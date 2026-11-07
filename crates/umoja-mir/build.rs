@@ -17,7 +17,7 @@ fn main() {
     let mut build = cc::Build::new();
     build
         .cpp(true)
-        .std("c++17")
+        .std("c++20")
         .file("src/shim/umoja_shim.cpp")
         .warnings(true)
         .flag_if_supported("-Wno-deprecated-declarations");
