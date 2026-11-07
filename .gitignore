@@ -1,0 +1,8 @@
+/target
+/vendor/lemonade/
+debian/.cargo/
+debian/.debhelper/
+debian/umoja-*/
+debian/*.substvars
+debian/*.log
+debian/files
