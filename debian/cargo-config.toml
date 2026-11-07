@@ -3,7 +3,7 @@
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
-directory = "vendor/cargo"
+directory = "@VENDOR_DIR@"
 
 [net]
 offline = true

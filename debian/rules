@@ -24,7 +24,9 @@ GREETER := debian/umoja-greeter
 
 override_dh_auto_configure:
 	mkdir -p $(CARGO_HOME)
-	cp debian/cargo-config.toml $(CARGO_HOME)/config.toml
+	# Cargo resolves relative paths against the config file's parent, so
+	# the vendor directory must be absolute.
+	sed "s|@VENDOR_DIR@|$(CURDIR)/vendor/cargo|" debian/cargo-config.toml > $(CARGO_HOME)/config.toml
 
 override_dh_auto_build:
 	cargo build --release --offline --frozen --workspace
