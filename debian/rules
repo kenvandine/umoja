@@ -83,3 +83,8 @@ override_dh_strip:
 
 override_dh_dwz:
 	dh_dwz -X/usr/lib/umoja/lemonade
+
+override_dh_clean:
+	# dh_clean deletes *.orig files, but vendored crates ship
+	# Cargo.toml.orig and list it in .cargo-checksum.json.
+	dh_clean -Xvendor/
