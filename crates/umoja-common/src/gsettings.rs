@@ -83,3 +83,40 @@ where
     s.connect_changed(Some(key), move |s, k| f(s, k));
     Some(s)
 }
+
+pub const BACKGROUND: &str = "org.gnome.desktop.background";
+
+/// Ubuntu's default wallpaper, used when the configured one is missing.
+pub const FALLBACK_WALLPAPER: &str = "/usr/share/backgrounds/warty-final-ubuntu.png";
+
+/// The wallpaper image GNOME would show: `picture-uri-dark` when the
+/// colour scheme prefers dark, `picture-uri` otherwise, falling back to the
+/// other one and then to Ubuntu's default. Slideshow XMLs and missing files
+/// are skipped.
+pub fn wallpaper_path(prefer_dark: bool) -> Option<std::path::PathBuf> {
+    let dark = get_string(BACKGROUND, "picture-uri-dark", "");
+    let light = get_string(BACKGROUND, "picture-uri", "");
+    let order = if prefer_dark { [dark, light] } else { [light, dark] };
+    order
+        .into_iter()
+        .filter_map(|uri| {
+            let path = glib::filename_from_uri(&uri).ok()?.0;
+            let is_image = path.extension().is_some_and(|e| {
+                matches!(
+                    e.to_ascii_lowercase().to_str(),
+                    Some("png" | "jpg" | "jpeg" | "webp" | "svg")
+                )
+            });
+            (is_image && path.exists()).then_some(path)
+        })
+        .next()
+        .or_else(|| {
+            let p = std::path::PathBuf::from(FALLBACK_WALLPAPER);
+            p.exists().then_some(p)
+        })
+}
+
+/// Whether `org.gnome.desktop.interface color-scheme` asks for dark.
+pub fn prefers_dark() -> bool {
+    get_string(DESKTOP_INTERFACE, "color-scheme", "default") == "prefer-dark"
+}

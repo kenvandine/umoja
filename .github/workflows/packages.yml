@@ -88,6 +88,38 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  install-test:
+    name: Install test (${{ matrix.arch }})
+    needs: binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:26.10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: debs-${{ matrix.arch }}
+          path: dist
+
+      # Stock ubuntu-desktop-minimal with Recommends, then our debs, then a
+      # headless session with screenshots (see tests/install-test.sh).
+      - name: Install on ubuntu-desktop-minimal and run headless
+        run: tests/install-test.sh dist install-test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-test-${{ matrix.arch }}
+          path: install-test/
+
   ppa:
     name: Upload to PPA
     needs: binary

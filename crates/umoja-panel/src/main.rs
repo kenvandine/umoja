@@ -8,6 +8,7 @@
 mod clock;
 mod quick_settings;
 mod sni;
+mod wallpaper;
 
 use adw::prelude::*;
 use gtk::glib;
@@ -32,7 +33,16 @@ fn main() -> glib::ExitCode {
     app.run()
 }
 
+thread_local! {
+    static WALLPAPER: std::cell::OnceCell<std::rc::Rc<wallpaper::Wallpaper>> =
+        const { std::cell::OnceCell::new() };
+}
+
 fn build(app: &adw::Application) {
+    WALLPAPER.with(|w| {
+        w.get_or_init(|| wallpaper::Wallpaper::start(app));
+    });
+
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .default_height(PANEL_HEIGHT)

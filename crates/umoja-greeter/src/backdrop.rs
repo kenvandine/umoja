@@ -10,7 +10,7 @@ use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 
 /// Ubuntu's default wallpaper, used when nothing better is configured.
-pub const FALLBACK_WALLPAPER: &str = "/usr/share/backgrounds/warty-final-ubuntu.png";
+pub use umoja_common::gsettings::FALLBACK_WALLPAPER;
 
 mod imp {
     use super::*;
@@ -94,24 +94,6 @@ impl Backdrop {
 /// The system default wallpaper, as Ubuntu configures it for new users
 /// (`org.gnome.desktop.background picture-uri[-dark]`, set by ubuntu-settings).
 pub fn system_wallpaper() -> Option<String> {
-    use umoja_common::gsettings as gs;
-    let schema = "org.gnome.desktop.background";
-    let dark = gs::get_string(schema, "picture-uri-dark", "");
-    let light = gs::get_string(schema, "picture-uri", "");
-    [dark, light]
-        .into_iter()
-        .filter_map(|uri| {
-            let path = glib::filename_from_uri(&uri).ok()?.0;
-            // Slideshow XMLs aren't images; skip to the next candidate.
-            let is_image = path.extension().is_some_and(|e| {
-                matches!(e.to_str(), Some("png" | "jpg" | "jpeg" | "webp" | "svg"))
-            });
-            (is_image && path.exists()).then(|| path.to_string_lossy().into_owned())
-        })
-        .next()
-        .or_else(|| {
-            std::path::Path::new(FALLBACK_WALLPAPER)
-                .exists()
-                .then(|| FALLBACK_WALLPAPER.to_string())
-        })
+    // The greeter always uses the dark variant, which suits the glass card.
+    umoja_common::gsettings::wallpaper_path(true).map(|p| p.to_string_lossy().into_owned())
 }
