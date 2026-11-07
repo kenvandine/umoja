@@ -14,7 +14,7 @@ Build-Depends: debhelper-compat (= 13),
                liblightdm-gobject-1-dev,
                libglib2.0-dev,
                libglib2.0-bin,
-               libssl-dev
+               libssl3t64
 Standards-Version: 4.7.0
 Homepage: https://github.com/kenvandine/umoja
 Vcs-Git: https://github.com/kenvandine/umoja.git
