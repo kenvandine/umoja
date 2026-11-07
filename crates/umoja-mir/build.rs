@@ -9,8 +9,11 @@ fn main() {
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.cpp");
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.h");
 
+    // Probe without emitting link flags yet: the static shim must come
+    // before libmiral on the linker line, or `--as-needed` drops miral.
     let miral = pkg_config::Config::new()
         .atleast_version("3.9")
+        .cargo_metadata(false)
         .probe("miral")
         .expect("miral (libmiral-dev) >= 3.9 is required to build umoja-mir");
 
@@ -25,4 +28,11 @@ fn main() {
         build.include(path);
     }
     build.compile("umoja_shim");
+
+    for path in &miral.link_paths {
+        println!("cargo:rustc-link-search=native={}", path.display());
+    }
+    for lib in &miral.libs {
+        println!("cargo:rustc-link-lib={lib}");
+    }
 }
