@@ -111,6 +111,8 @@ jobs:
         id: version
         shell: bash
         run: |
+          # The container runs as root, the checkout belongs to the runner.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           base=$(dpkg-parsechangelog -S Version | sed 's/[~+].*//')
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}~${SERIES}1"
