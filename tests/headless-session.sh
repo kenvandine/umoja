@@ -11,13 +11,24 @@ fail() { echo "FAIL: $*" | tee -a "$LOG"; FAILED=1; }
 pass() { echo "PASS: $*" | tee -a "$LOG"; }
 
 export XDG_RUNTIME_DIR=$(mktemp -d /tmp/umoja-runtime.XXXXXX)
-export XDG_CURRENT_DESKTOP=Umoja:GNOME:Ubuntu XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=Umoja
+export XDG_CURRENT_DESKTOP=Umoja:ubuntu:GNOME XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=Umoja
 export NO_AT_BRIDGE=1 RUST_LOG=info
 # No systemd --user in a container: start the shell pieces by hand below.
 export UMOJA_NO_SESSION_TARGET=1 UMOJA_NO_XWAYLAND=1
 unset DISPLAY WAYLAND_DISPLAY
 cd "$HOME"
 eval "$(dbus-launch --sh-syntax)"
+
+# Ubuntu's desktop defaults must apply, as they do in the Ubuntu session.
+expect() { # schema key value
+    local v; v=$(gsettings get "$1" "$2" 2>&1)
+    [ "$v" = "$3" ] && pass "$1 $2 is $3" || fail "$1 $2 is $v, expected $3"
+}
+expect org.gnome.shell.extensions.dash-to-dock dock-position "'LEFT'"
+expect org.gnome.shell.extensions.dash-to-dock extend-height true
+expect org.gnome.desktop.interface gtk-theme "'Yaru'"
+expect org.gnome.desktop.interface icon-theme "'Yaru'"
+expect org.gnome.desktop.interface font-name "'Ubuntu Sans 11'"
 
 overlay() { gdbus call --session --dest org.umoja.Overlay --object-path /org/umoja/Overlay \
     --method "org.umoja.Overlay.$1" >>"$LOG" 2>&1; }

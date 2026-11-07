@@ -4,6 +4,6 @@ Comment=This session logs you into the Umoja AI-first desktop environment
 Exec=umoja-session
 TryExec=umoja-session
 Type=Application
-DesktopNames=Umoja;GNOME;Ubuntu
+DesktopNames=Umoja;ubuntu;GNOME
 Keywords=launch;Umoja;desktop;session;
 X-Ubuntu-Gettext-Domain=gnome-session-46

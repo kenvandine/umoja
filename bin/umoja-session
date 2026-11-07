@@ -1,6 +1,8 @@
 #!/bin/sh
 # Session entry point, launched by LightDM (or any DM) via umoja.desktop.
-export XDG_CURRENT_DESKTOP="Umoja:GNOME:Ubuntu"
+# "ubuntu" (lowercase, as in Ubuntu's own "ubuntu:GNOME") turns on the
+# [schema:ubuntu] GSettings overrides: the left dock, Yaru, Ubuntu Sans...
+export XDG_CURRENT_DESKTOP="Umoja:ubuntu:GNOME"
 export XDG_SESSION_DESKTOP="Umoja"
 export XDG_SESSION_TYPE="wayland"
 export GDK_BACKEND="wayland,x11"
