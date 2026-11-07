@@ -1,0 +1,33 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: umoja
+Source: https://github.com/kenvandine/umoja
+
+Files: *
+Copyright: 2026 Umoja Desktop Contributors
+License: GPL-3.0-or-later
+
+Files: vendor/lemonade/*
+Copyright: Advanced Micro Devices, Inc. and Lemonade contributors
+License: Apache-2.0
+Comment: Prebuilt "lemonade-embeddable" release from
+ https://github.com/lemonade-sdk/lemonade, shipped privately in
+ /usr/lib/umoja/lemonade. Inference backends it downloads keep their own
+ licenses.
+
+Files: vendor/cargo/*
+Copyright: The respective crate authors
+License: various
+Comment: Vendored Rust dependencies; see each crate's Cargo.toml and LICENSE.
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the full text of the GNU General Public License
+ version 3 can be found in "/usr/share/common-licenses/GPL-3".
+
+License: Apache-2.0
+ On Debian systems, the full text of the Apache License version 2.0 can be
+ found in "/usr/share/common-licenses/Apache-2.0".

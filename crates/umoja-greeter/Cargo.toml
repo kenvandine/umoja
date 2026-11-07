@@ -1,0 +1,20 @@
+[package]
+name = "umoja-greeter"
+description = "LightDM greeter for Umoja, written in GTK4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+build = "build.rs"
+
+[dependencies]
+umoja-common.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+gio.workspace = true
+glib.workspace = true
+tracing.workspace = true
+libc.workspace = true
+
+[build-dependencies]
+pkg-config.workspace = true

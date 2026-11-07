@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.umoja
+Exec=/usr/libexec/xdg-desktop-portal-umoja
+SystemdService=xdg-desktop-portal-umoja.service

@@ -1,0 +1,11 @@
+[Unit]
+Description=Portal service (Umoja implementation)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.umoja
+ExecStart=/usr/libexec/xdg-desktop-portal-umoja
+Restart=on-failure
+Slice=session.slice

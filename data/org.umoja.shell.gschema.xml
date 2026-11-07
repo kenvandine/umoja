@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Umoja-specific settings. Everything that GNOME already has a key for
+  (dock, keybindings, interface, night light...) is read from the GNOME
+  schema instead, so gnome-control-center changes apply to Umoja too.
+-->
+<schemalist gettext-domain="umoja-shell">
+  <schema id="org.umoja.shell" path="/org/umoja/shell/">
+    <key name="assistant-enabled" type="b">
+      <default>true</default>
+      <summary>Enable the Lemonade AI assistant in the overlay search</summary>
+    </key>
+    <key name="lemonade-model" type="s">
+      <default>'Qwen3-4B-Instruct-2507-GGUF'</default>
+      <summary>Model the embedded Lemonade server uses for the assistant</summary>
+      <description>
+        The embedded server listens on 127.0.0.1:13345 by default (not
+        Lemonade's usual 13305). Override the port by writing
+        UMOJA_LEMONADE_PORT=PORT to ~/.config/umoja/lemonade.env.
+      </description>
+    </key>
+    <key name="dictation-hotkey" type="as">
+      <default>['&lt;Super&gt;d']</default>
+      <summary>Toggle Myna voice dictation</summary>
+    </key>
+    <key name="tile-top-left" type="as">
+      <default>['&lt;Super&gt;KP_7']</default>
+      <summary>Tile window to the top-left quarter</summary>
+    </key>
+    <key name="tile-top-right" type="as">
+      <default>['&lt;Super&gt;KP_9']</default>
+      <summary>Tile window to the top-right quarter</summary>
+    </key>
+    <key name="tile-bottom-left" type="as">
+      <default>['&lt;Super&gt;KP_1']</default>
+      <summary>Tile window to the bottom-left quarter</summary>
+    </key>
+    <key name="tile-bottom-right" type="as">
+      <default>['&lt;Super&gt;KP_3']</default>
+      <summary>Tile window to the bottom-right quarter</summary>
+    </key>
+  </schema>
+</schemalist>

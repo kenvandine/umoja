@@ -1,0 +1,20 @@
+[package]
+name = "umoja-portal"
+description = "xdg-desktop-portal backend for Umoja"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "xdg-desktop-portal-umoja"
+path = "src/main.rs"
+
+[dependencies]
+umoja-common.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+gio.workspace = true
+glib.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

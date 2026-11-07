@@ -1,0 +1,8 @@
+umoja-desktop (0.1.0) stonking; urgency=medium
+
+  * Initial release: workspace scaffold for umoja-mir, umoja-panel,
+    umoja-dock, umoja-overlay, umoja-greeter and xdg-desktop-portal-umoja.
+  * Bundle an embedded Lemonade server on port 13345.
+  * umoja-greeter switches the default display manager from GDM to LightDM.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Sat, 07 Nov 2026 20:30:00 +0000

@@ -1,8 +1,10 @@
 /target
-/vendor/lemonade/
+/vendor/
 debian/.cargo/
 debian/.debhelper/
-debian/umoja-*/
+debian/umoja-desktop/
+debian/umoja-greeter/
 debian/*.substvars
 debian/*.log
+debian/debhelper-build-stamp
 debian/files

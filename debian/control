@@ -1,0 +1,69 @@
+Source: umoja-desktop
+Section: x11
+Priority: optional
+Maintainer: Umoja Maintainers <dev@umoja.internal>
+Build-Depends: debhelper-compat (= 13),
+               cargo (>= 1.85),
+               rustc (>= 1.85),
+               pkgconf,
+               g++,
+               libgtk-4-dev (>= 4.16),
+               libadwaita-1-dev (>= 1.6),
+               libgtk4-layer-shell-dev,
+               libmiral-dev (>= 3.9),
+               liblightdm-gobject-1-dev,
+               libglib2.0-dev,
+               libglib2.0-bin
+Standards-Version: 4.7.0
+Homepage: https://github.com/kenvandine/umoja
+Vcs-Git: https://github.com/kenvandine/umoja.git
+Vcs-Browser: https://github.com/kenvandine/umoja
+Rules-Requires-Root: no
+
+Package: umoja-desktop
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         mir-platform-graphics-gbm-kms,
+         xwayland,
+         dbus-user-session,
+         myna-config,
+         xdg-desktop-portal,
+         xdg-desktop-portal-gnome | xdg-desktop-portal-gtk,
+         gsettings-desktop-schemas,
+         gnome-control-center,
+         yaru-theme-gtk,
+         yaru-theme-icon
+Recommends: umoja-greeter,
+            grim,
+            wireplumber,
+            power-profiles-daemon,
+            gnome-keyring
+Description: AI-native, Rust-based desktop shell for Ubuntu
+ Umoja is a resilient, modern desktop environment built in Rust, powered by
+ Mir and GTK4. It features seamless GNOME/Ubuntu settings fidelity,
+ Myna voice dictation, and an embedded Lemonade AI search assistant.
+ .
+ The Lemonade server is bundled privately under /usr/lib/umoja/lemonade and
+ runs per user on 127.0.0.1:13345, so it does not conflict with a system
+ lemonade-server package on its default port 13305.
+
+Package: umoja-greeter
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         debconf,
+         lightdm (>= 1.30),
+         accountsservice,
+         ubuntu-wallpapers | desktop-base
+Recommends: umoja-desktop
+Provides: lightdm-greeter
+Description: GTK4 LightDM greeter for Umoja
+ A login screen for LightDM, written in Rust and GTK4, drawn over a
+ softened copy of the system wallpaper. It lists users from
+ AccountsService, supports session selection and user switching, and
+ preselects the Umoja session.
+ .
+ On a fresh install this package makes LightDM the default display manager
+ in place of GDM; the change takes effect at the next boot. Removing the
+ package restores the previous display manager.

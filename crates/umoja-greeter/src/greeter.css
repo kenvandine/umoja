@@ -1,0 +1,112 @@
+/* Wallpaper is drawn by the Backdrop widget; everything here floats on it. */
+window.umoja-greeter {
+  background-color: #2c001e;
+  color: #ffffff;
+}
+
+.greeter-top-bar {
+  min-height: 32px;
+  padding: 0 12px;
+  font-weight: bold;
+  background-color: alpha(#000000, 0.25);
+}
+
+/* Lock-screen style clock, bottom left. */
+.clock-box {
+  margin: 0 0 72px 88px;
+}
+.big-clock {
+  font-size: 96px;
+  font-weight: 200;
+  letter-spacing: -2px;
+  text-shadow: 0 2px 12px alpha(#000000, 0.35);
+}
+.big-date {
+  font-size: 22px;
+  font-weight: 400;
+  opacity: 0.9;
+  text-shadow: 0 1px 6px alpha(#000000, 0.35);
+}
+
+/* Frosted-glass login card. */
+.login-card {
+  /* Margin leaves room for the shadow inside the fade-in revealer. */
+  margin: 64px;
+  padding: 40px 40px 24px 40px;
+  border-radius: 32px;
+  background-color: alpha(#1a0d15, 0.42);
+  border: 1px solid alpha(#ffffff, 0.14);
+  box-shadow: 0 24px 64px alpha(#000000, 0.45), inset 0 1px 0 alpha(#ffffff, 0.08);
+}
+.user-avatar {
+  outline: 3px solid alpha(#ffffff, 0.85);
+  outline-offset: 4px;
+  border-radius: 999px;
+}
+.user-name {
+  font-size: 24px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+.password-pill {
+  padding: 4px 4px 4px 14px;
+  border-radius: 999px;
+  background-color: alpha(#ffffff, 0.12);
+  border: 1px solid alpha(#ffffff, 0.18);
+  transition: border-color 200ms ease;
+}
+.password-pill:focus-within {
+  border-color: #E95420;
+}
+.password-pill entry {
+  background: none;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  min-height: 36px;
+  color: #ffffff;
+}
+.password-pill .submit {
+  background-color: #E95420;
+  color: #ffffff;
+  min-width: 36px;
+  min-height: 36px;
+}
+.message {
+  color: #ffb4a0;
+}
+.session-button {
+  opacity: 0.8;
+}
+
+@keyframes shake {
+  0% { margin-left: 0; margin-right: 0; }
+  20% { margin-left: 0; margin-right: 24px; }
+  40% { margin-left: 24px; margin-right: 0; }
+  60% { margin-left: 0; margin-right: 16px; }
+  80% { margin-left: 8px; margin-right: 0; }
+  100% { margin-left: 0; margin-right: 0; }
+}
+.login-card.shake {
+  animation: shake 400ms ease-in-out;
+}
+
+/* Other accounts along the bottom. */
+.user-strip {
+  margin-bottom: 40px;
+}
+.user-chip {
+  padding: 10px 14px;
+  border-radius: 20px;
+  color: #ffffff;
+  opacity: 0.75;
+  transition: opacity 200ms ease, background-color 200ms ease;
+}
+.user-chip:hover {
+  opacity: 1;
+  background-color: alpha(#ffffff, 0.1);
+}
+.user-chip.selected {
+  opacity: 1;
+  background-color: alpha(#ffffff, 0.16);
+}

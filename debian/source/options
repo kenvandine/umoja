@@ -1,0 +1,7 @@
+# Keep build products and git metadata out of the source package. The
+# vendor/ tree (crates + embedded Lemonade) must stay in: Launchpad builds
+# offline.
+tar-ignore = ".git"
+tar-ignore = ".github"
+tar-ignore = "target"
+tar-ignore = "debian/.cargo"

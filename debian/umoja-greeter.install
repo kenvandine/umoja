@@ -1,0 +1,2 @@
+# Intentionally empty: files are installed straight into debian/umoja-greeter
+# by override_dh_auto_install in debian/rules.

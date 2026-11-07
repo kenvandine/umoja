@@ -1,0 +1,545 @@
+//! The overlay window: search entry, app grid and assistant answers.
+
+use crate::lemonade::{self, LemonadeClient, RUNTIME, StreamEvent};
+use crate::myna::{Myna, MynaEvent};
+use adw::prelude::*;
+use gio::prelude::*;
+use gtk::glib;
+use gtk4 as gtk;
+use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use libadwaita as adw;
+use std::cell::{Cell, RefCell};
+use std::process::Command;
+use std::rc::Rc;
+use umoja_common::gsettings as gs;
+use umoja_common::i18n;
+use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
+
+const MAX_RESULTS: usize = 48;
+
+pub struct Overlay {
+    window: gtk::ApplicationWindow,
+    entry: gtk::SearchEntry,
+    grid: gtk::FlowBox,
+    ask_button: gtk::Button,
+    answer: gtk::Label,
+    chips: gtk::FlowBox,
+    assistant: gtk::Box,
+    myna_pill: gtk::Button,
+    apps: RefCell<Vec<gio::AppInfo>>,
+    lemonade: LemonadeClient,
+    myna: Myna,
+    /// Bumped on every new question so stale streams are dropped.
+    generation: Cell<u64>,
+}
+
+impl Overlay {
+    pub fn new(app: &adw::Application) -> Rc<Self> {
+        let window = gtk::ApplicationWindow::builder()
+            .application(app)
+            .css_classes(["umoja-overlay"])
+            .build();
+        window.init_layer_shell();
+        window.set_layer(Layer::Overlay);
+        window.set_namespace("umoja-overlay");
+        for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            window.set_anchor(e, true);
+        }
+        window.set_exclusive_zone(-1);
+        window.set_keyboard_mode(KeyboardMode::Exclusive);
+
+        let entry = gtk::SearchEntry::builder()
+            .placeholder_text(i18n::umoja("Search apps, or ask anything…"))
+            .width_request(560)
+            .halign(gtk::Align::Center)
+            .build();
+        let myna_pill = gtk::Button::builder()
+            .icon_name("audio-input-microphone-symbolic")
+            .tooltip_text(i18n::umoja("Dictate with Myna"))
+            .css_classes(["circular", "myna-pill"])
+            .build();
+        let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        search_row.set_halign(gtk::Align::Center);
+        search_row.append(&entry);
+        search_row.append(&myna_pill);
+
+        let ask_button = gtk::Button::builder()
+            .label(i18n::umoja("Ask the assistant"))
+            .halign(gtk::Align::Center)
+            .css_classes(["pill", "suggested-action"])
+            .visible(false)
+            .build();
+        let answer = gtk::Label::builder()
+            .wrap(true)
+            .xalign(0.0)
+            .selectable(true)
+            .max_width_chars(80)
+            .build();
+        let chips = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .max_children_per_line(4)
+            .build();
+        let assistant = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        assistant.add_css_class("assistant-card");
+        assistant.set_halign(gtk::Align::Center);
+        assistant.set_width_request(640);
+        assistant.append(&answer);
+        assistant.append(&chips);
+        assistant.set_visible(false);
+
+        let grid = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .max_children_per_line(8)
+            .min_children_per_line(4)
+            .homogeneous(true)
+            .row_spacing(24)
+            .column_spacing(24)
+            .valign(gtk::Align::Start)
+            .build();
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&grid)
+            .vexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .build();
+
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 24);
+        root.set_margin_top(64);
+        root.set_margin_start(96);
+        root.set_margin_end(96);
+        root.set_margin_bottom(48);
+        root.append(&search_row);
+        root.append(&ask_button);
+        root.append(&assistant);
+        root.append(&scroller);
+        window.set_child(Some(&root));
+
+        let overlay = Rc::new(Self {
+            window,
+            entry,
+            grid,
+            ask_button,
+            answer,
+            chips,
+            assistant,
+            myna_pill,
+            apps: RefCell::new(load_apps()),
+            lemonade: LemonadeClient::new(),
+            myna: Myna::start(),
+            generation: Cell::new(0),
+        });
+        overlay.connect_signals();
+        overlay.refresh_results();
+        overlay
+    }
+
+    fn connect_signals(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.entry.connect_search_changed(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.refresh_results();
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        self.entry.connect_activate(move |e| {
+            let Some(o) = weak.upgrade() else { return };
+            let q = e.text().to_string();
+            if lemonade::looks_like_question(&q) || o.grid.first_child().is_none() {
+                o.ask(&q);
+            } else if let Some(app) = o.matches(&q).into_iter().next() {
+                o.launch(&app);
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        self.entry.connect_stop_search(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.hide();
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        self.ask_button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                let q = o.entry.text().to_string();
+                o.ask(&q);
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        self.myna_pill.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.myna.toggle();
+            }
+        });
+
+        // Escape anywhere closes the overlay.
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                if let Some(o) = weak.upgrade() {
+                    o.hide();
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.window.add_controller(keys);
+
+        // Rescan apps when packages are installed or removed.
+        let monitor = gio::AppInfoMonitor::get();
+        let weak = Rc::downgrade(self);
+        monitor.connect_changed(move |_| {
+            if let Some(o) = weak.upgrade() {
+                *o.apps.borrow_mut() = load_apps();
+                o.refresh_results();
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        let events = self.myna.events.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(ev) = events.recv().await {
+                let Some(o) = weak.upgrade() else { break };
+                o.on_myna(ev);
+            }
+        });
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.window.is_visible()
+    }
+
+    pub fn show(&self) {
+        self.entry.set_text("");
+        self.assistant.set_visible(false);
+        self.window.present();
+        self.entry.grab_focus();
+    }
+
+    pub fn hide(&self) {
+        self.generation.set(self.generation.get() + 1);
+        self.window.set_visible(false);
+    }
+
+    pub fn toggle(&self) {
+        if self.is_visible() {
+            self.hide()
+        } else {
+            self.show()
+        }
+    }
+
+    pub fn toggle_dictation(&self) {
+        self.myna.toggle();
+    }
+
+    fn on_myna(self: &Rc<Self>, ev: MynaEvent) {
+        match ev {
+            MynaEvent::Available(a) => self.myna_pill.set_sensitive(a),
+            MynaEvent::Listening(on) => {
+                if on {
+                    self.myna_pill.add_css_class("listening");
+                } else {
+                    self.myna_pill.remove_css_class("listening");
+                }
+            }
+            MynaEvent::Partial(text) if self.is_visible() => self.entry.set_text(&text),
+            MynaEvent::Final(text) if self.is_visible() => {
+                self.entry.set_text(&text);
+                self.entry.set_position(-1);
+                if lemonade::looks_like_question(&text) {
+                    self.ask(&text);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn matches(&self, query: &str) -> Vec<gio::AppInfo> {
+        let q = query.trim().to_lowercase();
+        let apps = self.apps.borrow();
+        if q.is_empty() {
+            return apps.clone();
+        }
+        let mut scored: Vec<(u8, gio::AppInfo)> = apps
+            .iter()
+            .filter_map(|a| {
+                let name = a.display_name().to_lowercase();
+                let score = if name.starts_with(&q) {
+                    0
+                } else if name.contains(&q) {
+                    1
+                } else if haystack(a).contains(&q) {
+                    2
+                } else {
+                    return None;
+                };
+                Some((score, a.clone()))
+            })
+            .collect();
+        scored.sort_by_key(|(s, a)| (*s, a.display_name().to_lowercase()));
+        scored.into_iter().map(|(_, a)| a).collect()
+    }
+
+    fn refresh_results(self: &Rc<Self>) {
+        while let Some(c) = self.grid.first_child() {
+            self.grid.remove(&c);
+        }
+        let q = self.entry.text().to_string();
+        let found = self.matches(&q);
+        for app in found.iter().take(MAX_RESULTS) {
+            self.grid.append(&self.app_tile(app));
+        }
+        self.ask_button.set_visible(
+            !q.trim().is_empty() && (found.is_empty() || lemonade::looks_like_question(&q)),
+        );
+        if q.trim().is_empty() {
+            self.assistant.set_visible(false);
+        }
+    }
+
+    fn app_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::Widget {
+        let image = match app.icon() {
+            Some(icon) => gtk::Image::from_gicon(&icon),
+            None => gtk::Image::from_icon_name("application-x-executable"),
+        };
+        image.set_pixel_size(64);
+        let label = gtk::Label::builder()
+            .label(app.display_name())
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(14)
+            .build();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        content.append(&image);
+        content.append(&label);
+        let button = gtk::Button::builder()
+            .child(&content)
+            .css_classes(["flat", "app-tile"])
+            .build();
+        let weak = Rc::downgrade(self);
+        let app = app.clone();
+        button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.launch(&app);
+            }
+        });
+        button.upcast()
+    }
+
+    fn launch(&self, app: &gio::AppInfo) {
+        let ctx = gtk::prelude::WidgetExt::display(&self.window).app_launch_context();
+        if let Err(e) = app.launch(&[], Some(&ctx)) {
+            tracing::warn!(error = %e, "launch failed");
+        }
+        self.hide();
+    }
+
+    /// Stream the query to Lemonade and render text + action chips.
+    fn ask(self: &Rc<Self>, query: &str) {
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+
+        self.assistant.set_visible(true);
+        self.answer.set_text(&i18n::umoja("Thinking…"));
+        while let Some(c) = self.chips.first_child() {
+            self.chips.remove(&c);
+        }
+
+        let (tx, rx) = async_channel::unbounded();
+        let client = self.lemonade.clone();
+        RUNTIME.spawn(async move { client.stream_guidance(&query, tx).await });
+
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let mut text = String::new();
+            while let Ok(ev) = rx.recv().await {
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation {
+                    return; // superseded; dropping rx cancels the stream
+                }
+                match ev {
+                    StreamEvent::Delta(d) => {
+                        text.push_str(&d);
+                        o.answer.set_text(&strip_actions(&text));
+                    }
+                    StreamEvent::Done => {
+                        o.answer.set_text(&strip_actions(&text));
+                        for action in extract_actions(&text) {
+                            o.chips.append(&o.chip(action));
+                        }
+                        return;
+                    }
+                    StreamEvent::Error(e) => {
+                        o.answer.set_text(&e);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    fn chip(self: &Rc<Self>, action: AssistantAction) -> gtk::Widget {
+        let (icon, label) = match &action {
+            AssistantAction::OpenSettings { panel, subpage } => (
+                "emblem-system-symbolic",
+                format!(
+                    "{} › {}{}",
+                    i18n::control_center("Settings"),
+                    panel,
+                    subpage
+                        .as_deref()
+                        .map(|s| format!(" › {s}"))
+                        .unwrap_or_default()
+                ),
+            ),
+            AssistantAction::RunCommand { cmd, .. } => ("utilities-terminal-symbolic", cmd.clone()),
+            AssistantAction::LaunchApp { app_id } => {
+                ("application-x-executable-symbolic", app_id.clone())
+            }
+            AssistantAction::SetSetting { key, value, .. } => {
+                ("preferences-system-symbolic", format!("{key} = {value}"))
+            }
+        };
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.append(&gtk::Image::from_icon_name(icon));
+        content.append(
+            &gtk::Label::builder()
+                .label(&label)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .max_width_chars(48)
+                .build(),
+        );
+        let button = gtk::Button::builder()
+            .child(&content)
+            .css_classes(["pill", "action-chip"])
+            .build();
+        let weak = Rc::downgrade(self);
+        button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.run_action(&action);
+            }
+        });
+        button.upcast()
+    }
+
+    fn run_action(self: &Rc<Self>, action: &AssistantAction) {
+        if action.needs_confirmation() {
+            let AssistantAction::RunCommand { cmd, .. } = action else {
+                return;
+            };
+            let dialog = adw::AlertDialog::new(Some(&i18n::umoja("Run this command?")), Some(cmd));
+            dialog.add_response("cancel", &i18n::gtk("_Cancel"));
+            dialog.add_response("run", &i18n::umoja("Run"));
+            dialog.set_response_appearance("run", adw::ResponseAppearance::Destructive);
+            let weak = Rc::downgrade(self);
+            let action = action.clone();
+            dialog.connect_response(None, move |_, response| {
+                if response == "run"
+                    && let Some(o) = weak.upgrade() {
+                        o.execute(&action);
+                    }
+            });
+            dialog.present(Some(&self.window));
+        } else {
+            self.execute(action);
+        }
+    }
+
+    fn execute(&self, action: &AssistantAction) {
+        let result = match action {
+            AssistantAction::OpenSettings { panel, subpage } => {
+                let mut c = Command::new("gnome-control-center");
+                c.arg(panel);
+                if let Some(s) = subpage {
+                    c.arg(s);
+                }
+                c.spawn().map(|_| ())
+            }
+            // Isolated in a transient scope that can't gain privileges.
+            AssistantAction::RunCommand { cmd, .. } => Command::new("systemd-run")
+                .args([
+                    "--user",
+                    "--scope",
+                    "--collect",
+                    "--quiet",
+                    "-p",
+                    "NoNewPrivileges=yes",
+                    "--",
+                    "sh",
+                    "-c",
+                    cmd,
+                ])
+                .current_dir(glib::home_dir())
+                .spawn()
+                .map(|_| ()),
+            AssistantAction::LaunchApp { app_id } => {
+                let id = if app_id.ends_with(".desktop") {
+                    app_id.clone()
+                } else {
+                    format!("{app_id}.desktop")
+                };
+                if let Some(app) = gio::DesktopAppInfo::new(&id) {
+                    self.launch(app.upcast_ref());
+                }
+                Ok(())
+            }
+            AssistantAction::SetSetting { schema, key, value } => {
+                if let (Some(s), Some(v)) = (
+                    gs::settings(schema).filter(|s| gs::has_key(s, key)),
+                    json_to_variant(value),
+                ) {
+                    let _ = s.set_value(key, &v);
+                }
+                Ok(())
+            }
+        };
+        if let Err(e) = result {
+            self.answer.set_text(&e.to_string());
+        }
+    }
+}
+
+fn haystack(app: &gio::AppInfo) -> String {
+    let mut s = app
+        .description()
+        .map(|d| d.to_lowercase())
+        .unwrap_or_default();
+    if let Some(d) = app.downcast_ref::<gio::DesktopAppInfo>() {
+        for k in d.keywords() {
+            s.push(' ');
+            s.push_str(&k.to_lowercase());
+        }
+    }
+    s
+}
+
+fn load_apps() -> Vec<gio::AppInfo> {
+    let mut apps: Vec<_> = gio::AppInfo::all()
+        .into_iter()
+        .filter(|a| a.should_show())
+        .collect();
+    apps.sort_by_key(|a| a.display_name().to_lowercase());
+    apps
+}
+
+fn json_to_variant(v: &serde_json::Value) -> Option<glib::Variant> {
+    use serde_json::Value;
+    Some(match v {
+        Value::Bool(b) => b.to_variant(),
+        Value::Number(n) if n.is_i64() => (n.as_i64()? as i32).to_variant(),
+        Value::Number(n) => n.as_f64()?.to_variant(),
+        Value::String(s) => s.to_variant(),
+        Value::Array(items) => items
+            .iter()
+            .map(|i| i.as_str().map(String::from))
+            .collect::<Option<Vec<_>>>()?
+            .to_variant(),
+        _ => return None,
+    })
+}

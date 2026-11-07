@@ -1,0 +1,28 @@
+#!/bin/sh
+# Launch Umoja's embedded Lemonade server (lemond) for the current user.
+#
+# This is deliberately separate from any system lemonade-server package:
+#  - binary:  /usr/lib/umoja/lemonade/lemond (not on PATH)
+#  - port:    $UMOJA_LEMONADE_PORT, default 13345 (upstream uses 13305)
+#  - host:    127.0.0.1 only, UDP discovery broadcast off
+#  - config:  ~/.config/umoja/lemonade   (config.json)
+#  - cache:   ~/.cache/umoja/lemonade    (backends, models)
+set -eu
+
+LEMONADE_DIR=${UMOJA_LEMONADE_DIR:-/usr/lib/umoja/lemonade}
+PORT=${UMOJA_LEMONADE_PORT:-13345}
+CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/umoja/lemonade
+CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/umoja/lemonade
+
+if [ "$PORT" = "13305" ]; then
+    echo "umoja-lemonade: refusing port 13305, it belongs to the system lemonade-server" >&2
+    exit 1
+fi
+
+mkdir -p "$CONFIG" "$CACHE"
+
+# Keep Hugging Face model downloads inside Umoja's cache too.
+export HF_HOME="$CACHE/huggingface"
+
+exec "$LEMONADE_DIR/lemond" "$CACHE" "$CONFIG" \
+    --host 127.0.0.1 --port "$PORT" --no-broadcast --log-file disabled

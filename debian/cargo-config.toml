@@ -1,0 +1,9 @@
+# Copied to $CARGO_HOME/config.toml by debian/rules for offline builds.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor/cargo"
+
+[net]
+offline = true

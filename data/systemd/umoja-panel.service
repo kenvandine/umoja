@@ -1,0 +1,18 @@
+[Unit]
+Description=Umoja top panel
+PartOf=umoja-session.target
+After=umoja-session.target
+# Lots of fast restarts are expected while a crash loop is being fixed;
+# never give up on the shell.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/umoja-panel
+Restart=always
+# Restart well inside the 200 ms crash-recovery budget.
+RestartSec=100ms
+Slice=session.slice
+
+[Install]
+WantedBy=umoja-session.target

@@ -1,0 +1,180 @@
+# Build Debian packages and publish them to ppa:ken-vandine/umoja.
+#
+# - Pull requests: build binary .debs in the target Ubuntu release (no upload).
+# - Pushes to main: upload a snapshot (0.1.0+git<date>.<sha>~<series>1).
+# - Tags v*: upload that release (e.g. v0.2.0 -> 0.2.0~<series>1).
+# - Manual runs: pick the series and whether to upload.
+#
+# Launchpad builds offline, so the source package carries vendored crates
+# and the embedded Lemonade build (`make vendor`).
+#
+# Required repository secrets:
+#   PPA_GPG_PRIVATE_KEY  ASCII-armoured secret key registered with Launchpad
+#   PPA_GPG_PASSPHRASE   its passphrase (may be empty)
+#   PPA_SIGNER_NAME      name on that key, e.g. "Ken VanDine"
+#   PPA_SIGNER_EMAIL     email on that key (must match a Launchpad-verified address)
+
+name: Packages
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      series:
+        description: Ubuntu series to target
+        default: stonking
+      image:
+        description: Docker image for that series
+        default: ubuntu:26.10
+      upload:
+        description: Upload the source package to the PPA
+        type: boolean
+        default: true
+
+env:
+  SERIES: ${{ inputs.series || 'stonking' }}
+  IMAGE: ${{ inputs.image || 'ubuntu:26.10' }}
+  PPA: ppa:ken-vandine/umoja
+  DEBIAN_FRONTEND: noninteractive
+
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  binary:
+    name: Build .debs (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:26.10
+    steps:
+      - name: Install tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git devscripts equivs build-essential lintian
+
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: mk-build-deps --install --remove --tool 'apt-get -y --no-install-recommends' debian/control
+
+      - name: Vendor crates and Lemonade
+        run: make vendor LEMONADE_ARCHES=${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
+
+      - name: Build
+        run: dpkg-buildpackage -b -us -uc
+
+      - name: Collect
+        run: |
+          mkdir -p dist
+          mv ../*.deb ../*.buildinfo ../*.changes dist/
+
+      - name: Lint
+        run: lintian --no-tag-display-limit dist/*.changes || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  ppa:
+    name: Upload to PPA
+    needs: binary
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.upload)
+    runs-on: ubuntu-24.04
+    container: ${{ inputs.image || 'ubuntu:26.10' }}
+    steps:
+      - name: Install tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git devscripts dput gnupg \
+            debhelper cargo rustc pkgconf
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          base=$(dpkg-parsechangelog -S Version | sed 's/[~+].*//')
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}~${SERIES}1"
+          else
+            stamp=$(git log -1 --format=%cd --date=format:%Y%m%d%H%M)
+            version="${base}+git${stamp}.$(git rev-parse --short=8 HEAD)~${SERIES}1"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Packaging $version for $SERIES"
+
+      - name: Import signing key
+        id: gpg
+        env:
+          KEY: ${{ secrets.PPA_GPG_PRIVATE_KEY }}
+          PASSPHRASE: ${{ secrets.PPA_GPG_PASSPHRASE }}
+        run: |
+          test -n "$KEY" || { echo "::error::PPA_GPG_PRIVATE_KEY secret is not set"; exit 1; }
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+          printf '%s' "$PASSPHRASE" > "$RUNNER_TEMP/passphrase"
+          printf '%s\n' "$KEY" | gpg --batch --import
+          keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          echo "keyid=$keyid" >> "$GITHUB_OUTPUT"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+
+      - name: Update changelog
+        env:
+          DEBFULLNAME: ${{ secrets.PPA_SIGNER_NAME }}
+          DEBEMAIL: ${{ secrets.PPA_SIGNER_EMAIL }}
+        run: |
+          dch --newversion "${{ steps.version.outputs.version }}" \
+              --distribution "$SERIES" --force-distribution --force-bad-version \
+              "Automated build of ${GITHUB_SHA} (${GITHUB_REF_NAME})."
+
+      - name: Vendor crates and Lemonade
+        run: |
+          cargo install --locked cargo-vendor-filterer || true
+          export PATH="$HOME/.cargo/bin:$PATH"
+          make vendor
+
+      - name: Build source package
+        run: dpkg-buildpackage -S -sa -d -us -uc
+
+      - name: Sign
+        run: |
+          debsign -k"${{ steps.gpg.outputs.keyid }}" \
+            -p"gpg --batch --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/passphrase" \
+            ../umoja-desktop_*_source.changes
+
+      - name: Upload to Launchpad
+        run: dput "$PPA" ../umoja-desktop_*_source.changes
+
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p dist
+          mv ../umoja-desktop_*.dsc ../umoja-desktop_*.tar.* ../umoja-desktop_*_source.* dist/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-package
+          path: dist/
+
+      - name: Clean up key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/passphrase"

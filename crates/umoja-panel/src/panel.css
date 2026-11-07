@@ -1,0 +1,32 @@
+/* Matches the Yaru top bar: solid black, white text, rounded hover pills. */
+window.umoja-panel {
+  background-color: #000000;
+  color: #ffffff;
+  min-height: 32px;
+}
+window.umoja-panel button {
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 0 12px;
+  min-height: 24px;
+  margin: 4px 2px;
+  font-weight: bold;
+}
+window.umoja-panel button:hover {
+  background-color: alpha(#ffffff, 0.15);
+}
+window.umoja-panel .tray-item {
+  padding: 0 6px;
+}
+.quick-settings {
+  padding: 12px;
+  min-width: 340px;
+}
+.quick-settings .tile {
+  border-radius: 999px;
+  min-height: 48px;
+}
+.quick-settings .tile:checked {
+  background-color: #E95420;
+  color: #ffffff;
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Umoja embedded Lemonade server (local LLM backend)
+Documentation=https://lemonade-server.ai/docs/embeddable/
+PartOf=umoja-session.target
+After=umoja-session.target
+ConditionPathExists=/usr/lib/umoja/lemonade/lemond
+
+[Service]
+Type=simple
+# Port 13345, not upstream's 13305, so a system lemonade-server (lemond.service)
+# can run alongside. Override in ~/.config/umoja/lemonade.env.
+Environment=UMOJA_LEMONADE_PORT=13345
+EnvironmentFile=-%E/umoja/lemonade.env
+ExecStart=/usr/lib/umoja/umoja-lemonade
+Restart=on-failure
+RestartSec=2s
+# Inference is the first thing the OOM killer should take, never the shell.
+OOMScoreAdjust=800
+Slice=app.slice
+Nice=5
+
+[Install]
+WantedBy=umoja-session.target

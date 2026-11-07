@@ -1,0 +1,22 @@
+#!/bin/sh
+# Session entry point, launched by LightDM (or any DM) via umoja.desktop.
+export XDG_CURRENT_DESKTOP="Umoja:GNOME:Ubuntu"
+export XDG_SESSION_DESKTOP="Umoja"
+export XDG_SESSION_TYPE="wayland"
+export GDK_BACKEND="wayland,x11"
+export QT_QPA_PLATFORM="wayland;xcb"
+export MOZ_ENABLE_WAYLAND=1
+
+# Ensure the D-Bus user session and systemd --user see the session variables.
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE \
+    GDK_BACKEND QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE
+fi
+
+# Stop shell services when the compositor exits, however it exits.
+trap 'systemctl --user stop umoja-session.target' EXIT INT TERM
+
+# umoja-mir is the session master. Once Wayland is up it starts
+# umoja-session.target (panel, dock, overlay, portal, embedded Lemonade).
+/usr/bin/umoja-mir "$@"

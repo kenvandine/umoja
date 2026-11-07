@@ -1,0 +1,83 @@
+#!/usr/bin/make -f
+# Builds entirely offline: Launchpad builders have no network, so the
+# source package carries vendored crates (vendor/cargo) and the embedded
+# Lemonade build (vendor/lemonade/<arch>). Run `make vendor` before
+# building a source package.
+
+export DH_VERBOSE = 1
+export CARGO_HOME = $(CURDIR)/debian/.cargo
+export CARGO_TARGET_DIR = $(CURDIR)/target
+
+include /usr/share/dpkg/architecture.mk
+
+ifeq ($(DEB_HOST_ARCH),amd64)
+LEMONADE_ARCH := x64
+else ifeq ($(DEB_HOST_ARCH),arm64)
+LEMONADE_ARCH := arm64
+endif
+LEMONADE_SRC := vendor/lemonade/$(LEMONADE_ARCH)
+DESKTOP := debian/umoja-desktop
+GREETER := debian/umoja-greeter
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	mkdir -p $(CARGO_HOME)
+	cp debian/cargo-config.toml $(CARGO_HOME)/config.toml
+
+override_dh_auto_build:
+	cargo build --release --offline --frozen --workspace
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# GTK crates need a display to run; test the headless logic only.
+	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal
+endif
+
+override_dh_auto_clean:
+	rm -rf debian/.cargo target
+
+override_dh_auto_install:
+	# Binaries
+	install -D -m 0755 target/release/umoja-mir $(DESKTOP)/usr/bin/umoja-mir
+	install -D -m 0755 target/release/umoja-panel $(DESKTOP)/usr/bin/umoja-panel
+	install -D -m 0755 target/release/umoja-dock $(DESKTOP)/usr/bin/umoja-dock
+	install -D -m 0755 target/release/umoja-overlay $(DESKTOP)/usr/bin/umoja-overlay
+	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
+	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
+	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
+
+	# Desktop session & GSettings
+	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
+	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
+
+	# systemd user units, D-Bus activation and portal registration
+	install -d $(DESKTOP)/usr/lib/systemd/user
+	install -m 0644 data/systemd/*.service data/systemd/*.target $(DESKTOP)/usr/lib/systemd/user/
+	install -D -m 0644 data/dbus/org.freedesktop.impl.portal.desktop.umoja.service \
+		$(DESKTOP)/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.umoja.service
+	install -D -m 0644 data/portal/umoja.portal $(DESKTOP)/usr/share/xdg-desktop-portal/portals/umoja.portal
+	install -D -m 0644 data/portal/umoja-portals.conf $(DESKTOP)/usr/share/xdg-desktop-portal/umoja-portals.conf
+
+	# Embedded Lemonade, private to Umoja (never on PATH, never port 13305)
+	test -x $(LEMONADE_SRC)/lemond || { echo "missing $(LEMONADE_SRC); run 'make vendor-lemonade'" >&2; exit 1; }
+	install -d $(DESKTOP)/usr/lib/umoja/lemonade
+	cp -a $(LEMONADE_SRC)/. $(DESKTOP)/usr/lib/umoja/lemonade/
+	install -D -m 0755 bin/umoja-lemonade $(DESKTOP)/usr/lib/umoja/umoja-lemonade
+
+	# Greeter
+	install -D -m 0644 data/lightdm-umoja-greeter.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter.desktop
+	install -D -m 0644 data/lightdm/60-umoja.conf $(GREETER)/usr/share/lightdm/lightdm.conf.d/60-umoja.conf
+
+override_dh_shlibdeps:
+	# lemond gets normal shlib deps; its downloaded/bundled backends under
+	# bin/ carry their own private libraries.
+	dh_shlibdeps -X/usr/lib/umoja/lemonade/bin -- --ignore-missing-info
+
+override_dh_strip:
+	# Don't strip upstream's prebuilt Lemonade binaries.
+	dh_strip -X/usr/lib/umoja/lemonade
+
+override_dh_dwz:
+	dh_dwz -X/usr/lib/umoja/lemonade

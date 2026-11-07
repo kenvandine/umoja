@@ -1,0 +1,16 @@
+[package]
+name = "umoja-common"
+description = "Shared GSettings, D-Bus, i18n and type helpers for Umoja"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+gio.workspace = true
+glib.workspace = true
+gettext-rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Hand the login screen back to whatever display manager we replaced
+# (normally gdm3), as long as it is still installed and nobody has picked
+# another one since.
+set -e
+
+STATE=/var/lib/umoja-greeter
+DEFAULT_DM_FILE=/etc/X11/default-display-manager
+DM_UNIT=/etc/systemd/system/display-manager.service
+
+restore_previous_dm() {
+    [ -r "$STATE/previous-display-manager" ] || return 0
+    previous=$(cat "$STATE/previous-display-manager")
+    current=""
+    [ -r "$DEFAULT_DM_FILE" ] && current=$(cat "$DEFAULT_DM_FILE")
+    [ "$current" = "/usr/sbin/lightdm" ] || return 0
+    [ -x "$previous" ] || return 0
+
+    name=$(basename "$previous")
+    echo "$previous" > "$DEFAULT_DM_FILE"
+    if [ -e "/usr/lib/systemd/system/$name.service" ]; then
+        ln -sf "/usr/lib/systemd/system/$name.service" "$DM_UNIT"
+    fi
+    if [ -e /usr/share/debconf/confmodule ]; then
+        . /usr/share/debconf/confmodule
+        db_set shared/default-x-display-manager "$name" || true
+    fi
+    echo "umoja-greeter: restored $name as the default display manager (takes effect after reboot)."
+}
+
+case "$1" in
+remove)
+    restore_previous_dm
+    ;;
+purge)
+    rm -f "$STATE/previous-display-manager"
+    rmdir "$STATE" 2>/dev/null || true
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

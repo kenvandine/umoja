@@ -1,0 +1,47 @@
+[workspace]
+members = [
+    "crates/umoja-mir",
+    "crates/umoja-panel",
+    "crates/umoja-dock",
+    "crates/umoja-overlay",
+    "crates/umoja-greeter",
+    "crates/umoja-portal",
+    "crates/umoja-common",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["Umoja Desktop Contributors"]
+repository = "https://github.com/kenvandine/umoja"
+
+[workspace.dependencies]
+umoja-common = { path = "crates/umoja-common" }
+
+gtk4 = { version = "0.9", features = ["v4_16"] }
+libadwaita = { version = "0.7", features = ["v1_6"] }
+gtk4-layer-shell = "0.4"
+gio = "0.20"
+glib = "0.20"
+zbus = { version = "5.0", default-features = false, features = ["tokio"] }
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+gettext-rs = { version = "0.7", features = ["gettext-system"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+futures-util = "0.3"
+async-channel = "2.3"
+anyhow = "1.0"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+cc = "1.1"
+pkg-config = "0.3"
+
+[profile.release]
+lto = "thin"
+panic = "unwind"   # keep unwinding so umoja-mir can catch panics at FFI boundaries

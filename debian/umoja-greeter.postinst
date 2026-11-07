@@ -1,0 +1,40 @@
+#!/bin/sh
+# Make LightDM + umoja-greeter the login screen on a standard Ubuntu
+# install, replacing GDM. Only done on first install so a later manual
+# switch back (dpkg-reconfigure lightdm / gdm3) is respected on upgrades.
+# The running display manager is never restarted: that would kill the
+# user's session. The switch takes effect on the next boot.
+set -e
+
+. /usr/share/debconf/confmodule
+
+STATE=/var/lib/umoja-greeter
+LIGHTDM=/usr/sbin/lightdm
+DEFAULT_DM_FILE=/etc/X11/default-display-manager
+DM_UNIT=/etc/systemd/system/display-manager.service
+
+case "$1" in
+configure)
+    update-alternatives --install /usr/share/xgreeters/lightdm-greeter.desktop \
+        lightdm-greeter /usr/share/xgreeters/lightdm-umoja-greeter.desktop 90
+
+    if [ -z "$2" ]; then
+        mkdir -p "$STATE"
+        previous=""
+        [ -r "$DEFAULT_DM_FILE" ] && previous=$(cat "$DEFAULT_DM_FILE")
+        if [ "$previous" != "$LIGHTDM" ]; then
+            [ -n "$previous" ] && echo "$previous" > "$STATE/previous-display-manager"
+            echo "$LIGHTDM" > "$DEFAULT_DM_FILE"
+            db_set shared/default-x-display-manager lightdm || true
+            if [ -d /run/systemd/system ] || [ -d /etc/systemd/system ]; then
+                ln -sf /usr/lib/systemd/system/lightdm.service "$DM_UNIT"
+            fi
+            echo "umoja-greeter: LightDM is now the default display manager (takes effect after reboot)."
+        fi
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0
