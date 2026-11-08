@@ -360,7 +360,7 @@ public:
         return Window{};
     }
 
-    void activate(Window const& w) {
+    void activate(Window w) {
         if (!w) return;
         guarded("activate", [&] {
             // Windows on another workspace take you there, as in GNOME.
@@ -382,7 +382,7 @@ public:
         });
     }
 
-    void close(Window const& w) {
+    void close(Window w) {
         if (w) guarded("close", [&] { tools.ask_client_to_close(w); });
     }
 
@@ -391,7 +391,7 @@ public:
         apply_switch(umoja_switcher_pick(index, &res), res);
     }
 
-    void tile(Window const& w, uint32_t action) {
+    void tile(Window w, uint32_t action) {
         if (w) guarded("tile", [&] { apply_to(w, action, false); });
     }
 
@@ -544,7 +544,9 @@ private:
 
     // ---- drag to snap -----------------------------------------------------
 
-    void begin_move(Window const& w, int32_t px, int32_t py, bool restore) {
+    // Helpers that modify windows take Window by value: modify_window() can
+    // replace the WindowInfo that a reference like info.window() points into.
+    void begin_move(Window w, int32_t px, int32_t py, bool restore) {
         if (moving == w) return;
         if (moving) end_move();
         moving = w;
@@ -640,7 +642,7 @@ private:
         }
     }
 
-    void hide(Window const& w) {
+    void hide(Window w) {
         auto& info = tools.info_for(w);
         auto const state = info.state();
         if (state == mir_window_state_hidden || state == mir_window_state_minimized) return;
@@ -650,7 +652,7 @@ private:
         tools.modify_window(info, spec);
     }
 
-    void unhide(Window const& w) {
+    void unhide(Window w) {
         auto it = hidden_states.find(w);
         if (it == hidden_states.end()) return;
         WindowSpecification spec;
@@ -723,7 +725,7 @@ private:
 
     // ---- actions ----------------------------------------------------------
 
-    void untile(Window const& w) {
+    void untile(Window w) {
         auto const id = window_id(w);
         if (tiled.erase(id)) umoja_tiling_unregister(id);
     }
@@ -775,7 +777,7 @@ private:
         return apply_to(active, action, true);
     }
 
-    bool apply_to(Window const& target, uint32_t action, bool from_keyboard) {
+    bool apply_to(Window target, uint32_t action, bool from_keyboard) {
         auto& info = tools.info_for(target);
         bool const is_tiled = tiled.count(window_id(target)) > 0;
 
@@ -850,7 +852,7 @@ private:
 
     bool move_to_monitor(WindowInfo& info, uint32_t action) {
         if (outputs.size() < 2) return false;
-        Window const& w = info.window();
+        Window const w = info.window();
         std::vector<int> ids;
         std::vector<UmojaRect> rects;
         geom::Rectangle from{};
