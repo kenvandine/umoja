@@ -31,6 +31,9 @@ pub struct Overlay {
     assistant: gtk::Box,
     myna_pill: gtk::Button,
     apps: RefCell<Vec<gio::AppInfo>>,
+    /// Held for the overlay's lifetime: the monitor is a weak singleton,
+    /// and once the last reference drops it stops emitting `changed`.
+    app_monitor: gio::AppInfoMonitor,
     lemonade: LemonadeClient,
     myna: Myna,
     /// Bumped on every new question so stale streams are dropped.
@@ -137,6 +140,7 @@ impl Overlay {
             myna_pill,
             model_status,
             apps: RefCell::new(load_apps()),
+            app_monitor: gio::AppInfoMonitor::get(),
             lemonade: LemonadeClient::new(),
             myna: Myna::start(),
             generation: Cell::new(0),
@@ -202,9 +206,8 @@ impl Overlay {
         self.window.add_controller(keys);
 
         // Rescan apps when packages are installed or removed.
-        let monitor = gio::AppInfoMonitor::get();
         let weak = Rc::downgrade(self);
-        monitor.connect_changed(move |_| {
+        self.app_monitor.connect_changed(move |_| {
             if let Some(o) = weak.upgrade() {
                 *o.apps.borrow_mut() = load_apps();
                 o.refresh_results();
