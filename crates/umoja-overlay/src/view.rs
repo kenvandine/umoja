@@ -422,7 +422,6 @@ impl Overlay {
         self.remember_window();
         self.window.present();
         self.entry.grab_focus();
-        self.read_clipboard_fallback();
     }
 
     /// Bring the overlay back after a capture, keeping what was typed.
@@ -745,6 +744,16 @@ impl Overlay {
                 o.refresh_clipboard();
             }
         });
+        // Wayland only hands the clipboard to the focused client, so the
+        // fallback read waits until the overlay actually has focus.
+        let weak = Rc::downgrade(self);
+        self.window.connect_is_active_notify(move |w| {
+            if w.is_active()
+                && let Some(o) = weak.upgrade()
+            {
+                o.read_clipboard_fallback();
+            }
+        });
         let weak = Rc::downgrade(self);
         self.copy_button.connect_clicked(move |_| {
             if let Some(o) = weak.upgrade() {
@@ -776,15 +785,24 @@ impl Overlay {
         let clip = display.clipboard();
         let primary = display.primary_clipboard();
         glib::spawn_future_local(async move {
-            if let Ok(Some(t)) = clip.read_text_future().await
-                && let Some(o) = weak.upgrade()
-            {
-                o.history.add(t.to_string());
+            match clip.read_text_future().await {
+                Ok(Some(t)) => {
+                    tracing::debug!(chars = t.len(), "read the clipboard on open");
+                    if let Some(o) = weak.upgrade() {
+                        o.history.add(t.to_string());
+                    }
+                }
+                Ok(None) => tracing::debug!("clipboard has no text"),
+                Err(e) => tracing::info!(error = %e, "couldn't read the clipboard"),
             }
-            if let Ok(Some(t)) = primary.read_text_future().await
-                && let Some(o) = weak.upgrade()
-            {
-                o.history.set_selection(t.to_string());
+            match primary.read_text_future().await {
+                Ok(Some(t)) => {
+                    if let Some(o) = weak.upgrade() {
+                        o.history.set_selection(t.to_string());
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::debug!(error = %e, "couldn't read the primary selection"),
             }
         });
     }
@@ -924,7 +942,10 @@ impl Overlay {
         glib::spawn_future_local(async move {
             match o.capture_aside(rect).await {
                 Ok(image) => o.ocr_and_attach(image, kind, pending),
-                Err(e) => o.ocr_failed(e),
+                Err(e) => {
+                    tracing::warn!(error = ?e, ?rect, "screen capture failed");
+                    o.ocr_failed(e)
+                }
             }
         });
     }
@@ -957,6 +978,10 @@ impl Overlay {
         let o = self.clone();
         glib::spawn_future_local(async move {
             let result = context::blocking(move || context::ocr_file(&image.0)).await;
+            match &result {
+                Ok(t) => tracing::info!(chars = t.len(), "read text from the screen"),
+                Err(e) => tracing::info!(error = ?e, "no text read from the screen"),
+            }
             o.set_pending(None);
             if !o.is_visible() {
                 return; // dismissed meanwhile
@@ -984,6 +1009,7 @@ impl Overlay {
     pub fn ask_about_screen(self: &Rc<Self>) {
         let opening = !self.is_visible();
         if let Some((text, true)) = self.history.selection() {
+            tracing::info!(chars = text.len(), "ask about the selection");
             if opening {
                 self.show();
             }
@@ -1002,12 +1028,15 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let win = context::focused_window().await;
+            tracing::info!(window = ?win, "ask about screen");
             let Some(o) = weak.upgrade() else { return };
+            let found = win.is_some();
             *o.last_window.borrow_mut() = win;
-            if o.last_window.borrow().is_some() {
+            if found {
                 o.attach_window();
             } else {
                 o.reveal();
+                o.show_error(&i18n::umoja("There's no window to read on this workspace."));
             }
         });
     }

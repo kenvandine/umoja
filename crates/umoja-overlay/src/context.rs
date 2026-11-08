@@ -234,6 +234,7 @@ pub async fn focused_window() -> Option<FocusedWindow> {
             1000,
         )
         .await
+        .map_err(|e| tracing::warn!(error = %e, "GetWindowsMru failed"))
         .ok()?;
     let (rows,) = reply.get::<(Vec<(u64, String, String, i32, i32, i32, i32, u32)>,)>()?;
     pick_focused(rows)
