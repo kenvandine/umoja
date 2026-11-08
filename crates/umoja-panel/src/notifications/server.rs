@@ -47,6 +47,10 @@ const XML: &str = r#"
       <arg type="u" name="id"/>
       <arg type="s" name="action_key"/>
     </signal>
+    <signal name="NotificationReplied">
+      <arg type="u" name="id"/>
+      <arg type="s" name="text"/>
+    </signal>
   </interface>
 </node>"#;
 
@@ -58,6 +62,8 @@ const CAPABILITIES: &[&str] = &[
     "body-hyperlinks",
     "body-markup",
     "icon-static",
+    // KDE's reply field: the `inline-reply` action and NotificationReplied.
+    "inline-reply",
     "persistence",
     "x-canonical-private-synchronous",
 ];
@@ -195,6 +201,8 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
         resident: hint_bool("resident"),
         expire_timeout,
         time: glib::DateTime::now_local().ok()?,
+        category: hint_str("category").filter(|c| !c.is_empty()),
+        reply_placeholder: hint_str("x-kde-reply-placeholder-text").filter(|c| !c.is_empty()),
     };
     Some((note, replaces_id))
 }

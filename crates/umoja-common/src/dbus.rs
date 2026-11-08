@@ -19,3 +19,10 @@ pub const MYNA_SOCKET_PATH: &str = "/tmp/myna.sock";
 pub const COMPOSITOR_BUS_NAME: &str = "org.umoja.Compositor";
 pub const COMPOSITOR_OBJECT_PATH: &str = "/org/umoja/Compositor";
 pub const COMPOSITOR_INTERFACE: &str = "org.umoja.Compositor";
+
+/// Notification history, digest and quick replies served by umoja-panel
+/// (next to its `org.freedesktop.Notifications` server), so the assistant
+/// can answer "what did I miss?" and draft replies.
+pub const NOTIFICATIONS_BUS_NAME: &str = "org.umoja.Notifications";
+pub const NOTIFICATIONS_OBJECT_PATH: &str = "/org/umoja/Notifications";
+pub const NOTIFICATIONS_INTERFACE: &str = "org.umoja.Notifications";

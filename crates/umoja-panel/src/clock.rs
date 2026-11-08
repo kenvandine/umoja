@@ -69,17 +69,38 @@ impl ClockButton {
         calendar.set_valign(gtk::Align::Start);
         let menu = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         menu.add_css_class("date-menu");
-        menu.append(&crate::notifications::MessageList::new(center).widget());
+        let list = Rc::new(crate::notifications::MessageList::new(center));
+        menu.append(&list.widget());
         menu.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         menu.append(&calendar);
         let popover = gtk::Popover::builder().child(&menu).build();
         {
             let dot = dot.clone();
-            popover.connect_show(move |_| {
+            let list = list.clone();
+            popover.connect_show(move |p| {
                 dot.set_visible(false);
+                // Like gnome-shell's date menu, take the keyboard while open
+                // (the quick-reply field needs it).
+                crate::notifications::want_keyboard(p, true);
                 if let Ok(now) = glib::DateTime::now_local() {
                     calendar.select_day(&now);
                 }
+                list.opened();
+            });
+        }
+        {
+            let list = list.clone();
+            popover.connect_hide(move |p| {
+                crate::notifications::want_keyboard(p, false);
+                list.closed();
+            });
+        }
+        {
+            // A banner's Reply button opens the menu at that message.
+            let popover = popover.clone();
+            center.connect_reply_requested(move |id| {
+                popover.popup();
+                list.open_reply(id);
             });
         }
         {

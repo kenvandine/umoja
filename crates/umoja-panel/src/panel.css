@@ -207,3 +207,27 @@ window.umoja-lock {
   color: #ffffff;
   opacity: 0.9;
 }
+
+/* ---- Assistant: missed-notification digest and quick replies ---- */
+.message-list .message-digest {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background-color: alpha(@accent_bg_color, 0.14);
+}
+.message-list .message-digest-text {
+  line-height: 1.35;
+}
+.message-list .message-reply {
+  margin-top: 8px;
+  margin-left: 44px;
+}
+.message-list .message-suggestion {
+  border-radius: 999px;
+  padding: 2px 12px;
+  background-color: alpha(currentColor, 0.1);
+  font-weight: normal;
+}
+.message-list .message-reply-hint,
+.message-list .message-reply-status {
+  font-size: 0.85em;
+}

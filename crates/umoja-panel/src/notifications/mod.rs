@@ -12,13 +12,23 @@
 //! the `value` hint (with `x-canonical-private-synchronous` replacing the
 //! previous bubble of the same kind, as notify-osd's volume and brightness
 //! bubbles did).
+//!
+//! The on-device assistant adds two things (see `assistant`): a digest of
+//! notifications that arrived since you last opened the message list, and
+//! quick replies drafted from a message. Apps that support KDE's
+//! `inline-reply` action get the reply back through `NotificationReplied`;
+//! for other chat and mail apps the reply is copied and the app raised.
+//! The same features are on D-Bus as `org.umoja.Notifications` (see `api`)
+//! so the assistant overlay can answer "what did I miss?".
 
+mod api;
+pub mod assistant;
 mod bubbles;
 mod list;
 mod server;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gio::prelude::*;
@@ -73,7 +83,21 @@ pub struct Note {
     pub resident: bool,
     pub expire_timeout: i32,
     pub time: glib::DateTime,
+    /// `category` hint, e.g. `im.received` or `email.arrived`.
+    pub category: Option<String>,
+    /// `x-kde-reply-placeholder-text` hint for the reply field.
+    pub reply_placeholder: Option<String>,
 }
+
+/// Chat and mail apps whose notifications are worth replying to even
+/// though they don't send the `inline-reply` action. Matched against the
+/// lower-cased desktop id and app name.
+const MESSAGING_APPS: &[&str] = &[
+    "thunderbird", "evolution", "geary", "mail", "telegram", "signal", "discord", "slack",
+    "element", "fractal", "polari", "whatsapp", "teams", "chat", "messag", "skype", "zulip",
+    "mattermost", "rocketchat", "rocket.chat", "dino", "gajim", "pidgin", "hexchat", "irc",
+    "matrix", "beeper", "ferdium", "franz", "wire", "threema", "viber", "zoom",
+];
 
 impl Note {
     pub fn default_action(&self) -> bool {
@@ -81,11 +105,47 @@ impl Note {
     }
 
     pub fn buttons(&self) -> impl Iterator<Item = &(String, String)> {
-        self.actions.iter().filter(|(k, _)| k != "default")
+        self.actions
+            .iter()
+            .filter(|(k, _)| k != "default" && k != INLINE_REPLY)
+    }
+
+    /// The app takes a typed reply back (KDE's inline-reply extension).
+    pub fn inline_reply(&self) -> bool {
+        self.actions.iter().any(|(k, _)| k == INLINE_REPLY)
+    }
+
+    /// Whether to offer quick replies: a message from a person, not a
+    /// progress bar, a volume bubble or a system warning.
+    pub fn can_reply(&self) -> bool {
+        if self.inline_reply() {
+            return true;
+        }
+        if self.value.is_some() || self.sync_tag.is_some() || self.body.trim().is_empty() {
+            return false;
+        }
+        if let Some(c) = &self.category {
+            if c.starts_with("im") || c == "email.arrived" || c == "email" {
+                return true;
+            }
+            // Any other category (device, network, transfer...) is not a
+            // conversation.
+            return false;
+        }
+        let id = self.app_id.as_deref().unwrap_or_default().to_lowercase();
+        let name = self.app_name.to_lowercase();
+        MESSAGING_APPS
+            .iter()
+            .any(|m| id.contains(m) || name.contains(m))
     }
 }
 
+/// Action key apps send to ask for a reply field (KDE convention, also
+/// used by Chromium, Firefox and Electron apps on Plasma).
+pub const INLINE_REPLY: &str = "inline-reply";
+
 type Listener = Box<dyn Fn()>;
+type ReplyListener = Box<dyn Fn(u32)>;
 
 /// Shared state between the D-Bus server, the banners and the message list.
 pub struct Center {
@@ -97,6 +157,10 @@ pub struct Center {
     listeners: RefCell<Vec<Listener>>,
     expiry: RefCell<HashMap<u32, glib::SourceId>>,
     settings: Option<gio::Settings>,
+    /// Ids that arrived since the message list was last opened: what the
+    /// digest summarizes.
+    unseen: RefCell<HashSet<u32>>,
+    reply_listeners: RefCell<Vec<ReplyListener>>,
 }
 
 impl Center {
@@ -109,6 +173,8 @@ impl Center {
             listeners: RefCell::default(),
             expiry: RefCell::default(),
             settings: gs::settings(NOTIFICATIONS),
+            unseen: RefCell::default(),
+            reply_listeners: RefCell::default(),
         });
         if let Some(s) = &center.settings {
             let weak = Rc::downgrade(&center);
@@ -122,6 +188,7 @@ impl Center {
             });
         }
         server::own_name(center.clone());
+        api::own_name(center.clone());
         center
     }
 
@@ -137,6 +204,102 @@ impl Center {
 
     pub fn notes(&self) -> Vec<Note> {
         self.notes.borrow().clone()
+    }
+
+    /// Notifications that arrived since the message list was last opened,
+    /// newest first, leaving out progress bars and volume-style bubbles.
+    pub fn missed(&self) -> Vec<Note> {
+        let unseen = self.unseen.borrow();
+        self.notes
+            .borrow()
+            .iter()
+            .filter(|n| unseen.contains(&n.id) && n.value.is_none() && n.sync_tag.is_none())
+            .cloned()
+            .collect()
+    }
+
+    /// The user has looked at the message list.
+    pub fn mark_seen(&self) {
+        let had = !self.unseen.borrow().is_empty();
+        self.unseen.borrow_mut().clear();
+        if had {
+            self.changed();
+        }
+    }
+
+    /// A short-lived banner from the shell itself ("Reply copied").
+    pub fn notify_internal(self: &Rc<Self>, summary: &str, body: &str, icon: &str) {
+        let Ok(time) = glib::DateTime::now_local() else { return };
+        let note = Note {
+            id: 0,
+            app_name: String::new(),
+            app_id: None,
+            summary: summary.into(),
+            body: glib::markup_escape_text(body).to_string(),
+            icon: Some(Icon::Name(icon.into())),
+            actions: vec![],
+            urgency: Urgency::Low,
+            value: None,
+            sync_tag: Some("umoja-shell".into()),
+            transient: true,
+            resident: false,
+            expire_timeout: -1,
+            time,
+            category: None,
+            reply_placeholder: None,
+        };
+        self.notify(note, 0);
+    }
+
+    pub fn note(&self, id: u32) -> Option<Note> {
+        self.find(id)
+    }
+
+    /// Ask the UI to open the reply field for `id` (the banner's Reply
+    /// button, or `org.umoja.Notifications.OpenReply`).
+    pub fn request_reply(&self, id: u32) {
+        if self.find(id).is_none_or(|n| !n.can_reply()) {
+            return;
+        }
+        self.bubbles.remove(id);
+        for l in self.reply_listeners.borrow().iter() {
+            l(id);
+        }
+    }
+
+    pub fn connect_reply_requested(&self, f: impl Fn(u32) + 'static) {
+        self.reply_listeners.borrow_mut().push(Box::new(f));
+    }
+
+    /// Send `text` as a reply. Apps with `inline-reply` get it through
+    /// `NotificationReplied`; for anything else it goes on the clipboard and
+    /// the app is raised so it can be pasted. Returns true when the app got
+    /// the reply itself.
+    pub fn reply(&self, id: u32, text: &str) -> bool {
+        let Some(note) = self.find(id) else { return false };
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        if note.inline_reply() {
+            self.emit("NotificationReplied", &(id, text).to_variant());
+            self.close(id, CloseReason::Dismissed);
+            return true;
+        }
+        if let Some(display) = gdk::Display::default() {
+            display.clipboard().set_text(text);
+        }
+        // Raise the app (its default action usually opens the conversation).
+        let resident = note.resident;
+        if note.default_action() {
+            self.emit("ActionInvoked", &(id, "default").to_variant());
+        } else {
+            self.activate(id);
+        }
+        if !resident {
+            self.close(id, CloseReason::Dismissed);
+        }
+        false
     }
 
     /// Do Not Disturb is "show-banners = false", as in GNOME.
@@ -189,6 +352,10 @@ impl Center {
             // Transient notifications never reach the message list.
             if !note.transient {
                 notes.insert(0, note.clone());
+                // An update to a progress bar isn't news; a new message is.
+                if existing.is_none() || note.value.is_none() {
+                    self.unseen.borrow_mut().insert(note.id);
+                }
             }
         }
 
@@ -238,6 +405,7 @@ impl Center {
             notes.retain(|n| n.id != id);
             before != notes.len()
         };
+        self.unseen.borrow_mut().remove(&id);
         let in_bubble = self.bubbles.remove(id);
         if let Some(src) = self.expiry.borrow_mut().remove(&id) {
             src.remove();
@@ -308,6 +476,17 @@ impl Center {
                 Some(args),
             );
         }
+    }
+}
+
+/// Let the panel take keyboard focus (for the reply field) or give it back.
+/// Layer surfaces default to no keyboard at all.
+pub fn want_keyboard(widget: &impl IsA<gtk::Widget>, on: bool) {
+    use gtk4_layer_shell::{KeyboardMode, LayerShell};
+    let Some(win) = widget.as_ref().root().and_downcast::<gtk::Window>() else { return };
+    // The clock menu is a popover; its root is the panel window.
+    if win.is_layer_window() {
+        win.set_keyboard_mode(if on { KeyboardMode::OnDemand } else { KeyboardMode::None });
     }
 }
 
@@ -382,10 +561,10 @@ pub fn banner_timeout(note: &Note) -> Option<std::time::Duration> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests_support {
     use super::*;
 
-    fn note(summary: &str, body: &str) -> Note {
+    pub fn note(summary: &str, body: &str) -> Note {
         Note {
             id: 1,
             app_name: "test".into(),
@@ -401,7 +580,42 @@ mod tests {
             resident: false,
             expire_timeout: -1,
             time: glib::DateTime::now_local().unwrap(),
+            category: None,
+            reply_placeholder: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::note;
+    use super::*;
+
+    #[test]
+    fn who_gets_quick_replies() {
+        let mut chat = note("Alice", "Lunch?");
+        chat.app_id = Some("org.telegram.desktop".into());
+        assert!(chat.can_reply());
+
+        let mut im = note("Bob", "hi");
+        im.category = Some("im.received".into());
+        assert!(im.can_reply());
+
+        let mut device = note("Disk full", "Free up space");
+        device.category = Some("device.error".into());
+        device.app_id = Some("org.gnome.Chat".into());
+        assert!(!device.can_reply());
+
+        let mut volume = note("Volume", "");
+        volume.value = Some(40);
+        assert!(!volume.can_reply());
+
+        assert!(!note("Updates", "3 updates are ready").can_reply());
+
+        let mut inline = note("Carol", "");
+        inline.actions = vec![(INLINE_REPLY.into(), "Reply".into())];
+        assert!(inline.can_reply());
+        assert_eq!(inline.buttons().count(), 0);
     }
 
     #[test]
