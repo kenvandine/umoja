@@ -678,8 +678,29 @@ private:
         relayout_workspaces();
     }
 
-    void move_active_to(size_t index) {
-        Window w = tools.active_window();
+    void move_active_to(size_t index) { move_window_to(tools.active_window(), index); }
+
+public:
+    void workspace_state(uint32_t* out_current, uint32_t* out_count) {
+        if (out_current) *out_current = static_cast<uint32_t>(current);
+        if (out_count) *out_count = static_cast<uint32_t>(workspaces.size());
+    }
+
+    // Switch from outside a key binding (org.umoja.Compositor), with the popup.
+    void switch_workspace(size_t index) {
+        if (index >= workspaces.size()) return;
+        switch_to(index);
+        umoja_workspace_switched(current, workspaces.size());
+    }
+
+    void move_to_workspace(Window w, size_t index) {
+        if (index >= workspaces.size()) return;
+        move_window_to(w, index);
+        umoja_workspace_switched(current, workspaces.size());
+    }
+
+private:
+    void move_window_to(Window w, size_t index) {
         if (!w || index >= workspaces.size() || !all_windows.count(w)) return;
         if (!in_any_workspace(w)) return; // sticky (secondary monitor)
         tools.remove_tree_from_workspace(w, workspaces[current]);
@@ -923,6 +944,20 @@ extern "C" void umoja_wm_switcher_pick(uint32_t index) {
 
 extern "C" void umoja_wm_tile(uint64_t id, uint32_t action) {
     with_wm("tile window", [&] { g_wm->tile(g_wm->find(id), action); });
+}
+
+extern "C" void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count) {
+    if (out_current) *out_current = 0;
+    if (out_count) *out_count = 0;
+    with_wm("workspaces", [&] { g_wm->workspace_state(out_current, out_count); });
+}
+
+extern "C" void umoja_wm_switch_workspace(uint32_t index) {
+    with_wm("switch workspace", [&] { g_wm->switch_workspace(index); });
+}
+
+extern "C" void umoja_wm_move_to_workspace(uint64_t id, uint32_t index) {
+    with_wm("move to workspace", [&] { g_wm->move_to_workspace(g_wm->find(id), index); });
 }
 
 extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* config) {

@@ -3,6 +3,7 @@
 //! Exposes `org.umoja.Overlay` on the session bus so the compositor (Super
 //! key), panel (Activities) and dock (Show Apps) can toggle it.
 
+mod assistant;
 mod chrome;
 mod lemonade;
 mod model;

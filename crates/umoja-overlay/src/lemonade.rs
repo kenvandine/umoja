@@ -82,8 +82,48 @@ struct StreamChoice {
 struct StreamDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCallDelta>,
 }
 
+/// One tool call requested by the model (OpenAI `tool_calls` format).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    /// The raw JSON arguments string, as the model wrote it.
+    pub arguments: String,
+}
+
+/// Events from [`LemonadeClient::stream_chat`].
+#[derive(Debug)]
+pub enum ChatEvent {
+    Text(String),
+    /// Sent once, just before `Done`, when the model asked for tools.
+    ToolCalls(Vec<ToolCall>),
+    Done,
+    Error(String),
+}
+
+#[derive(Deserialize, Default)]
+struct ToolCallDelta {
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<FunctionDelta>,
+}
+
+#[derive(Deserialize, Default)]
+struct FunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum StreamEvent {
     Delta(String),
@@ -155,7 +195,9 @@ impl LemonadeClient {
             .unwrap_or_default())
     }
 
-    /// Stream tokens to `tx` as they arrive (OpenAI SSE format).
+    /// Stream tokens to `tx` as they arrive (OpenAI SSE format), without
+    /// tools. The overlay now goes through `assistant::agent`.
+    #[allow(dead_code)]
     pub async fn stream_guidance(&self, user_query: &str, tx: async_channel::Sender<StreamEvent>) {
         let resp = self
             .client
@@ -195,6 +237,128 @@ impl LemonadeClient {
             }
         }
         let _ = tx.send(StreamEvent::Done).await;
+    }
+}
+
+impl LemonadeClient {
+    /// Model name requests are sent with.
+    #[allow(dead_code)]
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Stream a chat with OpenAI-style tool calling. `messages` and `tools`
+    /// are sent as-is (see `assistant::agent`). Text arrives as
+    /// [`ChatEvent::Text`]; tool calls are assembled from their streamed
+    /// fragments and sent as one [`ChatEvent::ToolCalls`] before `Done`.
+    pub async fn stream_chat(
+        &self,
+        messages: Vec<serde_json::Value>,
+        tools: Vec<serde_json::Value>,
+        tx: async_channel::Sender<ChatEvent>,
+    ) {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.2,
+            "stream": true,
+        });
+        if !tools.is_empty() {
+            body["tools"] = serde_json::Value::Array(tools);
+        }
+        let resp = self.client.post(&self.endpoint).json(&body).send().await;
+        let resp = match resp.and_then(|r| r.error_for_status()) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(ChatEvent::Error(describe(&e))).await;
+                return;
+            }
+        };
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut calls = CallAssembler::default();
+        let finish = |calls: CallAssembler| {
+            let tx = tx.clone();
+            async move {
+                let calls = calls.finish();
+                if !calls.is_empty() {
+                    let _ = tx.send(ChatEvent::ToolCalls(calls)).await;
+                }
+                let _ = tx.send(ChatEvent::Done).await;
+            }
+        };
+        while let Some(chunk) = stream.next().await {
+            let Ok(chunk) = chunk else {
+                let _ = tx.send(ChatEvent::Error("connection lost".into())).await;
+                return;
+            };
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(nl) = buf.find('\n') {
+                let line: String = buf.drain(..=nl).collect();
+                let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else {
+                    continue;
+                };
+                if data == "[DONE]" {
+                    finish(calls).await;
+                    return;
+                }
+                let Ok(chunk) = serde_json::from_str::<StreamChunk>(data) else {
+                    continue;
+                };
+                for choice in chunk.choices {
+                    calls.add(choice.delta.tool_calls);
+                    if let Some(text) = choice.delta.content.filter(|t| !t.is_empty())
+                        && tx.send(ChatEvent::Text(text)).await.is_err()
+                    {
+                        return; // UI went away
+                    }
+                }
+            }
+        }
+        finish(calls).await;
+    }
+}
+
+/// Joins streamed `tool_calls` fragments (keyed by `index`) into calls.
+#[derive(Default)]
+struct CallAssembler {
+    calls: Vec<ToolCall>,
+}
+
+impl CallAssembler {
+    fn add(&mut self, deltas: Vec<ToolCallDelta>) {
+        for d in deltas {
+            let i = d.index.unwrap_or(self.calls.len().saturating_sub(1));
+            while self.calls.len() <= i {
+                self.calls.push(ToolCall::default());
+            }
+            let c = &mut self.calls[i];
+            if let Some(id) = d.id.filter(|s| !s.is_empty()) {
+                c.id = id;
+            }
+            if let Some(f) = d.function {
+                if let Some(n) = f.name {
+                    c.name.push_str(&n);
+                }
+                if let Some(a) = f.arguments {
+                    c.arguments.push_str(&a);
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<ToolCall> {
+        self.calls
+            .into_iter()
+            .enumerate()
+            .filter(|(_, c)| !c.name.is_empty())
+            .map(|(i, mut c)| {
+                if c.id.is_empty() {
+                    c.id = format!("call_{i}");
+                }
+                c
+            })
+            .collect()
     }
 }
 
@@ -255,6 +419,28 @@ mod tests {
         assert_eq!(parse_sse_line("data: [DONE]"), Some(SseLine::Done));
         assert_eq!(parse_sse_line(": keep-alive"), None);
         assert_eq!(parse_sse_line(r#"data: {"choices":[{"delta":{}}]}"#), None);
+    }
+
+    #[test]
+    fn tool_call_fragments_are_joined() {
+        let mut a = CallAssembler::default();
+        for line in [
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"set_dark_style","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"enabled\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":" true}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"name":"launch_app","arguments":"{}"}}]}}]}"#,
+        ] {
+            let c: StreamChunk = serde_json::from_str(line).unwrap();
+            for ch in c.choices {
+                a.add(ch.delta.tool_calls);
+            }
+        }
+        let calls = a.finish();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "c1");
+        assert_eq!(calls[0].name, "set_dark_style");
+        assert_eq!(calls[0].arguments, r#"{"enabled": true}"#);
+        assert_eq!(calls[1].id, "call_1");
     }
 
     #[test]
