@@ -10,7 +10,6 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use std::cell::Cell;
-use std::process::Command;
 use std::rc::Rc;
 use umoja_common::{gsettings as gs, i18n};
 
@@ -269,49 +268,73 @@ fn session_row() -> gtk::Box {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     row.append(&spacer);
-    let items: [(&str, String, fn()); 4] = [
+    let items: [(&str, String, &str, fn()); 4] = [
         (
             "emblem-system-symbolic",
             i18n::control_center("Settings"),
+            "settings",
             || open_settings(""),
         ),
-        ("system-lock-screen-symbolic", i18n::shell("Lock"), || {
-            run(&["loginctl", "lock-session"])
-        }),
-        ("system-log-out-symbolic", i18n::shell("Log Out"), log_out),
-        ("system-shutdown-symbolic", i18n::shell("Power Off"), || {
-            run(&["systemctl", "poweroff"])
-        }),
+        (
+            "system-lock-screen-symbolic",
+            i18n::shell("Lock"),
+            "lock",
+            || crate::lock::locker().lock(),
+        ),
+        (
+            "system-log-out-symbolic",
+            i18n::shell("Log Out"),
+            "log-out",
+            crate::login::terminate_session,
+        ),
+        (
+            "system-shutdown-symbolic",
+            i18n::shell("Power Off"),
+            "power-off",
+            || run(&["systemctl", "poweroff"]),
+        ),
     ];
-    for (icon, label, action) in items {
+    for (icon, label, name, action) in items {
         let b = gtk::Button::from_icon_name(icon);
         b.set_tooltip_text(Some(&label));
         b.add_css_class("circular");
-        b.connect_clicked(move |_| action());
+        b.connect_clicked(move |b| {
+            tracing::info!(button = name, "quick settings action");
+            close_menu(b);
+            action();
+        });
         row.append(&b);
     }
     row
 }
 
-fn log_out() {
-    match std::env::var("XDG_SESSION_ID") {
-        Ok(id) => run(&["loginctl", "terminate-session", &id]),
-        Err(_) => run(&["systemctl", "--user", "stop", "umoja-session.target"]),
+/// Close Quick Settings before acting, as gnome-shell does, so the menu
+/// is not left open over a new window or the lock screen.
+pub fn close_menu(w: &impl IsA<gtk::Widget>) {
+    if let Some(p) = w.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>() {
+        p.popdown();
     }
 }
 
+/// Opens GNOME Settings (optionally on a panel) through its desktop file,
+/// with an activation token so the compositor focuses the new window.
 pub fn open_settings(panel: &str) {
-    let mut cmd = Command::new("gnome-control-center");
+    let ctx = gtk::gdk::Display::default().map(|d| d.app_launch_context());
+    let app = gio::DesktopAppInfo::new("org.gnome.Settings.desktop");
+    let mut argv = vec!["gnome-control-center".to_string()];
     if !panel.is_empty() {
-        cmd.arg(panel);
+        argv.push(panel.to_string());
     }
-    if let Err(e) = cmd.spawn() {
-        tracing::warn!(error = %e, "could not open Settings");
-    }
+    let token = match (&ctx, &app) {
+        (Some(ctx), Some(app)) => ctx.startup_notify_id(Some(app), &[]),
+        _ => None,
+    };
+    crate::launch::spawn_app("org.gnome.Settings", &argv, token.as_deref());
 }
 
 fn run(argv: &[&str]) {
-    if let Err(e) = Command::new(argv[0]).args(&argv[1..]).spawn() {
-        tracing::warn!(cmd = argv[0], error = %e, "could not run");
+    let argv: Vec<&std::ffi::OsStr> = argv.iter().map(|a| a.as_ref()).collect();
+    if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
+        tracing::warn!(cmd = ?argv[0], error = %e, "could not run");
     }
 }

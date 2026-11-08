@@ -9,6 +9,9 @@ mod battery;
 mod bus;
 mod clock;
 mod dbusmenu;
+mod launch;
+mod lock;
+mod login;
 mod network;
 mod notifications;
 mod quick_settings;
@@ -77,6 +80,7 @@ fn build(app: &adw::Application) {
 
     window.set_child(Some(&bar));
     window.present();
+    lock::init();
 }
 
 fn activities_button() -> gtk::Button {

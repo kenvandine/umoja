@@ -174,3 +174,36 @@ window.umoja-panel popover button {
 window.umoja-panel popover button:hover {
   background-color: alpha(currentColor, 0.1);
 }
+/* Lock screen, like gnome-shell's: white text over the blurred wallpaper. */
+window.umoja-lock {
+  background-color: #000000;
+  color: #ffffff;
+}
+.umoja-lock .lock-time {
+  font-size: 96px;
+  font-weight: 800;
+}
+.umoja-lock .lock-date {
+  font-size: 24px;
+  font-weight: 600;
+}
+.umoja-lock .lock-hint {
+  margin-top: 48px;
+  font-size: 14px;
+  opacity: 0.8;
+}
+.umoja-lock .lock-name {
+  font-size: 20px;
+  font-weight: 700;
+}
+.umoja-lock .lock-entry {
+  border-radius: 999px;
+  min-height: 40px;
+  padding: 0 12px;
+  background-color: alpha(#ffffff, 0.15);
+  color: #ffffff;
+}
+.umoja-lock .lock-message {
+  color: #ffffff;
+  opacity: 0.9;
+}

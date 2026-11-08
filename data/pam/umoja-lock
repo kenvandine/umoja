@@ -1,0 +1,4 @@
+#%PAM-1.0
+# Unlocking the Umoja lock screen: the user's normal password checks.
+@include common-auth
+@include common-account

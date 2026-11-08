@@ -14,3 +14,5 @@ gtk4-layer-shell.workspace = true
 gio.workspace = true
 glib.workspace = true
 tracing.workspace = true
+libc.workspace = true
+gtk4-session-lock.workspace = true

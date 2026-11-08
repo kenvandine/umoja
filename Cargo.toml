@@ -23,6 +23,7 @@ umoja-common = { path = "crates/umoja-common" }
 gtk4 = { version = "0.9", features = ["v4_16"] }
 libadwaita = { version = "0.7", features = ["v1_6"] }
 gtk4-layer-shell = "0.4"
+gtk4-session-lock = "0.1"
 gio = "0.20"
 glib = "0.20"
 zbus = { version = "5.0", default-features = false, features = ["tokio"] }

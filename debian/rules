@@ -50,6 +50,9 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
 	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
 
+	# Lock screen PAM service
+	install -D -m 0644 data/pam/umoja-lock $(DESKTOP)/etc/pam.d/umoja-lock
+
 	# Desktop session & GSettings
 	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
 	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
