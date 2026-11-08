@@ -268,6 +268,30 @@ public:
         return consumed;
     }
 
+    // A window hidden because it is on another workspace must stay hidden
+    // whatever its client asks. Chromium/Electron and Qt apps answer the
+    // configure that hiding sends by re-requesting their own state (e.g.
+    // "restored"), which Mir would apply and so un-hide the window on the
+    // workspace it just left. Remember the request for when it comes back.
+    void handle_modify_window(WindowInfo& info, WindowSpecification const& modifications) override {
+        auto it = hidden_states.find(info.window());
+        if (it == hidden_states.end() || !modifications.state().is_set()) {
+            MinimalWindowManager::handle_modify_window(info, modifications);
+            return;
+        }
+        WindowSpecification spec = modifications;
+        auto const requested = spec.state().consume();
+        if (requested != mir_window_state_hidden) it->second = requested;
+        MinimalWindowManager::handle_modify_window(info, spec);
+    }
+
+    // Activation requests from windows on another workspace don't pull them
+    // onto this one (GNOME shows a "ready" notice instead of switching).
+    void handle_raise_window(WindowInfo& info) override {
+        if (hidden_states.count(info.window())) return;
+        MinimalWindowManager::handle_raise_window(info);
+    }
+
     void handle_request_move(WindowInfo& info, MirInputEvent const* input_event) override {
         MinimalWindowManager::handle_request_move(info, input_event);
         if (!is_app_window(info) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer) return;
