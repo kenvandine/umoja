@@ -76,6 +76,8 @@ struct StreamChunk {
 struct StreamChoice {
     #[serde(default)]
     delta: StreamDelta,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -277,6 +279,7 @@ impl LemonadeClient {
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut calls = CallAssembler::default();
+        let mut finished = false;
         let finish = |calls: CallAssembler| {
             let tx = tx.clone();
             async move {
@@ -306,6 +309,7 @@ impl LemonadeClient {
                     continue;
                 };
                 for choice in chunk.choices {
+                    finished |= choice.finish_reason.is_some();
                     calls.add(choice.delta.tool_calls);
                     if let Some(text) = choice.delta.content.filter(|t| !t.is_empty())
                         && tx.send(ChatEvent::Text(text)).await.is_err()
@@ -315,7 +319,13 @@ impl LemonadeClient {
                 }
             }
         }
-        finish(calls).await;
+        // A body that ends without [DONE] or a finish_reason was cut off
+        // (e.g. the service restarted): don't pass a fragment off as the answer.
+        if finished {
+            finish(calls).await;
+        } else {
+            let _ = tx.send(ChatEvent::Error("The assistant stopped before finishing. Try again.".into())).await;
+        }
     }
 }
 
