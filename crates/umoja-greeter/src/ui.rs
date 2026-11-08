@@ -1,9 +1,9 @@
 //! The login screen.
 //!
-//! The selected user's wallpaper (or Ubuntu's default) fills the screen,
+//! Ubuntu's default wallpaper (warty-final-ubuntu.png) fills the screen,
 //! blurred and dimmed, with a large lock-screen clock in the corner, a
 //! frosted-glass login card in the middle, and the other accounts as a row
-//! of avatars underneath. Switching users cross-fades to their wallpaper.
+//! of avatars underneath.
 
 use crate::auth::{self, Greeter, PromptType, User};
 use crate::backdrop::{self, Backdrop};
@@ -27,9 +27,6 @@ struct State {
     sessions: Vec<auth::Session>,
     current: Cell<usize>,
     session: Cell<usize>,
-    system_wallpaper: Option<String>,
-    backdrops: gtk::Stack,
-    front: Cell<bool>,
     card: gtk::Box,
     avatar: adw::Avatar,
     name: gtk::Label,
@@ -54,16 +51,12 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         .css_classes(["umoja-greeter"])
         .build();
 
-    // Two backdrops so a user switch can cross-fade between wallpapers.
-    let backdrops = gtk::Stack::builder()
-        .transition_type(gtk::StackTransitionType::Crossfade)
-        .transition_duration(600)
-        .build();
-    backdrops.add_named(&Backdrop::new(BLUR_RADIUS), Some("a"));
-    backdrops.add_named(&Backdrop::new(BLUR_RADIUS), Some("b"));
+    // The login screen always shows Ubuntu's default wallpaper, blurred.
+    let bg = Backdrop::new(BLUR_RADIUS);
+    bg.set_wallpaper(Some(backdrop::GREETER_WALLPAPER));
 
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&backdrops));
+    overlay.set_child(Some(&bg));
 
     // Card ------------------------------------------------------------------
     let avatar = adw::Avatar::new(128, None, true);
@@ -167,9 +160,6 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         sessions,
         current: Cell::new(0),
         session: Cell::new(0),
-        system_wallpaper: backdrop::system_wallpaper(),
-        backdrops,
-        front: Cell::new(true),
         card,
         avatar,
         name,
@@ -361,22 +351,6 @@ fn select_user(state: &Rc<State>, index: usize) {
             .and_then(|p| gtk::gdk::Texture::from_filename(p).ok())
             .as_ref(),
     );
-
-    // Cross-fade to this user's wallpaper (or the system one).
-    let wallpaper = user
-        .background
-        .clone()
-        .or_else(|| state.system_wallpaper.clone());
-    let next = if state.front.get() { "b" } else { "a" };
-    if let Some(b) = state
-        .backdrops
-        .child_by_name(next)
-        .and_downcast::<Backdrop>()
-    {
-        b.set_wallpaper(wallpaper.as_deref());
-    }
-    state.backdrops.set_visible_child_name(next);
-    state.front.set(!state.front.get());
 
     // Highlight the chosen avatar in the strip.
     let mut child = state.user_strip.first_child();

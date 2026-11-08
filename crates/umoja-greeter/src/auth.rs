@@ -52,7 +52,6 @@ unsafe extern "C" {
     fn lightdm_user_get_display_name(u: GObjectPtr) -> *const c_char;
     fn lightdm_user_get_image(u: GObjectPtr) -> *const c_char;
     fn lightdm_user_get_session(u: GObjectPtr) -> *const c_char;
-    fn lightdm_user_get_background(u: GObjectPtr) -> *const c_char;
     fn lightdm_user_get_logged_in(u: GObjectPtr) -> gboolean;
 }
 
@@ -69,8 +68,6 @@ pub struct User {
     pub display_name: String,
     pub image: Option<String>,
     pub session: Option<String>,
-    /// Wallpaper from AccountsService (`BackgroundFile`), if the user set one.
-    pub background: Option<String>,
     pub logged_in: bool,
 }
 
@@ -269,8 +266,6 @@ pub fn users() -> Vec<User> {
             image: opt_str(unsafe { lightdm_user_get_image(u) })
                 .filter(|p| std::path::Path::new(p).exists()),
             session: opt_str(unsafe { lightdm_user_get_session(u) }),
-            background: opt_str(unsafe { lightdm_user_get_background(u) })
-                .filter(|p| std::path::Path::new(p).exists()),
             logged_in: unsafe { lightdm_user_get_logged_in(u) != 0 },
             name,
         });
@@ -287,7 +282,6 @@ pub fn preview_users() -> Vec<User> {
             display_name: d.to_string(),
             image: None,
             session: None,
-            background: None,
             logged_in: *n == "amara",
         })
         .collect()

@@ -15,7 +15,7 @@ down. It also adds a local AI assistant (Lemonade, see
 | `crates/umoja-panel` | Top bar: Activities, clock/calendar, AppIndicator tray (`org.kde.StatusNotifierWatcher` with native dbusmenu menus), network (NetworkManager), volume and battery (UPower) indicators, Quick Settings with Wi-Fi/Wired tiles and a network list, the lock screen, notifications, and the PolicyKit authentication agent (the "Authentication Required" password dialog). |
 | `crates/umoja-dock` | Ubuntu Dock work-alike driven by the `dash-to-dock` GSettings keys and `favorite-apps`, with running dots from `zwlr_foreign_toplevel`. |
 | `crates/umoja-overlay` | App grid + search, Lemonade assistant with action chips, Myna dictation, and the GNOME-style screenshot UI. |
-| `crates/umoja-greeter` | LightDM greeter over a blurred copy of the user's (or Ubuntu's default) wallpaper. |
+| `crates/umoja-greeter` | LightDM greeter over a blurred copy of Ubuntu's default wallpaper (`warty-final-ubuntu.png`). |
 | `crates/umoja-portal` | `xdg-desktop-portal-umoja`: Settings (GNOME keys incl. `button-layout`), Screenshot, ScreenCast (stub). |
 | `crates/umoja-common` | GSettings, i18n (reuses gnome-shell/GTK/control-center translations), HiDPI rules, shared types. |
 | `data/` | Session file, GSettings schema, systemd user units, portal + LightDM config. |

@@ -9,8 +9,13 @@ use gtk::subclass::prelude::*;
 use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 
-/// Ubuntu's default wallpaper, used when nothing better is configured.
-pub use umoja_common::gsettings::FALLBACK_WALLPAPER;
+/// The greeter's background: Ubuntu's default wallpaper (from ubuntu-wallpapers).
+pub const GREETER_WALLPAPER: &str = "/usr/share/backgrounds/warty-final-ubuntu.png";
+
+/// Used if the greeter wallpaper is missing (e.g. a desktop-base system).
+fn fallback_wallpaper() -> Option<String> {
+    umoja_common::gsettings::wallpaper_path(true).map(|p| p.to_string_lossy().into_owned())
+}
 
 mod imp {
     use super::*;
@@ -85,15 +90,8 @@ impl Backdrop {
     pub fn set_wallpaper(&self, path: Option<&str>) {
         let texture = path
             .and_then(|p| gdk::Texture::from_filename(p).ok())
-            .or_else(|| gdk::Texture::from_filename(FALLBACK_WALLPAPER).ok());
+            .or_else(|| fallback_wallpaper().and_then(|p| gdk::Texture::from_filename(p).ok()));
         *self.imp().texture.borrow_mut() = texture;
         self.queue_draw();
     }
-}
-
-/// The system default wallpaper, as Ubuntu configures it for new users
-/// (`org.gnome.desktop.background picture-uri[-dark]`, set by ubuntu-settings).
-pub fn system_wallpaper() -> Option<String> {
-    // The greeter always uses the dark variant, which suits the glass card.
-    umoja_common::gsettings::wallpaper_path(true).map(|p| p.to_string_lossy().into_owned())
 }
