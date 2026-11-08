@@ -29,14 +29,24 @@ pub struct Config {
     pub bindings: Vec<Binding>,
     pub overlay_keysym: Option<u32>,
     pub edge_tiling: bool,
+    /// Ubuntu Tiling Assistant's layout picker (drag to the top edge).
+    pub layout_picker: bool,
+    /// Tiling Assistant: focusing a tiled window raises its tile group.
+    pub raise_tile_group: bool,
     pub center_new_windows: bool,
     pub workspaces: workspaces::Settings,
 }
+
+/// Ubuntu's Tiling Assistant extension (enabled by default in Ubuntu).
+pub const TILING_ASSISTANT: &str = "org.gnome.shell.extensions.tiling-assistant";
+const TILING_ASSISTANT_UUID: &str = "tiling-assistant@ubuntu.com";
 
 pub static CONFIG: RwLock<Config> = RwLock::new(Config {
     bindings: Vec::new(),
     overlay_keysym: Some(XK_SUPER_L),
     edge_tiling: true,
+    layout_picker: true,
+    raise_tile_group: true,
     center_new_windows: false,
     workspaces: workspaces::Settings {
         dynamic: true,
@@ -46,6 +56,9 @@ pub static CONFIG: RwLock<Config> = RwLock::new(Config {
 });
 
 const XK_SUPER_L: u32 = 0xffeb;
+const XK_SUPER_R: u32 = 0xffec;
+/// Not a real keysym: stands for "either Super key" (mutter's `Super`).
+const XK_SUPER: u32 = 0x1_00ff_eb;
 
 /// (schema, key, action) for every shortcut the compositor handles itself.
 /// These are the same keys mutter/gnome-shell read in Ubuntu's GNOME session.
@@ -149,6 +162,49 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "toggle-application-view",
         Action::ToggleOverlay,
     ),
+    (gs::SHELL_KEYBINDINGS, "toggle-overview", Action::ToggleOverview),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-applications",
+        Action::SwitchApplications,
+    ),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-applications-backward",
+        Action::SwitchApplicationsBackward,
+    ),
+    (gs::WM_KEYBINDINGS, "switch-group", Action::SwitchGroup),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-group-backward",
+        Action::SwitchGroupBackward,
+    ),
+    (gs::WM_KEYBINDINGS, "switch-windows", Action::SwitchWindows),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-windows-backward",
+        Action::SwitchWindowsBackward,
+    ),
+    // Ubuntu's Tiling Assistant takes over Super+arrows (it empties mutter's
+    // toggle-tiled-*/maximize keys while enabled) and adds keypad quarters.
+    (TILING_ASSISTANT, "tile-left-half", Action::TileLeft),
+    (TILING_ASSISTANT, "tile-right-half", Action::TileRight),
+    (TILING_ASSISTANT, "tile-top-half", Action::TileTopHalf),
+    (TILING_ASSISTANT, "tile-bottom-half", Action::TileBottomHalf),
+    (TILING_ASSISTANT, "tile-topleft-quarter", Action::TileTopLeft),
+    (TILING_ASSISTANT, "tile-topright-quarter", Action::TileTopRight),
+    (
+        TILING_ASSISTANT,
+        "tile-bottomleft-quarter",
+        Action::TileBottomLeft,
+    ),
+    (
+        TILING_ASSISTANT,
+        "tile-bottomright-quarter",
+        Action::TileBottomRight,
+    ),
+    (TILING_ASSISTANT, "tile-maximize", Action::ToggleMaximized),
+    (TILING_ASSISTANT, "restore-window", Action::Unmaximize),
     (
         gs::SHELL_KEYBINDINGS,
         "show-screenshot-ui",
@@ -180,6 +236,21 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>h", Action::Minimize as u32),
     ("<Alt>F4", Action::Close as u32),
     ("<Super>a", Action::ToggleOverlay as u32),
+    ("<Super>s", Action::ToggleOverview as u32),
+    ("<Alt>Tab", Action::SwitchApplications as u32),
+    ("<Super>Tab", Action::SwitchApplications as u32),
+    ("<Shift><Alt>Tab", Action::SwitchApplicationsBackward as u32),
+    ("<Shift><Super>Tab", Action::SwitchApplicationsBackward as u32),
+    ("<Alt>Above_Tab", Action::SwitchGroup as u32),
+    ("<Super>Above_Tab", Action::SwitchGroup as u32),
+    ("<Shift><Alt>Above_Tab", Action::SwitchGroupBackward as u32),
+    ("<Shift><Super>Above_Tab", Action::SwitchGroupBackward as u32),
+    ("<Super>KP_7", Action::TileTopLeft as u32),
+    ("<Super>KP_9", Action::TileTopRight as u32),
+    ("<Super>KP_1", Action::TileBottomLeft as u32),
+    ("<Super>KP_3", Action::TileBottomRight as u32),
+    ("<Super>KP_8", Action::TileTopHalf as u32),
+    ("<Super>KP_2", Action::TileBottomHalf as u32),
     ("<Super>d", Action::ToggleDictation as u32),
     ("<Super>Page_Up", Action::WorkspacePrev as u32),
     ("<Super>Page_Down", Action::WorkspaceNext as u32),
@@ -238,10 +309,15 @@ pub fn reload() {
             .collect();
     }
     let overlay = gs::get_string(gs::MUTTER, "overlay-key", "Super_L");
+    let ta = tiling_assistant_active();
     let cfg = Config {
         bindings,
         overlay_keysym: keysym_from_name(&overlay),
-        edge_tiling: gs::get_bool(gs::MUTTER, "edge-tiling", true),
+        // Tiling Assistant switches mutter's edge-tiling off and does the
+        // edge tiling itself, so with it, edge tiling is on.
+        edge_tiling: ta || gs::get_bool(gs::MUTTER, "edge-tiling", true),
+        layout_picker: !ta || gs::get_bool(TILING_ASSISTANT, "enable-layout-picker", true),
+        raise_tile_group: !ta || gs::get_bool(TILING_ASSISTANT, "enable-raise-tile-group", true),
         center_new_windows: gs::get_bool(gs::MUTTER, "center-new-windows", false),
         workspaces: workspaces::Settings {
             dynamic: gs::get_bool(gs::MUTTER, "dynamic-workspaces", true),
@@ -257,6 +333,17 @@ pub fn reload() {
     *CONFIG.write().unwrap_or_else(|e| e.into_inner()) = cfg;
 }
 
+/// Ubuntu ships Tiling Assistant enabled through its session mode; it is
+/// active unless the user disabled it.
+fn tiling_assistant_active() -> bool {
+    if gs::settings(TILING_ASSISTANT).is_none() {
+        return false;
+    }
+    !gs::get_strv(gs::SHELL, "disabled-extensions")
+        .iter()
+        .any(|e| e == TILING_ASSISTANT_UUID)
+}
+
 /// Load once, then keep watching for changes on a helper thread.
 pub fn start_watching() {
     reload();
@@ -270,6 +357,7 @@ pub fn start_watching() {
                 let mut schemas: Vec<&str> = SOURCES.iter().map(|s| s.0).collect();
                 schemas.push(gs::MUTTER);
                 schemas.push(gs::WM_PREFERENCES);
+                schemas.push(gs::SHELL);
                 schemas.sort_unstable();
                 schemas.dedup();
                 for schema in schemas {
@@ -289,11 +377,14 @@ pub fn start_watching() {
 pub fn lookup(keysym: u32, mods: u32) -> u32 {
     let keysym = normalize(keysym);
     let cfg = CONFIG.read().unwrap_or_else(|e| e.into_inner());
-    cfg.bindings
+    let action = cfg
+        .bindings
         .iter()
         .find(|b| b.keysym == keysym && b.mods == mods)
         .map(|b| b.action)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    tracing::trace!(keysym, mods, action, "key");
+    action
 }
 
 pub fn read() -> std::sync::RwLockReadGuard<'static, Config> {
@@ -301,23 +392,26 @@ pub fn read() -> std::sync::RwLockReadGuard<'static, Config> {
 }
 
 pub fn is_overlay_key(keysym: u32) -> bool {
-    CONFIG
+    let configured = CONFIG
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .overlay_keysym
-        == Some(keysym)
+        .overlay_keysym;
+    // mutter's default is "Super" (GNOME 46+), meaning either Super key.
+    configured == Some(keysym) || (configured == Some(XK_SUPER) && matches!(keysym, XK_SUPER_L | XK_SUPER_R))
 }
 
 pub fn edge_tiling_enabled() -> bool {
     CONFIG.read().unwrap_or_else(|e| e.into_inner()).edge_tiling
 }
 
-/// Uppercase Latin letters (Shift held) match their lowercase binding.
+/// Shifted keysyms match their unshifted binding: uppercase Latin letters,
+/// ISO_Left_Tab (Shift+Tab) and asciitilde (Shift+`, for Above_Tab).
 fn normalize(keysym: u32) -> u32 {
-    if (0x41..=0x5a).contains(&keysym) {
-        keysym + 0x20
-    } else {
-        keysym
+    match keysym {
+        0x41..=0x5a => keysym + 0x20,
+        0xfe20 => 0xff09,
+        0x7e => 0x60,
+        _ => keysym,
     }
 }
 
@@ -360,6 +454,7 @@ pub fn keysym_from_name(name: &str) -> Option<u32> {
         "BackSpace" => 0xff08,
         "Delete" => 0xffff,
         "Print" => 0xff61,
+        "Super" => XK_SUPER,
         "Super_L" => 0xffeb,
         "Super_R" => 0xffec,
         "Above_Tab" | "grave" => 0x60,
@@ -418,11 +513,17 @@ mod tests {
             }],
             overlay_keysym: Some(XK_SUPER_L),
             edge_tiling: true,
+            layout_picker: true,
+            raise_tile_group: true,
             center_new_windows: false,
             workspaces: workspaces::Settings::default(),
         };
         assert_eq!(lookup('H' as u32, MOD_SUPER), Action::Minimize as u32);
         assert_eq!(lookup('h' as u32, 0), 0);
+        assert_eq!(normalize(0xfe20), 0xff09);
         assert!(is_overlay_key(0xffeb));
+        CONFIG.write().unwrap().overlay_keysym = keysym_from_name("Super");
+        assert!(is_overlay_key(0xffeb) && is_overlay_key(0xffec));
+        assert!(!is_overlay_key('a' as u32));
     }
 }

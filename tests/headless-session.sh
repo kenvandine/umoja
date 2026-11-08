@@ -15,6 +15,8 @@ export XDG_CURRENT_DESKTOP=Umoja:ubuntu:GNOME XDG_SESSION_TYPE=wayland XDG_SESSI
 export NO_AT_BRIDGE=1 RUST_LOG=info
 # No systemd --user in a container: start the shell pieces by hand below.
 export UMOJA_NO_SESSION_TARGET=1 UMOJA_NO_XWAYLAND=1
+# wtype's modifiers aren't reported on Mir key events; let umoja-mir track them.
+export UMOJA_TRACK_MODIFIERS=1
 unset DISPLAY WAYLAND_DISPLAY
 cd "$HOME"
 eval "$(dbus-launch --sh-syntax)"
@@ -54,6 +56,49 @@ sleep 4
 nautilus --new-window >"$OUT/nautilus.log" 2>&1 &
 sleep 8
 shot 02-apps
+
+# Window management, as in GNOME on Ubuntu.
+comp() { gdbus call --session --dest org.umoja.Compositor --object-path /org/umoja/Compositor \
+    --method "org.umoja.Compositor.$1" "${@:2}" 2>>"$LOG"; }
+windows=$(comp GetWindows)
+echo "GetWindows: $windows" >>"$LOG"
+[[ "$windows" == *TextEditor* && "$windows" == *Nautilus* ]] \
+    && pass "compositor lists both windows" || fail "compositor window list: $windows"
+
+# Super+Left tiles the focused window into the left half (tiled flag 32).
+wtype -P Super_L -k Left -p Super_L 2>>"$LOG"
+sleep 2
+shot 06-tiled-left
+comp GetWindowsMru | grep -Eq "^\(\[\([^)]*uint32 ([0-9]+)" && {
+    flags=$(comp GetWindowsMru | sed -E 's/^\(\[\([^)]*uint32 ([0-9]+).*/\1/')
+    (( flags & 32 )) && pass "Super+Left tiled the focused window" || fail "Super+Left did not tile (flags $flags)"
+} || fail "no focused window after Super+Left"
+
+# Alt+Tab: hold Alt, press Tab, capture while the switcher is up, release.
+before=$(comp GetWindowsMru | grep -oE "uint64 [0-9]+" | head -1)
+wtype -P Alt_L -k Tab -s 2500 -p Alt_L 2>>"$LOG" &
+sleep 1.5
+shot 07-alt-tab
+wait
+sleep 1
+after=$(comp GetWindowsMru | grep -oE "uint64 [0-9]+" | head -1)
+[ -n "$before" ] && [ "$before" != "$after" ] && pass "Alt+Tab switched windows" \
+    || fail "Alt+Tab did not switch ($before -> $after)"
+
+# Super opens the overview's window spread.
+overlay ToggleOverview && pass "overlay answers ToggleOverview" || fail "ToggleOverview failed"
+sleep 8
+shot 08-overview
+overlay ToggleOverview
+sleep 2
+
+# Drag-to-snap chrome: the compositor drives these while a window is dragged.
+# (Mir's virtual output sends no frame callbacks, so only check the calls.)
+ov() { gdbus call --session --dest org.umoja.Overlay --object-path /org/umoja/Overlay \
+    --method "org.umoja.Overlay.$1" "${@:2}" >>"$LOG" 2>&1; }
+ov TilePreview true 0 32 960 1048 600 300 800 600 && ov LayoutPicker 2 1 774 32 \
+    && ov TilePreview false 0 0 0 0 0 0 0 0 && ov LayoutPicker 0 0 0 0 \
+    && pass "overlay accepts tile preview and layout picker" || fail "tile preview / layout picker calls failed"
 
 # The app grid is built on first show, which is slow with software GL.
 overlay Show && pass "overlay answers Show" || fail "overlay Show failed"

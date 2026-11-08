@@ -4,17 +4,13 @@
 use crate::outputs::{self, Direction};
 use crate::tiling::{self, Action, Rect, TilingState};
 use crate::workspaces::{self, Request};
-use crate::{input, session};
+use crate::switcher::{self, Outcome};
+use crate::{input, session, shell};
 use std::ffi::{CStr, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{LazyLock, Mutex};
 
 static TILING: LazyLock<Mutex<TilingState>> = LazyLock::new(Default::default);
-
-/// Pixels from a screen edge at which a dropped window snaps.
-const SNAP_THRESHOLD: i32 = 8;
-/// Height of the corner band that turns a side snap into a quarter snap.
-const CORNER_BAND: i32 = 96;
 
 #[repr(C)]
 pub struct UmojaConfig {
@@ -65,16 +61,6 @@ pub extern "C" fn umoja_tile_geometry(action: u32, area: Rect, out: *mut Rect) -
             }
             _ => false,
         }
-    })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn umoja_edge_zone(px: i32, py: i32, area: Rect) -> u32 {
-    guard("edge_zone", 0, || {
-        if !input::edge_tiling_enabled() {
-            return 0;
-        }
-        tiling::edge_zone(px, py, area, SNAP_THRESHOLD, CORNER_BAND) as u32
     })
 }
 
@@ -297,4 +283,164 @@ pub extern "C" fn umoja_output_remove(id: i32) {
     guard("output_remove", (), || {
         crate::display_config::output_removed(id)
     })
+}
+
+// ---- switcher ---------------------------------------------------------------
+
+#[repr(C)]
+pub struct SwitchWindow {
+    pub id: u64,
+    pub app_id: *const c_char,
+    pub title: *const c_char,
+}
+
+const SWITCH_MAX: usize = 64;
+
+#[repr(C)]
+pub struct SwitchResult {
+    pub window: u64,
+    pub ids: [u64; SWITCH_MAX],
+    pub n_ids: usize,
+}
+
+pub const SWITCH_NOT_OURS: u32 = 0;
+pub const SWITCH_CONSUMED: u32 = 1;
+pub const SWITCH_ACTIVATE: u32 = 2;
+pub const SWITCH_CLOSE: u32 = 3;
+pub const SWITCH_CANCEL: u32 = 4;
+
+fn lossy(p: *const c_char) -> String {
+    if p.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+}
+
+fn write_outcome(out: Option<Outcome>, res: *mut SwitchResult) -> u32 {
+    let Some(out) = out else { return SWITCH_NOT_OURS };
+    let fill = |ids: &[u64]| {
+        if res.is_null() {
+            return;
+        }
+        let r = unsafe { &mut *res };
+        let n = ids.len().min(SWITCH_MAX);
+        r.ids[..n].copy_from_slice(&ids[..n]);
+        r.n_ids = n;
+    };
+    match out {
+        Outcome::Consumed => SWITCH_CONSUMED,
+        Outcome::Cancel => SWITCH_CANCEL,
+        Outcome::Activate { window, raise } => {
+            fill(&raise);
+            if !res.is_null() {
+                unsafe { (*res).window = window };
+            }
+            SWITCH_ACTIVATE
+        }
+        Outcome::Close(ids) => {
+            fill(&ids);
+            SWITCH_CLOSE
+        }
+    }
+}
+
+/// True when `action` is one of the Alt+Tab family.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_is_switcher_action(action: u32) -> bool {
+    guard("is_switcher_action", false, || {
+        shell::switcher_binding(action).is_some()
+    })
+}
+
+/// Open a switcher. `windows` is in MRU order (focused first).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_open(
+    action: u32,
+    mods: u32,
+    windows: *const SwitchWindow,
+    n: usize,
+) -> bool {
+    guard("switcher_open", false, || {
+        let list = if windows.is_null() || n == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(windows, n) }
+        };
+        let mru = list
+            .iter()
+            .map(|w| switcher::Window {
+                id: w.id,
+                app_id: lossy(w.app_id),
+                title: lossy(w.title),
+            })
+            .collect();
+        shell::open_switcher(action, mods, mru)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_key(
+    keysym: u32,
+    mods: u32,
+    down: bool,
+    out: *mut SwitchResult,
+) -> u32 {
+    guard("switcher_key", SWITCH_NOT_OURS, || {
+        write_outcome(shell::switcher_key(keysym, mods, down), out)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_pick(index: u32, out: *mut SwitchResult) -> u32 {
+    guard("switcher_pick", SWITCH_NOT_OURS, || {
+        write_outcome(shell::switcher_pick(index as usize), out)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_window_closed(id: u64) {
+    guard("switcher_window_closed", (), || shell::switcher_window_closed(id))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_cancel() {
+    guard("switcher_cancel", (), shell::switcher_cancel)
+}
+
+// ---- drag to snap ----------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_drag_begin(px: i32, py: i32, window: Rect, area: Rect, monitor: Rect) {
+    guard("drag_begin", (), || {
+        shell::drag_begin(px, py, window, area, monitor)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_drag_motion(
+    px: i32,
+    py: i32,
+    window: Rect,
+    area: Rect,
+    monitor: Rect,
+) -> u32 {
+    guard("drag_motion", 0, || {
+        shell::drag_motion(px, py, window, area, monitor) as u32
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_drag_end() -> u32 {
+    guard("drag_end", 0, || shell::drag_end() as u32)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_raise_tile_group() -> bool {
+    guard("raise_tile_group", true, || input::read().raise_tile_group)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_is_tile_action(action: u32) -> bool {
+    guard("is_tile_action", false, || tiling::is_tile(Action::from_u32(action)))
 }

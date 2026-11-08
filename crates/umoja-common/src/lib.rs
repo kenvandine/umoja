@@ -3,6 +3,7 @@
 //! Nothing in here depends on GTK so that the compositor, portal and other
 //! headless daemons can use it without pulling in a toolkit.
 
+pub mod apps;
 pub mod dbus;
 pub mod gsettings;
 pub mod hidpi;

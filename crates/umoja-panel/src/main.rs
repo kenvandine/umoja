@@ -88,7 +88,7 @@ fn activities_button() -> gtk::Button {
     button
 }
 
-/// Ask umoja-overlay to show/hide the app grid.
+/// Activities: ask umoja-overlay to show/hide the overview (window spread).
 pub fn toggle_overlay() {
     gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
         let Ok(conn) = conn else { return };
@@ -96,7 +96,7 @@ pub fn toggle_overlay() {
             Some(dbus::OVERLAY_BUS_NAME),
             dbus::OVERLAY_OBJECT_PATH,
             dbus::OVERLAY_INTERFACE,
-            "Toggle",
+            "ToggleOverview",
             None,
             None,
             gio::DBusCallFlags::NONE,

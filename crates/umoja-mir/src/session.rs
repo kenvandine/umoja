@@ -53,41 +53,84 @@ pub fn started(wayland_display: &str) {
 pub fn dispatch(action: Action) {
     let method = match action {
         Action::ToggleOverlay => "Toggle",
+        Action::ToggleOverview => "ToggleOverview",
         Action::ToggleDictation => "ToggleDictation",
         Action::ScreenshotUi => "ShowScreenshotUI",
         Action::Screenshot => "ScreenshotScreen",
         _ => return,
     };
-    call_overlay(method, ());
+    overlay_call(method, ());
 }
 
 pub fn screenshot_area(r: Rect) {
-    call_overlay("ScreenshotArea", (r.x, r.y, r.w, r.h));
+    overlay_call("ScreenshotArea", (r.x, r.y, r.w, r.h));
 }
 
-fn call_overlay<B>(method: &'static str, body: B)
+type BoxFuture = std::pin::Pin<Box<dyn std::future::Future<Output = zbus::Result<()>> + Send>>;
+type Body = Box<dyn FnOnce(zbus::Connection) -> BoxFuture + Send>;
+
+struct Call {
+    method: &'static str,
+    send: Body,
+}
+
+/// Calls to the overlay go through one queue so they arrive in order (a
+/// "hide preview" must never overtake the "show preview" before it). Bursts
+/// of state updates such as the tile preview during a drag are coalesced to
+/// the latest one, so a slow overlay never builds up a backlog.
+static QUEUE: LazyLock<tokio::sync::mpsc::UnboundedSender<Call>> = LazyLock::new(|| {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Call>();
+    RUNTIME.spawn(async move {
+        let mut conn: Option<zbus::Connection> = None;
+        while let Some(first) = rx.recv().await {
+            let mut batch = vec![first];
+            while let Ok(more) = rx.try_recv() {
+                batch.push(more);
+            }
+            // Keep only the last of each coalescable method, in order.
+            let mut keep = Vec::with_capacity(batch.len());
+            for (i, call) in batch.iter().enumerate() {
+                let later = COALESCE.contains(&call.method)
+                    && batch[i + 1..].iter().any(|c| c.method == call.method);
+                keep.push(!later);
+            }
+            for (call, keep) in batch.into_iter().zip(keep) {
+                if !keep {
+                    continue;
+                }
+                if conn.is_none() {
+                    conn = zbus::Connection::session().await.ok();
+                }
+                let Some(c) = conn.clone() else { continue };
+                let method = call.method;
+                if let Err(e) = (call.send)(c).await {
+                    tracing::debug!(method, error = %e, "overlay call failed");
+                }
+            }
+        }
+    });
+    tx
+});
+
+/// Methods that only carry the latest state.
+const COALESCE: &[&str] = &["TilePreview", "LayoutPicker", "SwitcherSelect"];
+
+pub fn overlay_call<B>(method: &'static str, body: B)
 where
     B: serde::Serialize + zbus::zvariant::DynamicType + Send + Sync + 'static,
 {
-    // Never block the compositor thread on D-Bus.
-    RUNTIME.spawn(async move {
-        let result = async {
-            let conn = zbus::Connection::session().await?;
-            conn.call_method(
-                Some(dbus::OVERLAY_BUS_NAME),
-                dbus::OVERLAY_OBJECT_PATH,
-                Some(dbus::OVERLAY_INTERFACE),
-                method,
-                &body,
-            )
-            .await?;
-            Ok::<_, zbus::Error>(())
-        }
-        .await;
-        if let Err(e) = result {
-            tracing::warn!(method, error = %e, "overlay call failed");
-        }
+    let send: Body = Box::new(move |conn: zbus::Connection| {
+        Box::pin(async move {
+            // Fire and forget: never wait on the overlay's reply.
+            let msg = zbus::Message::method_call(dbus::OVERLAY_OBJECT_PATH, method)?
+                .destination(dbus::OVERLAY_BUS_NAME)?
+                .interface(dbus::OVERLAY_INTERFACE)?
+                .with_flags(zbus::message::Flags::NoReplyExpected)?
+                .build(&body)?;
+            conn.send(&msg).await
+        })
     });
+    let _ = QUEUE.send(Call { method, send });
 }
 
 fn run(cmd: &str, args: &[&str]) {

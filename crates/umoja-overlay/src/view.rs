@@ -234,6 +234,13 @@ impl Overlay {
         self.model_status.set_text(status.as_deref().unwrap_or(""));
     }
 
+    /// Open the app search with `text` already typed (from the overview).
+    pub fn show_with_text(&self, text: &str) {
+        self.show();
+        self.entry.set_text(text);
+        self.entry.set_position(-1);
+    }
+
     pub fn hide(&self) {
         self.generation.set(self.generation.get() + 1);
         self.window.set_visible(false);

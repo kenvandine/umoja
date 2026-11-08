@@ -42,6 +42,15 @@ enum {
     UMOJA_ACTION_SCREENSHOT_UI = 25,
     UMOJA_ACTION_SCREENSHOT = 26,
     UMOJA_ACTION_SCREENSHOT_WINDOW = 27,
+    UMOJA_ACTION_TILE_TOP_HALF = 28,
+    UMOJA_ACTION_TILE_BOTTOM_HALF = 29,
+    UMOJA_ACTION_SWITCH_APPLICATIONS = 30,
+    UMOJA_ACTION_SWITCH_APPLICATIONS_BACKWARD = 31,
+    UMOJA_ACTION_SWITCH_GROUP = 32,
+    UMOJA_ACTION_SWITCH_GROUP_BACKWARD = 33,
+    UMOJA_ACTION_SWITCH_WINDOWS = 34,
+    UMOJA_ACTION_SWITCH_WINDOWS_BACKWARD = 35,
+    UMOJA_ACTION_TOGGLE_OVERVIEW = 36,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.
     UMOJA_ACTION_SWITCH_TO_WORKSPACE_BASE = 100,
     UMOJA_ACTION_MOVE_TO_WORKSPACE_BASE = 200,
@@ -60,6 +69,48 @@ enum {
     UMOJA_MOD_SUPER = 1 << 3,
 };
 
+// Alt+Tab switcher (src/shell.rs, src/switcher.rs).
+typedef struct {
+    uint64_t id;
+    char const* app_id;
+    char const* title;
+} UmojaSwitchWindow;
+
+#define UMOJA_SWITCH_MAX 64
+typedef struct {
+    uint64_t window;                // to activate
+    uint64_t ids[UMOJA_SWITCH_MAX]; // to raise first (activate) or to close
+    size_t n_ids;
+} UmojaSwitchResult;
+
+enum {
+    UMOJA_SWITCH_NOT_OURS = 0,
+    UMOJA_SWITCH_CONSUMED = 1,
+    UMOJA_SWITCH_ACTIVATE = 2,
+    UMOJA_SWITCH_CLOSE = 3,
+    UMOJA_SWITCH_CANCEL = 4,
+};
+
+// org.umoja.Compositor window listing (src/shell.rs).
+typedef struct {
+    uint64_t id;
+    char const* app_id;
+    char const* title;
+    UmojaRect rect;
+    uint32_t flags;
+} UmojaWindowDesc;
+
+enum {
+    UMOJA_WINDOW_FOCUSED = 1 << 0,
+    UMOJA_WINDOW_MINIMIZED = 1 << 1,
+    UMOJA_WINDOW_CURRENT_WORKSPACE = 1 << 2,
+    UMOJA_WINDOW_MAXIMIZED = 1 << 3,
+    UMOJA_WINDOW_FULLSCREEN = 1 << 4,
+    UMOJA_WINDOW_TILED = 1 << 5,
+};
+
+typedef void (*UmojaWindowCallback)(void* ctx, UmojaWindowDesc const* desc);
+
 typedef struct {
     // Wayland extensions to force-enable (layer shell, foreign toplevel...).
     const char* const* extensions;
@@ -74,7 +125,6 @@ int umoja_mir_run(int argc, char const** argv, UmojaConfig const* config);
 uint32_t umoja_lookup_binding(uint32_t keysym, uint32_t modifiers);
 bool umoja_overlay_key_matches(uint32_t keysym);
 bool umoja_tile_geometry(uint32_t action, UmojaRect area, UmojaRect* out);
-uint32_t umoja_edge_zone(int32_t px, int32_t py, UmojaRect area);
 void umoja_tiling_register(uint64_t id, uint32_t action, UmojaRect rect);
 void umoja_tiling_unregister(uint64_t id);
 size_t umoja_tiling_resized(uint64_t id, UmojaRect new_rect, uint64_t* out_ids, UmojaRect* out_rects, size_t max);
@@ -91,6 +141,25 @@ void umoja_output_update(int32_t id, char const* name, UmojaRect extents, float 
                          uint32_t height_mm, uint32_t orientation);
 void umoja_output_remove(int32_t id);
 void umoja_session_started(char const* wayland_display);
+bool umoja_is_switcher_action(uint32_t action);
+bool umoja_switcher_open(uint32_t action, uint32_t mods, UmojaSwitchWindow const* windows, size_t n);
+uint32_t umoja_switcher_key(uint32_t keysym, uint32_t mods, bool down, UmojaSwitchResult* out);
+uint32_t umoja_switcher_pick(uint32_t index, UmojaSwitchResult* out);
+void umoja_switcher_window_closed(uint64_t id);
+void umoja_switcher_cancel(void);
+void umoja_drag_begin(int32_t px, int32_t py, UmojaRect window, UmojaRect area, UmojaRect monitor);
+uint32_t umoja_drag_motion(int32_t px, int32_t py, UmojaRect window, UmojaRect area, UmojaRect monitor);
+uint32_t umoja_drag_end(void);
+bool umoja_raise_tile_group(void);
+bool umoja_is_tile_action(uint32_t action);
+
+// Implemented by the shim, called from Rust's D-Bus thread. Each takes the
+// window manager lock, so they are safe from any thread except Mir's own.
+void umoja_wm_list_windows(UmojaWindowCallback cb, void* ctx, bool mru);
+void umoja_wm_activate(uint64_t id);
+void umoja_wm_close(uint64_t id);
+void umoja_wm_switcher_pick(uint32_t index);
+void umoja_wm_tile(uint64_t id, uint32_t action);
 
 #ifdef __cplusplus
 }

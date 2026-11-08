@@ -37,6 +37,15 @@ pub enum Action {
     ScreenshotUi = 25,
     Screenshot = 26,
     ScreenshotWindow = 27,
+    TileTopHalf = 28,
+    TileBottomHalf = 29,
+    SwitchApplications = 30,
+    SwitchApplicationsBackward = 31,
+    SwitchGroup = 32,
+    SwitchGroupBackward = 33,
+    SwitchWindows = 34,
+    SwitchWindowsBackward = 35,
+    ToggleOverview = 36,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -71,6 +80,15 @@ impl Action {
             25 => ScreenshotUi,
             26 => Screenshot,
             27 => ScreenshotWindow,
+            28 => TileTopHalf,
+            29 => TileBottomHalf,
+            30 => SwitchApplications,
+            31 => SwitchApplicationsBackward,
+            32 => SwitchGroup,
+            33 => SwitchGroupBackward,
+            34 => SwitchWindows,
+            35 => SwitchWindowsBackward,
+            36 => ToggleOverview,
             _ => None,
         }
     }
@@ -117,33 +135,34 @@ pub fn geometry(action: Action, area: Rect) -> Option<Rect> {
         Action::TileTopRight => Rect::new(rx, area.y, rw, half_h),
         Action::TileBottomLeft => Rect::new(area.x, ry, half_w, rh),
         Action::TileBottomRight => Rect::new(rx, ry, rw, rh),
+        Action::TileTopHalf => Rect::new(area.x, area.y, area.w, half_h),
+        Action::TileBottomHalf => Rect::new(area.x, ry, area.w, rh),
         _ => return None,
     })
 }
 
-/// Which snap a window dropped with the pointer at `(px, py)` should get.
-///
-/// Matches Ubuntu: top edge maximizes, left/right edges half-tile, and the
-/// corners (within `corner` px of both edges) quarter-tile.
-pub fn edge_zone(px: i32, py: i32, area: Rect, threshold: i32, corner: i32) -> Action {
-    let near_left = px <= area.x + threshold;
-    let near_right = px >= area.right() - 1 - threshold;
-    let near_top = py <= area.y + threshold;
-    let near_bottom = py >= area.bottom() - 1 - threshold;
-    let in_top_band = py <= area.y + corner;
-    let in_bottom_band = py >= area.bottom() - 1 - corner;
-
-    match (near_left, near_right) {
-        (true, _) if in_top_band => Action::TileTopLeft,
-        (true, _) if in_bottom_band => Action::TileBottomLeft,
-        (true, _) => Action::TileLeft,
-        (_, true) if in_top_band => Action::TileTopRight,
-        (_, true) if in_bottom_band => Action::TileBottomRight,
-        (_, true) => Action::TileRight,
-        _ if near_top => Action::Maximize,
-        _ if near_bottom => Action::None,
-        _ => Action::None,
+/// Where a window would end up for `action`, including maximize (the whole
+/// work area). Used for the snap preview.
+pub fn target_rect(action: Action, area: Rect) -> Option<Rect> {
+    match action {
+        Action::Maximize => Some(area),
+        a => geometry(a, area),
     }
+}
+
+/// True for the actions that put a window into a tile (half or quarter).
+pub fn is_tile(action: Action) -> bool {
+    matches!(
+        action,
+        Action::TileLeft
+            | Action::TileRight
+            | Action::TileTopLeft
+            | Action::TileTopRight
+            | Action::TileBottomLeft
+            | Action::TileBottomRight
+            | Action::TileTopHalf
+            | Action::TileBottomHalf
+    )
 }
 
 /// Tracks tiled windows so dragging the border between two tiles resizes both.
@@ -232,16 +251,6 @@ mod tests {
         let r = geometry(Action::TileRight, area).unwrap();
         assert_eq!(r.right(), area.right());
         assert_eq!(l.right(), r.x);
-    }
-
-    #[test]
-    fn edge_zones() {
-        assert_eq!(edge_zone(0, 500, AREA, 8, 64), Action::TileLeft);
-        assert_eq!(edge_zone(1919, 500, AREA, 8, 64), Action::TileRight);
-        assert_eq!(edge_zone(960, 32, AREA, 8, 64), Action::Maximize);
-        assert_eq!(edge_zone(0, 40, AREA, 8, 64), Action::TileTopLeft);
-        assert_eq!(edge_zone(1919, 1079, AREA, 8, 64), Action::TileBottomRight);
-        assert_eq!(edge_zone(960, 500, AREA, 8, 64), Action::None);
     }
 
     #[test]

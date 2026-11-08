@@ -3,11 +3,13 @@
 //! Exposes `org.umoja.Overlay` on the session bus so the compositor (Super
 //! key), panel (Activities) and dock (Show Apps) can toggle it.
 
+mod chrome;
 mod lemonade;
 mod model;
 mod model_picker;
 mod myna;
 mod screenshot;
+mod spread;
 mod view;
 
 use gio::prelude::*;
@@ -23,6 +25,7 @@ const IFACE_XML: &str = r#"
 <node>
   <interface name="org.umoja.Overlay">
     <method name="Toggle"/>
+    <method name="ToggleOverview"/>
     <method name="Show"/>
     <method name="Hide"/>
     <method name="ToggleDictation"/>
@@ -34,6 +37,34 @@ const IFACE_XML: &str = r#"
       <arg name="width" type="i" direction="in"/>
       <arg name="height" type="i" direction="in"/>
     </method>
+    <method name="TilePreview">
+      <arg name="show" type="b" direction="in"/>
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="width" type="i" direction="in"/>
+      <arg name="height" type="i" direction="in"/>
+      <arg name="window_x" type="i" direction="in"/>
+      <arg name="window_y" type="i" direction="in"/>
+      <arg name="window_width" type="i" direction="in"/>
+      <arg name="window_height" type="i" direction="in"/>
+    </method>
+    <method name="LayoutPicker">
+      <arg name="visibility" type="u" direction="in"/>
+      <arg name="tile" type="u" direction="in"/>
+      <arg name="x" type="i" direction="in"/>
+      <arg name="work_area_y" type="i" direction="in"/>
+    </method>
+    <method name="ShowSwitcher">
+      <arg name="mode" type="u" direction="in"/>
+      <arg name="items" type="a(ssas)" direction="in"/>
+      <arg name="selected" type="u" direction="in"/>
+      <arg name="window" type="i" direction="in"/>
+    </method>
+    <method name="SwitcherSelect">
+      <arg name="selected" type="u" direction="in"/>
+      <arg name="window" type="i" direction="in"/>
+    </method>
+    <method name="HideSwitcher"/>
     <property name="Visible" type="b" access="read"/>
   </interface>
 </node>"#;
@@ -56,14 +87,21 @@ fn main() -> glib::ExitCode {
                 o.set_model_status(status);
             }
         }));
-        export(overlay, shots);
+        let spread = spread::Spread::new(app, &overlay);
+        let chrome = chrome::Chrome::new(app);
+        export(overlay, shots, spread, chrome);
         // Keep the process alive while the overlay window is hidden.
         std::mem::forget(app.hold());
     });
     app.run()
 }
 
-fn export(overlay: Rc<view::Overlay>, shots: Rc<screenshot::ScreenshotUi>) {
+fn export(
+    overlay: Rc<view::Overlay>,
+    shots: Rc<screenshot::ScreenshotUi>,
+    spread: Rc<spread::Spread>,
+    chrome: Rc<chrome::Chrome>,
+) {
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(IFACE_XML).expect("valid XML");
         let iface = info
@@ -72,6 +110,8 @@ fn export(overlay: Rc<view::Overlay>, shots: Rc<screenshot::ScreenshotUi>) {
         let methods = overlay.clone();
         let props = overlay.clone();
         let shots = shots.clone();
+        let spread = spread.clone();
+        let chrome = chrome.clone();
         let res = conn
             .register_object(dbus::OVERLAY_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {
@@ -91,8 +131,47 @@ fn export(overlay: Rc<view::Overlay>, shots: Rc<screenshot::ScreenshotUi>) {
                             return;
                         }
                     },
-                    "Toggle" => methods.toggle(),
-                    "Show" => methods.show(),
+                    "Toggle" => {
+                        spread.hide();
+                        methods.toggle()
+                    }
+                    "ToggleOverview" => {
+                        // Super from the app grid closes it, as in GNOME.
+                        if methods.is_visible() {
+                            methods.hide();
+                        } else {
+                            spread.toggle();
+                        }
+                    }
+                    "TilePreview" => {
+                        if let Some((show, x, y, w, h, wx, wy, ww, wh)) =
+                            params.get::<(bool, i32, i32, i32, i32, i32, i32, i32, i32)>()
+                        {
+                            chrome.tile_preview(show, (x, y, w, h), (wx, wy, ww, wh));
+                        }
+                    }
+                    "LayoutPicker" => {
+                        if let Some((vis, tile, x, y)) = params.get::<(u32, u32, i32, i32)>() {
+                            chrome.layout_picker(vis, tile, x, y);
+                        }
+                    }
+                    "ShowSwitcher" => {
+                        if let Some((mode, items, sel, sub)) =
+                            params.get::<(u32, chrome::SwitcherItems, u32, i32)>()
+                        {
+                            chrome.show_switcher(mode, items, sel, sub);
+                        }
+                    }
+                    "SwitcherSelect" => {
+                        if let Some((sel, sub)) = params.get::<(u32, i32)>() {
+                            chrome.switcher_select(sel, sub);
+                        }
+                    }
+                    "HideSwitcher" => chrome.hide_switcher(),
+                    "Show" => {
+                        spread.hide();
+                        methods.show()
+                    }
                     "Hide" => methods.hide(),
                     "ToggleDictation" => methods.toggle_dictation(),
                     _ => {
