@@ -4,6 +4,7 @@
 //! key), panel (Activities) and dock (Show Apps) can toggle it.
 
 mod chrome;
+mod files;
 mod lemonade;
 mod model;
 mod model_picker;

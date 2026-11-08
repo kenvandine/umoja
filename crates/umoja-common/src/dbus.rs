@@ -19,3 +19,9 @@ pub const MYNA_SOCKET_PATH: &str = "/tmp/myna.sock";
 pub const COMPOSITOR_BUS_NAME: &str = "org.umoja.Compositor";
 pub const COMPOSITOR_OBJECT_PATH: &str = "/org/umoja/Compositor";
 pub const COMPOSITOR_INTERFACE: &str = "org.umoja.Compositor";
+
+/// File search served by umoja-files (a local index of the home folder,
+/// searched by meaning through the embedded Lemonade).
+pub const FILES_BUS_NAME: &str = "org.umoja.Files";
+pub const FILES_OBJECT_PATH: &str = "/org/umoja/Files";
+pub const FILES_INTERFACE: &str = "org.umoja.Files";

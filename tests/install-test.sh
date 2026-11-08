@@ -60,7 +60,7 @@ dpkg -s myna-config >/dev/null 2>&1 && pass "recommend myna-config installed" \
     || echo "NOTE: myna-config not available from the configured archives" | tee -a "$LOG"
 
 step "Shared libraries"
-for b in /usr/bin/umoja-mir /usr/bin/umoja-panel /usr/bin/umoja-dock /usr/bin/umoja-overlay \
+for b in /usr/bin/umoja-mir /usr/bin/umoja-panel /usr/bin/umoja-dock /usr/bin/umoja-overlay /usr/bin/umoja-files \
          /usr/libexec/xdg-desktop-portal-umoja /usr/sbin/umoja-greeter /usr/lib/umoja/lemonade/lemond; do
     missing=$(ldd "$b" 2>&1 | grep 'not found')
     if [ -n "$missing" ]; then fail "$b: $missing"; else pass "$b links"; fi

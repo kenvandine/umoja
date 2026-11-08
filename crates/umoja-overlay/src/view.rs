@@ -29,6 +29,8 @@ pub struct Overlay {
     answer: gtk::Label,
     chips: gtk::FlowBox,
     assistant: gtk::Box,
+    /// Matching files from umoja-files, under the assistant card.
+    files: Rc<crate::files::FilesSection>,
     myna_pill: gtk::Button,
     apps: RefCell<Vec<gio::AppInfo>>,
     /// Held for the overlay's lifetime: the monitor is a weak singleton,
@@ -129,7 +131,15 @@ impl Overlay {
         root.append(&scroller);
         window.set_content(Some(&root));
 
-        let overlay = Rc::new(Self {
+        let overlay = Rc::new_cyclic(|weak: &std::rc::Weak<Self>| Self {
+            files: crate::files::FilesSection::new({
+                let weak = weak.clone();
+                move || {
+                    if let Some(o) = weak.upgrade() {
+                        o.hide();
+                    }
+                }
+            }),
             window,
             entry,
             grid,
@@ -145,6 +155,7 @@ impl Overlay {
             myna: Myna::start(),
             generation: Cell::new(0),
         });
+        root.insert_child_after(&overlay.files.widget, Some(&overlay.assistant));
         overlay.connect_signals();
         overlay.refresh_results();
         overlay
@@ -162,6 +173,9 @@ impl Overlay {
         self.entry.connect_activate(move |e| {
             let Some(o) = weak.upgrade() else { return };
             let q = e.text().to_string();
+            if crate::files::looks_like_file_search(&q) && o.files.activate_first() {
+                return;
+            }
             if lemonade::looks_like_question(&q) || o.grid.first_child().is_none() {
                 o.ask(&q);
             } else if let Some(app) = o.matches(&q).into_iter().next() {
@@ -231,6 +245,7 @@ impl Overlay {
     pub fn show(&self) {
         self.entry.set_text("");
         self.assistant.set_visible(false);
+        self.files.clear();
         self.window.present();
         self.entry.grab_focus();
     }
@@ -327,6 +342,7 @@ impl Overlay {
         if q.trim().is_empty() {
             self.assistant.set_visible(false);
         }
+        self.files.update(&q);
     }
 
     fn app_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::Widget {

@@ -25,7 +25,7 @@ check:
 
 # GTK crates need a display; these cover the policy/logic crates.
 test:
-	$(CARGO) test -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel
+	$(CARGO) test -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files
 
 vendor: vendor-cargo vendor-lemonade
 

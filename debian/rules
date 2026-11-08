@@ -34,7 +34,7 @@ override_dh_auto_build:
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# GTK crates need a display to run; test the headless logic only.
-	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel
+	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files
 endif
 
 override_dh_auto_clean:
@@ -46,6 +46,7 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/umoja-panel $(DESKTOP)/usr/bin/umoja-panel
 	install -D -m 0755 target/release/umoja-dock $(DESKTOP)/usr/bin/umoja-dock
 	install -D -m 0755 target/release/umoja-overlay $(DESKTOP)/usr/bin/umoja-overlay
+	install -D -m 0755 target/release/umoja-files $(DESKTOP)/usr/bin/umoja-files
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
 	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
@@ -60,6 +61,8 @@ override_dh_auto_install:
 	# systemd user units, D-Bus activation and portal registration
 	install -d $(DESKTOP)/usr/lib/systemd/user
 	install -m 0644 data/systemd/*.service data/systemd/*.target $(DESKTOP)/usr/lib/systemd/user/
+	install -D -m 0644 data/dbus/org.umoja.Files.service \
+		$(DESKTOP)/usr/share/dbus-1/services/org.umoja.Files.service
 	install -D -m 0644 data/dbus/org.freedesktop.impl.portal.desktop.umoja.service \
 		$(DESKTOP)/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.umoja.service
 	install -D -m 0644 data/portal/umoja.portal $(DESKTOP)/usr/share/xdg-desktop-portal/portals/umoja.portal

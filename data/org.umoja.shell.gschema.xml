@@ -19,6 +19,24 @@
         UMOJA_LEMONADE_PORT=PORT to ~/.config/umoja/lemonade.env.
       </description>
     </key>
+    <key name="file-search-enabled" type="b">
+      <default>true</default>
+      <summary>Index the home folder so files can be found by what they're about</summary>
+      <description>
+        umoja-files keeps a local index in ~/.cache/umoja/files. Hidden
+        folders, .gitignore'd paths and folders holding .nomedia,
+        .trackerignore or CACHEDIR.TAG are left out. Content is embedded
+        only on mains power, by the embedded Lemonade server.
+      </description>
+    </key>
+    <key name="file-search-embedding-model" type="s">
+      <default>'nomic-embed-text-v1-GGUF'</default>
+      <summary>Lemonade embedding model used for file search</summary>
+      <description>
+        Downloaded through the embedded Lemonade server on an unmetered
+        connection. Changing it re-embeds the index.
+      </description>
+    </key>
     <key name="dictation-hotkey" type="as">
       <default>['&lt;Super&gt;d']</default>
       <summary>Toggle Myna voice dictation</summary>

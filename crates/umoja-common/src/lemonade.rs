@@ -48,6 +48,11 @@ pub fn chat_completions_url() -> String {
     format!("{}/api/v1/chat/completions", base_url())
 }
 
+/// OpenAI-compatible embeddings endpoint, used by umoja-files.
+pub fn embeddings_url() -> String {
+    format!("{}/api/v1/embeddings", base_url())
+}
+
 /// Model download endpoint (`POST`, SSE progress with `"stream": true`).
 pub fn pull_url() -> String {
     format!("{}/api/v1/pull", base_url())

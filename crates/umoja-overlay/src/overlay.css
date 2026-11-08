@@ -20,6 +20,21 @@ window.umoja-overlay {
   border-radius: 18px;
   padding: 18px;
 }
+.files-heading {
+  color: alpha(#ffffff, 0.8);
+  margin-start: 6px;
+}
+.files-list {
+  background-color: alpha(#ffffff, 0.08);
+  border-radius: 18px;
+}
+.files-list row {
+  color: #ffffff;
+  border-radius: 18px;
+}
+.files-list row:hover {
+  background-color: alpha(#ffffff, 0.08);
+}
 .action-chip {
   background-color: alpha(#E95420, 0.9);
   color: #ffffff;

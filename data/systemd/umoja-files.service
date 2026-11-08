@@ -1,0 +1,27 @@
+[Unit]
+Description=Umoja file search (local index of the home folder)
+Documentation=https://github.com/kenvandine/umoja
+PartOf=umoja-session.target
+After=umoja-session.target umoja-lemonade.service
+
+[Service]
+Type=dbus
+BusName=org.umoja.Files
+ExecStart=/usr/bin/umoja-files
+EnvironmentFile=-%E/umoja/lemonade.env
+Restart=on-failure
+RestartSec=10s
+# Indexing must never be noticed: idle CPU and I/O priority, capped memory,
+# and the first in line for the OOM killer.
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+CPUWeight=idle
+IOWeight=10
+MemoryHigh=300M
+MemoryMax=600M
+OOMScoreAdjust=900
+Slice=background.slice
+
+[Install]
+WantedBy=umoja-session.target
