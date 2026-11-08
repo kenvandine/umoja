@@ -164,6 +164,16 @@ const SOURCES: &[(&str, &str, Action)] = &[
     ),
     (gs::SHELL_KEYBINDINGS, "toggle-overview", Action::ToggleOverview),
     (
+        gs::SHELL_KEYBINDINGS,
+        "shift-overview-up",
+        Action::ShiftOverviewUp,
+    ),
+    (
+        gs::SHELL_KEYBINDINGS,
+        "shift-overview-down",
+        Action::ShiftOverviewDown,
+    ),
+    (
         gs::WM_KEYBINDINGS,
         "switch-applications",
         Action::SwitchApplications,
@@ -256,15 +266,40 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>d", Action::ToggleDictation as u32),
     ("<Super><Shift>a", Action::AskAboutScreen as u32),
     ("<Super><Shift>v", Action::ClipboardHistory as u32),
+    // gsettings-desktop-schemas' and gnome-shell's workspace defaults.
     ("<Super>Page_Up", Action::WorkspacePrev as u32),
     ("<Super>Page_Down", Action::WorkspaceNext as u32),
+    ("<Super><Alt>Left", Action::WorkspacePrev as u32),
+    ("<Super><Alt>Right", Action::WorkspaceNext as u32),
     ("<Control><Alt>Left", Action::WorkspacePrev as u32),
     ("<Control><Alt>Right", Action::WorkspaceNext as u32),
+    ("<Super>Home", workspaces::SWITCH_BASE + 1),
+    ("<Super>End", Action::WorkspaceLast as u32),
     ("<Super><Shift>Page_Up", Action::MoveToWorkspacePrev as u32),
     (
         "<Super><Shift>Page_Down",
         Action::MoveToWorkspaceNext as u32,
     ),
+    (
+        "<Super><Shift><Alt>Left",
+        Action::MoveToWorkspacePrev as u32,
+    ),
+    (
+        "<Super><Shift><Alt>Right",
+        Action::MoveToWorkspaceNext as u32,
+    ),
+    (
+        "<Control><Shift><Alt>Left",
+        Action::MoveToWorkspacePrev as u32,
+    ),
+    (
+        "<Control><Shift><Alt>Right",
+        Action::MoveToWorkspaceNext as u32,
+    ),
+    ("<Super><Shift>Home", workspaces::MOVE_BASE + 1),
+    ("<Super><Shift>End", Action::MoveToWorkspaceLast as u32),
+    ("<Super><Alt>Up", Action::ShiftOverviewUp as u32),
+    ("<Super><Alt>Down", Action::ShiftOverviewDown as u32),
     ("<Super><Shift>Left", Action::MoveToMonitorLeft as u32),
     ("<Super><Shift>Right", Action::MoveToMonitorRight as u32),
     ("Print", Action::ScreenshotUi as u32),
@@ -325,7 +360,8 @@ pub fn reload() {
         center_new_windows: gs::get_bool(gs::MUTTER, "center-new-windows", false),
         workspaces: workspaces::Settings {
             dynamic: gs::get_bool(gs::MUTTER, "dynamic-workspaces", true),
-            fixed_count: gs::get_int(gs::WM_PREFERENCES, "num-workspaces", 4).max(1) as usize,
+            // mutter caps num-workspaces at 36.
+            fixed_count: gs::get_int(gs::WM_PREFERENCES, "num-workspaces", 4).clamp(1, 36) as usize,
             only_on_primary: gs::get_bool(gs::MUTTER, "workspaces-only-on-primary", true),
         },
     };
@@ -334,7 +370,18 @@ pub fn reload() {
         edge_tiling = cfg.edge_tiling,
         "keybindings loaded"
     );
-    *CONFIG.write().unwrap_or_else(|e| e.into_inner()) = cfg;
+    let new_workspaces = cfg.workspaces;
+    let old_workspaces = std::mem::replace(
+        &mut *CONFIG.write().unwrap_or_else(|e| e.into_inner()),
+        cfg,
+    )
+    .workspaces;
+    // Switching dynamic workspaces off, changing the count or the
+    // primary-only rule applies straight away, as in GNOME.
+    if new_workspaces != old_workspaces {
+        tracing::info!(?new_workspaces, "workspace settings changed");
+        crate::shell::workspace_settings_changed();
+    }
 }
 
 /// Ubuntu ships Tiling Assistant enabled through its session mode; it is

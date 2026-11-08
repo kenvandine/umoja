@@ -459,3 +459,12 @@ pub extern "C" fn umoja_workspace_switched(current: usize, count: usize) {
         session::overlay_call("WorkspaceSwitched", (current as u32, count as u32))
     })
 }
+
+/// The workspace list or the active workspace may have changed: tell the
+/// top bar's indicator and the overview (deduplicated in [`shell`]).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_workspaces_changed(current: usize, count: usize) {
+    guard("workspaces_changed", (), || {
+        shell::workspaces_changed(current as u32, count as u32)
+    })
+}

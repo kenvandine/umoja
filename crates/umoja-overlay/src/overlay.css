@@ -187,8 +187,52 @@ window.umoja-spread {
   background-color: #000000;
   color: #ffffff;
 }
-.spread-dim {
-  background-color: alpha(#000000, 0.35);
+/* gnome-shell's overview: the system background around workspace cards. */
+.spread-background {
+  background-color: #1d1d20;
+}
+.workspace-card {
+  border-radius: 24px;
+  box-shadow: 0 6px 24px alpha(#000000, 0.5);
+}
+.workspace-peek {
+  border-radius: 18px;
+  opacity: 0.7;
+}
+.workspace-peek:hover {
+  opacity: 0.9;
+}
+.workspace-thumbnail {
+  border-radius: 8px;
+  box-shadow: 0 2px 6px alpha(#000000, 0.4);
+  opacity: 0.75;
+}
+.workspace-thumbnail:hover {
+  opacity: 1;
+}
+/* Outlines are drawn over the content, unlike inset shadows. */
+.workspace-thumbnail.active {
+  opacity: 1;
+  outline: 3px solid #ffffff;
+  outline-offset: -3px;
+}
+.workspace-thumbnail.drop-target,
+.workspace-peek.drop-target {
+  opacity: 1;
+  outline: 3px solid @accent_bg_color;
+  outline-offset: -3px;
+}
+.thumb-window {
+  border-radius: 2px;
+  box-shadow: 0 1px 3px alpha(#000000, 0.5);
+}
+.thumb-window-card {
+  background-color: alpha(#3a3a3e, 0.95);
+}
+.spread-drag-ghost {
+  border-radius: 12px;
+  opacity: 0.85;
+  box-shadow: 0 8px 24px alpha(#000000, 0.6);
 }
 window.umoja-spread entry {
   min-height: 40px;

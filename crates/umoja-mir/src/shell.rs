@@ -291,6 +291,8 @@ pub struct WindowDesc {
     pub title: *const c_char,
     pub rect: Rect,
     pub flags: u32,
+    /// 0-based, or -1 for a window on every workspace.
+    pub workspace: i32,
 }
 
 // Flags: 1 focused, 2 minimized, 4 on the current workspace, 8 maximized,
@@ -309,6 +311,14 @@ unsafe extern "C" {
     fn umoja_wm_workspaces(current: *mut u32, count: *mut u32);
     fn umoja_wm_switch_workspace(index: u32);
     fn umoja_wm_move_to_workspace(id: u64, index: u32);
+    fn umoja_wm_show_workspace(index: u32);
+    fn umoja_wm_send_to_workspace(id: u64, index: u32);
+    fn umoja_wm_workspace_settings_changed();
+}
+
+/// Re-apply GNOME's workspace settings after they changed.
+pub fn workspace_settings_changed() {
+    unsafe { umoja_wm_workspace_settings_changed() }
 }
 
 pub type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
@@ -319,6 +329,22 @@ fn cstr(p: *const c_char) -> String {
     } else {
         unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
     }
+}
+
+extern "C" fn collect_workspaces(ctx: *mut c_void, desc: *const WindowDesc) {
+    if ctx.is_null() || desc.is_null() {
+        return;
+    }
+    let rows = unsafe { &mut *(ctx as *mut Vec<(u64, i32)>) };
+    let d = unsafe { &*desc };
+    rows.push((d.id, d.workspace));
+}
+
+/// (window id, workspace) for every application window, -1 = all workspaces.
+pub fn list_window_workspaces() -> Vec<(u64, i32)> {
+    let mut rows: Vec<(u64, i32)> = Vec::new();
+    unsafe { umoja_wm_list_windows(collect_workspaces, &mut rows as *mut _ as *mut c_void, false) };
+    rows
 }
 
 extern "C" fn collect(ctx: *mut c_void, desc: *const WindowDesc) {
@@ -404,6 +430,60 @@ impl Compositor {
         let _ =
             tokio::task::spawn_blocking(move || unsafe { umoja_wm_move_to_workspace(id, index) }).await;
     }
+
+    /// (window id, workspace) for every window in `GetWindows`; the
+    /// workspace is 0-based, or -1 for a window on every workspace.
+    async fn get_window_workspaces(&self) -> Vec<(u64, i32)> {
+        tokio::task::spawn_blocking(list_window_workspaces)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Switch to workspace `index` without the switcher popup (overview).
+    async fn show_workspace(&self, index: u32) {
+        let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_show_workspace(index) }).await;
+    }
+
+    /// Put a window on workspace `index` without following it (overview
+    /// drag and drop).
+    async fn send_window_to_workspace(&self, id: u64, index: u32) {
+        let _ =
+            tokio::task::spawn_blocking(move || unsafe { umoja_wm_send_to_workspace(id, index) }).await;
+    }
+
+    /// Emitted when the active workspace or the number of workspaces changes.
+    #[zbus(signal)]
+    async fn workspaces_changed(
+        emitter: &zbus::object_server::SignalEmitter<'_>,
+        current: u32,
+        count: u32,
+    ) -> zbus::Result<()>;
+}
+
+static CONNECTION: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
+static LAST_WORKSPACES: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+/// Called from the shim (under the WM lock) after every workspace change.
+pub fn workspaces_changed(current: u32, count: u32) {
+    {
+        let mut last = LAST_WORKSPACES.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some((current, count)) {
+            return;
+        }
+        *last = Some((current, count));
+    }
+    let Some(conn) = CONNECTION.get().cloned() else {
+        return;
+    };
+    crate::session::RUNTIME.spawn(async move {
+        let emitted = match zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+            Ok(e) => Compositor::workspaces_changed(&e, current, count).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = emitted {
+            tracing::debug!(error = %e, "WorkspacesChanged not sent");
+        }
+    });
 }
 
 pub fn start() {
@@ -419,6 +499,7 @@ pub fn start() {
             // Keep the connection alive for the life of the compositor.
             Ok(conn) => {
                 crate::session::keep_name(conn.clone(), BUS_NAME);
+                let _ = CONNECTION.set(conn.clone());
                 std::mem::forget(conn);
             }
             Err(e) => tracing::warn!(error = %e, "org.umoja.Compositor unavailable"),

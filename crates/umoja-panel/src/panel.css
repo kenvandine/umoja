@@ -300,3 +300,16 @@ window.umoja-polkit {
 .umoja-polkit .polkit-message:backdrop {
   color: @error_color;
 }
+
+/* GNOME 45+ workspace indicator in the Activities button. */
+.activities .workspace-dot {
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 999px;
+  background-color: alpha(currentColor, 0.5);
+  transition: min-width 200ms ease-out, background-color 200ms ease-out;
+}
+.activities .workspace-dot.active {
+  min-width: 30px;
+  background-color: currentColor;
+}

@@ -61,6 +61,14 @@ pub fn dispatch(action: Action) {
         Action::ToggleDictation => "ToggleDictation",
         Action::AskAboutScreen => "AskAboutScreen",
         Action::ClipboardHistory => "ShowClipboard",
+        Action::ShiftOverviewUp => {
+            overlay_call("ShiftOverview", (true,));
+            return;
+        }
+        Action::ShiftOverviewDown => {
+            overlay_call("ShiftOverview", (false,));
+            return;
+        }
         Action::ScreenshotUi => "ShowScreenshotUI",
         Action::Screenshot => "ScreenshotScreen",
         _ => return,

@@ -87,13 +87,80 @@ fn build(app: &adw::Application) {
     polkit::start();
 }
 
+/// GNOME 45+'s Activities button: one dot per workspace, the active one a
+/// wider pill. The label stays as the accessible name and tooltip.
 fn activities_button() -> gtk::Button {
     // "Activities" comes from gnome-shell's catalog, already translated.
-    let button = gtk::Button::with_label(&i18n::shell("Activities"));
+    let label = i18n::shell("Activities");
+    let dots = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+    dots.set_valign(gtk::Align::Center);
+    dots.add_css_class("workspace-dots");
+    set_workspace_dots(&dots, 0, 1);
+    let button = gtk::Button::builder().child(&dots).tooltip_text(&label).build();
+    button.update_property(&[gtk::accessible::Property::Label(&label)]);
     button.add_css_class("flat");
     button.add_css_class("activities");
     button.connect_clicked(|_| toggle_overlay());
+    watch_workspaces(&dots);
     button
+}
+
+fn set_workspace_dots(dots: &gtk::Box, current: u32, count: u32) {
+    while let Some(c) = dots.first_child() {
+        dots.remove(&c);
+    }
+    for i in 0..count.max(1) {
+        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dot.set_valign(gtk::Align::Center);
+        dot.add_css_class("workspace-dot");
+        if i == current {
+            dot.add_css_class("active");
+        }
+        dots.append(&dot);
+    }
+}
+
+/// Follow org.umoja.Compositor's workspaces.
+fn watch_workspaces(dots: &gtk::Box) {
+    let dots = dots.downgrade();
+    glib::spawn_future_local(async move {
+        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+            return;
+        };
+        let d = dots.clone();
+        let id = conn.signal_subscribe(
+            Some(dbus::COMPOSITOR_BUS_NAME),
+            Some(dbus::COMPOSITOR_INTERFACE),
+            Some("WorkspacesChanged"),
+            Some(dbus::COMPOSITOR_OBJECT_PATH),
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |_, _, _, _, _, params| {
+                if let (Some(dots), Some((current, count))) = (d.upgrade(), params.get::<(u32, u32)>()) {
+                    set_workspace_dots(&dots, current, count);
+                }
+            },
+        );
+        std::mem::forget(id);
+        let reply = conn
+            .call_future(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                dbus::COMPOSITOR_OBJECT_PATH,
+                dbus::COMPOSITOR_INTERFACE,
+                "GetWorkspaces",
+                None,
+                Some(glib::VariantTy::new("(uu)").unwrap()),
+                gio::DBusCallFlags::NONE,
+                2000,
+            )
+            .await;
+        if let (Some(dots), Some((current, count))) =
+            (dots.upgrade(), reply.ok().and_then(|v| v.get::<(u32, u32)>()))
+        {
+            set_workspace_dots(&dots, current, count);
+        }
+        std::mem::forget(conn);
+    });
 }
 
 /// Activities: ask umoja-overlay to show/hide the overview (window spread).

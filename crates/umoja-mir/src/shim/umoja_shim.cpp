@@ -300,7 +300,7 @@ public:
 
     void advise_move_to(WindowInfo const& info, geom::Point top_left) override {
         MinimalWindowManager::advise_move_to(info, top_left);
-        if (all_windows.count(info.window())) update_workspace_membership(info.window());
+        if (all_windows.count(info.window()) && update_workspace_membership(info.window())) relayout_workspaces();
         if (applying) return;
         // The user dragged a tiled window away: it leaves its tile group.
         untile(info.window());
@@ -358,7 +358,7 @@ public:
             if (on_current_workspace(w)) flags |= UMOJA_WINDOW_CURRENT_WORKSPACE;
             if (tiled.count(window_id(w))) flags |= UMOJA_WINDOW_TILED;
             UmojaWindowDesc const d{window_id(w), app.c_str(), title.c_str(), to_rect({w.top_left(), w.size()}),
-                                    flags};
+                                    flags, workspace_of(w)};
             cb(ctx, &d);
         }
     }
@@ -637,18 +637,30 @@ private:
         return found;
     }
 
+    int32_t workspace_of(Window const& w) {
+        for (size_t i = 0; i < workspaces.size(); ++i)
+            if (in_workspace(w, workspaces[i])) return static_cast<int32_t>(i);
+        return -1;
+    }
+
     // org.gnome.mutter workspaces-only-on-primary: windows on secondary
-    // monitors are on every workspace.
-    void update_workspace_membership(Window const& w) {
+    // monitors are on every workspace. Returns whether membership changed.
+    bool update_workspace_membership(Window const& w) {
         bool const sticky = umoja_workspaces_only_on_primary() && !on_primary(w);
         bool const member = in_any_workspace(w);
         if (sticky && member) {
             std::vector<std::shared_ptr<Workspace>> containing;
             tools.for_each_workspace_containing(w, [&](std::shared_ptr<Workspace> const& c) { containing.push_back(c); });
             for (auto const& ws : containing) tools.remove_tree_from_workspace(w, ws);
-        } else if (!sticky && !member) {
-            tools.add_tree_to_workspace(w, workspaces[current]);
+            // Now on every workspace, so it must be visible on this one.
+            unhide(w);
+            return true;
         }
+        if (!sticky && !member) {
+            tools.add_tree_to_workspace(w, workspaces[current]);
+            return true;
+        }
+        return false;
     }
 
     void hide(Window w) {
@@ -708,6 +720,42 @@ public:
         umoja_workspace_switched(current, workspaces.size());
     }
 
+    // The overview's thumbnails: switch quietly, the overview is the feedback.
+    void show_workspace(size_t index) {
+        if (index >= workspaces.size()) return;
+        switch_to(index);
+    }
+
+    // The overview's drag and drop: the window goes, the view stays.
+    void send_to_workspace(Window w, size_t index) {
+        if (!w || index >= workspaces.size() || !all_windows.count(w)) return;
+        if (!in_any_workspace(w) || in_workspace(w, workspaces[index])) return;
+        guarded("send to workspace", [&] {
+            std::vector<std::shared_ptr<Workspace>> containing;
+            tools.for_each_workspace_containing(w, [&](std::shared_ptr<Workspace> const& c) { containing.push_back(c); });
+            for (auto const& ws : containing) tools.remove_tree_from_workspace(w, ws);
+            tools.add_tree_to_workspace(w, workspaces[index]);
+            applying = true;
+            if (index == current) {
+                unhide(w);
+                tools.raise_tree(w);
+            } else {
+                hide(w);
+            }
+            applying = false;
+        });
+        relayout_workspaces();
+    }
+
+    // org.gnome.mutter dynamic-workspaces / workspaces-only-on-primary or
+    // org.gnome.desktop.wm.preferences num-workspaces changed.
+    void workspace_settings_changed() {
+        guarded("workspace settings", [&] {
+            for (auto const& w : all_windows) update_workspace_membership(w);
+        });
+        relayout_workspaces();
+    }
+
 private:
     void move_window_to(Window w, size_t index) {
         if (!w || index >= workspaces.size() || !all_windows.count(w)) return;
@@ -743,14 +791,27 @@ private:
                 if (idx < current) --current;
             }
             while (workspaces.size() < desired) workspaces.push_back(tools.create_workspace());
-            // Fixed count shrank: fold extra workspaces into the last kept one.
+            // Fixed count shrank (or dynamic was switched off with more
+            // workspaces than num-workspaces): fold extra workspaces into
+            // the last kept one, as mutter does.
+            bool folded = false;
             while (workspaces.size() > desired && workspaces.size() > 1) {
                 auto extra = workspaces.back();
                 workspaces.pop_back();
                 tools.move_workspace_content_to_workspace(workspaces.back(), extra);
                 if (current >= workspaces.size()) current = workspaces.size() - 1;
+                folded = true;
+            }
+            if (folded) {
+                // Windows folded into the workspace we're on must show up.
+                std::vector<Window> here;
+                tools.for_each_window_in_workspace(workspaces[current], [&](Window const& w) { here.push_back(w); });
+                applying = true;
+                for (auto const& w : here) unhide(w);
+                applying = false;
             }
         });
+        umoja_workspaces_changed(current, workspaces.size());
     }
 
     // ---- actions ----------------------------------------------------------
@@ -798,6 +859,8 @@ private:
         case UMOJA_ACTION_SCREENSHOT:
         case UMOJA_ACTION_ASK_ABOUT_SCREEN:
         case UMOJA_ACTION_CLIPBOARD_HISTORY:
+        case UMOJA_ACTION_SHIFT_OVERVIEW_UP:
+        case UMOJA_ACTION_SHIFT_OVERVIEW_DOWN:
             umoja_handle_action(action);
             return true;
         default:
@@ -969,6 +1032,18 @@ extern "C" void umoja_wm_switch_workspace(uint32_t index) {
 
 extern "C" void umoja_wm_move_to_workspace(uint64_t id, uint32_t index) {
     with_wm("move to workspace", [&] { g_wm->move_to_workspace(g_wm->find(id), index); });
+}
+
+extern "C" void umoja_wm_show_workspace(uint32_t index) {
+    with_wm("show workspace", [&] { g_wm->show_workspace(index); });
+}
+
+extern "C" void umoja_wm_send_to_workspace(uint64_t id, uint32_t index) {
+    with_wm("send to workspace", [&] { g_wm->send_to_workspace(g_wm->find(id), index); });
+}
+
+extern "C" void umoja_wm_workspace_settings_changed(void) {
+    with_wm("workspace settings changed", [&] { g_wm->workspace_settings_changed(); });
 }
 
 namespace {

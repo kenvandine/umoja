@@ -53,6 +53,8 @@ enum {
     UMOJA_ACTION_TOGGLE_OVERVIEW = 36,
     UMOJA_ACTION_ASK_ABOUT_SCREEN = 37,
     UMOJA_ACTION_CLIPBOARD_HISTORY = 38,
+    UMOJA_ACTION_SHIFT_OVERVIEW_UP = 39,
+    UMOJA_ACTION_SHIFT_OVERVIEW_DOWN = 40,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.
     UMOJA_ACTION_SWITCH_TO_WORKSPACE_BASE = 100,
     UMOJA_ACTION_MOVE_TO_WORKSPACE_BASE = 200,
@@ -100,6 +102,9 @@ typedef struct {
     char const* title;
     UmojaRect rect;
     uint32_t flags;
+    // 0-based workspace, or -1 when the window is on every workspace
+    // (a secondary monitor with workspaces-only-on-primary).
+    int32_t workspace;
 } UmojaWindowDesc;
 
 enum {
@@ -163,6 +168,8 @@ uint32_t umoja_drag_motion(int32_t px, int32_t py, UmojaRect window, UmojaRect a
 uint32_t umoja_drag_end(void);
 bool umoja_raise_tile_group(void);
 void umoja_workspace_switched(size_t current, size_t count);
+// The current workspace or the number of workspaces may have changed.
+void umoja_workspaces_changed(size_t current, size_t count);
 bool umoja_is_tile_action(uint32_t action);
 
 // Implemented by the shim, called from Rust's D-Bus thread. Each takes the
@@ -175,6 +182,12 @@ void umoja_wm_tile(uint64_t id, uint32_t action);
 void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count);
 void umoja_wm_switch_workspace(uint32_t index);
 void umoja_wm_move_to_workspace(uint64_t id, uint32_t index);
+// Without the switcher popup and, for the window, without following it
+// (the overview's thumbnails and drag and drop).
+void umoja_wm_show_workspace(uint32_t index);
+void umoja_wm_send_to_workspace(uint64_t id, uint32_t index);
+// Workspace GSettings changed: re-apply count and primary-only membership.
+void umoja_wm_workspace_settings_changed(void);
 
 #ifdef __cplusplus
 }

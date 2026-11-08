@@ -16,6 +16,7 @@ mod model_picker;
 mod myna;
 mod screenshot;
 mod spread;
+mod texpane;
 mod view;
 
 use gio::prelude::*;
@@ -76,6 +77,9 @@ const IFACE_XML: &str = r#"
     <method name="WorkspaceSwitched">
       <arg name="active" type="u" direction="in"/>
       <arg name="count" type="u" direction="in"/>
+    </method>
+    <method name="ShiftOverview">
+      <arg name="up" type="b" direction="in"/>
     </method>
     <property name="Visible" type="b" access="read"/>
   </interface>
@@ -186,8 +190,31 @@ fn export(
                     }
                     "HideSwitcher" => chrome.hide_switcher(),
                     "WorkspaceSwitched" => {
+                        // The overview shows the switch itself (it follows
+                        // WorkspacesChanged), so no popup on top of it.
                         if let Some((active, count)) = params.get::<(u32, u32)>() {
-                            chrome.workspace_switched(active, count);
+                            if !spread.is_visible() {
+                                chrome.workspace_switched(active, count);
+                            }
+                        }
+                    }
+                    // gnome-shell's shift-overview-up/down (Super+Alt+Up/Down):
+                    // desktop, overview and app grid are steps on one ladder.
+                    "ShiftOverview" => {
+                        let up = params.get::<(bool,)>().map(|(u,)| u).unwrap_or(true);
+                        if up {
+                            if spread.is_visible() {
+                                spread.hide();
+                                methods.show();
+                            } else if !methods.is_visible() {
+                                chrome.hide_switcher();
+                                spread.show();
+                            }
+                        } else if methods.is_visible() {
+                            methods.hide();
+                            spread.show();
+                        } else if spread.is_visible() {
+                            spread.hide();
                         }
                     }
                     "Show" => {

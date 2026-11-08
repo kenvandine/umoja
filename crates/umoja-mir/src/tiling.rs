@@ -48,6 +48,9 @@ pub enum Action {
     ToggleOverview = 36,
     AskAboutScreen = 37,
     ClipboardHistory = 38,
+    /// gnome-shell's shift-overview-up/down: desktop → overview → app grid.
+    ShiftOverviewUp = 39,
+    ShiftOverviewDown = 40,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -93,6 +96,8 @@ impl Action {
             36 => ToggleOverview,
             37 => AskAboutScreen,
             38 => ClipboardHistory,
+            39 => ShiftOverviewUp,
+            40 => ShiftOverviewDown,
             _ => None,
         }
     }
