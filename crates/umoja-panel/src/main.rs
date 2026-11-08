@@ -6,6 +6,7 @@
 //! of the session carries on.
 
 mod battery;
+mod bluetooth;
 mod bus;
 mod clock;
 mod dbusmenu;

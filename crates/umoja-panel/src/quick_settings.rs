@@ -4,7 +4,7 @@
 //! GNOME, so flipping Dark Style here or in gnome-control-center is the same
 //! operation and both stay in sync.
 
-use crate::{battery, network, volume};
+use crate::{battery, bluetooth, network, volume};
 use gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
@@ -30,6 +30,7 @@ pub fn button() -> gtk::MenuButton {
     let (net, vpn) = network::indicators();
     icons.append(&net);
     icons.append(&vpn);
+    icons.append(&bluetooth::indicator());
     icons.append(&volume::indicator());
     icons.append(&battery::indicator());
     let power = gtk::Image::from_icon_name("system-shutdown-symbolic");
@@ -62,15 +63,11 @@ fn menu() -> gtk::Box {
         .build();
     let (wifi, networks) = network::wifi_tile(tile);
     let (power, profiles) = power_profile_tile();
+    let (bt, bt_devices) = bluetooth::tile(tile);
     let tiles: Vec<gtk::Widget> = vec![
         network::wired_tile(tile).upcast(),
         wifi.upcast(),
-        settings_tile(
-            "bluetooth-active-symbolic",
-            &i18n::control_center("Bluetooth"),
-            "bluetooth",
-        )
-        .upcast(),
+        bt.upcast(),
         power.upcast(),
         dark_style_tile().upcast(),
         night_light_tile().upcast(),
@@ -88,6 +85,7 @@ fn menu() -> gtk::Box {
     }
     root.append(&flow);
     root.append(&networks);
+    root.append(&bt_devices);
     root.append(&profiles);
     root
 }
@@ -106,17 +104,6 @@ pub fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
         .child(&content)
         .css_classes(["tile"])
         .build()
-}
-
-/// A tile that opens a gnome-control-center panel.
-/// TODO: drive BlueZ directly for on/off state.
-fn settings_tile(icon: &str, label: &str, panel: &'static str) -> gtk::ToggleButton {
-    let t = tile(icon, label);
-    t.connect_clicked(move |b| {
-        b.set_active(false);
-        open_settings(panel);
-    });
-    t
 }
 
 /// Bind a tile to a boolean key and keep it in sync both ways.

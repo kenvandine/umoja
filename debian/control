@@ -41,6 +41,7 @@ Recommends: umoja-greeter,
             wireplumber,
             network-manager,
             upower,
+            bluez,
             power-profiles-daemon,
             gnome-keyring
 Description: AI-native, Rust-based desktop shell for Ubuntu
