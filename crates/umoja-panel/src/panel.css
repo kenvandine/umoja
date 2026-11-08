@@ -30,3 +30,39 @@ window.umoja-panel .tray-item {
   background-color: #E95420;
   color: #ffffff;
 }
+/* System status area: icons spaced like gnome-shell's. */
+window.umoja-panel .system-status image {
+  -gtk-icon-size: 16px;
+}
+window.umoja-panel .battery-percentage {
+  font-weight: bold;
+}
+.quick-settings .split-tile > .tile:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.quick-settings .split-tile > .tile-arrow {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  min-width: 36px;
+  padding: 0 8px;
+}
+.quick-settings .split-tile > .tile-arrow:checked {
+  background-color: shade(#E95420, 0.9);
+}
+.quick-settings .network-list {
+  padding: 8px;
+  border-radius: 18px;
+  background-color: alpha(currentColor, 0.06);
+}
+.quick-settings .network-list-header {
+  padding: 4px 8px;
+}
+.quick-settings .network-row {
+  border-radius: 12px;
+  padding: 6px 8px;
+}
+.quick-settings .battery-button {
+  border-radius: 999px;
+  padding: 4px 12px;
+}

@@ -4,11 +4,12 @@
 //! that draws the icons, so tray icons from Steam, Discord, Slack, nm-applet
 //! and friends work without any legacy XEmbed wrapper.
 
+use crate::dbusmenu;
 use gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use umoja_common::dbus;
@@ -28,10 +29,25 @@ const WATCHER_XML: &str = r#"
 </node>"#;
 
 const ITEM_IFACE: &str = "org.kde.StatusNotifierItem";
+/// Panel icons are 16 logical pixels, like gnome-shell's.
+const ICON_SIZE: i32 = 16;
 
 struct Item {
     button: gtk::Button,
+    state: Rc<ItemState>,
     unwatch: Box<dyn FnOnce()>,
+}
+
+/// Live state of one tray item.
+struct ItemState {
+    conn: gio::DBusConnection,
+    bus: String,
+    proxy: gio::DBusProxy,
+    image: gtk::Image,
+    button: glib::WeakRef<gtk::Button>,
+    item_is_menu: Cell<bool>,
+    menu_path: RefCell<Option<String>>,
+    menu: RefCell<Option<Rc<dbusmenu::Menu>>>,
 }
 
 pub struct Tray {
@@ -87,8 +103,11 @@ impl Tray {
                     let arg = params.get::<(String,)>().map(|(s,)| s).unwrap_or_default();
                     match method {
                         "RegisterStatusNotifierItem" => {
-                            tray.register(sender.unwrap_or_default(), &arg);
+                            // Reply first: the item may block on this call,
+                            // and registering talks back to it.
                             invocation.return_value(None);
+                            let sender = sender.unwrap_or_default().to_string();
+                            glib::idle_add_local_once(move || tray.register(&sender, &arg));
                         }
                         "RegisterStatusNotifierHost" => invocation.return_value(None),
                         _ => invocation
@@ -147,12 +166,9 @@ impl Tray {
             return;
         };
 
-        let button = gtk::Button::builder()
-            .css_classes(["flat", "tray-item"])
-            .build();
         let proxy = gio::DBusProxy::new_sync(
             &conn,
-            gio::DBusProxyFlags::DO_NOT_AUTO_START,
+            gio::DBusProxyFlags::DO_NOT_AUTO_START | gio::DBusProxyFlags::DO_NOT_LOAD_PROPERTIES,
             None,
             Some(&bus),
             &path,
@@ -160,31 +176,80 @@ impl Tray {
             gio::Cancellable::NONE,
         );
         let Ok(proxy) = proxy else { return };
-        refresh_icon(&proxy, &button);
+        let image = gtk::Image::builder().pixel_size(ICON_SIZE).build();
+        let button = gtk::Button::builder()
+            .child(&image)
+            .css_classes(["flat", "tray-item"])
+            .visible(false)
+            .build();
+        let state = Rc::new(ItemState {
+            conn: conn.clone(),
+            bus: bus.clone(),
+            proxy: proxy.clone(),
+            image,
+            button: button.downgrade(),
+            item_is_menu: Cell::new(false),
+            menu_path: RefCell::default(),
+            menu: RefCell::default(),
+        });
+        state.refresh();
 
         proxy.connect_local("g-signal", false, {
-            let button = button.downgrade();
+            let weak = Rc::downgrade(&state);
             move |args| {
-                let proxy = args[0].get::<gio::DBusProxy>().ok()?;
                 let signal = args[2].get::<String>().ok()?;
-                if let (Some(b), "NewIcon" | "NewTitle" | "NewStatus" | "NewToolTip") =
-                    (button.upgrade(), signal.as_str())
-                {
-                    refresh_icon(&proxy, &b);
+                if signal.starts_with("New") {
+                    weak.upgrade()?.refresh();
                 }
                 None
             }
         });
-        button.connect_clicked({
-            let proxy = proxy.clone();
-            move |_| call(&proxy, "Activate")
+
+        // Left click: Activate, or the menu for menu-only (AppIndicator)
+        // items. Middle click: SecondaryActivate. Right click: the menu.
+        let click = gtk::GestureClick::builder().button(0).build();
+        click.connect_released({
+            let weak = Rc::downgrade(&state);
+            move |g, _, x, y| {
+                let Some(st) = weak.upgrade() else { return };
+                let (rx, ry) = st.root_coords(x, y);
+                match g.current_button() {
+                    1 if st.item_is_menu.get() && st.has_menu() => st.show_menu(),
+                    1 => st.activate("Activate", rx, ry),
+                    2 => st.call("SecondaryActivate", Some((rx, ry).to_variant())),
+                    3 if st.has_menu() => st.show_menu(),
+                    3 => st.call("ContextMenu", Some((rx, ry).to_variant())),
+                    _ => {}
+                }
+            }
         });
-        let secondary = gtk::GestureClick::builder().button(3).build();
-        secondary.connect_pressed(move |_, _, _, _| {
-            // TODO(phase 2): render com.canonical.dbusmenu menus natively.
-            call(&proxy, "ContextMenu")
+        button.add_controller(click);
+
+        let scroll = gtk::EventControllerScroll::new(
+            gtk::EventControllerScrollFlags::BOTH_AXES | gtk::EventControllerScrollFlags::DISCRETE,
+        );
+        scroll.connect_scroll({
+            let weak = Rc::downgrade(&state);
+            move |_, dx, dy| {
+                let Some(st) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                if dy != 0.0 {
+                    st.call(
+                        "Scroll",
+                        Some(((dy * -120.0) as i32, "vertical").to_variant()),
+                    );
+                }
+                if dx != 0.0 {
+                    st.call(
+                        "Scroll",
+                        Some(((dx * 120.0) as i32, "horizontal").to_variant()),
+                    );
+                }
+                glib::Propagation::Stop
+            }
         });
-        button.add_controller(secondary);
+        button.add_controller(scroll);
 
         let watch = {
             let weak = Rc::downgrade(self);
@@ -207,6 +272,7 @@ impl Tray {
             key.clone(),
             Item {
                 button,
+                state,
                 unwatch: Box::new(move || gio::bus_unwatch_name(watch)),
             },
         );
@@ -217,6 +283,8 @@ impl Tray {
     fn unregister(&self, key: &str) {
         let removed = self.items.borrow_mut().remove(key);
         if let Some(item) = removed {
+            // Unparents the menu popover before its button goes away.
+            item.state.menu.borrow_mut().take();
             self.container.remove(&item.button);
             (item.unwatch)();
             self.emit("StatusNotifierItemUnregistered", Some(key));
@@ -234,54 +302,192 @@ fn split_service(sender: &str, service: &str) -> (String, String) {
     }
 }
 
-/// SNI items rarely emit PropertiesChanged, so fetch properties explicitly.
-fn refresh_icon(proxy: &gio::DBusProxy, button: &gtk::Button) {
-    let button = button.downgrade();
-    proxy.call(
-        "org.freedesktop.DBus.Properties.GetAll",
-        Some(&(ITEM_IFACE,).to_variant()),
-        gio::DBusCallFlags::NONE,
-        2000,
-        gio::Cancellable::NONE,
-        move |res| {
-            let (Ok(v), Some(button)) = (res, button.upgrade()) else {
-                return;
-            };
-            let Some((props,)) = v.get::<(HashMap<String, glib::Variant>,)>() else {
-                return;
-            };
-            let text = |k: &str| {
-                props
-                    .get(k)
-                    .and_then(|v| v.as_variant().unwrap_or(v.clone()).get::<String>())
-            };
-            let status = text("Status").unwrap_or_default();
-            button.set_visible(status != "Passive");
-            let icon = if status == "NeedsAttention" {
-                text("AttentionIconName").or_else(|| text("IconName"))
-            } else {
-                text("IconName")
-            };
-            match icon.filter(|i| !i.is_empty()) {
-                Some(name) => button.set_icon_name(&name),
-                None => button.set_label(&text("Title").unwrap_or_else(|| "•".into())),
+impl ItemState {
+    fn has_menu(&self) -> bool {
+        self.menu_path.borrow().is_some()
+    }
+
+    fn root_coords(&self, x: f64, y: f64) -> (i32, i32) {
+        // Wayland clients cannot know global coordinates; items only use
+        // these to place their own menus, so the local point is good enough.
+        (x as i32, y as i32)
+    }
+
+    fn call(&self, method: &str, args: Option<glib::Variant>) {
+        self.proxy.call(
+            method,
+            args.as_ref(),
+            gio::DBusCallFlags::NONE,
+            2000,
+            gio::Cancellable::NONE,
+            |_| {},
+        );
+    }
+
+    /// Activate, falling back to the menu when the item does not implement
+    /// it (many AppIndicators only have a menu).
+    fn activate(self: &Rc<Self>, method: &str, x: i32, y: i32) {
+        let weak = Rc::downgrade(self);
+        self.proxy.call(
+            method,
+            Some(&(x, y).to_variant()),
+            gio::DBusCallFlags::NONE,
+            2000,
+            gio::Cancellable::NONE,
+            move |res| {
+                if res.is_err()
+                    && let Some(st) = weak.upgrade()
+                    && st.has_menu()
+                {
+                    st.show_menu();
+                }
+            },
+        );
+    }
+
+    fn show_menu(&self) {
+        let Some(path) = self.menu_path.borrow().clone() else {
+            return;
+        };
+        let Some(button) = self.button.upgrade() else {
+            return;
+        };
+        let mut menu = self.menu.borrow_mut();
+        if menu.is_none() {
+            *menu = dbusmenu::Menu::new(&self.conn, &self.bus, &path, button.upcast_ref());
+        }
+        if let Some(m) = menu.as_ref() {
+            m.popup();
+        }
+    }
+
+    /// SNI items rarely emit PropertiesChanged, so fetch properties
+    /// explicitly on every New* signal.
+    fn refresh(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.proxy.call(
+            "org.freedesktop.DBus.Properties.GetAll",
+            Some(&(ITEM_IFACE,).to_variant()),
+            gio::DBusCallFlags::NONE,
+            2000,
+            gio::Cancellable::NONE,
+            move |res| {
+                let (Ok(v), Some(st)) = (res, weak.upgrade()) else {
+                    return;
+                };
+                st.apply(&crate::bus::Props::from_dict(&v.child_value(0)));
+            },
+        );
+    }
+
+    fn apply(&self, props: &crate::bus::Props) {
+        let Some(button) = self.button.upgrade() else {
+            return;
+        };
+        let text = |k: &str| props.str(k).filter(|s| !s.is_empty());
+        let status = text("Status").unwrap_or_default();
+        button.set_visible(status != "Passive");
+        self.item_is_menu
+            .set(props.bool("ItemIsMenu").unwrap_or(false));
+        let menu_path = props.obj("Menu");
+        if *self.menu_path.borrow() != menu_path {
+            self.menu.borrow_mut().take();
+            *self.menu_path.borrow_mut() = menu_path;
+        }
+
+        if let Some(dir) = text("IconThemePath")
+            && let Some(display) = gtk::gdk::Display::default()
+        {
+            let theme = gtk::IconTheme::for_display(&display);
+            if !theme
+                .search_path()
+                .iter()
+                .any(|p| p.as_os_str() == dir.as_str())
+            {
+                theme.add_search_path(&dir);
             }
-            if let Some(title) = text("Title") {
-                button.set_tooltip_text(Some(&title));
+        }
+
+        let attention = status == "NeedsAttention";
+        let (name_key, pixmap_key) = if attention {
+            ("AttentionIconName", "AttentionIconPixmap")
+        } else {
+            ("IconName", "IconPixmap")
+        };
+        let name = text(name_key).or_else(|| text("IconName"));
+        let scale = button.scale_factor();
+        let pixmap = props
+            .get(pixmap_key)
+            .or_else(|| props.get("IconPixmap"))
+            .and_then(|v| best_pixmap(v, ICON_SIZE * scale));
+        match (name, pixmap) {
+            (Some(n), _) if n.starts_with('/') => self.image.set_from_file(Some(&n)),
+            (Some(n), Some(p)) => {
+                let theme = gtk::gdk::Display::default().map(|d| gtk::IconTheme::for_display(&d));
+                if theme.is_some_and(|t| t.has_icon(&n)) {
+                    self.image.set_icon_name(Some(&n));
+                } else {
+                    self.image.set_paintable(Some(&p));
+                }
             }
-        },
-    );
+            (Some(n), None) => self.image.set_icon_name(Some(&n)),
+            (None, Some(p)) => self.image.set_paintable(Some(&p)),
+            (None, None) => self
+                .image
+                .set_icon_name(Some("application-x-executable-symbolic")),
+        }
+
+        let tooltip = props
+            .get("ToolTip")
+            .and_then(tooltip_text)
+            .or_else(|| text("Title"));
+        button.set_tooltip_markup(tooltip.as_deref());
+    }
 }
 
-fn call(proxy: &gio::DBusProxy, method: &str) {
-    proxy.call(
-        method,
-        Some(&(0i32, 0i32).to_variant()),
-        gio::DBusCallFlags::NONE,
-        2000,
-        gio::Cancellable::NONE,
-        |_| {},
-    );
+/// `ToolTip` is `(s icon, a(iiay) pixmaps, s title, s description)`.
+fn tooltip_text(v: &glib::Variant) -> Option<String> {
+    let title = v.try_child_value(2)?.str()?.to_string();
+    let body = v
+        .try_child_value(3)
+        .and_then(|b| b.str().map(String::from))
+        .unwrap_or_default();
+    let title = glib::markup_escape_text(&title).to_string();
+    match (title.is_empty(), body.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(title),
+        (true, false) => Some(body),
+        (false, false) => Some(format!("<b>{title}</b>\n{body}")),
+    }
+}
+
+/// Picks the smallest `a(iiay)` ARGB32 pixmap at least `size` pixels wide
+/// (or the largest one) and converts it to a texture.
+fn best_pixmap(v: &glib::Variant, size: i32) -> Option<gtk::gdk::MemoryTexture> {
+    let mut pixmaps: Vec<(i32, i32, Vec<u8>)> = v
+        .iter()
+        .filter_map(|p| {
+            let w = p.try_child_value(0)?.get::<i32>()?;
+            let h = p.try_child_value(1)?.get::<i32>()?;
+            let data = p.try_child_value(2)?.get::<Vec<u8>>()?;
+            (w > 0 && h > 0 && data.len() >= (w * h * 4) as usize).then_some((w, h, data))
+        })
+        .collect();
+    pixmaps.sort_by_key(|(w, _, _)| *w);
+    let (w, h, data) = pixmaps
+        .iter()
+        .find(|(w, _, _)| *w >= size)
+        .or(pixmaps.last())?
+        .clone();
+    // SNI pixmaps are ARGB32 in network byte order: A, R, G, B per pixel.
+    let bytes = glib::Bytes::from_owned(data);
+    Some(gtk::gdk::MemoryTexture::new(
+        w,
+        h,
+        gtk::gdk::MemoryFormat::A8r8g8b8,
+        &bytes,
+        (w * 4) as usize,
+    ))
 }
 
 #[cfg(test)]

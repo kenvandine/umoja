@@ -4,20 +4,41 @@
 //! GNOME, so flipping Dark Style here or in gnome-control-center is the same
 //! operation and both stay in sync.
 
+use crate::{battery, network, volume};
 use gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
+use std::cell::Cell;
 use std::process::Command;
+use std::rc::Rc;
 use umoja_common::{gsettings as gs, i18n};
 
 const POWER_PROFILES_BUS: &str = "net.hadess.PowerProfiles";
 const POWER_PROFILES_PATH: &str = "/net/hadess/PowerProfiles";
 
+/// The system status area: network, VPN, volume and battery icons (or the
+/// power icon on machines without a battery), opening Quick Settings.
 pub fn button() -> gtk::MenuButton {
-    let popover = gtk::Popover::builder().child(&menu()).build();
+    let popover = gtk::Popover::builder()
+        .child(&menu())
+        .css_classes(["quick-settings-popover"])
+        .build();
+    let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    icons.add_css_class("system-status");
+    let (net, vpn) = network::indicators();
+    icons.append(&net);
+    icons.append(&vpn);
+    icons.append(&volume::indicator());
+    icons.append(&battery::indicator());
+    let power = gtk::Image::from_icon_name("system-shutdown-symbolic");
+    battery::Battery::get().subscribe({
+        let power = power.clone();
+        move |s| power.set_visible(!s.present)
+    });
+    icons.append(&power);
     gtk::MenuButton::builder()
-        .icon_name("system-shutdown-symbolic")
+        .child(&icons)
         .popover(&popover)
         .css_classes(["flat", "quick-settings-button"])
         .build()
@@ -27,42 +48,48 @@ fn menu() -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
     root.add_css_class("quick-settings");
 
+    root.append(&session_row());
     root.append(&volume_row());
 
-    let grid = gtk::Grid::builder()
+    let flow = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .min_children_per_line(2)
+        .max_children_per_line(2)
         .row_spacing(8)
         .column_spacing(8)
-        .column_homogeneous(true)
         .build();
-    let tiles = [
-        settings_tile(
-            "network-wireless-symbolic",
-            &i18n::control_center("Wi-Fi"),
-            "wifi",
-        ),
+    let (wifi, networks) = network::wifi_tile(tile);
+    let tiles: Vec<gtk::Widget> = vec![
+        network::wired_tile(tile).upcast(),
+        wifi.upcast(),
         settings_tile(
             "bluetooth-active-symbolic",
             &i18n::control_center("Bluetooth"),
             "bluetooth",
-        ),
-        settings_tile(
-            "network-vpn-symbolic",
-            &i18n::control_center("VPN"),
-            "network",
-        ),
-        power_profile_tile(),
-        dark_style_tile(),
-        night_light_tile(),
+        )
+        .upcast(),
+        power_profile_tile().upcast(),
+        dark_style_tile().upcast(),
+        night_light_tile().upcast(),
     ];
-    for (i, tile) in tiles.iter().enumerate() {
-        grid.attach(tile, (i % 2) as i32, (i / 2) as i32, 1, 1);
+    for t in tiles {
+        flow.append(&t);
+        // A hidden tile must not leave a hole: hide its FlowBoxChild too.
+        let sync = |w: &gtk::Widget| {
+            if let Some(p) = w.parent() {
+                p.set_visible(w.is_visible());
+            }
+        };
+        sync(&t);
+        t.connect_visible_notify(sync);
     }
-    root.append(&grid);
-    root.append(&session_row());
+    root.append(&flow);
+    root.append(&networks);
     root
 }
 
-fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
+pub fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     content.append(&gtk::Image::from_icon_name(icon));
     content.append(
@@ -79,7 +106,7 @@ fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
 }
 
 /// A tile that opens a gnome-control-center panel.
-/// TODO(phase 2): drive NetworkManager / BlueZ directly for on/off state.
+/// TODO: drive BlueZ directly for on/off state.
 fn settings_tile(icon: &str, label: &str, panel: &'static str) -> gtk::ToggleButton {
     let t = tile(icon, label);
     t.connect_clicked(move |b| {
@@ -202,45 +229,46 @@ fn power_profile_tile() -> gtk::ToggleButton {
     t
 }
 
-/// Output volume via WirePlumber's `wpctl`.
-/// TODO(phase 2): talk to PipeWire directly and list sinks.
+/// Output volume slider; the speaker icon mutes, like gnome-shell.
 fn volume_row() -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&gtk::Image::from_icon_name("audio-volume-high-symbolic"));
+    let mute = gtk::Button::builder()
+        .icon_name("audio-volume-high-symbolic")
+        .css_classes(["flat", "circular"])
+        .build();
+    mute.connect_clicked(|_| volume::Volume::get().toggle_mute());
+    row.append(&mute);
     let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
     scale.set_hexpand(true);
-    if let Some(v) = read_volume() {
-        scale.set_value(v);
-    }
-    scale.connect_value_changed(|s| {
-        let _ = Command::new("wpctl")
-            .args([
-                "set-volume",
-                "@DEFAULT_AUDIO_SINK@",
-                &format!("{:.2}", s.value()),
-            ])
-            .spawn();
-    });
     row.append(&scale);
-    row
-}
 
-fn read_volume() -> Option<f64> {
-    let out = Command::new("wpctl")
-        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .output()
-        .ok()?;
-    // "Volume: 0.45" or "Volume: 0.45 [MUTED]"
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()
+    let updating = Rc::new(Cell::new(false));
+    volume::Volume::get().subscribe({
+        let (row, scale, updating) = (row.clone(), scale.clone(), updating.clone());
+        move |s| {
+            row.set_sensitive(s.available);
+            mute.set_icon_name(s.icon());
+            if (scale.value() - s.volume).abs() > 0.005 {
+                updating.set(true);
+                scale.set_value(s.volume);
+                updating.set(false);
+            }
+        }
+    });
+    scale.connect_value_changed(move |s| {
+        if !updating.get() {
+            volume::Volume::get().set_volume(s.value());
+        }
+    });
+    row
 }
 
 fn session_row() -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.set_halign(gtk::Align::End);
+    row.append(&battery::menu_button());
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    row.append(&spacer);
     let items: [(&str, String, fn()); 4] = [
         (
             "emblem-system-symbolic",

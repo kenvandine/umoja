@@ -5,9 +5,14 @@
 //! (`umoja-panel.service`); if it crashes, systemd restarts it and the rest
 //! of the session carries on.
 
+mod battery;
+mod bus;
 mod clock;
+mod dbusmenu;
+mod network;
 mod quick_settings;
 mod sni;
+mod volume;
 mod wallpaper;
 
 use adw::prelude::*;
