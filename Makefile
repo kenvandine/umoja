@@ -33,7 +33,7 @@ vendor: vendor-cargo vendor-lemonade
 # which shrinks the PPA source upload by a few hundred MB.
 vendor-cargo:
 	@if command -v cargo-vendor-filterer >/dev/null 2>&1; then \
-	  $(CARGO) vendor-filterer --locked --platform=x86_64-unknown-linux-gnu \
+	  $(CARGO) vendor-filterer --platform=x86_64-unknown-linux-gnu \
 	    --platform=aarch64-unknown-linux-gnu $(VENDOR)/cargo > /dev/null; \
 	else \
 	  $(CARGO) vendor --locked $(VENDOR)/cargo > /dev/null; \
