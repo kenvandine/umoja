@@ -79,7 +79,7 @@ gsettings --schemadir /usr/share/glib-2.0/schemas list-keys org.umoja.shell >/de
 
 step "Headless session"
 apt-get install -y -q --no-install-recommends mir-platform-graphics-virtual xvfb x11-utils \
-    imagemagick dbus-x11 wtype >>"$LOG" 2>&1 || fail "could not install headless test tools"
+    imagemagick dbus-x11 wtype python3-gi >>"$LOG" 2>&1 || fail "could not install headless test tools"
 # Run the session as a normal user, as LightDM would (Nautilus refuses root).
 id umoja-test >/dev/null 2>&1 || useradd -m -s /bin/bash -c "Umoja Test" umoja-test
 chmod 777 "$OUT"

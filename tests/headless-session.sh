@@ -158,22 +158,37 @@ shot 04-screenshot-ui
 # Screen blanking follows org.gnome.desktop.session idle-delay, and an
 # org.freedesktop.ScreenSaver inhibitor keeps the screen on.
 blanks() { grep -c 'screen off' "$OUT/umoja-mir.log"; }
-ss() { gdbus call --session --dest org.freedesktop.ScreenSaver --object-path /org/freedesktop/ScreenSaver \
-    --method "org.freedesktop.ScreenSaver.$1" "${@:2}" 2>>"$LOG"; }
 before=$(blanks)
 gsettings set org.gnome.desktop.screensaver lock-enabled false
 gsettings set org.gnome.desktop.session idle-delay 3
 sleep 6
 [ "$(blanks)" -gt "$before" ] && pass "screen blanks after idle-delay" || fail "screen did not blank after idle-delay 3"
 # (Mir only reports waking when it dimmed first, which needs >= 20s.)
-wtype -k shift 2>>"$LOG"
+wtype -k Shift_L 2>>"$LOG"
 sleep 1
-cookie=$(ss Inhibit umoja-test "testing" | grep -oE '[0-9]+' | tail -1)
+# An inhibitor lives as long as its bus connection, so hold it from a
+# process that stays up (a one-shot gdbus call drops it straight away).
+python3 -c '
+import sys, time
+from gi.repository import Gio, GLib
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+r = bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
+    "org.freedesktop.ScreenSaver", "Inhibit", GLib.Variant("(ss)", ("umoja-test", "testing")),
+    None, 0, -1)
+print(r.unpack()[0], flush=True)
+time.sleep(600)
+' >"$OUT/inhibitor.out" 2>>"$LOG" &
+HOLDER=$!
+sleep 2
+cookie=$(grep -oE '^[0-9]+' "$OUT/inhibitor.out")
 [ -n "$cookie" ] && pass "org.freedesktop.ScreenSaver Inhibit" || fail "ScreenSaver Inhibit failed"
 before=$(blanks)
 sleep 6
 [ "$(blanks)" -eq "$before" ] && pass "inhibitor keeps the screen on" || fail "screen blanked while inhibited"
-[ -n "$cookie" ] && ss UnInhibit "$cookie" >/dev/null
+# Its owner going away releases it, like an app that exits mid-video.
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+grep -q 'inhibitor removed' "$OUT/umoja-mir.log" && pass "inhibitor dropped when its owner leaves" \
+    || fail "inhibitor not dropped when its owner left"
 sleep 9
 [ "$(blanks)" -gt "$before" ] && pass "screen blanks again after the inhibitor goes" || fail "screen did not blank after UnInhibit"
 gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/SessionManager \
@@ -181,7 +196,7 @@ gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/Se
     && pass "org.gnome.SessionManager Inhibit" || fail "SessionManager Inhibit failed"
 gsettings reset org.gnome.desktop.session idle-delay
 gsettings reset org.gnome.desktop.screensaver lock-enabled
-wtype -k shift 2>>"$LOG"
+wtype -k Shift_L 2>>"$LOG"
 
 # Only this test's processes: everything it started, directly or through
 # its private D-Bus (activated apps, wsdd, the portal), carries its private
