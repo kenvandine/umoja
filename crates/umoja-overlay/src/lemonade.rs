@@ -404,6 +404,8 @@ pub fn looks_like_question(query: &str) -> bool {
     q.ends_with('?')
         || q.split_whitespace().count() >= 4
         || STARTERS.iter().any(|s| q.starts_with(&format!("{s} ")))
+        // Short symptom reports: "fan loud", "wifi broken".
+        || !umoja_common::diagnostics::topics_for(&q).is_empty()
 }
 
 #[cfg(test)]
@@ -446,6 +448,9 @@ mod tests {
     #[test]
     fn question_heuristic() {
         assert!(looks_like_question("How do I set up a WireGuard VPN?"));
+        assert!(looks_like_question("wifi broken"));
+        assert!(looks_like_question("fan loud"));
+        assert!(!looks_like_question("bluetooth"));
         assert!(looks_like_question("Scale my secondary 4K display to 150%"));
         assert!(looks_like_question("convert sample.png to webp"));
         assert!(!looks_like_question("firefox"));
