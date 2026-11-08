@@ -830,7 +830,6 @@ impl Overlay {
         self.pick_selection
             .set_sensitive(self.history.selection().is_some());
         let win = self.last_window.borrow();
-        self.pick_window.0.set_sensitive(win.is_some());
         self.pick_window.1.set_text(&match win.as_ref() {
             Some(w) if !w.title.is_empty() => format!(
                 "{} — {}",
@@ -919,7 +918,7 @@ impl Overlay {
     /// capture, then comes back.
     pub fn attach_window(self: &Rc<Self>) {
         let Some(win) = self.last_window.borrow().clone() else {
-            self.show_error(&i18n::umoja("There's no window to read on this workspace."));
+            self.read_screen(None, Kind::Area, i18n::umoja("Reading the screen…"));
             return;
         };
         let kind = Kind::Window {
@@ -1054,8 +1053,8 @@ impl Overlay {
             if found {
                 o.attach_window();
             } else {
-                o.reveal();
-                o.show_error(&i18n::umoja("There's no window to read on this workspace."));
+                // No window list (compositor not on the bus): read the screen.
+                o.read_screen(None, Kind::Area, i18n::umoja("Reading the screen…"));
             }
         });
     }
