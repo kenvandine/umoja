@@ -25,6 +25,12 @@ pub fn started(wayland_display: &str) {
         // threads read the environment.
         unsafe { std::env::set_var("WAYLAND_DISPLAY", wayland_display) };
     }
+    // Test and nested compositors (UMOJA_NO_SESSION_TARGET) must not touch
+    // the user's systemd/D-Bus environment: exporting their WAYLAND_DISPLAY
+    // sends every activated app of the real session to the test display.
+    if std::env::var_os("UMOJA_NO_SESSION_TARGET").is_some() {
+        return;
+    }
     std::thread::spawn(|| {
         let vars = [
             "WAYLAND_DISPLAY",
@@ -40,12 +46,10 @@ pub fn started(wayland_display: &str) {
             "systemctl",
             &[&["--user", "import-environment"][..], &vars[..]].concat(),
         );
-        if std::env::var_os("UMOJA_NO_SESSION_TARGET").is_none() {
-            run(
-                "systemctl",
-                &["--user", "start", "--no-block", "umoja-session.target"],
-            );
-        }
+        run(
+            "systemctl",
+            &["--user", "start", "--no-block", "umoja-session.target"],
+        );
     });
 }
 
