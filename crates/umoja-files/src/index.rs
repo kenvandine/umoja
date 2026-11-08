@@ -191,6 +191,11 @@ impl Index {
                 // Semantic similarity alone has a floor of noise (unrelated
                 // text still scores ~0.3–0.4 with small models), so a file
                 // needs either matching words or a clearly related meaning.
+                // "photos from June" names nothing but a type and a time:
+                // then those are the search, not just nudges.
+                if q.words.is_empty() && !q.matches_hints(e) {
+                    return None;
+                }
                 let relevant =
                     words > 0.0 || meaning >= q.meaning_floor || (q.words.is_empty() && hint > 0.0);
                 relevant.then(|| (meaning + 0.6 * words + hint, e))
@@ -329,6 +334,16 @@ impl Query {
             };
         }
         s / self.words.len() as f64
+    }
+
+    /// The file is of a named type (if any) and from the named time (if any).
+    fn matches_hints(&self, e: &Entry) -> bool {
+        let ext = extension(Path::new(&e.path));
+        let kind = self.kinds.is_empty() || self.kinds.iter().any(|k| k.contains(&ext.as_str()));
+        let time = self
+            .time
+            .is_none_or(|(from, to)| e.mtime >= from && e.mtime < to);
+        kind && time
     }
 
     fn hint_score(&self, e: &Entry) -> f64 {
