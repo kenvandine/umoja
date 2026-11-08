@@ -78,7 +78,16 @@ pub fn initial_messages(q: &Question) -> Vec<Value> {
 /// Answer `question`, calling tools as the model asks. Returns the final
 /// answer text (empty when cancelled or failed; errors are shown via `ui`).
 pub async fn run(client: LemonadeClient, question: Question, ui: Rc<dyn Ui>) -> String {
-    let tools = registry();
+    run_with(client, question, ui, registry()).await
+}
+
+/// [`run`] with a given tool set (tests swap in stubs).
+pub async fn run_with(
+    client: LemonadeClient,
+    question: Question,
+    ui: Rc<dyn Ui>,
+    tools: Vec<ToolSpec>,
+) -> String {
     let schemas: Vec<Value> = tools.iter().map(ToolSpec::schema).collect();
     let mut messages = initial_messages(&question);
     let mut shown = String::new();
@@ -280,6 +289,7 @@ fn visible_text(text: &str, tools: &[ToolSpec]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gtk4::glib;
 
     #[test]
     fn inline_calls_are_found_and_hidden() {
@@ -307,6 +317,76 @@ mod tests {
         assert_eq!(parse_args(r#""{\"a\":1}""#), json!({"a": 1}));
         assert_eq!(parse_args(""), json!({}));
         assert_eq!(parse_args("not json"), json!({}));
+    }
+
+    /// Asks the live Lemonade on 127.0.0.1:13345 a set of requests and
+    /// prints which tools the model called. State-changing tools are
+    /// stubbed, so nothing on the desktop changes. Run with
+    /// `cargo test -p umoja-overlay live_tool_choice -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_tool_choice() {
+        use std::cell::RefCell;
+        struct Rec(RefCell<Vec<String>>);
+        impl Ui for Rec {
+            fn text(&self, _: &str) {}
+            fn step(&self, _: usize, label: &str, state: StepState) {
+                if state != StepState::Running {
+                    self.0.borrow_mut().push(format!("{label} [{state:?}]"));
+                }
+            }
+            fn confirm(&self, label: &str, _: Risk) -> Pin<Box<dyn Future<Output = bool>>> {
+                self.0.borrow_mut().push(format!("ASKED: {label}"));
+                Box::pin(async { false })
+            }
+            fn cancelled(&self) -> bool {
+                false
+            }
+        }
+        const REAL: &[&str] = &["list_settings", "desktop_status"];
+        let tools: Vec<ToolSpec> = registry()
+            .into_iter()
+            .map(|mut t| {
+                if t.name == "list_windows" {
+                    t.run = super::super::tools::Run::Blocking(|_| {
+                        "1. org.gnome.Ptyxis — ken@umoja: ~ (focused)\n2. firefox — Ubuntu — Mozilla Firefox\nYou are on workspace 1 of 3.".into()
+                    });
+                } else if !REAL.contains(&t.name) {
+                    t.run = super::super::tools::Run::Blocking(|_| "done".into());
+                }
+                t
+            })
+            .collect();
+        let prompts = [
+            "turn on dark mode",
+            "open firefox",
+            "switch to power saver",
+            "turn off bluetooth",
+            "turn wifi off",
+            "make text bigger",
+            "stop the screen dimming so fast",
+            "put the terminal on the left half of the screen",
+            "move firefox to workspace 2",
+            "show battery percentage",
+            "delete everything in my Downloads folder",
+            "how do I set up a VPN?",
+        ];
+        let ctx = glib::MainContext::default();
+        for p in prompts {
+            let rec = Rc::new(Rec(RefCell::new(Vec::new())));
+            let t0 = std::time::Instant::now();
+            let answer = ctx.block_on(run_with(
+                LemonadeClient::new(),
+                Question::from(p),
+                rec.clone(),
+                tools.clone(),
+            ));
+            println!("\n> {p}  ({:.1}s)", t0.elapsed().as_secs_f32());
+            for s in rec.0.borrow().iter() {
+                println!("  - {s}");
+            }
+            println!("  = {}", answer.replace('\n', " "));
+        }
     }
 
     #[test]
