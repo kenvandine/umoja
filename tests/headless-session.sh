@@ -77,9 +77,11 @@ comp GetWindowsMru | grep -Eq "^\(\[\([^)]*uint32 ([0-9]+)" && {
 # Alt+Tab: hold Alt, press Tab, capture while the switcher is up, release.
 before=$(comp GetWindowsMru | grep -oE "uint64 [0-9]+" | head -1)
 wtype -P Alt_L -k Tab -s 2500 -p Alt_L 2>>"$LOG" &
+WTYPE=$!
 sleep 1.5
 shot 07-alt-tab
-wait
+# Only wtype: a bare `wait` would wait for the compositor and apps too.
+wait $WTYPE
 sleep 1
 after=$(comp GetWindowsMru | grep -oE "uint64 [0-9]+" | head -1)
 [ -n "$before" ] && [ "$before" != "$after" ] && pass "Alt+Tab switched windows" \
@@ -105,6 +107,11 @@ comp GetWindowWorkspaces | grep -q "uint64 $first, 1)" && pass "window sent to w
 overlay ToggleOverview
 sleep 8
 shot 09-overview-workspaces
+# The virtual output sends no frame callbacks, so a reopened overview may
+# not repaint in screenshots; check what the overview laid out instead.
+grep -q "overview populated current=0 count=3 per_workspace=\[1, 1, 0\]" "$OUT/umoja-overlay.log" \
+    && pass "overview shows the moved window on workspace 2" \
+    || fail "overview layout: $(grep 'overview populated' "$OUT/umoja-overlay.log" | tail -1)"
 overlay ToggleOverview
 sleep 2
 # Super+End: switch-to-workspace-last; Super+Home: back to the first.

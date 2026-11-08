@@ -530,6 +530,10 @@ impl Spread {
         let (aw, ah) = self.area();
         let count = st.count.max(1);
         let current = st.current.min(count - 1);
+        let per_workspace: Vec<usize> = (0..count)
+            .map(|i| st.windows.iter().filter(|w| shown_on(w, current) == i).count())
+            .collect();
+        tracing::info!("overview populated current={current} count={count} per_workspace={per_workspace:?}");
 
         // Thumbnails, when there is more than one workspace (as in GNOME).
         let mut used_h = 24.0 + 40.0 + GAP;
