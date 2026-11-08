@@ -92,6 +92,40 @@ shot 08-overview
 overlay ToggleOverview
 sleep 2
 
+# Workspaces, as in GNOME: dynamic by default (always one empty at the end).
+ws() { comp GetWorkspaces | grep -oE "uint32 [0-9]+" | awk '{print $2}' | tr '\n' ' '; }
+[ "$(ws)" = "0 2 " ] && pass "dynamic workspaces: one in use plus a spare" || fail "GetWorkspaces: $(ws)"
+first=$(comp GetWindows | grep -oE "uint64 [0-9]+" | head -1 | awk '{print $2}')
+comp SendWindowToWorkspace "$first" 1 >/dev/null
+sleep 1
+echo "GetWindowWorkspaces: $(comp GetWindowWorkspaces)" >>"$LOG"
+comp GetWindowWorkspaces | grep -q "uint64 $first, 1)" && pass "window sent to workspace 2" \
+    || fail "SendWindowToWorkspace did not move window $first"
+[ "$(ws)" = "0 3 " ] && pass "a new spare workspace appeared" || fail "after moving: $(ws)"
+overlay ToggleOverview
+sleep 8
+shot 09-overview-workspaces
+overlay ToggleOverview
+sleep 2
+# Super+End: switch-to-workspace-last; Super+Home: back to the first.
+wtype -P Super_L -k End -p Super_L 2>>"$LOG"
+sleep 1
+[ "$(ws)" = "2 3 " ] && pass "Super+End switched to the last workspace" || fail "after Super+End: $(ws)"
+wtype -P Super_L -k Home -p Super_L 2>>"$LOG"
+sleep 1
+[ "$(ws)" = "0 3 " ] && pass "Super+Home switched to the first workspace" || fail "after Super+Home: $(ws)"
+# Fixed workspaces apply at once.
+gsettings set org.gnome.mutter dynamic-workspaces false
+gsettings set org.gnome.desktop.wm.preferences num-workspaces 4
+sleep 2
+[ "$(ws)" = "0 4 " ] && pass "fixed num-workspaces 4 applied" || fail "fixed workspaces: $(ws)"
+gsettings set org.gnome.desktop.wm.preferences num-workspaces 1
+sleep 2
+[ "$(ws)" = "0 1 " ] && pass "shrinking to one workspace folds the rest" || fail "fold: $(ws)"
+gsettings reset org.gnome.desktop.wm.preferences num-workspaces
+gsettings reset org.gnome.mutter dynamic-workspaces
+sleep 2
+
 # Drag-to-snap chrome: the compositor drives these while a window is dragged.
 # (Mir's virtual output sends no frame callbacks, so only check the calls.)
 ov() { gdbus call --session --dest org.umoja.Overlay --object-path /org/umoja/Overlay \
