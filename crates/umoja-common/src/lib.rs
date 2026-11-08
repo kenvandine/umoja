@@ -5,6 +5,7 @@
 
 pub mod apps;
 pub mod dbus;
+pub mod diagnostics;
 pub mod gsettings;
 pub mod hidpi;
 pub mod i18n;
