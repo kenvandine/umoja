@@ -1,7 +1,11 @@
-# Keep build products and git metadata out of the source package. The
+# Keep git metadata and local build state out of the source package. The
 # vendor/ tree (crates + embedded Lemonade) must stay in: Launchpad builds
 # offline.
+#
+# tar matches these against every path component, so a bare "target" or
+# ".github" would also strip vendored crates' own target/ and .github/
+# directories and break their .cargo-checksum.json. Only list names that
+# never occur under vendor/. target/ is removed by `debian/rules clean`,
+# which dpkg-buildpackage runs before building the source package.
 tar-ignore = ".git"
-tar-ignore = ".github"
-tar-ignore = "target"
 tar-ignore = "debian/.cargo"
