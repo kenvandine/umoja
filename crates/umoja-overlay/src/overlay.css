@@ -167,3 +167,20 @@ window.umoja-spread entry {
   border-radius: 999px;
   padding: 4px 12px;
 }
+
+/* Workspace switcher popup, after gnome-shell's .workspace-switcher. */
+.workspace-switcher {
+  background-color: alpha(#2e2e32, 0.95);
+  border-radius: 999px;
+  padding: 12px;
+}
+.ws-indicator {
+  min-width: 12px;
+  min-height: 12px;
+  border-radius: 999px;
+  background-color: alpha(#ffffff, 0.3);
+}
+.ws-indicator.active {
+  min-width: 48px;
+  background-color: #ffffff;
+}

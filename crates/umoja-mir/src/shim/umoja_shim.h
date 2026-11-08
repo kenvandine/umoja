@@ -151,6 +151,7 @@ void umoja_drag_begin(int32_t px, int32_t py, UmojaRect window, UmojaRect area, 
 uint32_t umoja_drag_motion(int32_t px, int32_t py, UmojaRect window, UmojaRect area, UmojaRect monitor);
 uint32_t umoja_drag_end(void);
 bool umoja_raise_tile_group(void);
+void umoja_workspace_switched(size_t current, size_t count);
 bool umoja_is_tile_action(uint32_t action);
 
 // Implemented by the shim, called from Rust's D-Bus thread. Each takes the

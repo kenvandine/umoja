@@ -65,6 +65,10 @@ const IFACE_XML: &str = r#"
       <arg name="window" type="i" direction="in"/>
     </method>
     <method name="HideSwitcher"/>
+    <method name="WorkspaceSwitched">
+      <arg name="active" type="u" direction="in"/>
+      <arg name="count" type="u" direction="in"/>
+    </method>
     <property name="Visible" type="b" access="read"/>
   </interface>
 </node>"#;
@@ -136,6 +140,10 @@ fn export(
                         methods.toggle()
                     }
                     "ToggleOverview" => {
+                        // Drag chrome never stays above the overview.
+                        chrome.tile_preview(false, (0, 0, 0, 0), (0, 0, 0, 0));
+                        chrome.layout_picker(0, 0, 0, 0);
+                        chrome.hide_switcher();
                         // Super from the app grid closes it, as in GNOME.
                         if methods.is_visible() {
                             methods.hide();
@@ -168,6 +176,11 @@ fn export(
                         }
                     }
                     "HideSwitcher" => chrome.hide_switcher(),
+                    "WorkspaceSwitched" => {
+                        if let Some((active, count)) = params.get::<(u32, u32)>() {
+                            chrome.workspace_switched(active, count);
+                        }
+                    }
                     "Show" => {
                         spread.hide();
                         methods.show()

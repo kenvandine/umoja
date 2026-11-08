@@ -753,6 +753,8 @@ private:
         if (umoja_workspace_resolve(action, current, workspaces.size(), &kind, &index)) {
             if (kind == UMOJA_WORKSPACE_SWITCH) switch_to(index);
             else move_active_to(index);
+            // GNOME's workspace switcher popup, for keyboard switches.
+            umoja_workspace_switched(current, workspaces.size());
             return true;
         }
 

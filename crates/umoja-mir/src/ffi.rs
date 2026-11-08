@@ -444,3 +444,11 @@ pub extern "C" fn umoja_raise_tile_group() -> bool {
 pub extern "C" fn umoja_is_tile_action(action: u32) -> bool {
     guard("is_tile_action", false, || tiling::is_tile(Action::from_u32(action)))
 }
+
+/// A keyboard workspace switch happened: show GNOME's switcher popup.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_workspace_switched(current: usize, count: usize) {
+    guard("workspace_switched", (), || {
+        session::overlay_call("WorkspaceSwitched", (current as u32, count as u32))
+    })
+}

@@ -678,12 +678,69 @@ fn pick(index: u32) {
     });
 }
 
+// ---- workspace switcher popup -------------------------------------------------
+
+/// gnome-shell's WorkspaceSwitcherPopup: a row of pills, the active one
+/// wider, shown low on the screen for a moment after a keyboard switch.
+struct WorkspacePopup {
+    window: gtk::ApplicationWindow,
+    row: gtk::Box,
+    hide_id: RefCell<Option<glib::SourceId>>,
+}
+
+/// switcherPopup DISPLAY_TIMEOUT in workspaceSwitcherPopup.js.
+const WORKSPACE_POPUP_MS: u64 = 600;
+
+impl WorkspacePopup {
+    fn new(app: &adw::Application) -> Rc<Self> {
+        let window = chrome_window(app, Layer::Overlay, "umoja-workspace-switcher");
+        window.set_exclusive_zone(0);
+        window.set_anchor(Edge::Bottom, true);
+        window.set_margin(Edge::Bottom, 120);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("workspace-switcher");
+        window.set_child(Some(&row));
+        Rc::new(Self {
+            window,
+            row,
+            hide_id: RefCell::default(),
+        })
+    }
+
+    fn show(self: &Rc<Self>, active: u32, count: u32) {
+        while let Some(c) = self.row.first_child() {
+            self.row.remove(&c);
+        }
+        for i in 0..count.max(1) {
+            let pill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            pill.add_css_class("ws-indicator");
+            if i == active {
+                pill.add_css_class("active");
+            }
+            self.row.append(&pill);
+        }
+        self.window.present();
+        if let Some(id) = self.hide_id.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_millis(WORKSPACE_POPUP_MS), move || {
+            if let Some(p) = weak.upgrade() {
+                p.hide_id.borrow_mut().take();
+                p.window.set_visible(false);
+            }
+        });
+        *self.hide_id.borrow_mut() = Some(id);
+    }
+}
+
 // ---- public face ------------------------------------------------------------------
 
 pub struct Chrome {
     preview: Rc<Preview>,
     picker: Rc<Picker>,
     switcher: Rc<Switcher>,
+    workspaces: Rc<WorkspacePopup>,
 }
 
 impl Chrome {
@@ -692,6 +749,7 @@ impl Chrome {
             preview: Preview::new(app),
             picker: Picker::new(app),
             switcher: Switcher::new(app),
+            workspaces: WorkspacePopup::new(app),
         })
     }
 
@@ -723,5 +781,9 @@ impl Chrome {
 
     pub fn hide_switcher(&self) {
         self.switcher.hide();
+    }
+
+    pub fn workspace_switched(&self, active: u32, count: u32) {
+        self.workspaces.show(active, count);
     }
 }
