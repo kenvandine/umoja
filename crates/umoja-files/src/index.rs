@@ -173,7 +173,7 @@ impl Index {
             return Vec::new();
         }
         let home = home().to_string_lossy().into_owned();
-        let mut hits: Vec<(f64, &Entry)> = self
+        let mut hits: Vec<(f64, bool, &Entry)> = self
             .entries
             .iter()
             .filter_map(|e| {
@@ -198,17 +198,18 @@ impl Index {
                 }
                 let relevant =
                     words > 0.0 || meaning >= q.meaning_floor || (q.words.is_empty() && hint > 0.0);
-                relevant.then(|| (meaning + 0.6 * words + hint, e))
+                relevant.then_some((meaning + 0.6 * words + hint, words > 0.0, e))
             })
             .collect();
         hits.sort_by(|a, b| b.0.total_cmp(&a.0));
-        // Drop the long tail of weak matches far behind the best one.
+        // Drop the long tail of meaning-only matches far behind the best
+        // one; files that share words with the query always stay.
         if let Some(best) = hits.first().map(|h| h.0) {
-            hits.retain(|h| h.0 >= best - 0.35);
+            hits.retain(|h| h.1 || h.0 >= best - 0.35);
         }
         hits.truncate(limit);
         hits.into_iter()
-            .map(|(score, e)| {
+            .map(|(score, _, e)| {
                 let folder = Path::new(&e.path)
                     .parent()
                     .map(|p| p.to_string_lossy().replacen(&home, "~", 1))
