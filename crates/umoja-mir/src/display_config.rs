@@ -358,6 +358,7 @@ pub fn start(display_file: &'static str) {
             },
             Err(e) => return tracing::warn!(error = %e, "DisplayConfig unavailable"),
         };
+        crate::session::keep_name(conn.clone(), BUS_NAME);
         loop {
             CHANGED.notified().await;
             // Coalesce bursts (hotplug sends several updates).

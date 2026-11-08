@@ -146,3 +146,40 @@ fn run(cmd: &str, args: &[&str]) {
         Err(e) => tracing::warn!(cmd, error = %e, "could not run"),
     }
 }
+
+/// Take `name` back if the bus ever takes it away from `conn`.
+///
+/// On the test laptop both of our well-known names were dropped at once
+/// while the connections stayed up (cause unknown), leaving the overview and
+/// the assistant without the compositor. Re-request with a backoff.
+pub fn keep_name(conn: zbus::Connection, name: &'static str) {
+    use futures_util::StreamExt;
+    RUNTIME.spawn(async move {
+        let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else {
+            return;
+        };
+        let Ok(mut lost) = proxy.receive_name_lost().await else {
+            return;
+        };
+        while let Some(sig) = lost.next().await {
+            if sig.args().is_ok_and(|a| a.name.as_str() != name) {
+                continue;
+            }
+            tracing::warn!(name, "lost bus name; requesting it again");
+            let mut delay = std::time::Duration::from_millis(500);
+            loop {
+                tokio::time::sleep(delay).await;
+                match conn.request_name(name).await {
+                    Ok(()) => {
+                        tracing::info!(name, "bus name reacquired");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(name, error = %e, "could not reacquire bus name");
+                        delay = (delay * 2).min(std::time::Duration::from_secs(30));
+                    }
+                }
+            }
+        }
+    });
+}

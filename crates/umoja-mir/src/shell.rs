@@ -417,7 +417,10 @@ pub fn start() {
         };
         match built {
             // Keep the connection alive for the life of the compositor.
-            Ok(conn) => std::mem::forget(conn),
+            Ok(conn) => {
+                crate::session::keep_name(conn.clone(), BUS_NAME);
+                std::mem::forget(conn);
+            }
             Err(e) => tracing::warn!(error = %e, "org.umoja.Compositor unavailable"),
         }
     });
