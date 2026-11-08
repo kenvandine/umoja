@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod desktop;
+pub mod files;
 pub mod settings;
 pub mod tools;
 
