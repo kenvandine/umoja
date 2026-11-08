@@ -5,6 +5,7 @@ use gtk::{gdk, prelude::*};
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
+use libadwaita::prelude::AnimationExt;
 
 /// How long the desktop takes to fade up after login.
 pub const SESSION_IN_MS: u32 = 700;
