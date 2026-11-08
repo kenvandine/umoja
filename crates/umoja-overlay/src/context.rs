@@ -135,11 +135,6 @@ impl Transform {
         })
     }
 
-    /// Whether the answer is a drop-in replacement for the text (offer Copy).
-    pub fn replaces_text(self) -> bool {
-        matches!(self, Transform::Translate | Transform::Reformat)
-    }
-
     /// System prompt for this transform; `language` is the user's own.
     pub fn system_prompt(self, language: &str) -> String {
         match self {
@@ -508,8 +503,6 @@ mod tests {
     #[test]
     fn transform_prompts_name_the_language() {
         assert!(Transform::Translate.system_prompt("German").contains("into German"));
-        assert!(Transform::Reformat.replaces_text());
-        assert!(!Transform::Summarize.replaces_text());
     }
 
     #[test]
