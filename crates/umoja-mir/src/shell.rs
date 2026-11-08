@@ -306,6 +306,9 @@ unsafe extern "C" {
     fn umoja_wm_close(id: u64);
     fn umoja_wm_switcher_pick(index: u32);
     fn umoja_wm_tile(id: u64, action: u32);
+    fn umoja_wm_workspaces(current: *mut u32, count: *mut u32);
+    fn umoja_wm_switch_workspace(index: u32);
+    fn umoja_wm_move_to_workspace(id: u64, index: u32);
 }
 
 pub type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
@@ -378,6 +381,28 @@ impl Compositor {
     /// top/bottom half (the `tiling::Action` numbers).
     async fn tile_window(&self, id: u64, action: u32) {
         let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_tile(id, action) }).await;
+    }
+
+    /// (current, count): the active workspace (0-based) and how many exist.
+    async fn get_workspaces(&self) -> (u32, u32) {
+        tokio::task::spawn_blocking(|| {
+            let (mut current, mut count) = (0u32, 0u32);
+            unsafe { umoja_wm_workspaces(&mut current, &mut count) };
+            (current, count)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Switch to workspace `index` (0-based), showing the switcher popup.
+    async fn switch_workspace(&self, index: u32) {
+        let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_switch_workspace(index) }).await;
+    }
+
+    /// Move a window to workspace `index` (0-based) and follow it there.
+    async fn move_window_to_workspace(&self, id: u64, index: u32) {
+        let _ =
+            tokio::task::spawn_blocking(move || unsafe { umoja_wm_move_to_workspace(id, index) }).await;
     }
 }
 

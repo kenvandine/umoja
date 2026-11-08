@@ -161,6 +161,9 @@ void umoja_wm_activate(uint64_t id);
 void umoja_wm_close(uint64_t id);
 void umoja_wm_switcher_pick(uint32_t index);
 void umoja_wm_tile(uint64_t id, uint32_t action);
+void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count);
+void umoja_wm_switch_workspace(uint32_t index);
+void umoja_wm_move_to_workspace(uint64_t id, uint32_t index);
 
 #ifdef __cplusplus
 }
