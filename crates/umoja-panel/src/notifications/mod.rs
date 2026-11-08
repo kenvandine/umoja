@@ -25,6 +25,7 @@ mod api;
 pub mod assistant;
 mod bubbles;
 mod list;
+mod quick_reply;
 mod server;
 
 use std::cell::{Cell, RefCell};
@@ -187,6 +188,12 @@ impl Center {
                 }
             });
         }
+        {
+            let qr = quick_reply::QuickReply::new(app.upcast_ref(), Rc::downgrade(&center));
+            let q = qr.clone();
+            center.connect_reply_requested(move |id| q.show(id));
+            center.connect_changed(move || qr.sync());
+        }
         server::own_name(center.clone());
         api::own_name(center.clone());
         center
@@ -255,8 +262,8 @@ impl Center {
         self.find(id)
     }
 
-    /// Ask the UI to open the reply field for `id` (the banner's Reply
-    /// button, or `org.umoja.Notifications.OpenReply`).
+    /// Open the quick-reply window for `id` (the banner's Reply button, or
+    /// `org.umoja.Notifications.OpenReply`).
     pub fn request_reply(&self, id: u32) {
         if self.find(id).is_none_or(|n| !n.can_reply()) {
             return;
@@ -480,16 +487,16 @@ impl Center {
 }
 
 /// Let the panel take keyboard focus (for the reply field) or give it back.
-/// Layer surfaces default to no keyboard at all. OnDemand rather than
-/// Exclusive: a menu opened for a reply has no grab (see clock.rs), so an
-/// exclusive panel would keep the keyboard from every other window until
-/// the menu closed.
+/// Layer surfaces default to no keyboard at all. Only used while the clock
+/// menu (an autohide popover, so a click elsewhere closes it) or the
+/// quick-reply window (closed by Escape) is open; OnDemand never got
+/// keyboard focus without a click under Mir.
 pub fn want_keyboard(widget: &impl IsA<gtk::Widget>, on: bool) {
     use gtk4_layer_shell::{KeyboardMode, LayerShell};
     let Some(win) = widget.as_ref().root().and_downcast::<gtk::Window>() else { return };
     // The clock menu is a popover; its root is the panel window.
     if win.is_layer_window() {
-        win.set_keyboard_mode(if on { KeyboardMode::OnDemand } else { KeyboardMode::None });
+        win.set_keyboard_mode(if on { KeyboardMode::Exclusive } else { KeyboardMode::None });
     }
 }
 

@@ -92,25 +92,7 @@ impl ClockButton {
             let list = list.clone();
             popover.connect_hide(move |p| {
                 crate::notifications::want_keyboard(p, false);
-                p.set_autohide(true);
                 list.closed();
-            });
-        }
-        {
-            // A banner's Reply button opens the menu at that message.
-            let popover = popover.clone();
-            center.connect_reply_requested(move |id| {
-                // A request from D-Bus (OpenReply) has no input event, so an
-                // autohide popover's grab has serial 0 and Mir dismisses it
-                // with popup_done at once. Open this one without a grab; it
-                // closes from the clock button or Escape, and autohide comes
-                // back on hide.
-                if !popover.is_visible() {
-                    popover.set_autohide(false);
-                    list.opening_for_reply();
-                }
-                popover.popup();
-                list.open_reply(id);
             });
         }
         {

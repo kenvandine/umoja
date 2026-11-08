@@ -34,7 +34,6 @@ struct Inner {
     /// Built rows by notification id, with what they were built from.
     built: RefCell<HashMap<u32, (Fingerprint, Row)>>,
     digest: Digest,
-    skip_digest: Cell<bool>,
 }
 
 #[derive(PartialEq)]
@@ -134,7 +133,6 @@ impl MessageList {
             rows,
             built: RefCell::default(),
             digest,
-            skip_digest: Cell::new(false),
         });
 
         let refresh = {
@@ -164,11 +162,6 @@ impl MessageList {
 
     /// The clock menu opened: summarize a pile of new notifications.
     pub fn opened(&self) {
-        // Opened for a reply: drafting it comes first, and Lemonade answers
-        // one request at a time.
-        if self.inner.skip_digest.replace(false) {
-            return;
-        }
         let Some(c) = self.inner.center.upgrade() else { return };
         let missed = c.missed();
         if missed.len() >= AUTO_DIGEST {
@@ -185,23 +178,6 @@ impl MessageList {
         }
         if let Some(c) = self.inner.center.upgrade() {
             c.mark_seen();
-        }
-    }
-
-    /// The menu is about to open for a reply: don't start a digest.
-    pub fn opening_for_reply(&self) {
-        self.inner.skip_digest.set(true);
-    }
-
-    /// Open the reply field under notification `id`.
-    pub fn open_reply(&self, id: u32) {
-        let built = self.inner.built.borrow();
-        if let Some((_, Row { reply: Some(r), widget })) = built.get(&id) {
-            r.expand();
-            let w = widget.clone();
-            glib::idle_add_local_once(move || {
-                w.grab_focus();
-            });
         }
     }
 }
@@ -340,18 +316,21 @@ fn row(note: &Note, center: Weak<Center>) -> Row {
 /// Quick reply under a message: suggestions drafted by the assistant, a
 /// text field and Send.
 #[derive(Clone)]
-struct Reply {
-    revealer: gtk::Revealer,
+pub(super) struct Reply {
+    pub(super) revealer: gtk::Revealer,
     entry: gtk::Entry,
     suggestions: gtk::FlowBox,
     status: gtk::Label,
     spinner: gtk::Spinner,
     note: Rc<Note>,
     drafted: Rc<Cell<bool>>,
+    /// Called after the reply went out (the quick-reply window closes).
+    sent: Rc<RefCell<Option<Box<dyn Fn()>>>>,
 }
 
 impl Reply {
-    fn new(note: &Note, center: Weak<Center>) -> Self {
+    pub(super) fn new(note: &Note, center: Weak<Center>) -> Self {
+        let sent: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::default();
         let id = note.id;
         let revealer = gtk::Revealer::builder()
             .transition_type(gtk::RevealerTransitionType::SlideDown)
@@ -417,6 +396,7 @@ impl Reply {
         }
         let submit = {
             let entry = entry.clone();
+            let sent = sent.clone();
             move || {
                 let text = entry.text().to_string();
                 if text.trim().is_empty() {
@@ -435,6 +415,9 @@ impl Reply {
                         );
                     }
                 }
+                if let Some(f) = sent.borrow().as_ref() {
+                    f();
+                }
             }
         };
         {
@@ -451,7 +434,12 @@ impl Reply {
             spinner,
             note: Rc::new(note.clone()),
             drafted: Rc::new(Cell::new(false)),
+            sent,
         }
+    }
+
+    pub(super) fn connect_sent(&self, f: impl Fn() + 'static) {
+        self.sent.replace(Some(Box::new(f)));
     }
 
     fn is_open(&self) -> bool {
@@ -470,7 +458,7 @@ impl Reply {
         self.revealer.set_reveal_child(false);
     }
 
-    fn expand(&self) {
+    pub(super) fn expand(&self) {
         self.revealer.set_reveal_child(true);
         crate::notifications::want_keyboard(&self.entry, true);
         self.entry.grab_focus();
