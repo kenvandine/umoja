@@ -1,6 +1,7 @@
-/* Matches the Yaru top bar: solid black, white text, rounded hover pills. */
+/* Yaru-style top bar (white text, rounded hover pills), but translucent
+   with the same tint and opacity as the dock (.dock-list in dock.css). */
 window.umoja-panel {
-  background-color: #000000;
+  background-color: alpha(#1d1d1d, 0.85);
   color: #ffffff;
   min-height: 32px;
 }
