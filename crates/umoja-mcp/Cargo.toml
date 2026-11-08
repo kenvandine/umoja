@@ -1,0 +1,25 @@
+[package]
+name = "umoja-mcp"
+description = "Umoja MCP server: the desktop's apps, settings, windows and troubleshooting as Model Context Protocol tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "umoja_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "umoja-mcp"
+path = "src/main.rs"
+
+[dependencies]
+umoja-common.workspace = true
+gio.workspace = true
+glib.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+async-channel.workspace = true
+tracing-subscriber.workspace = true

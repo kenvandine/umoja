@@ -1,16 +1,15 @@
-//! Notification tools for the assistant: "what did I miss?" and replies,
+//! Notification tools: "what did I miss?" and replies,
 //! backed by umoja-panel's `org.umoja.Notifications` (see
 //! crates/umoja-panel/src/notifications/api.rs).
 
-use super::tools::{Run, ToolSpec, arg_bool, arg_str, arg_u64};
+use crate::tool::{Outcome, Tool, arg_bool, arg_str, arg_u64};
 use gio::prelude::*;
-use gtk4::glib;
 use serde_json::{Value, json};
 use umoja_common::dbus;
 
-pub fn tools() -> Vec<ToolSpec> {
+pub fn tools() -> Vec<Tool> {
     vec![
-        ToolSpec::new(
+        Tool::read_only(
             "list_notifications",
             "List the user's notifications, newest first, with their ids. Use for \"what did I \
              miss?\", \"any messages?\" or before replying to one. By default only those that \
@@ -20,10 +19,10 @@ pub fn tools() -> Vec<ToolSpec> {
             json!({"type": "object", "properties": {
                 "all": {"type": "boolean", "description": "Include notifications already seen."}
             }}),
-            Run::Main(|a| Box::pin(list(a))),
+            |a| Box::pin(async move { Outcome::text(list(a).await) }),
         )
         .with_summary(|_| "Check your notifications".into()),
-        ToolSpec::new(
+        Tool::new(
             "reply_to_notification",
             "Send a reply to a chat or mail notification (id from list_notifications). Apps that \
              support it receive the reply directly; otherwise it is copied to the clipboard and \
@@ -32,19 +31,19 @@ pub fn tools() -> Vec<ToolSpec> {
                 "id": {"type": "integer", "description": "Notification id."},
                 "text": {"type": "string", "description": "The reply to send."}
             }, "required": ["id", "text"]}),
-            Run::Main(|a| Box::pin(reply(a))),
+            |a| Box::pin(async move { Outcome::text(reply(a).await) }),
         )
         // It sends a message to someone outside the desktop: always ask.
         .confirm()
         .with_summary(|a| format!("Reply \"{}\"", arg_str(a, "text").unwrap_or(""))),
-        ToolSpec::new(
+        Tool::new(
             "open_notification_reply",
             "Open the notification list at a notification's reply field, with replies drafted \
              by the assistant, so the user can pick or edit one and send it themselves.",
             json!({"type": "object", "properties": {
                 "id": {"type": "integer", "description": "Notification id."}
             }, "required": ["id"]}),
-            Run::Main(|a| Box::pin(open_reply(a))),
+            |a| Box::pin(async move { Outcome::text(open_reply(a).await).hide_if_ok() }),
         )
         .with_summary(|_| "Open the reply field".into()),
     ]
@@ -145,7 +144,6 @@ async fn open_reply(args: Value) -> String {
     let Some(id) = arg_u64(&args, "id") else { return "error: id is required".into() };
     match call("OpenReply", Some((id as u32,).to_variant()), None).await {
         Ok(_) => {
-            super::hide_when_done();
             "Opened the reply field with drafted replies.".into()
         }
         Err(e) => format!("error: {e}"),

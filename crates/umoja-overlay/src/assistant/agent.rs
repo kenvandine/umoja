@@ -1,12 +1,16 @@
 //! The assistant's tool-calling loop.
 //!
-//! A question goes to Lemonade with every registered tool. When the model
+//! A question goes to the model (the local Lemonade or the cloud backend)
+//! with every tool: the desktop tools served by umoja-mcp (see [`super::mcp`])
+//! plus the overlay's own (selected text, clipboard, current window). When the model
 //! answers with tool calls, each one is shown to the user as a progress
-//! line, confirmed first if it's risky, run, and its result sent back; the
+//! line, confirmed first if it's risky (umoja-mcp decides and asks through
+//! the overlay's dialog), run, and its result sent back; the
 //! loop repeats until the model answers in plain text (or gives up after
 //! [`MAX_ROUNDS`]). Runs on the GTK main loop; network I/O stays on the
 //! Tokio runtime.
 
+use super::mcp::{Confirm, McpClient};
 use super::tools::{Risk, ToolSpec, registry};
 use crate::lemonade::{ChatEvent, LemonadeClient, RUNTIME, ToolCall};
 use serde_json::{Value, json};
@@ -19,8 +23,11 @@ const MAX_ROUNDS: usize = 6;
 
 pub const SYSTEM_PROMPT: &str = "You are Umoja OS Assistant, built into the user's Ubuntu \
 desktop. You can act on the desktop with the provided tools: open apps, change settings, \
-switch Wi-Fi, Bluetooth, power mode and dark style, and arrange windows and workspaces. When \
-the user asks you to do something, do it with a tool call instead of explaining how. For \
+switch Wi-Fi, Bluetooth, power mode and dark style, arrange windows and workspaces, and find \
+or remove installed apps. When the user asks you to do something, do it with a tool call \
+instead of explaining how, and never ask the user to run a command to find something out: \
+look it up with a tool. To uninstall an app, call remove_app with its name; it works out how \
+the app was installed and asks the user itself. For \
 settings, call list_settings to find the right one and its current value, then change_setting \
 in the same answer; don't stop to ask. \"Show X\" or \"turn on X\" means set it to true. For \
 relative changes like \"bigger\" or \"slower to dim\", compute the new value from the current \
@@ -77,6 +84,43 @@ pub fn initial_messages(q: &Question) -> Vec<Value> {
     ]
 }
 
+/// The tools offered to the model: the overlay's own plus umoja-mcp's.
+#[derive(Clone)]
+pub struct Toolbox {
+    pub local: Vec<ToolSpec>,
+    pub mcp: Option<Rc<McpClient>>,
+}
+
+impl Toolbox {
+    /// The overlay's tools and the shared umoja-mcp connection.
+    pub async fn load() -> Self {
+        Self {
+            local: registry(),
+            mcp: super::mcp::shared().await,
+        }
+    }
+
+    fn local(&self, name: &str) -> Option<&ToolSpec> {
+        self.local.iter().find(|t| t.name == name)
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.local(name).is_some() || self.mcp.as_ref().is_some_and(|m| m.has(name))
+    }
+
+    pub fn schemas(&self) -> Vec<Value> {
+        let mut s: Vec<Value> = self.local.iter().map(ToolSpec::schema).collect();
+        if let Some(m) = &self.mcp {
+            s.extend(
+                m.openai_schemas()
+                    .into_iter()
+                    .filter(|t| self.local(t["function"]["name"].as_str().unwrap_or("")).is_none()),
+            );
+        }
+        s
+    }
+}
+
 /// Answer `question`, calling tools as the model asks. Returns the final
 /// answer text (empty when cancelled or failed; errors are shown via `ui`).
 pub async fn run(client: LemonadeClient, question: Question, ui: Rc<dyn Ui>) -> String {
@@ -85,7 +129,11 @@ pub async fn run(client: LemonadeClient, question: Question, ui: Rc<dyn Ui>) -> 
     if ui.cancelled() {
         return String::new();
     }
-    run_with(client, question, ui, registry()).await
+    let tools = Toolbox::load().await;
+    if ui.cancelled() {
+        return String::new();
+    }
+    run_with(client, question, ui, tools).await
 }
 
 /// [`run`] with a given tool set (tests swap in stubs).
@@ -93,9 +141,9 @@ pub async fn run_with(
     client: LemonadeClient,
     question: Question,
     ui: Rc<dyn Ui>,
-    tools: Vec<ToolSpec>,
+    tools: Toolbox,
 ) -> String {
-    let schemas: Vec<Value> = tools.iter().map(ToolSpec::schema).collect();
+    let schemas: Vec<Value> = tools.schemas();
     let mut messages = initial_messages(&question);
     let mut shown = String::new();
     let mut step_id = 0usize;
@@ -161,7 +209,7 @@ pub async fn run_with(
         }));
         for call in &calls {
             step_id += 1;
-            let result = run_call(&tools, call, step_id, ui.as_ref()).await;
+            let result = run_call(&tools, call, step_id, &ui).await;
             if ui.cancelled() {
                 return String::new();
             }
@@ -176,11 +224,18 @@ pub async fn run_with(
     shown
 }
 
-async fn run_call(tools: &[ToolSpec], call: &ToolCall, id: usize, ui: &dyn Ui) -> String {
-    let Some(tool) = tools.iter().find(|t| t.name == call.name) else {
-        return format!("error: there is no tool named {}", call.name);
-    };
+async fn run_call(tools: &Toolbox, call: &ToolCall, id: usize, ui: &Rc<dyn Ui>) -> String {
     let args = parse_args(&call.arguments);
+    if let Some(tool) = tools.local(&call.name) {
+        return run_local(tool, args, id, ui.as_ref()).await;
+    }
+    match &tools.mcp {
+        Some(m) if m.has(&call.name) => run_mcp(m, &call.name, args, id, ui).await,
+        _ => format!("error: there is no tool named {}", call.name),
+    }
+}
+
+async fn run_local(tool: &ToolSpec, args: Value, id: usize, ui: &dyn Ui) -> String {
     let label = tool.describe(&args);
     let risk = (tool.risk)(&args);
     if risk != Risk::Low {
@@ -206,6 +261,40 @@ async fn run_call(tools: &[ToolSpec], call: &ToolCall, id: usize, ui: &dyn Ui) -
     result
 }
 
+/// A umoja-mcp tool. The server decides whether to ask and asks through
+/// `ui`'s dialog.
+async fn run_mcp(mcp: &McpClient, name: &str, args: Value, id: usize, ui: &Rc<dyn Ui>) -> String {
+    let (label, _) = mcp.describe(name, &args).await;
+    ui.step(id, &label, StepState::Running);
+    tracing::info!(tool = name, args = %args, "assistant tool call (umoja-mcp)");
+    let asker = ui.clone();
+    let confirm: Confirm = Rc::new(move |text, risk| asker.confirm(&text, risk));
+    let r = mcp.call(name, args, confirm).await;
+    if r.declined {
+        ui.step(id, &label, StepState::Declined);
+        return r.text;
+    }
+    if r.hide {
+        super::hide_when_done();
+    }
+    if name == "search_files"
+        && let Some(hits) = r.data.as_ref().and_then(|d| d["hits"].as_array())
+    {
+        let hits: Vec<crate::files::Hit> = hits
+            .iter()
+            .map(|h| crate::files::Hit {
+                path: h["path"].as_str().unwrap_or("").into(),
+                name: h["name"].as_str().unwrap_or("").into(),
+                detail: h["detail"].as_str().unwrap_or("").into(),
+                score: h["score"].as_f64().unwrap_or(0.0),
+            })
+            .collect();
+        crate::files::show_tool_hits(&hits);
+    }
+    ui.step(id, &label, if r.is_error { StepState::Failed } else { StepState::Done });
+    r.text
+}
+
 fn parse_args(raw: &str) -> Value {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -221,7 +310,7 @@ fn parse_args(raw: &str) -> Value {
 
 /// JSON objects in `text` that look like `{"name": <a tool>, "arguments": {...}}`,
 /// with their byte ranges. Qwen-style templates wrap them in `<tool_call>`.
-fn inline_spans(text: &str, tools: &[ToolSpec]) -> Vec<(usize, usize, ToolCall)> {
+fn inline_spans(text: &str, tools: &Toolbox) -> Vec<(usize, usize, ToolCall)> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(off) = text[i..].find('{') {
@@ -231,7 +320,7 @@ fn inline_spans(text: &str, tools: &[ToolSpec]) -> Vec<(usize, usize, ToolCall)>
             Some(Ok(v)) => {
                 let end = start + it.byte_offset();
                 let name = v.get("name").and_then(Value::as_str).unwrap_or("");
-                if tools.iter().any(|t| t.name == name) {
+                if tools.has(name) {
                     let args = v
                         .get("arguments")
                         .or_else(|| v.get("parameters"))
@@ -259,12 +348,12 @@ fn inline_spans(text: &str, tools: &[ToolSpec]) -> Vec<(usize, usize, ToolCall)>
     out
 }
 
-fn inline_tool_calls(text: &str, tools: &[ToolSpec]) -> Vec<ToolCall> {
+fn inline_tool_calls(text: &str, tools: &Toolbox) -> Vec<ToolCall> {
     inline_spans(text, tools).into_iter().map(|(_, _, c)| c).collect()
 }
 
 /// The text without reasoning, inline tool calls or their wrappers.
-fn visible_text(text: &str, tools: &[ToolSpec]) -> String {
+fn visible_text(text: &str, tools: &Toolbox) -> String {
     let mut t = text.to_string();
     // Drop <think>…</think>, including an unfinished one while streaming.
     while let Some(s) = t.find("<think>") {
@@ -307,9 +396,21 @@ mod tests {
     use super::*;
     use gtk4::glib;
 
+    /// A toolbox with a stand-in for a umoja-mcp tool.
+    fn toolbox() -> Toolbox {
+        let mut local = registry();
+        local.push(ToolSpec::read_only(
+            "set_dark_style",
+            "stand-in",
+            json!({"type": "object"}),
+            |_| String::new(),
+        ));
+        Toolbox { local, mcp: None }
+    }
+
     #[test]
     fn inline_calls_are_found_and_hidden() {
-        let tools = registry();
+        let tools = toolbox();
         let text = "Sure.\n<tool_call>\n{\"name\": \"set_dark_style\", \"arguments\": {\"enabled\": true}}\n</tool_call>";
         let calls = inline_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
@@ -322,7 +423,7 @@ mod tests {
 
     #[test]
     fn streaming_text_hides_partial_calls_and_thinking() {
-        let tools = registry();
+        let tools = toolbox();
         assert_eq!(visible_text("<think>hmm", &tools), "");
         assert_eq!(visible_text("<think>a</think>Done.", &tools), "Done.");
         assert_eq!(visible_text("Ok <tool_call>{\"name\": \"set_", &tools), "Ok");
@@ -338,8 +439,9 @@ mod tests {
     }
 
     /// Asks the live Lemonade on 127.0.0.1:13345 a set of requests and
-    /// prints which tools the model called. State-changing tools are
-    /// stubbed, so nothing on the desktop changes. Run with
+    /// prints which tools the model called. umoja-mcp runs with --dry-run
+    /// and every confirmation is declined, so nothing on the desktop
+    /// changes. Build umoja-mcp first, then run
     /// `cargo test -p umoja-overlay live_tool_choice -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -363,20 +465,13 @@ mod tests {
                 false
             }
         }
-        const REAL: &[&str] = &["list_settings", "desktop_status"];
-        let tools: Vec<ToolSpec> = registry()
-            .into_iter()
-            .map(|mut t| {
-                if t.name == "list_windows" {
-                    t.run = super::super::tools::Run::Blocking(|_| {
-                        "1. org.gnome.Ptyxis — ken@umoja: ~ (focused)\n2. firefox — Ubuntu — Mozilla Firefox\nYou are on workspace 1 of 3.".into()
-                    });
-                } else if !REAL.contains(&t.name) {
-                    t.run = super::super::tools::Run::Blocking(|_| "done".into());
-                }
-                t
-            })
-            .collect();
+        // umoja-mcp in dry-run mode: read-only tools run for real, the
+        // rest confirm as usual and then report "done" without acting.
+        let ctx = glib::MainContext::default();
+        let mcp = ctx
+            .block_on(McpClient::start(&["--dry-run"]))
+            .expect("build umoja-mcp first: cargo build -p umoja-mcp");
+        let tools = Toolbox { local: registry(), mcp: Some(mcp) };
         let prompts = [
             "turn on dark mode",
             "open firefox",
@@ -390,8 +485,10 @@ mod tests {
             "show battery percentage",
             "delete everything in my Downloads folder",
             "how do I set up a VPN?",
+            "remove discord",
+            "how is firefox installed?",
+            "make the mouse pointer bigger",
         ];
-        let ctx = glib::MainContext::default();
         for p in prompts {
             let rec = Rc::new(Rec(RefCell::new(Vec::new()), RefCell::new(String::new())));
             let t0 = std::time::Instant::now();

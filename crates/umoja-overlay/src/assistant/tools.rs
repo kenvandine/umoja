@@ -1,4 +1,10 @@
-//! The assistant's tool registry.
+//! The overlay's own assistant tools.
+//!
+//! Desktop tools (apps, settings, windows, files, notifications,
+//! troubleshooting) live in the umoja-mcp server so every MCP client gets
+//! them; add new ones there (crates/umoja-mcp). This registry is for the
+//! few that need the overlay itself: the selected text, its clipboard
+//! history and the window under it.
 //!
 //! Every capability the Lemonade assistant can use is a [`ToolSpec`]: a
 //! name, a description the model reads, a JSON Schema for its arguments, a
@@ -138,14 +144,7 @@ impl ToolSpec {
 }
 
 /// Every module that contributes tools. Add yours here.
-const PROVIDERS: &[fn() -> Vec<ToolSpec>] = &[
-    super::desktop::tools,
-    super::settings::tools,
-    super::files::tools,
-    super::notifications::tools,
-    super::screen::tools,
-    super::diagnostics::tools,
-];
+const PROVIDERS: &[fn() -> Vec<ToolSpec>] = &[super::screen::tools];
 
 /// All registered tools, in registration order.
 pub fn registry() -> Vec<ToolSpec> {

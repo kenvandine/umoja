@@ -1,11 +1,9 @@
-//! Desktop actions for the assistant: apps, Settings panels, Dark Style,
+//! Desktop actions: Settings panels, Dark Style,
 //! Power Mode, Wi-Fi, Bluetooth, windows and workspaces, and (always
 //! confirmed) shell commands.
 
-use super::tools::{Risk, Run, ToolSpec, arg_bool, arg_str, arg_u64};
+use crate::tool::{Outcome, Risk, Tool, arg_bool, arg_str, arg_u64};
 use gio::prelude::*;
-use gtk4::prelude::DisplayExt;
-use gtk4::glib;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,48 +11,39 @@ use umoja_common::dbus;
 use umoja_common::gsettings as gs;
 use umoja_common::types::AssistantAction;
 
-pub fn tools() -> Vec<ToolSpec> {
+pub fn tools() -> Vec<Tool> {
     vec![
-        ToolSpec::new(
-            "launch_app",
-            "Open an installed application by name (e.g. \"Firefox\", \"Files\", \"Terminal\", \"text editor\").",
-            json!({"type": "object", "properties": {
-                "name": {"type": "string", "description": "App name, or what it's for"}
-            }, "required": ["name"]}),
-            Run::Main(|a| Box::pin(launch_app(a))),
-        )
-        .with_summary(|a| format!("Open {}", arg_str(a, "name").unwrap_or("app"))),
-        ToolSpec::new(
+        Tool::new(
             "open_settings",
             "Open a page of GNOME Settings. Panels: applications, background, bluetooth, color, datetime, display, keyboard, mouse, multitasking, network, notifications, online-accounts, power, printers, privacy, region, search, sharing, sound, system, ubuntu, universal-access, users, wacom, wifi, wwan.",
             json!({"type": "object", "properties": {
                 "panel": {"type": "string"},
                 "subpage": {"type": "string", "description": "Optional, e.g. \"vpn\" for network"}
             }, "required": ["panel"]}),
-            Run::Main(|a| Box::pin(open_settings(a))),
+            |a| Box::pin(async move { Outcome::text(open_settings(a).await).hide_if_ok() }),
         )
         .with_summary(|a| format!("Open Settings › {}", arg_str(a, "panel").unwrap_or(""))),
-        ToolSpec::new(
+        Tool::read_only(
             "desktop_status",
             "Read the current Dark Style, Power Mode, Wi-Fi, Bluetooth and workspace state.",
             json!({"type": "object", "properties": {}}),
-            Run::Main(|_| Box::pin(desktop_status())),
+            |_| Box::pin(async move { Outcome::text(desktop_status().await) }),
         )
         .with_summary(|_| "Check the desktop's status".into()),
-        ToolSpec::new(
+        Tool::new(
             "set_dark_style",
             "Turn Dark Style (dark mode) on or off.",
             json!({"type": "object", "properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}),
-            Run::Main(|a| Box::pin(async move { set_dark_style(&a) })),
+            |a| Box::pin(async move { Outcome::text(set_dark_style(&a)) }),
         )
         .with_summary(|a| on_off("Dark Style", a)),
-        ToolSpec::new(
+        Tool::new(
             "set_power_mode",
             "Set the Power Mode: \"power-saver\", \"balanced\" or \"performance\".",
             json!({"type": "object", "properties": {
                 "mode": {"type": "string", "enum": ["power-saver", "balanced", "performance"]}
             }, "required": ["mode"]}),
-            Run::Main(|a| Box::pin(set_power_mode(a))),
+            |a| Box::pin(async move { Outcome::text(set_power_mode(a).await) }),
         )
         .with_summary(|a| {
             format!(
@@ -62,39 +51,39 @@ pub fn tools() -> Vec<ToolSpec> {
                 profile_label(arg_str(a, "mode").unwrap_or(""))
             )
         }),
-        ToolSpec::new(
+        Tool::new(
             "set_wifi",
             "Turn Wi-Fi on or off.",
             json!({"type": "object", "properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}),
-            Run::Main(|a| Box::pin(set_wifi(a))),
+            |a| Box::pin(async move { Outcome::text(set_wifi(a).await) }),
         )
         .with_summary(|a| on_off("Wi-Fi", a)),
-        ToolSpec::new(
+        Tool::new(
             "set_bluetooth",
             "Turn Bluetooth on or off.",
             json!({"type": "object", "properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}),
-            Run::Main(|a| Box::pin(set_bluetooth(a))),
+            |a| Box::pin(async move { Outcome::text(set_bluetooth(a).await) }),
         )
         .with_summary(|a| on_off("Bluetooth", a)),
-        ToolSpec::new(
+        Tool::read_only(
             "list_windows",
             "List open windows (most recently used first) with their ids, and the workspaces.",
             json!({"type": "object", "properties": {}}),
-            Run::Main(|_| Box::pin(list_windows())),
+            |_| Box::pin(async move { Outcome::text(list_windows().await) }),
         )
         .with_summary(|_| "Look at the open windows".into()),
-        ToolSpec::new(
+        Tool::new(
             "focus_window",
             "Bring a window to the front.",
             window_schema(json!({})),
-            Run::Main(|a| Box::pin(focus_window(a))),
+            |a| Box::pin(async move { Outcome::text(focus_window(a).await).hide_if_ok() }),
         )
         .with_summary(|a| format!("Switch to {}", window_name(a))),
-        ToolSpec::new(
+        Tool::new(
             "arrange_window",
             "Put a window somewhere: the left or right half of the screen, a quarter, maximized, restored, minimized, fullscreen, or another monitor. Use this directly for requests like \"put the terminal on the left\" (pass the app name as window); no need to focus it first.",
             window_schema(json!({"position": {"type": "string", "enum": POSITIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>()}})),
-            Run::Main(|a| Box::pin(arrange_window(a))),
+            |a| Box::pin(async move { Outcome::text(arrange_window(a).await).hide_if_ok() }),
         )
         .with_summary(|a| {
             format!(
@@ -103,18 +92,18 @@ pub fn tools() -> Vec<ToolSpec> {
                 arg_str(a, "position").unwrap_or("?").replace('_', " ")
             )
         }),
-        ToolSpec::new(
+        Tool::new(
             "switch_workspace",
             "Switch to a workspace by number (1 is the first).",
             json!({"type": "object", "properties": {"number": {"type": "integer", "minimum": 1}}, "required": ["number"]}),
-            Run::Main(|a| Box::pin(switch_workspace(a))),
+            |a| Box::pin(async move { Outcome::text(switch_workspace(a).await).hide_if_ok() }),
         )
         .with_summary(|a| format!("Switch to workspace {}", arg_u64(a, "number").unwrap_or(1))),
-        ToolSpec::new(
+        Tool::new(
             "move_window_to_workspace",
             "Move a window to a workspace by number (1 is the first) and follow it.",
             window_schema(json!({"number": {"type": "integer", "minimum": 1}})),
-            Run::Main(|a| Box::pin(move_to_workspace(a))),
+            |a| Box::pin(async move { Outcome::text(move_to_workspace(a).await).hide_if_ok() }),
         )
         .with_summary(|a| {
             format!(
@@ -123,22 +112,22 @@ pub fn tools() -> Vec<ToolSpec> {
                 arg_u64(a, "number").unwrap_or(1)
             )
         }),
-        ToolSpec::new(
+        Tool::new(
             "close_window",
             "Close a window. Unsaved work may be lost, so the user is asked first.",
             window_schema(json!({})),
-            Run::Main(|a| Box::pin(close_window(a))),
+            |a| Box::pin(async move { Outcome::text(close_window(a).await) }),
         )
         .confirm()
         .with_summary(|a| format!("Close {}", window_name(a))),
-        ToolSpec::new(
+        Tool::new(
             "run_command",
             "Run a shell command as the user and get its output. Only when no other tool fits. The user is always asked first; commands using sudo or package managers open in a terminal.",
             json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}),
-            Run::Main(|a| Box::pin(run_command(a))),
+            |a| Box::pin(async move { let t = run_command(a).await; let hide = t.starts_with("Opened a terminal"); let o = Outcome::text(t); if hide { o.hide() } else { o } }),
         )
         .with_risk(|a| {
-            if crate::view::needs_terminal(arg_str(a, "command").unwrap_or("")) {
+            if umoja_common::terminal::needs_terminal(arg_str(a, "command").unwrap_or("")) {
                 Risk::High
             } else {
                 Risk::Medium
@@ -159,70 +148,6 @@ fn err(msg: impl std::fmt::Display) -> String {
     format!("error: {msg}")
 }
 
-// ---- apps -------------------------------------------------------------------
-
-/// Score how well an app matches `q` (lower is better).
-fn app_score(q: &str, name: &str, id: &str, extra: &str) -> Option<u8> {
-    let name = name.to_lowercase();
-    let id = id.to_lowercase();
-    if name == q || id.trim_end_matches(".desktop") == q {
-        Some(0)
-    } else if name.starts_with(q) {
-        Some(1)
-    } else if name.contains(q) || id.contains(q) {
-        Some(2)
-    } else if q.split_whitespace().all(|w| extra.contains(w)) {
-        Some(3)
-    } else {
-        None
-    }
-}
-
-fn find_app(query: &str) -> Option<gio::AppInfo> {
-    let q = query.trim().to_lowercase();
-    let mut best: Option<(u8, gio::AppInfo)> = None;
-    for app in gio::AppInfo::all().into_iter().filter(|a| a.should_show()) {
-        let id = app.id().map(|s| s.to_string()).unwrap_or_default();
-        let mut extra = app
-            .description()
-            .map(|d| d.to_lowercase())
-            .unwrap_or_default();
-        if let Some(d) = app.downcast_ref::<gio::DesktopAppInfo>() {
-            for k in d.keywords() {
-                extra.push(' ');
-                extra.push_str(&k.to_lowercase());
-            }
-            if let Some(g) = d.generic_name() {
-                extra.push(' ');
-                extra.push_str(&g.to_lowercase());
-            }
-        }
-        if let Some(s) = app_score(&q, &app.display_name(), &id, &extra)
-            && best.as_ref().is_none_or(|(b, _)| s < *b)
-        {
-            best = Some((s, app));
-        }
-    }
-    best.map(|(_, a)| a)
-}
-
-async fn launch_app(a: Value) -> String {
-    let Some(name) = arg_str(&a, "name") else {
-        return err("name is required");
-    };
-    let Some(app) = find_app(name) else {
-        return err(format!("no installed app matches \"{name}\""));
-    };
-    let ctx = gtk4::gdk::Display::default().map(|d| d.app_launch_context());
-    match app.launch(&[], ctx.as_ref()) {
-        Ok(()) => {
-            super::hide_when_done();
-            format!("Opened {}", app.display_name())
-        }
-        Err(e) => err(e),
-    }
-}
-
 async fn open_settings(a: Value) -> String {
     let panel = arg_str(&a, "panel").unwrap_or("").to_string();
     let subpage = arg_str(&a, "subpage").map(String::from);
@@ -237,7 +162,6 @@ async fn open_settings(a: Value) -> String {
     argv.extend(subpage);
     match std::process::Command::new(&argv[0]).args(&argv[1..]).spawn() {
         Ok(_) => {
-            super::hide_when_done();
             format!("Opened Settings › {panel}")
         }
         Err(e) => err(e),
@@ -695,7 +619,6 @@ async fn focus_window(a: Value) -> String {
     };
     match compositor_call("ActivateWindow", Some((w.id,).to_variant()), None).await {
         Ok(_) => {
-            super::hide_when_done();
             format!("Switched to {}", label(&w))
         }
         Err(e) => err(e),
@@ -747,7 +670,6 @@ async fn arrange_window(a: Value) -> String {
     };
     match compositor_call("TileWindow", Some((w.id, code).to_variant()), None).await {
         Ok(_) => {
-            super::hide_when_done();
             format!("Moved {} ({})", label(&w), arg_str(&a, "position").unwrap_or(""))
         }
         Err(e) => err(e),
@@ -784,7 +706,6 @@ async fn switch_workspace(a: Value) -> String {
     };
     match compositor_call("SwitchWorkspace", Some((i,).to_variant()), None).await {
         Ok(_) => {
-            super::hide_when_done();
             format!("Switched to workspace {}", i + 1)
         }
         Err(e) => err(e),
@@ -810,7 +731,6 @@ async fn move_to_workspace(a: Value) -> String {
     .await
     {
         Ok(_) => {
-            super::hide_when_done();
             format!("Moved {} to workspace {}", label(&w), i + 1)
         }
         Err(e) => err(e),
@@ -825,11 +745,10 @@ async fn run_command(a: Value) -> String {
     let Some(cmd) = arg_str(&a, "command").map(String::from) else {
         return err("command is required");
     };
-    if crate::view::needs_terminal(&cmd) {
-        return match crate::view::spawn_in_terminal(&cmd) {
+    if umoja_common::terminal::needs_terminal(&cmd) {
+        return match umoja_common::terminal::spawn_in_terminal(&cmd) {
             Ok(()) => {
-                super::hide_when_done();
-                "Opened a terminal running the command; the user will see its output there.".into()
+                    "Opened a terminal running the command; the user will see its output there.".into()
             }
             Err(e) => err(e),
         };
@@ -880,16 +799,6 @@ async fn run_command(a: Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn app_matching() {
-        assert_eq!(app_score("firefox", "Firefox", "firefox_firefox.desktop", ""), Some(0));
-        assert_eq!(app_score("files", "Files", "org.gnome.Nautilus.desktop", ""), Some(0));
-        assert_eq!(app_score("text editor", "Text Editor", "org.gnome.TextEditor.desktop", ""), Some(0));
-        assert_eq!(app_score("term", "Terminal", "x.desktop", ""), Some(1));
-        assert_eq!(app_score("browser", "Firefox", "firefox.desktop", "web browser internet"), Some(3));
-        assert_eq!(app_score("gimp", "Firefox", "firefox.desktop", "web"), None);
-    }
 
     #[test]
     fn yaru_keeps_accent() {

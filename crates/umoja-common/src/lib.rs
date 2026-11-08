@@ -11,6 +11,7 @@ pub mod gsettings;
 pub mod hidpi;
 pub mod i18n;
 pub mod lemonade;
+pub mod terminal;
 pub mod types;
 
 /// Initialise `tracing` for a component. Honours `RUST_LOG`, defaulting to `info`.

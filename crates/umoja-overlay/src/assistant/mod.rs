@@ -1,13 +1,10 @@
-//! The Lemonade assistant: a tool-calling loop ([`agent`]) over a registry
-//! of tools ([`tools`]) that other modules contribute to.
+//! The assistant: a tool-calling loop ([`agent`]) over the desktop tools
+//! served by umoja-mcp ([`mcp`]) and the overlay's own ([`tools`]).
 
 pub mod agent;
-pub mod desktop;
-pub mod files;
 pub mod diagnostics;
-pub mod notifications;
+pub mod mcp;
 pub mod screen;
-pub mod settings;
 pub mod tools;
 
 use std::cell::Cell;

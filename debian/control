@@ -39,6 +39,7 @@ Depends: ${shlibs:Depends},
          yaru-theme-gtk,
          yaru-theme-icon
 Recommends: umoja-greeter,
+            zenity,
             myna-config,
             grim,
             wireplumber,

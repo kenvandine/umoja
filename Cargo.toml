@@ -8,6 +8,7 @@ members = [
     "crates/umoja-portal",
     "crates/umoja-common",
     "crates/umoja-files",
+    "crates/umoja-mcp",
 ]
 resolver = "2"
 

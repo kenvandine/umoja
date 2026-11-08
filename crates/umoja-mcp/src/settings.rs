@@ -5,9 +5,8 @@
 //! needs names and descriptions. Anything outside it goes through
 //! `set_gsetting`, which asks the user first.
 
-use super::tools::{Run, ToolSpec, arg_str};
+use crate::tool::{Outcome, Tool, arg_str, show};
 use gio::prelude::*;
-use gtk4::glib;
 use serde_json::{Value, json};
 use umoja_common::gsettings as gs;
 
@@ -111,29 +110,53 @@ pub const CATALOG: &[Entry] = &[
     e!("auto_delete_temp_files", PRIVACY, "remove-old-temp-files", "Delete old temporary files automatically"),
     e!("old_files_days", PRIVACY, "old-files-age", "Days before trash and temporary files count as old (default 30)"),
     e!("automatic_time_zone", "org.gnome.desktop.datetime", "automatic-timezone", "Set the time zone automatically"),
+    e!("wallpaper", "org.gnome.desktop.background", "picture-uri", "Wallpaper image as a file:// URI (light style)"),
+    e!("wallpaper_dark", "org.gnome.desktop.background", "picture-uri-dark", "Wallpaper image as a file:// URI used with Dark Style"),
+    e!("show_desktop_icons", "org.gnome.shell.extensions.ding", "show-home", "Show the Home folder icon on the desktop"),
+    // Umoja's own
+    e!("file_search", UMOJA, "file-search-enabled", "Index the home folder so files can be found by what they're about"),
+    e!("clipboard_history", UMOJA, "clipboard-history", "Keep a clipboard history this session (in memory only)"),
+    e!("dictation_shortcut", UMOJA, "dictation-hotkey", "Keyboard shortcut for voice dictation, e.g. [\"<Super>d\"]"),
+    e!("ask_about_screen_shortcut", UMOJA, "ask-about-screen-hotkey", "Keyboard shortcut to ask the assistant about the screen"),
+    e!("clipboard_history_shortcut", UMOJA, "clipboard-history-hotkey", "Keyboard shortcut to show the clipboard history"),
 ];
+
+const UMOJA: &str = "org.umoja.shell";
+
+/// Schemas searched for settings the catalogue doesn't name.
+const SEARCHED_PREFIXES: &[&str] = &[
+    "org.gnome.desktop.",
+    "org.gnome.settings-daemon.",
+    "org.gnome.mutter",
+    "org.gnome.shell.extensions.dash-to-dock",
+    "org.gnome.system.",
+    "org.umoja.",
+];
+
+/// Keys the assistant shouldn't be steered to (internal state, keyring-ish).
+const HIDDEN_KEYS: &[&str] = &["cloud-base-url", "cloud-model", "lemonade-model", "assistant-backend"];
 
 fn names() -> Vec<&'static str> {
     CATALOG.iter().map(|e| e.name).collect()
 }
 
-pub fn tools() -> Vec<ToolSpec> {
+pub fn tools() -> Vec<Tool> {
     vec![
-        ToolSpec::new(
+        Tool::read_only(
             "list_settings",
-            "Find desktop settings and their current values. Optional query words narrow the list (e.g. \"text\", \"screen dim\", \"touchpad\").",
+            "Find desktop settings and their current values. Optional query words narrow the list (e.g. \"text\", \"screen dim\", \"touchpad\"). Named settings come first; other matching GSettings keys are listed with their schema and key for set_gsetting.",
             json!({"type": "object", "properties": {"query": {"type": "string"}}}),
-            Run::Main(|a| Box::pin(async move { list_settings(&a) })),
+            |a| Box::pin(async move { Outcome::text(list_settings(&a)) }),
         )
         .with_summary(|_| "Look up settings".into()),
-        ToolSpec::new(
+        Tool::new(
             "change_setting",
             "Change a desktop setting by name (from list_settings). Booleans take true/false, numbers take numbers, choices take the listed string.",
             json!({"type": "object", "properties": {
                 "name": {"type": "string", "enum": names()},
                 "value": {"description": "The new value"}
             }, "required": ["name", "value"]}),
-            Run::Main(|a| Box::pin(async move { change_setting(&a) })),
+            |a| Box::pin(async move { Outcome::text(change_setting(&a)) }),
         )
         .with_summary(|a| {
             format!(
@@ -142,20 +165,29 @@ pub fn tools() -> Vec<ToolSpec> {
                 show(a.get("value").unwrap_or(&Value::Null))
             )
         }),
-        ToolSpec::new(
+        Tool::new(
             "reset_setting",
             "Put a desktop setting (from list_settings) back to its default.",
             json!({"type": "object", "properties": {"name": {"type": "string", "enum": names()}}, "required": ["name"]}),
-            Run::Main(|a| Box::pin(async move { reset_setting(&a) })),
+            |a| Box::pin(async move { Outcome::text(reset_setting(&a)) }),
         )
         .with_summary(|a| format!("Reset {}", arg_str(a, "name").unwrap_or("?").replace('_', " "))),
-        ToolSpec::new(
+        Tool::read_only(
+            "describe_setting",
+            "Explain a setting: what it does, its type, allowed values, default and current value. Takes a name from list_settings, or a schema and key.",
+            json!({"type": "object", "properties": {
+                "name": {"type": "string"}, "schema": {"type": "string"}, "key": {"type": "string"}
+            }}),
+            |a| Box::pin(async move { Outcome::text(describe_setting(&a)) }),
+        )
+        .with_summary(|a| format!("Look up {}", arg_str(a, "name").or(arg_str(a, "key")).unwrap_or("a setting").replace('_', " "))),
+        Tool::new(
             "set_gsetting",
             "Set any org.gnome.* GSettings key not covered by change_setting. The user is asked first.",
             json!({"type": "object", "properties": {
                 "schema": {"type": "string"}, "key": {"type": "string"}, "value": {}
             }, "required": ["schema", "key", "value"]}),
-            Run::Main(|a| Box::pin(async move { set_gsetting(&a) })),
+            |a| Box::pin(async move { Outcome::text(set_gsetting(&a)) }),
         )
         .confirm()
         .with_summary(|a| {
@@ -169,14 +201,7 @@ pub fn tools() -> Vec<ToolSpec> {
     ]
 }
 
-fn show(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn entry(name: &str) -> Option<&'static Entry> {
+pub fn entry(name: &str) -> Option<&'static Entry> {
     let n = name.trim().to_lowercase().replace([' ', '-'], "_");
     CATALOG.iter().find(|e| e.name == n)
 }
@@ -279,23 +304,26 @@ fn constraint(k: &gio::SettingsSchemaKey) -> Option<String> {
     }
 }
 
-fn list_settings(a: &Value) -> String {
-    let words: Vec<String> = arg_str(a, "query")
-        .unwrap_or("")
-        .to_lowercase()
+fn query_words(q: &str) -> Vec<String> {
+    q.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() > 2)
-        .map(String::from)
-        .collect();
+        .map(|w| w.trim_end_matches('s').to_string())
+        .collect()
+}
+
+fn list_settings(a: &Value) -> String {
+    let words = query_words(arg_str(a, "query").unwrap_or(""));
     let matches = |e: &Entry| {
         let hay = format!("{} {} {}", e.name.replace('_', " "), e.key, e.about).to_lowercase();
-        words.iter().any(|w| hay.contains(w.trim_end_matches('s')))
+        words.iter().any(|w| hay.contains(w.as_str()))
     };
     let mut picked: Vec<&Entry> = CATALOG.iter().filter(|e| matches(e)).collect();
-    if picked.is_empty() {
+    let extra = if words.is_empty() { Vec::new() } else { search_schemas(&words, 12) };
+    if picked.is_empty() && extra.is_empty() {
         picked = CATALOG.iter().collect();
     }
-    let lines: Vec<String> = picked
+    let mut lines: Vec<String> = picked
         .into_iter()
         .filter_map(|e| {
             let (s, _) = open(e.schema, e.key).ok()?;
@@ -307,11 +335,83 @@ fn list_settings(a: &Value) -> String {
             ))
         })
         .collect();
+    if !extra.is_empty() {
+        lines.push("Other settings (change with set_gsetting):".into());
+        lines.extend(extra);
+    }
     if lines.is_empty() {
         "No matching settings are installed.".into()
     } else {
         lines.join("\n")
     }
+}
+
+/// Keys in the installed schemas whose name or summary has all of
+/// `words` (or, failing that, most of them), as "schema key = value — summary".
+fn search_schemas(words: &[String], limit: usize) -> Vec<String> {
+    let Some(source) = gio::SettingsSchemaSource::default() else { return Vec::new() };
+    let (non_reloc, _) = source.list_schemas(true);
+    let in_catalog = |schema: &str, key: &str| CATALOG.iter().any(|e| e.schema == schema && e.key == key);
+    let mut hits: Vec<(usize, String)> = Vec::new();
+    for id in non_reloc {
+        let id = id.to_string();
+        if !SEARCHED_PREFIXES.iter().any(|p| id.starts_with(p)) {
+            continue;
+        }
+        let Some(schema) = source.lookup(&id, true) else { continue };
+        for key in schema.list_keys() {
+            let key = key.to_string();
+            if in_catalog(&id, &key) || HIDDEN_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            let k = schema.key(&key);
+            let summary = k.summary().map(|s| s.to_string()).unwrap_or_default();
+            let hay = format!("{} {} {}", id.rsplit('.').next().unwrap_or(""), key.replace('-', " "), summary).to_lowercase();
+            let n = words.iter().filter(|w| hay.contains(w.as_str())).count();
+            if n == 0 || (words.len() > 1 && n < words.len().div_ceil(2) + usize::from(words.len() > 2)) {
+                continue;
+            }
+            let value = gs::settings(&id).map(|s| show(&to_json(&s.value(&key)))).unwrap_or_default();
+            let summary = if summary.is_empty() { String::new() } else { format!(" — {}", summary.trim()) };
+            hits.push((n, format!("{id} {key} = {value}{summary}")));
+        }
+    }
+    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.into_iter().take(limit).map(|(_, s)| s).collect()
+}
+
+fn describe_setting(a: &Value) -> String {
+    let (schema, key, about) = match arg_str(a, "name").and_then(entry) {
+        Some(e) => (e.schema.to_string(), e.key.to_string(), Some(e.about)),
+        None => match (arg_str(a, "schema"), arg_str(a, "key")) {
+            (Some(s), Some(k)) => (s.to_string(), k.to_string(), None),
+            _ => return "error: give a name from list_settings, or schema and key".into(),
+        },
+    };
+    let (s, k) = match open(&schema, &key) {
+        Ok(v) => v,
+        Err(m) => return format!("error: {m}"),
+    };
+    let mut lines = vec![format!("{schema} {key}")];
+    if let Some(about) = about {
+        lines.push(about.to_string());
+    }
+    if let Some(sum) = k.summary() {
+        lines.push(format!("Summary: {}", sum.trim()));
+    }
+    if let Some(d) = k.description() {
+        lines.push(format!("Description: {}", d.split_whitespace().collect::<Vec<_>>().join(" ")));
+    }
+    lines.push(format!("Type: {}", k.value_type().as_str()));
+    if let Some(c) = constraint(&k) {
+        lines.push(format!("Allowed: {c}"));
+    }
+    lines.push(format!("Default: {}", show(&to_json(&k.default_value()))));
+    lines.push(format!("Current: {}", show(&to_json(&s.value(&key)))));
+    if !s.is_writable(&key) {
+        lines.push("Locked by the administrator.".into());
+    }
+    lines.join("\n")
 }
 
 fn write(schema: &str, key: &str, value: &Value) -> Result<String, String> {

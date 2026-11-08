@@ -1,7 +1,7 @@
-//! Read-only troubleshooting tools for the assistant.
+//! Troubleshooting questions start from a system report.
 //!
-//! The collectors live in [`umoja_common::diagnostics`]; this module
-//! registers them as assistant tools and, for questions that look like
+//! The collectors live in [`umoja_common::diagnostics`] (umoja-mcp serves
+//! them as tools); for questions that look like
 //! troubleshooting ("why is my fan loud?", "Wi-Fi won't connect"), gathers
 //! a report up front and adds it to the question's context. Small local
 //! models often answer from general knowledge instead of calling a tool,
@@ -10,20 +10,8 @@
 //! (a unit's status, a journal search).
 
 use super::agent::{Question, StepState, Ui};
-use super::tools::ToolSpec;
 use crate::lemonade::RUNTIME;
 use umoja_common::{diagnostics, i18n};
-
-/// Every diagnostics collector as a read-only (never confirmed) tool.
-pub fn tools() -> Vec<ToolSpec> {
-    diagnostics::tools()
-        .into_iter()
-        .map(|t| {
-            ToolSpec::read_only(t.name, t.description, (t.parameters)(), t.run)
-                .with_summary(t.summary)
-        })
-        .collect()
-}
 
 /// How the report is introduced to the model.
 const PREAMBLE: &str = "The user is troubleshooting this computer. Below is a read-only \
@@ -65,22 +53,4 @@ pub async fn ground(mut question: Question, ui: &dyn Ui) -> Question {
         _ => grounded,
     });
     question
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tools_register_without_confirmation() {
-        let tools = tools();
-        assert!(tools.iter().any(|t| t.name == "journal"));
-        for t in &tools {
-            assert_eq!(
-                (t.risk)(&serde_json::json!({})),
-                super::super::tools::Risk::Low
-            );
-            assert!(!t.describe(&serde_json::json!({})).is_empty());
-        }
-    }
 }
