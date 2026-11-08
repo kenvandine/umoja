@@ -443,7 +443,18 @@ impl CloudForm {
                 }
                 Err(_) => return,
             }
-            if let Some(s) = gs::settings(gs::UMOJA_SHELL) {
+            let Some(s) =
+                gs::settings(gs::UMOJA_SHELL).filter(|s| gs::has_key(s, backend::BACKEND_KEY))
+            else {
+                // GIO aborts on keys an older installed schema doesn't have.
+                return form.show_status(
+                    &i18n::umoja(
+                        "The installed settings schema is out of date. Reinstall Umoja, then try again.",
+                    ),
+                    Some(false),
+                );
+            };
+            {
                 let _ = s.set_string(backend::CLOUD_URL_KEY, &url);
                 let _ = s.set_string(backend::CLOUD_MODEL_KEY, &model);
                 let _ = s.set_string(backend::BACKEND_KEY, backend::CLOUD);
@@ -463,7 +474,9 @@ impl CloudForm {
         let form = self.clone();
         glib::spawn_future_local(async move {
             let _ = rx.recv().await;
-            if let Some(s) = gs::settings(gs::UMOJA_SHELL) {
+            if let Some(s) = gs::settings(gs::UMOJA_SHELL)
+                && gs::has_key(&s, backend::BACKEND_KEY)
+            {
                 let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
             }
             form.has_key.set(false);

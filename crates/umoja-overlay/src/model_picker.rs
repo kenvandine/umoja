@@ -182,7 +182,10 @@ pub fn button() -> gtk::MenuButton {
             let id = row.widget_name();
             if let Some(s) = gs::settings(gs::UMOJA_SHELL) {
                 let _ = s.set_string("lemonade-model", &id);
-                let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
+                // An older installed schema lacks the key; GIO aborts on unknown keys.
+                if gs::has_key(&s, backend::BACKEND_KEY) {
+                    let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
+                }
             }
             popover.popdown();
         });
