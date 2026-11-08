@@ -4,7 +4,8 @@ An AI-native desktop shell for Ubuntu 26.10, written in Rust on top of Mir
 and GTK4. It behaves like Ubuntu's GNOME session (same settings, keyboard
 shortcuts, dock, Quick Settings, screenshot UI and display settings), but
 every piece runs in its own process so one crash never takes the session
-down. It also adds a local AI assistant (Lemonade) and voice dictation (Myna).
+down. It also adds a local AI assistant (Lemonade, see
+[AI features](docs/ai-features.md)) and voice dictation (Myna).
 
 ## Layout
 
@@ -56,25 +57,16 @@ If the compositor crashes during a session, `umoja-session` restarts it in
 place (up to 3 times in 10 minutes) instead of logging you out. Open apps
 are lost, but the panel, dock, overlay and Lemonade come back.
 
-### Screen and clipboard context
+## AI features
 
-The assistant can look at what you're looking at. Press **Super+Shift+A**
-to ask about the text you just selected or, with nothing selected, the
-window you're in; or use the paperclip button next to the search entry to
-attach the selected text, the current window, an area of the screen (the
-screenshot UI opens to pick it) or the last thing you copied. Window and
-area contents are read with Tesseract OCR (`tesseract-ocr`, a Recommends)
-and sent to the embedded Lemonade with your question; nothing leaves the
-computer. The assistant can also read these itself through its
-`read_selected_text`, `read_clipboard` and `read_focused_window` tools.
-
-**Super+Shift+V** (or the clipboard button) shows the clipboard history,
-with Translate (into your language), Reformat and Summarize on each entry.
-The history is kept in memory only, skips anything a password manager
-marks as secret, and is turned off with
-`gsettings set org.umoja.shell clipboard-history false`. It relies on
-`ext_data_control_v1`, which umoja-mir offers only to Umoja's own
-`umoja-*` binaries, so ordinary apps can't watch the clipboard.
+Press **Super** and type a question or a request: the assistant answers,
+and can open apps, change settings, arrange windows, read what's on screen
+(**Super+Shift+A**), work with the clipboard history (**Super+Shift+V**),
+summarize and reply to notifications, troubleshoot the computer and find
+files by what they're about. Everything runs on the embedded Lemonade by
+default; an OpenAI-compatible cloud model is optional. See
+[docs/ai-features.md](docs/ai-features.md) for how to use each feature,
+what the assistant asks before acting, and what stays on your computer.
 
 ## Login screen
 
