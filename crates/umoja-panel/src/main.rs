@@ -10,6 +10,7 @@ mod bluetooth;
 mod bus;
 mod clock;
 mod dbusmenu;
+mod fade;
 mod launch;
 mod lock;
 mod login;
@@ -82,6 +83,7 @@ fn build(app: &adw::Application) {
     bar.set_end_widget(Some(&end));
 
     window.set_child(Some(&bar));
+    fade::fade_in_on_map(&window, fade::SESSION_IN_MS);
     window.present();
     lock::init();
     polkit::start();

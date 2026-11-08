@@ -157,7 +157,25 @@ fn build(app: &adw::Application) {
     dock.install_autohide();
     dock.apply_layout();
     dock.rebuild();
+    fade_in_on_map(&window);
     window.present();
+}
+
+/// Fade the dock up from transparent the first time it maps, in step with
+/// umoja-panel's wallpaper and top bar after login.
+fn fade_in_on_map(window: &gtk::ApplicationWindow) {
+    window.set_opacity(0.0);
+    let handler = Rc::new(Cell::new(None::<glib::SignalHandlerId>));
+    let h = handler.clone();
+    handler.set(Some(window.connect_map(move |w| {
+        if let Some(id) = h.take() {
+            w.disconnect(id);
+        }
+        let target = adw::PropertyAnimationTarget::new(w, "opacity");
+        let anim = adw::TimedAnimation::new(w, 0.0, 1.0, 700, target);
+        anim.set_easing(adw::Easing::EaseInOutCubic);
+        anim.play();
+    })));
 }
 
 impl Dock {

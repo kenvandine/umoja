@@ -314,3 +314,8 @@ window.umoja-polkit {
   min-width: 30px;
   background-color: currentColor;
 }
+
+/* Log Out fade (fade.rs): plain black over every monitor. */
+window.umoja-curtain {
+  background-color: #000000;
+}

@@ -20,6 +20,8 @@ use umoja_common::i18n;
 /// The session preselected for users who have never logged in.
 pub const DEFAULT_SESSION: &str = "umoja";
 const BLUR_RADIUS: f64 = 48.0;
+const FADE_IN_MS: u32 = 600;
+const FADE_OUT_MS: u32 = 450;
 
 struct State {
     greeter: Greeter,
@@ -37,6 +39,8 @@ struct State {
     session_buttons: RefCell<Vec<gtk::CheckButton>>,
     user_strip: gtk::Box,
     busy: Cell<bool>,
+    /// Everything on screen; faded in at start and out before the session.
+    content: gtk::Overlay,
 }
 
 pub fn build(app: &adw::Application, greeter: Greeter) {
@@ -57,6 +61,8 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
 
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&bg));
+    // Starts transparent over the black window and fades in once mapped.
+    overlay.set_opacity(0.0);
 
     // Card ------------------------------------------------------------------
     let avatar = adw::Avatar::new(128, None, true);
@@ -170,6 +176,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         session_buttons: RefCell::default(),
         user_strip,
         busy: Cell::new(false),
+        content: overlay.clone(),
     });
 
     session_menu.set_popover(Some(&session_popover(&state)));
@@ -197,11 +204,15 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     // There's no window manager under LightDM to set a pointer, so name one
     // explicitly instead of inheriting the bare X root window's.
     window.set_cursor_from_name(Some("default"));
-    window.present();
-    // Fade the card in once the first frame (and wallpaper) is up.
-    glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
-        card_reveal.set_reveal_child(true)
+    // Fade up from black once the window is on screen, then bring the card in.
+    let content = overlay.clone();
+    window.connect_map(move |_| {
+        let card_reveal = card_reveal.clone();
+        fade(&content, 1.0, FADE_IN_MS, move || {
+            card_reveal.set_reveal_child(true)
+        });
     });
+    window.present();
 }
 
 fn session_popover(state: &Rc<State>) -> gtk::Popover {
@@ -290,9 +301,15 @@ fn wire(state: &Rc<State>) {
                 .get(s.session.get())
                 .map(|x| x.key.clone())
                 .unwrap_or_else(|| DEFAULT_SESSION.into());
-            if let Err(e) = s.greeter.start_session(&key) {
-                show_message(&s, &e.to_string());
-            }
+            // Fade to black first so the hand-over to the session's display
+            // server (which also starts black) is not a hard cut.
+            let st = s.clone();
+            fade(&s.content, 0.0, FADE_OUT_MS, move || {
+                if let Err(e) = st.greeter.start_session(&key) {
+                    st.content.set_opacity(1.0);
+                    show_message(&st, &e.to_string());
+                }
+            });
         } else {
             show_message(
                 &s,
@@ -321,6 +338,17 @@ fn wire(state: &Rc<State>) {
     let on_enter = submit.clone();
     state.entry.connect_activate(move |_| on_enter());
     state.submit.connect_clicked(move |_| submit());
+}
+
+/// Animates `widget`'s opacity to `to`, then runs `done`. Animations are
+/// skipped (and `done` runs at once) when GTK animations are turned off.
+fn fade(widget: &impl IsA<gtk::Widget>, to: f64, ms: u32, done: impl Fn() + 'static) {
+    let widget = widget.as_ref();
+    let target = adw::PropertyAnimationTarget::new(widget, "opacity");
+    let anim = adw::TimedAnimation::new(widget, widget.opacity(), to, ms, target);
+    anim.set_easing(adw::Easing::EaseInOutCubic);
+    anim.connect_done(move |_| done());
+    anim.play();
 }
 
 fn show_message(state: &State, text: &str) {

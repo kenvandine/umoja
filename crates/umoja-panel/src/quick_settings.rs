@@ -406,7 +406,7 @@ fn session_row() -> gtk::Box {
             "system-log-out-symbolic",
             i18n::shell("Log Out"),
             "log-out",
-            crate::login::terminate_session,
+            crate::fade::log_out,
         ),
         (
             "system-shutdown-symbolic",

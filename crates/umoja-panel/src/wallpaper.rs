@@ -18,6 +18,9 @@ use umoja_common::gsettings as gs;
 pub struct Wallpaper {
     app: gtk::Application,
     windows: RefCell<Vec<gtk::Window>>,
+    /// The first surfaces fade up from black after login; later rebuilds
+    /// (wallpaper or monitor changes) swap in place.
+    faded_in: std::cell::Cell<bool>,
     _watches: RefCell<Vec<gio::Settings>>,
 }
 
@@ -26,6 +29,7 @@ impl Wallpaper {
         let this = Rc::new(Self {
             app: app.clone().upcast(),
             windows: RefCell::default(),
+            faded_in: std::cell::Cell::new(false),
             _watches: RefCell::default(),
         });
 
@@ -113,10 +117,14 @@ impl Wallpaper {
             frame.append(&picture);
             set_background_color(&frame, &color);
             window.set_child(Some(&frame));
+            if !self.faded_in.get() {
+                crate::fade::fade_in_on_map(&window, crate::fade::SESSION_IN_MS);
+            }
             window.present();
             windows.push(window);
         }
         tracing::info!(monitors = windows.len(), "wallpaper surfaces ready");
+        self.faded_in.set(true);
         *self.windows.borrow_mut() = windows;
     }
 }
