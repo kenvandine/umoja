@@ -460,28 +460,37 @@ impl Compositor {
     ) -> zbus::Result<()>;
 }
 
-static CONNECTION: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
-static LAST_WORKSPACES: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+/// The latest (current, count). One task emits WorkspacesChanged from it,
+/// so signals go out in order and a burst collapses into its final state
+/// (separately spawned emits could overtake each other and leave the top
+/// bar showing a workspace that was already left).
+static WORKSPACES: LazyLock<tokio::sync::watch::Sender<(u32, u32)>> =
+    LazyLock::new(|| tokio::sync::watch::channel((0, 1)).0);
 
 /// Called from the shim (under the WM lock) after every workspace change.
 pub fn workspaces_changed(current: u32, count: u32) {
-    {
-        let mut last = LAST_WORKSPACES.lock().unwrap_or_else(|e| e.into_inner());
-        if *last == Some((current, count)) {
-            return;
-        }
-        *last = Some((current, count));
-    }
-    let Some(conn) = CONNECTION.get().cloned() else {
-        return;
-    };
+    WORKSPACES.send_if_modified(|v| {
+        let changed = *v != (current, count);
+        *v = (current, count);
+        changed
+    });
+}
+
+fn emit_workspaces(conn: zbus::Connection) {
+    let mut rx = WORKSPACES.subscribe();
     crate::session::RUNTIME.spawn(async move {
-        let emitted = match zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
-            Ok(e) => Compositor::workspaces_changed(&e, current, count).await,
-            Err(e) => Err(e),
-        };
-        if let Err(e) = emitted {
-            tracing::debug!(error = %e, "WorkspacesChanged not sent");
+        loop {
+            let (current, count) = *rx.borrow_and_update();
+            let emitted = match zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                Ok(e) => Compositor::workspaces_changed(&e, current, count).await,
+                Err(e) => Err(e),
+            };
+            if let Err(e) = emitted {
+                tracing::debug!(error = %e, "WorkspacesChanged not sent");
+            }
+            if rx.changed().await.is_err() {
+                break;
+            }
         }
     });
 }
@@ -499,7 +508,7 @@ pub fn start() {
             // Keep the connection alive for the life of the compositor.
             Ok(conn) => {
                 crate::session::keep_name(conn.clone(), BUS_NAME);
-                let _ = CONNECTION.set(conn.clone());
+                emit_workspaces(conn.clone());
                 std::mem::forget(conn);
             }
             Err(e) => tracing::warn!(error = %e, "org.umoja.Compositor unavailable"),
