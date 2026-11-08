@@ -784,7 +784,9 @@ pub fn bluetooth() -> String {
         None => out.push_str("No Bluetooth adapter, or bluetoothd is not running.\n"),
     }
     let devices = bluez_devices();
-    if !devices.is_empty() {
+    if devices.is_empty() {
+        out.push_str("Known devices: none paired or connected\n");
+    } else {
         out.push_str("Known devices:\n");
         for d in devices.iter().take(10) {
             out.push_str(&format!("  {d}\n"));
@@ -1144,10 +1146,20 @@ fn process_name(pid: u32, comm: &str) -> String {
         .ok()
         .and_then(|c| {
             let argv0 = String::from_utf8_lossy(c.split(|b| *b == 0).next()?).into_owned();
-            let base = argv0.rsplit('/').next()?.trim().to_string();
-            (!base.is_empty()).then_some(base)
+            name_from_path(&argv0)
         })
         .unwrap_or_else(|| comm.to_string())
+}
+
+/// The last path component that reads like a name: for
+/// `~/.local/share/claude/versions/2.1.319` that is "claude".
+fn name_from_path(path: &str) -> Option<String> {
+    path.rsplit('/')
+        .map(str::trim)
+        .find(|p| {
+            p.chars().any(char::is_alphabetic) && !matches!(*p, "versions" | "bin" | "current")
+        })
+        .map(str::to_string)
 }
 
 /// Processes with the largest resident memory, from /proc.
@@ -1373,6 +1385,19 @@ mod tests {
         );
         let nets = wifi_networks(" :posey:85:WPA2\n :other:90:WPA2", &["posey".into()]);
         assert_eq!(nets[0], "posey (connected) signal 85% WPA2");
+    }
+
+    #[test]
+    fn version_named_binaries() {
+        assert_eq!(
+            name_from_path("/home/ken/.local/share/claude/versions/2.1.319").as_deref(),
+            Some("claude")
+        );
+        assert_eq!(
+            name_from_path("/usr/bin/firefox").as_deref(),
+            Some("firefox")
+        );
+        assert_eq!(name_from_path("1.2.3"), None);
     }
 
     #[test]
