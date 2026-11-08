@@ -30,7 +30,9 @@ const BATCH: usize = 16;
 /// Pause between batches, so indexing never hogs a core or the GPU.
 const BATCH_PAUSE: Duration = Duration::from_millis(250);
 const SNIPPET_CHARS: usize = 1000;
-const CHUNK_CHARS: usize = 1000;
+/// Small enough to stay under 512 tokens (the default llama.cpp batch)
+/// for most text; denser chunks are halved on retry.
+const CHUNK_CHARS: usize = 800;
 /// Don't retry a failed model download more often than this.
 const PULL_RETRY: Duration = Duration::from_secs(6 * 3600);
 
@@ -412,19 +414,54 @@ async fn process(shared: &Shared, batch: Vec<Entry>, semantic: bool) -> Option<V
         return Some(entries);
     }
     let texts: Vec<String> = chunks.iter().map(|(_, t)| t.clone()).collect();
-    let vectors = match shared.embedder.documents(&texts).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "embedding failed");
+    let vectors: Vec<Option<Vec<f32>>> = match shared.embedder.documents(&texts).await {
+        Ok(v) => v.into_iter().map(Some).collect(),
+        Err(EmbedError::Unavailable(why)) => {
+            tracing::warn!(why, "embedding failed");
             return None;
+        }
+        Err(e) => {
+            // One bad chunk (too many tokens for the model's batch, say)
+            // fails the whole request: retry one at a time so it can't
+            // stop the rest of the batch.
+            tracing::debug!(error = %e, "batch embedding failed; retrying one by one");
+            let mut out = Vec::with_capacity(texts.len());
+            for t in &texts {
+                out.push(embed_one(&shared.embedder, t).await);
+            }
+            out
         }
     };
     for ((i, _), v) in chunks.iter().zip(vectors) {
-        if let Some(q) = Vector::quantize(&v) {
+        if let Some(q) = v.as_deref().and_then(Vector::quantize) {
             entries[*i].vectors.push(q);
         }
     }
+    // A file left without vectors would be picked again forever.
+    if entries.iter().any(|e| e.vectors.is_empty()) {
+        tracing::warn!("embedding failed for some files");
+        return None;
+    }
     Some(entries)
+}
+
+/// Embed one chunk, halving it while the model says it's too long.
+async fn embed_one(embedder: &Embedder, text: &str) -> Option<Vec<f32>> {
+    let mut t: String = text.to_string();
+    for _ in 0..4 {
+        match embedder.documents(std::slice::from_ref(&t)).await {
+            Ok(mut v) => return v.pop(),
+            Err(e) => {
+                let n = t.chars().count();
+                if n < 64 {
+                    tracing::debug!(error = %e, "chunk embedding failed");
+                    return None;
+                }
+                t = t.chars().take(n / 2).collect();
+            }
+        }
+    }
+    None
 }
 
 /// What gets embedded for a file: its name and folder, then its text in

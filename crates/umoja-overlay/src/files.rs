@@ -19,6 +19,7 @@ const ROWS: u32 = 5;
 const DEBOUNCE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // score is for callers that rank or filter further
 pub struct Hit {
     pub path: String,
     pub name: String,

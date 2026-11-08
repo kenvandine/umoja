@@ -197,6 +197,10 @@ impl Index {
             })
             .collect();
         hits.sort_by(|a, b| b.0.total_cmp(&a.0));
+        // Drop the long tail of weak matches far behind the best one.
+        if let Some(best) = hits.first().map(|h| h.0) {
+            hits.retain(|h| h.0 >= best - 0.35);
+        }
         hits.truncate(limit);
         hits.into_iter()
             .map(|(score, e)| {
@@ -287,7 +291,7 @@ impl Query {
             .map(String::from)
             .collect();
         let mut q = Query {
-            meaning_floor: 0.55,
+            meaning_floor: 0.62,
             ..Default::default()
         };
         q.time = time_hint(&tokens, now);
@@ -366,6 +370,31 @@ fn is_time_word(t: &str) -> bool {
             | "months"
             | "years"
     ) || t.parse::<u32>().is_ok_and(|y| (1990..2100).contains(&y))
+        || month_number(t).is_some()
+}
+
+/// "june" or "jun" -> 6. "may" and "march" are also verbs, but in a file
+/// search they are nearly always months.
+fn month_number(t: &str) -> Option<u32> {
+    const MONTHS: [&str; 12] = [
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ];
+    MONTHS
+        .iter()
+        .position(|m| t == *m || (t.len() == 3 && m.starts_with(t) && t != "mar" && t != "may"))
+        .or_else(|| (t == "sept").then_some(8))
+        .map(|i| i as u32 + 1)
 }
 
 /// Civil date from a Unix day number (Howard Hinnant's algorithm).
@@ -449,6 +478,13 @@ fn time_hint(tokens: &[String], now: i64) -> Option<(i64, i64)> {
             }
         }
         return Some((begins(y) - 15 * DAY, begins(y) + 107 * DAY));
+    }
+    if let Some(m) = tokens.iter().find_map(|t| month_number(t)) {
+        let mut y = explicit_year.unwrap_or(year);
+        if explicit_year.is_none() && (ts(y, m) > now || (last && m == month)) {
+            y -= 1;
+        }
+        return Some((ts(y, m) - 5 * DAY, ts(y, m + 1) + 5 * DAY));
     }
     if has("year") {
         return Some(if last {
@@ -639,6 +675,12 @@ mod tests {
         assert_eq!((from.0, from.1), (2025, 11));
         assert_eq!(t("tax forms 2024").unwrap().0, (2024, 1, 1));
         assert_eq!(t("yesterday").unwrap().0, (2026, 11, 7));
+        // A month that hasn't come yet this year means last year's.
+        let (from, to) = t("photos from June").unwrap();
+        assert_eq!((from.0, from.1, to.0, to.1), (2026, 5, 2026, 7));
+        assert_eq!(t("pictures from december").unwrap().0.0, 2025);
+        assert_eq!(t("receipts jan 2024").unwrap().0, (2023, 12, 27));
+        assert!(Query::parse("photos from june", now).words.is_empty());
         assert!(t("lease").is_none());
         let q = Query::parse("the PDF about the lease from last spring", now);
         assert_eq!(q.words, vec!["lease"]);
