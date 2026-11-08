@@ -107,6 +107,13 @@ pub extern "C" fn umoja_handle_action(action: u32) {
     })
 }
 
+/// Whether scroll events from this source class (`UMOJA_SCROLL_*`) should be
+/// inverted ("natural" scrolling). Called for every scroll event.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_natural_scroll(source: u32) -> bool {
+    guard("natural_scroll", false, || crate::peripherals::natural_scroll(source))
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_session_started(wayland_display: *const c_char) {
     guard("session_started", (), || {

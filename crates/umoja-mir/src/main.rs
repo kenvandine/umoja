@@ -10,6 +10,7 @@ mod display_config;
 mod ffi;
 mod input;
 mod outputs;
+mod peripherals;
 mod protocols;
 mod session;
 mod shell;
@@ -26,6 +27,7 @@ use std::ffi::{CString, c_char};
 fn main() {
     umoja_common::init_logging("umoja-mir");
     input::start_watching();
+    peripherals::start_watching();
     outputs::import_gnome_monitors(DISPLAY_CONFIG_FILE);
     display_config::start(DISPLAY_CONFIG_FILE);
     shell::start();

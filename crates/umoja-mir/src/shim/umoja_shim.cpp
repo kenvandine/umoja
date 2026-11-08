@@ -14,6 +14,7 @@
 #include <miral/display_configuration.h>
 #include <miral/minimal_window_manager.h>
 #include <miral/output.h>
+#include <miral/prepend_event_filter.h>
 #include <miral/runner.h>
 #include <miral/set_window_management_policy.h>
 #include <miral/toolkit_event.h>
@@ -37,6 +38,9 @@
 #include <vector>
 
 #include <unistd.h>
+
+// Mir's event classes (libmircommon-dev), for rewriting scroll axes in place.
+#include <mir/events/pointer_event.h>
 
 using namespace miral;
 using namespace miral::toolkit;
@@ -987,6 +991,45 @@ bool is_umoja_shell_client(WaylandExtensions::EnableInfo const& info) {
 bool is_privileged_extension(std::string const& name) {
     return name == "ext_data_control_manager_v1" || name == "zwlr_data_control_manager_v1";
 }
+
+template <typename Axis>
+Axis inverted(Axis axis) {
+    axis.precise = decltype(axis.precise){-axis.precise.as_value()};
+    axis.discrete = decltype(axis.discrete){-axis.discrete.as_value()};
+    axis.value120 = decltype(axis.value120){-axis.value120.as_value()};
+    return axis;
+}
+
+// Natural scrolling. Mir never enables libinput's natural-scroll option,
+// and a negative scroll speed only negates the precise value (not the
+// wheel's discrete/value120 steps that clients prefer), so flip all three
+// here, before the event reaches the window manager or any client.
+bool apply_natural_scroll(MirEvent const* event) {
+    if (mir_event_get_type(event) != mir_event_type_input) return false;
+    auto const* input = mir_event_get_input_event(event);
+    if (mir_input_event_get_type(input) != mir_input_event_type_pointer) return false;
+    // The event is owned by Mir's input pipeline and was never const; this
+    // filter runs first, so later consumers see the rewritten axes.
+    auto* pointer = const_cast<MirPointerEvent*>(mir_input_event_get_pointer_event(input));
+
+    uint32_t source = 0;
+    switch (pointer->axis_source()) {
+    case mir_pointer_axis_source_finger:
+        source = UMOJA_SCROLL_TOUCHPAD;
+        break;
+    case mir_pointer_axis_source_wheel:
+    case mir_pointer_axis_source_wheel_tilt:
+    case mir_pointer_axis_source_continuous:
+        source = UMOJA_SCROLL_MOUSE;
+        break;
+    default:
+        return false;
+    }
+    if (!umoja_natural_scroll(source)) return false;
+    pointer->set_v_scroll(inverted(pointer->v_scroll()));
+    pointer->set_h_scroll(inverted(pointer->h_scroll()));
+    return false;
+}
 }
 
 extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* config) {
@@ -1015,6 +1058,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     // Persisted monitor layout (~/.config/umoja-mir.display), seeded from
     // GNOME's monitors.xml by the Rust side; Mir reloads it when it changes.
     DisplayConfiguration display_config{runner};
+    PrependEventFilter natural_scroll{apply_natural_scroll};
 
     runner.add_start_callback([&runner] {
         auto display = runner.wayland_display();
@@ -1035,6 +1079,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         return runner.run_with({
             display_config,
             display_config.layout_option(),
+            natural_scroll,
             extensions,
             X11Support{},
             set_window_management_policy<UmojaWindowManager>(),
@@ -1043,6 +1088,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     return runner.run_with({
         display_config,
         display_config.layout_option(),
+        natural_scroll,
         extensions,
         set_window_management_policy<UmojaWindowManager>(),
     });
