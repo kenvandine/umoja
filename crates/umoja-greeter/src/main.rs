@@ -14,6 +14,7 @@ fn main() -> glib::ExitCode {
     umoja_common::init_logging("umoja-greeter");
     i18n::init();
     apply_hidpi_scale();
+    apply_desktop_defaults();
 
     let app = adw::Application::builder()
         .application_id("org.umoja.Greeter")
@@ -50,9 +51,10 @@ fn main() -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
-/// LightDM runs greeters on X11, where GTK only scales when told to. Pick
-/// the same integer scale mutter would round to for the main panel, so the
-/// login screen isn't tiny on a HiDPI laptop. Must run before GTK starts.
+/// LightDM runs greeters on X11, where GTK only scales by whole numbers and
+/// only when told to. Round the panel's preferred (mutter) scale: 150% and
+/// up becomes 2x, so e.g. a 166⅔% OLED laptop isn't tiny. Must run before
+/// GTK starts.
 fn apply_hidpi_scale() {
     if std::env::var_os("GDK_SCALE").is_some() {
         return;
@@ -61,7 +63,7 @@ fn apply_hidpi_scale() {
         return;
     };
     let scale = panel.preferred_scale();
-    if scale >= 1.75 {
+    if scale >= 1.5 {
         tracing::info!(
             connector = panel.connector,
             scale,
@@ -69,5 +71,37 @@ fn apply_hidpi_scale() {
         );
         // SAFETY: single-threaded, before GTK or any other thread starts.
         unsafe { std::env::set_var("GDK_SCALE", "2") };
+    }
+}
+
+/// LightDM starts greeters with a bare environment and no settings daemon,
+/// so GTK would fall back to upstream defaults. Ask for Ubuntu's (Yaru,
+/// Ubuntu Sans, the Yaru cursor at the right size) the way the session does.
+fn apply_desktop_defaults() {
+    // SAFETY: single-threaded, before GTK or any other thread starts.
+    unsafe {
+        if std::env::var_os("XDG_CURRENT_DESKTOP").is_none() {
+            std::env::set_var("XDG_CURRENT_DESKTOP", "Umoja:ubuntu:GNOME");
+        }
+        if std::env::var_os("XCURSOR_THEME").is_none() {
+            let theme = umoja_common::gsettings::get_string(
+                umoja_common::gsettings::DESKTOP_INTERFACE,
+                "cursor-theme",
+                "Yaru",
+            );
+            std::env::set_var("XCURSOR_THEME", theme);
+        }
+        if std::env::var_os("XCURSOR_SIZE").is_none() {
+            let base = umoja_common::gsettings::get_int(
+                umoja_common::gsettings::DESKTOP_INTERFACE,
+                "cursor-size",
+                24,
+            );
+            let scale: i32 = std::env::var("GDK_SCALE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+            std::env::set_var("XCURSOR_SIZE", (base * scale).to_string());
+        }
     }
 }

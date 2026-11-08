@@ -204,6 +204,9 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     }
     window.set_decorated(false);
     window.fullscreen();
+    // There's no window manager under LightDM to set a pointer, so name one
+    // explicitly instead of inheriting the bare X root window's.
+    window.set_cursor_from_name(Some("default"));
     window.present();
     // Fade the card in once the first frame (and wallpaper) is up.
     glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {

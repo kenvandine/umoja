@@ -385,10 +385,11 @@ mod tests {
 
     #[test]
     fn apply_request_validation() {
+        // Settings sends back the 166⅔% it was offered, as a float.
         let ok = vec![(
             0,
             0,
-            1.75,
+            1.666_666_7,
             0u32,
             true,
             vec![(
@@ -398,7 +399,7 @@ mod tests {
             )],
         )];
         let cfg = configs_from_request(&ok).unwrap();
-        assert_eq!(cfg[0].scale, 1.75);
+        assert!((cfg[0].scale - 1.666_666_7).abs() < 1e-6);
         assert_eq!(cfg[0].width, 2880);
 
         let bad_scale = vec![(

@@ -5,20 +5,69 @@
 export XDG_CURRENT_DESKTOP="Umoja:ubuntu:GNOME"
 export XDG_SESSION_DESKTOP="Umoja"
 export XDG_SESSION_TYPE="wayland"
-export GDK_BACKEND="wayland,x11"
 export QT_QPA_PLATFORM="wayland;xcb"
 export MOZ_ENABLE_WAYLAND=1
+# GTK picks Wayland by itself; forcing GDK_BACKEND leaks into later sessions.
+unset GDK_BACKEND
+
+SESSION_VARS="XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND"
+
+log() { echo "umoja-session: $*" >&2; }
 
 # Ensure the D-Bus user session and systemd --user see the session variables.
-systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE \
-    GDK_BACKEND QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND
+# shellcheck disable=SC2086
+systemctl --user import-environment $SESSION_VARS
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE
+    # shellcheck disable=SC2086
+    dbus-update-activation-environment --systemd $SESSION_VARS
 fi
 
-# Stop shell services when the compositor exits, however it exits.
-trap 'systemctl --user stop umoja-session.target' EXIT INT TERM
+# Stop the shell services when the compositor exits, however it exits, and
+# take our variables back out of the user manager, which outlives this
+# session and would otherwise hand them to the next login (e.g. GNOME).
+cleanup() {
+    systemctl --user stop umoja-session.target
+    # shellcheck disable=SC2086
+    systemctl --user unset-environment $SESSION_VARS WAYLAND_DISPLAY DISPLAY
+}
+trap cleanup EXIT INT TERM
+
+# LightDM starts the session before it has stopped the X greeter and made
+# this logind session active, and until then Mir can't open the GPU ("Failed
+# to find any platforms"). Wait for the hand-over, as gnome-session does.
+wait_active() {
+    [ -n "${XDG_SESSION_ID:-}" ] || return 0
+    i=0
+    while [ $i -lt 100 ]; do
+        [ "$(loginctl show-session "$XDG_SESSION_ID" -p Active --value 2>/dev/null)" = yes ] && return 0
+        sleep 0.1
+        i=$((i + 1))
+    done
+    log "session $XDG_SESSION_ID still not active after 10s; starting anyway"
+}
+
+# The compositor's output goes to the journal (journalctl -t umoja-mir).
+run_mir() {
+    if command -v systemd-cat >/dev/null 2>&1; then
+        systemd-cat -t umoja-mir /usr/bin/umoja-mir "$@"
+    else
+        /usr/bin/umoja-mir "$@"
+    fi
+}
 
 # umoja-mir is the session master. Once Wayland is up it starts
 # umoja-session.target (panel, dock, overlay, portal, embedded Lemonade).
-/usr/bin/umoja-mir "$@"
+wait_active
+started=$(date +%s)
+run_mir "$@"
+status=$?
+# A compositor that dies straight away most likely lost the race for the
+# GPU; give it one more go before giving up and returning to the greeter.
+if [ $status -ne 0 ] && [ $(( $(date +%s) - started )) -lt 3 ]; then
+    log "umoja-mir exited with $status during start-up; retrying once"
+    sleep 1
+    wait_active
+    run_mir "$@"
+    status=$?
+fi
+exit $status
