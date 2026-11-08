@@ -2,6 +2,7 @@
 //! lists Lemonade's chat models that fit this machine, with their size and
 //! whether they're already downloaded. Picking one sets
 //! `org.umoja.shell lemonade-model`; the model watcher then downloads it.
+//! A second page sets up an OpenAI-compatible cloud model (see `cloud`).
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -9,8 +10,10 @@ use std::time::Duration;
 use gtk::{glib, prelude::*};
 use gtk4 as gtk;
 use serde::Deserialize;
+use umoja_common::assistant_backend as backend;
 use umoja_common::{gsettings as gs, i18n, lemonade};
 
+use crate::cloud::CloudForm;
 use crate::lemonade::{DEFAULT_MODEL, RUNTIME};
 
 /// The catalog that ships inside the embedded Lemonade build.
@@ -145,22 +148,41 @@ pub fn button() -> gtk::MenuButton {
         .max_width_chars(44)
         .css_classes(["dim-label", "caption"])
         .build();
+    let local_page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    local_page.append(&note);
+    local_page.append(&scroller);
+
+    let popover = gtk::Popover::new();
+    let cloud = CloudForm::new(&popover);
+
+    let stack = gtk::Stack::builder()
+        .vhomogeneous(false)
+        .hhomogeneous(true)
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .build();
+    stack.add_titled(&local_page, Some("local"), &i18n::umoja("This Computer"));
+    stack.add_titled(&cloud.page, Some("cloud"), &i18n::umoja("Cloud"));
+    let switcher = gtk::StackSwitcher::builder()
+        .stack(&stack)
+        .halign(gtk::Align::Center)
+        .build();
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     content.set_margin_top(6);
     content.set_margin_bottom(6);
     content.set_margin_start(6);
     content.set_margin_end(6);
     content.append(&heading);
-    content.append(&note);
-    content.append(&scroller);
-
-    let popover = gtk::Popover::builder().child(&content).build();
+    content.append(&switcher);
+    content.append(&stack);
+    popover.set_child(Some(&content));
     {
         let popover = popover.clone();
         list.connect_row_activated(move |_, row| {
             let id = row.widget_name();
             if let Some(s) = gs::settings(gs::UMOJA_SHELL) {
                 let _ = s.set_string("lemonade-model", &id);
+                let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
             }
             popover.popdown();
         });
@@ -173,6 +195,12 @@ pub fn button() -> gtk::MenuButton {
         .build();
 
     popover.connect_show(move |popover| {
+        stack.set_visible_child_name(if backend::current().cloud {
+            "cloud"
+        } else {
+            "local"
+        });
+        cloud.load();
         let list = list.clone();
         let popover = popover.clone();
         let mem = mem_total_gb();
@@ -203,7 +231,12 @@ fn fill(
     while let Some(row) = list.first_child() {
         list.remove(&row);
     }
-    let current = gs::get_string(gs::UMOJA_SHELL, "lemonade-model", DEFAULT_MODEL);
+    // No check mark while the cloud model is in use.
+    let current = if backend::current().cloud {
+        String::new()
+    } else {
+        gs::get_string(gs::UMOJA_SHELL, "lemonade-model", DEFAULT_MODEL)
+    };
     for m in models {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.set_margin_top(6);

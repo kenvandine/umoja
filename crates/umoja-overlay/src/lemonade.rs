@@ -10,7 +10,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::time::Duration;
-use umoja_common::{gsettings as gs, lemonade};
+use umoja_common::assistant_backend::{self as backend, Endpoint};
+use umoja_common::lemonade;
 
 /// Shared Tokio runtime for network I/O; GTK stays on its own main loop.
 pub static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
@@ -133,6 +134,9 @@ pub enum StreamEvent {
     Error(String),
 }
 
+/// Chat client for the assistant. Despite the name it talks to whichever
+/// backend is selected (see `umoja_common::assistant_backend`): the embedded
+/// Lemonade by default, or the user's OpenAI-compatible cloud endpoint.
 #[derive(Clone)]
 pub struct LemonadeClient {
     client: Client,
@@ -140,18 +144,99 @@ pub struct LemonadeClient {
     #[allow(dead_code)]
     health: String,
     model: String,
+    backend: Endpoint,
+    /// Key to use instead of the keyring's (the settings "Test" button).
+    token: Option<String>,
 }
 
 impl LemonadeClient {
+    /// A client for the backend selected right now. Reads GSettings, so
+    /// create it on the main thread, once per question.
     pub fn new() -> Self {
+        Self::for_endpoint(backend::current(), None)
+    }
+
+    pub fn for_endpoint(backend: Endpoint, token: Option<String>) -> Self {
+        let connect = if backend.cloud { 10 } else { 2 };
         Self {
             client: Client::builder()
-                .connect_timeout(Duration::from_secs(2))
+                .connect_timeout(Duration::from_secs(connect))
                 .build()
                 .unwrap_or_default(),
-            endpoint: lemonade::chat_completions_url(),
+            endpoint: backend.chat_url.clone(),
             health: lemonade::health_url(),
-            model: gs::get_string(gs::UMOJA_SHELL, "lemonade-model", DEFAULT_MODEL),
+            model: backend.model.clone(),
+            backend,
+            token,
+        }
+    }
+
+    /// True when requests go to a cloud endpoint.
+    #[allow(dead_code)]
+    pub fn is_cloud(&self) -> bool {
+        self.backend.cloud
+    }
+
+    /// POST `body` as JSON, with the cloud key when there is one. A strict
+    /// provider's 400 about a parameter gets one retry without it. Errors
+    /// come back as a sentence for the user.
+    async fn post(&self, mut body: serde_json::Value) -> Result<reqwest::Response, String> {
+        let token = if !self.backend.cloud {
+            None
+        } else if let Some(t) = &self.token {
+            Some(t.clone())
+        } else {
+            tokio::task::spawn_blocking(backend::token::lookup)
+                .await
+                .ok()
+                .flatten()
+        };
+        let mut retried = false;
+        loop {
+            let mut req = self.client.post(&self.endpoint).json(&body);
+            if let Some(t) = token.as_deref().filter(|t| !t.is_empty()) {
+                req = req.bearer_auth(t);
+            }
+            if self.backend.cloud {
+                // OpenRouter's app attribution; other servers ignore it.
+                req = req.header("X-Title", "Umoja Desktop");
+            }
+            let resp = req.send().await.map_err(|e| self.describe(&e))?;
+            let status = resp.status();
+            if status.is_success() {
+                return Ok(resp);
+            }
+            let text = resp.text().await.unwrap_or_default();
+            let err = backend::provider_error(&text).unwrap_or_default();
+            if !retried && status.as_u16() == 400 && backend::adapt_request(&mut body, &err) {
+                tracing::info!(%err, "retrying the chat request without the rejected parameter");
+                retried = true;
+                continue;
+            }
+            tracing::warn!(status = status.as_u16(), body = %text, "chat request failed");
+            return Err(if self.backend.cloud {
+                backend::describe_status(&self.backend, status.as_u16(), &text)
+            } else if status.as_u16() == 404 {
+                "The assistant's model isn't downloaded yet.".into()
+            } else {
+                format!("The local assistant failed ({status}). {err}")
+                    .trim()
+                    .to_string()
+            });
+        }
+    }
+
+    fn describe(&self, e: &reqwest::Error) -> String {
+        if !self.backend.cloud {
+            return describe(e);
+        }
+        if e.is_connect() || e.is_timeout() {
+            format!(
+                "Couldn't reach {}. Check the server URL and your internet connection.",
+                self.backend.host()
+            )
+        } else {
+            e.to_string()
         }
     }
 
@@ -259,6 +344,10 @@ impl LemonadeClient {
         tools: Vec<serde_json::Value>,
         tx: async_channel::Sender<ChatEvent>,
     ) {
+        let mut messages = messages;
+        if self.backend.cloud {
+            backend::strip_local_only_fields(&mut messages);
+        }
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -268,11 +357,10 @@ impl LemonadeClient {
         if !tools.is_empty() {
             body["tools"] = serde_json::Value::Array(tools);
         }
-        let resp = self.client.post(&self.endpoint).json(&body).send().await;
-        let resp = match resp.and_then(|r| r.error_for_status()) {
+        let resp = match self.post(body).await {
             Ok(r) => r,
             Err(e) => {
-                let _ = tx.send(ChatEvent::Error(describe(&e))).await;
+                let _ = tx.send(ChatEvent::Error(e)).await;
                 return;
             }
         };
@@ -324,7 +412,11 @@ impl LemonadeClient {
         if finished {
             finish(calls).await;
         } else {
-            let _ = tx.send(ChatEvent::Error("The assistant stopped before finishing. Try again.".into())).await;
+            let _ = tx
+                .send(ChatEvent::Error(
+                    "The assistant stopped before finishing. Try again.".into(),
+                ))
+                .await;
         }
     }
 }

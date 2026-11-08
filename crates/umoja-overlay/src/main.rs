@@ -7,6 +7,7 @@ mod assistant;
 mod chrome;
 mod clipboard;
 mod clipwatch;
+mod cloud;
 mod context;
 mod files;
 mod lemonade;

@@ -19,6 +19,29 @@
         UMOJA_LEMONADE_PORT=PORT to ~/.config/umoja/lemonade.env.
       </description>
     </key>
+    <key name="assistant-backend" type="s">
+      <choices>
+        <choice value="local"/>
+        <choice value="cloud"/>
+      </choices>
+      <default>'local'</default>
+      <summary>Where the assistant's chat model runs</summary>
+      <description>
+        'local' uses the embedded Lemonade server and lemonade-model.
+        'cloud' sends assistant requests to the OpenAI-compatible endpoint
+        in cloud-base-url using cloud-model. The API key is kept in the
+        keyring, never in GSettings. File search embeddings always stay local.
+      </description>
+    </key>
+    <key name="cloud-base-url" type="s">
+      <default>''</default>
+      <summary>Base URL of the OpenAI-compatible cloud endpoint</summary>
+      <description>For example https://api.openai.com/v1. "/chat/completions" is appended.</description>
+    </key>
+    <key name="cloud-model" type="s">
+      <default>''</default>
+      <summary>Model name requested from the cloud endpoint</summary>
+    </key>
     <key name="file-search-enabled" type="b">
       <default>true</default>
       <summary>Index the home folder so files can be found by what they're about</summary>

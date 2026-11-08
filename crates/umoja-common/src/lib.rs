@@ -4,6 +4,7 @@
 //! headless daemons can use it without pulling in a toolkit.
 
 pub mod apps;
+pub mod assistant_backend;
 pub mod dbus;
 pub mod diagnostics;
 pub mod gsettings;

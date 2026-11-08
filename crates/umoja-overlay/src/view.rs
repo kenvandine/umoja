@@ -49,7 +49,6 @@ pub struct Overlay {
     /// Held for the overlay's lifetime: the monitor is a weak singleton,
     /// and once the last reference drops it stops emitting `changed`.
     app_monitor: gio::AppInfoMonitor,
-    lemonade: LemonadeClient,
     myna: Myna,
     /// Bumped on every new question so stale streams are dropped.
     generation: Cell<u64>,
@@ -299,7 +298,6 @@ impl Overlay {
             model_status,
             apps: RefCell::new(load_apps()),
             app_monitor: gio::AppInfoMonitor::get(),
-            lemonade: LemonadeClient::new(),
             myna: Myna::start(),
             generation: Cell::new(0),
             context_button,
@@ -618,7 +616,8 @@ impl Overlay {
             generation,
             rows: RefCell::new(HashMap::new()),
         });
-        let client = self.lemonade.clone();
+        // Fresh per request: picks up model and backend changes.
+        let client = LemonadeClient::new();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let text = agent::run(client, question, ui).await;
@@ -656,7 +655,8 @@ impl Overlay {
             serde_json::json!({"role": "user", "content": context::truncate_chars(&text, context::MAX_CONTEXT_CHARS)}),
         ];
         let (tx, rx) = async_channel::unbounded();
-        let client = self.lemonade.clone();
+        // Fresh per request: picks up model and backend changes.
+        let client = LemonadeClient::new();
         RUNTIME.spawn(async move { client.stream_chat(messages, Vec::new(), tx).await });
 
         let weak = Rc::downgrade(self);
