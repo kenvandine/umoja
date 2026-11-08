@@ -20,3 +20,6 @@ reqwest.workspace = true
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+libc.workspace = true

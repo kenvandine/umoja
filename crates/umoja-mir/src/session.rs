@@ -59,6 +59,8 @@ pub fn dispatch(action: Action) {
         Action::ToggleOverlay => "Toggle",
         Action::ToggleOverview => "ToggleOverview",
         Action::ToggleDictation => "ToggleDictation",
+        Action::AskAboutScreen => "AskAboutScreen",
+        Action::ClipboardHistory => "ShowClipboard",
         Action::ScreenshotUi => "ShowScreenshotUI",
         Action::Screenshot => "ScreenshotScreen",
         _ => return,

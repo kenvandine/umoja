@@ -44,6 +44,26 @@ in `~/.cache/umoja/lemonade`. It never uses Lemonade's default port 13305,
 so the `lemonade-server` package can be installed alongside it. To change
 the port, put `UMOJA_LEMONADE_PORT=<port>` in `~/.config/umoja/lemonade.env`.
 
+### Screen and clipboard context
+
+The assistant can look at what you're looking at. Press **Super+Shift+A**
+to ask about the text you just selected or, with nothing selected, the
+window you're in; or use the paperclip button next to the search entry to
+attach the selected text, the current window, an area of the screen (the
+screenshot UI opens to pick it) or the last thing you copied. Window and
+area contents are read with Tesseract OCR (`tesseract-ocr`, a Recommends)
+and sent to the embedded Lemonade with your question; nothing leaves the
+computer. The assistant can also read these itself through its
+`read_selected_text`, `read_clipboard` and `read_focused_window` tools.
+
+**Super+Shift+V** (or the clipboard button) shows the clipboard history,
+with Translate (into your language), Reformat and Summarize on each entry.
+The history is kept in memory only, skips anything a password manager
+marks as secret, and is turned off with
+`gsettings set org.umoja.shell clipboard-history false`. It relies on
+`ext_data_control_v1`, which umoja-mir offers only to Umoja's own
+`umoja-*` binaries, so ordinary apps can't watch the clipboard.
+
 ## Login screen
 
 Installing `umoja-greeter` on a standard Ubuntu desktop switches the

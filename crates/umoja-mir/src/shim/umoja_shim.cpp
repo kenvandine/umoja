@@ -9,6 +9,7 @@
 
 #include "umoja_shim.h"
 
+#include <miral/application.h>
 #include <miral/configuration_option.h>
 #include <miral/display_configuration.h>
 #include <miral/minimal_window_manager.h>
@@ -24,6 +25,7 @@
 #include <miral/zone.h>
 
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -33,6 +35,8 @@
 #include <set>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
 
 using namespace miral;
 using namespace miral::toolkit;
@@ -787,6 +791,8 @@ private:
         case UMOJA_ACTION_TOGGLE_DICTATION:
         case UMOJA_ACTION_SCREENSHOT_UI:
         case UMOJA_ACTION_SCREENSHOT:
+        case UMOJA_ACTION_ASK_ABOUT_SCREEN:
+        case UMOJA_ACTION_CLIPBOARD_HISTORY:
             umoja_handle_action(action);
             return true;
         default:
@@ -960,6 +966,29 @@ extern "C" void umoja_wm_move_to_workspace(uint64_t id, uint32_t index) {
     with_wm("move to workspace", [&] { g_wm->move_to_workspace(g_wm->find(id), index); });
 }
 
+namespace {
+// ext_data_control lets a client read every copy and selection in the
+// background, so only Umoja's own shell binaries (umoja-overlay's clipboard
+// history) get it, never ordinary apps.
+bool is_umoja_shell_client(WaylandExtensions::EnableInfo const& info) {
+    pid_t const pid = miral::pid_of(info.app());
+    if (pid <= 0) return false;
+    char exe[PATH_MAX];
+    auto const proc = "/proc/" + std::to_string(pid) + "/exe";
+    ssize_t const n = readlink(proc.c_str(), exe, sizeof exe - 1);
+    if (n <= 0) return false;
+    exe[n] = '\0';
+    std::string const path{exe};
+    auto const slash = path.rfind('/');
+    std::string const name = slash == std::string::npos ? path : path.substr(slash + 1);
+    return name.rfind("umoja-", 0) == 0;
+}
+
+bool is_privileged_extension(std::string const& name) {
+    return name == "ext_data_control_manager_v1" || name == "zwlr_data_control_manager_v1";
+}
+}
+
 extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* config) {
     MirRunner runner{argc, argv};
 
@@ -970,6 +999,10 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         // Newer protocols (e.g. fractional scale) only exist in newer Mir.
         if (!supported.count(name)) {
             std::fprintf(stderr, "umoja-mir: %s not supported by this Mir, skipping\n", name.c_str());
+            continue;
+        }
+        if (is_privileged_extension(name)) {
+            extensions.conditionally_enable(name, is_umoja_shell_client);
             continue;
         }
         // Shell components are trusted first-party clients; enable for all.

@@ -23,6 +23,24 @@
       <default>['&lt;Super&gt;d']</default>
       <summary>Toggle Myna voice dictation</summary>
     </key>
+    <key name="ask-about-screen-hotkey" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;a']</default>
+      <summary>Ask the assistant about the selected text or the current window</summary>
+    </key>
+    <key name="clipboard-history-hotkey" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;v']</default>
+      <summary>Show the clipboard history</summary>
+    </key>
+    <key name="clipboard-history" type="b">
+      <default>true</default>
+      <summary>Keep a clipboard history</summary>
+      <description>
+        Remember text copied this session (in memory only, never on disk)
+        so the overlay can offer it again with translate, reformat and
+        summarize actions. Text that password managers mark as secret is
+        never recorded.
+      </description>
+    </key>
     <key name="tile-top-left" type="as">
       <default>['&lt;Super&gt;KP_7']</default>
       <summary>Tile window to the top-left quarter</summary>
