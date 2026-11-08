@@ -8,6 +8,7 @@
 
 mod display_config;
 mod ffi;
+mod idle;
 mod input;
 mod outputs;
 mod peripherals;
@@ -31,6 +32,7 @@ fn main() {
     outputs::import_gnome_monitors(DISPLAY_CONFIG_FILE);
     display_config::start(DISPLAY_CONFIG_FILE);
     shell::start();
+    idle::start();
 
     let args: Vec<CString> = std::env::args_os()
         .map(|a| CString::new(a.into_encoded_bytes()).expect("argv has no NUL"))

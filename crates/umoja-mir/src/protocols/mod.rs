@@ -19,6 +19,8 @@
 //!   scaling (125%, 150%, 175%...) for GTK4, Qt6, Firefox and Chromium, as
 //!   with mutter's scale-monitor-framebuffer. Skipped on Mir builds that
 //!   predate them.
+//! * `zwp_idle_inhibit_manager_v1` — video players and browsers keep the
+//!   screen from blanking while they play (see [`crate::idle`]).
 //!
 //! `zxdg_decoration_manager_v1` is deliberately disabled (see the shim):
 //! mutter doesn't offer it either, so apps decorate themselves exactly as
@@ -39,6 +41,7 @@ pub const ENABLED: &[&str] = &[
     "ext_data_control_manager_v1",
     "wp_fractional_scale_manager_v1",
     "wp_viewporter",
+    "zwp_idle_inhibit_manager_v1",
 ];
 
 pub fn as_cstrings() -> Vec<CString> {

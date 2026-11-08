@@ -468,3 +468,9 @@ pub extern "C" fn umoja_workspaces_changed(current: usize, count: usize) {
         shell::workspaces_changed(current as u32, count as u32)
     })
 }
+
+/// Mir dimmed, blanked or woke the screen (`UMOJA_IDLE_*`).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_idle_state(state: u32) {
+    guard("idle_state", (), || crate::idle::mir_state(state))
+}

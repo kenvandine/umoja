@@ -189,6 +189,21 @@ void umoja_wm_send_to_workspace(uint64_t id, uint32_t index);
 // Workspace GSettings changed: re-apply count and primary-only membership.
 void umoja_wm_workspace_settings_changed(void);
 
+// Screen blanking (src/idle.rs, src/shim/idle.cpp). Seconds before the
+// outputs turn off, unlocked and on the lock screen; 0 = never.
+void umoja_idle_set_timeouts(int32_t off_seconds, int32_t locked_off_seconds);
+enum {
+    UMOJA_IDLE_DIM = 1,
+    UMOJA_IDLE_OFF = 2,
+    UMOJA_IDLE_WAKE = 3,
+};
+// Mir's idle state changed (called on a Mir thread).
+void umoja_idle_state(uint32_t state);
+
 #ifdef __cplusplus
 }
+
+namespace mir { class Server; }
+// Hooks Mir's idle handler up (idle.cpp).
+void umoja_idle_setup(mir::Server& server);
 #endif

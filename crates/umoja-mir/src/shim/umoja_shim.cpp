@@ -1220,8 +1220,11 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         }
     });
 
+    auto const idle = [](mir::Server& server) { umoja_idle_setup(server); };
+
     if (config->enable_x11) {
         return runner.run_with({
+            idle,
             display_config,
             display_config.layout_option(),
             natural_scroll,
@@ -1231,6 +1234,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         });
     }
     return runner.run_with({
+        idle,
         display_config,
         display_config.layout_option(),
         natural_scroll,

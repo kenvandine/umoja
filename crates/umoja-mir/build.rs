@@ -8,6 +8,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.cpp");
     println!("cargo:rerun-if-changed=src/shim/natural_scroll.cpp");
+    println!("cargo:rerun-if-changed=src/shim/idle.cpp");
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.h");
 
     // Probe without emitting link flags yet: the static shim must come
@@ -24,23 +25,43 @@ fn main() {
         .probe("mircommon")
         .expect("mircommon (libmircommon-dev) is required to build umoja-mir");
 
+    // mir::Server and the idle handler (screen blanking, idle.cpp). Only
+    // libmirserver-internal-dev ships these headers.
+    let mirserver = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("mirserver-internal")
+        .expect("mirserver-internal (libmirserver-internal-dev) is required to build umoja-mir");
+
     let mut build = cc::Build::new();
     build
         .cpp(true)
         .std("c++20")
         .file("src/shim/umoja_shim.cpp")
         .file("src/shim/natural_scroll.cpp")
+        .file("src/shim/idle.cpp")
         .warnings(true)
         .flag_if_supported("-Wno-deprecated-declarations");
-    for path in miral.include_paths.iter().chain(&mircommon.include_paths) {
+    for path in miral
+        .include_paths
+        .iter()
+        .chain(&mircommon.include_paths)
+        .chain(&mirserver.include_paths) {
         build.include(path);
     }
     build.compile("umoja_shim");
 
-    for path in miral.link_paths.iter().chain(&mircommon.link_paths) {
+    for path in miral
+        .link_paths
+        .iter()
+        .chain(&mircommon.link_paths)
+        .chain(&mirserver.link_paths) {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
-    for lib in miral.libs.iter().chain(&mircommon.libs) {
+    for lib in miral
+        .libs
+        .iter()
+        .chain(&mircommon.libs)
+        .chain(&mirserver.libs) {
         println!("cargo:rustc-link-lib={lib}");
     }
 }

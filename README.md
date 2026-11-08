@@ -11,7 +11,7 @@ down. It also adds a local AI assistant (Lemonade, see
 
 | Path | What it is |
 | --- | --- |
-| `crates/umoja-mir` | Wayland compositor. A thin MirAL C++ shim (`src/shim/`) with all policy in Rust: GNOME keybindings, half/quarter tiling with group resize, dynamic workspaces, multi-monitor, `org.gnome.Mutter.DisplayConfig` for Settings › Displays, HiDPI defaults. |
+| `crates/umoja-mir` | Wayland compositor. A thin MirAL C++ shim (`src/shim/`) with all policy in Rust: GNOME keybindings, half/quarter tiling with group resize, dynamic workspaces, multi-monitor, `org.gnome.Mutter.DisplayConfig` for Settings › Displays, HiDPI defaults, screen blanking and lock-on-blank from Settings › Power / Privacy with idle inhibitors (`org.freedesktop.ScreenSaver`, `org.gnome.SessionManager` Inhibit, Wayland idle-inhibit). |
 | `crates/umoja-panel` | Top bar: Activities, clock/calendar, AppIndicator tray (`org.kde.StatusNotifierWatcher` with native dbusmenu menus), network (NetworkManager), volume and battery (UPower) indicators, Quick Settings with Wi-Fi/Wired tiles and a network list, the lock screen, notifications, and the PolicyKit authentication agent (the "Authentication Required" password dialog). |
 | `crates/umoja-dock` | Ubuntu Dock work-alike driven by the `dash-to-dock` GSettings keys and `favorite-apps`, with running dots from `zwlr_foreign_toplevel`. |
 | `crates/umoja-overlay` | App grid + search, Lemonade assistant with action chips, Myna dictation, and the GNOME-style screenshot UI. |

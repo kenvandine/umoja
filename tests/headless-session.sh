@@ -17,6 +17,9 @@ export NO_AT_BRIDGE=1 RUST_LOG=info
 export UMOJA_NO_SESSION_TARGET=1 UMOJA_NO_XWAYLAND=1
 # wtype's modifiers aren't reported on Mir key events; let umoja-mir track them.
 export UMOJA_TRACK_MODIFIERS=1
+# This test has its own D-Bus session, so umoja-mir may own the inhibitor
+# names (org.freedesktop.ScreenSaver, org.gnome.SessionManager) on it.
+export UMOJA_IDLE_BUS=1
 unset DISPLAY WAYLAND_DISPLAY
 cd "$HOME"
 eval "$(dbus-launch --sh-syntax)"
@@ -151,6 +154,34 @@ sleep 2
 overlay ShowScreenshotUI && pass "screenshot UI opens" || fail "screenshot UI failed"
 sleep 5
 shot 04-screenshot-ui
+
+# Screen blanking follows org.gnome.desktop.session idle-delay, and an
+# org.freedesktop.ScreenSaver inhibitor keeps the screen on.
+blanks() { grep -c 'screen off' "$OUT/umoja-mir.log"; }
+ss() { gdbus call --session --dest org.freedesktop.ScreenSaver --object-path /org/freedesktop/ScreenSaver \
+    --method "org.freedesktop.ScreenSaver.$1" "${@:2}" 2>>"$LOG"; }
+before=$(blanks)
+gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.desktop.session idle-delay 3
+sleep 6
+[ "$(blanks)" -gt "$before" ] && pass "screen blanks after idle-delay" || fail "screen did not blank after idle-delay 3"
+# (Mir only reports waking when it dimmed first, which needs >= 20s.)
+wtype -k shift 2>>"$LOG"
+sleep 1
+cookie=$(ss Inhibit umoja-test "testing" | grep -oE '[0-9]+' | tail -1)
+[ -n "$cookie" ] && pass "org.freedesktop.ScreenSaver Inhibit" || fail "ScreenSaver Inhibit failed"
+before=$(blanks)
+sleep 6
+[ "$(blanks)" -eq "$before" ] && pass "inhibitor keeps the screen on" || fail "screen blanked while inhibited"
+[ -n "$cookie" ] && ss UnInhibit "$cookie" >/dev/null
+sleep 9
+[ "$(blanks)" -gt "$before" ] && pass "screen blanks again after the inhibitor goes" || fail "screen did not blank after UnInhibit"
+gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/SessionManager \
+    --method org.gnome.SessionManager.Inhibit test 0 testing 8 >>"$LOG" 2>&1 \
+    && pass "org.gnome.SessionManager Inhibit" || fail "SessionManager Inhibit failed"
+gsettings reset org.gnome.desktop.session idle-delay
+gsettings reset org.gnome.desktop.screensaver lock-enabled
+wtype -k shift 2>>"$LOG"
 
 for p in mir panel dock overlay; do
     pgrep -u "$(id -u)" -x "umoja-$p" >/dev/null && pass "umoja-$p still running" \
