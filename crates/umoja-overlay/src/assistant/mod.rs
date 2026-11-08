@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod desktop;
+pub mod notifications;
 pub mod settings;
 pub mod tools;
 
