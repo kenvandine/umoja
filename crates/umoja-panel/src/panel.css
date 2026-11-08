@@ -66,3 +66,101 @@ window.umoja-panel .battery-percentage {
   border-radius: 999px;
   padding: 4px 12px;
 }
+
+/* ---- Date menu: message list + calendar (gnome-shell layout) ---- */
+.clock-unseen {
+  font-size: 0.6em;
+  color: #ffffff;
+}
+.date-menu {
+  padding: 12px;
+}
+.message-list .message {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background-color: alpha(currentColor, 0.06);
+}
+.message-list .message:hover {
+  background-color: alpha(currentColor, 0.12);
+}
+.message-list .message-title {
+  font-weight: bold;
+}
+.message-list .message-time {
+  font-size: 0.85em;
+}
+.message-list-empty {
+  opacity: 0.5;
+  padding: 48px 0;
+}
+.message-list-bar {
+  padding-top: 6px;
+}
+
+/* ---- Notification bubbles, styled after Ubuntu's notify-osd ---- */
+window.umoja-notifications {
+  background: transparent;
+}
+.osd-bubble {
+  background-color: rgba(18, 18, 18, 0.88);
+  color: #ffffff;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 6px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
+}
+.osd-bubble.critical {
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55), inset 0 0 0 1px alpha(#E95420, 0.9);
+}
+.osd-title {
+  font-weight: bold;
+  font-size: 1.05em;
+}
+.osd-body {
+  color: #e2e2e2;
+}
+.osd-gauge trough {
+  min-height: 6px;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.18);
+}
+.osd-gauge progress {
+  min-height: 6px;
+  border-radius: 3px;
+  background-color: #ffffff;
+}
+.osd-actions {
+  margin-top: 8px;
+}
+.osd-actions button {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  min-height: 28px;
+  font-weight: normal;
+}
+.osd-actions button:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+.osd-close {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 2px;
+  margin: 2px;
+  border-radius: 999px;
+  color: #ffffff;
+  background-color: rgba(60, 60, 60, 0.95);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+overlay:hover > .osd-close {
+  opacity: 1;
+}
+
+.message .message-gauge trough,
+.message .message-gauge progress {
+  min-height: 4px;
+}
+.message .message-gauge {
+  margin-top: 4px;
+}

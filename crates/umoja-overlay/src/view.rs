@@ -18,6 +18,7 @@ use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
 const MAX_RESULTS: usize = 48;
 
 pub struct Overlay {
+    model_status: gtk::Label,
     window: gtk::ApplicationWindow,
     entry: gtk::SearchEntry,
     grid: gtk::FlowBox,
@@ -62,6 +63,14 @@ impl Overlay {
         search_row.set_halign(gtk::Align::Center);
         search_row.append(&entry);
         search_row.append(&myna_pill);
+        search_row.append(&crate::model_picker::button());
+
+        // "Downloading the assistant's model… 42%" while it's fetched.
+        let model_status = gtk::Label::builder()
+            .halign(gtk::Align::Center)
+            .css_classes(["dim-label", "model-status"])
+            .visible(false)
+            .build();
 
         let ask_button = gtk::Button::builder()
             .label(i18n::umoja("Ask the assistant"))
@@ -108,6 +117,7 @@ impl Overlay {
         root.set_margin_end(96);
         root.set_margin_bottom(48);
         root.append(&search_row);
+        root.append(&model_status);
         root.append(&ask_button);
         root.append(&assistant);
         root.append(&scroller);
@@ -122,6 +132,7 @@ impl Overlay {
             chips,
             assistant,
             myna_pill,
+            model_status,
             apps: RefCell::new(load_apps()),
             lemonade: LemonadeClient::new(),
             myna: Myna::start(),
@@ -216,6 +227,11 @@ impl Overlay {
         self.assistant.set_visible(false);
         self.window.present();
         self.entry.grab_focus();
+    }
+
+    pub fn set_model_status(&self, status: Option<String>) {
+        self.model_status.set_visible(status.is_some());
+        self.model_status.set_text(status.as_deref().unwrap_or(""));
     }
 
     pub fn hide(&self) {

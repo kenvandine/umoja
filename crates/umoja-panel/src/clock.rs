@@ -51,17 +51,54 @@ impl Format {
 }
 
 impl ClockButton {
-    pub fn new() -> Self {
+    /// The clock, and gnome-shell's date menu: the notification list on the
+    /// left, the calendar on the right, and a dot by the time while there
+    /// are notifications you haven't looked at.
+    pub fn new(center: &Rc<crate::notifications::Center>) -> Self {
         let label = gtk::Label::new(None);
+        let dot = gtk::Label::builder()
+            .label("●")
+            .css_classes(["clock-unseen"])
+            .visible(false)
+            .build();
+        let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        face.append(&label);
+        face.append(&dot);
+
         let calendar = gtk::Calendar::new();
-        let popover = gtk::Popover::builder().child(&calendar).build();
-        popover.connect_show(move |_| {
-            if let Ok(now) = glib::DateTime::now_local() {
-                calendar.select_day(&now);
-            }
-        });
+        calendar.set_valign(gtk::Align::Start);
+        let menu = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        menu.add_css_class("date-menu");
+        menu.append(&crate::notifications::MessageList::new(center).widget());
+        menu.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        menu.append(&calendar);
+        let popover = gtk::Popover::builder().child(&menu).build();
+        {
+            let dot = dot.clone();
+            popover.connect_show(move |_| {
+                dot.set_visible(false);
+                if let Ok(now) = glib::DateTime::now_local() {
+                    calendar.select_day(&now);
+                }
+            });
+        }
+        {
+            let weak = Rc::downgrade(center);
+            let seen = Rc::new(Cell::new(0usize));
+            let popover = popover.clone();
+            center.connect_changed(move || {
+                let Some(c) = weak.upgrade() else { return };
+                let count = c.notes().len();
+                if count == 0 || popover.is_visible() {
+                    dot.set_visible(false);
+                } else if count > seen.get() {
+                    dot.set_visible(true);
+                }
+                seen.set(count);
+            });
+        }
         let button = gtk::MenuButton::builder()
-            .child(&label)
+            .child(&face)
             .popover(&popover)
             .css_classes(["flat", "clock"])
             .build();

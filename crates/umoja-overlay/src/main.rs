@@ -4,6 +4,8 @@
 //! key), panel (Activities) and dock (Show Apps) can toggle it.
 
 mod lemonade;
+mod model;
+mod model_picker;
 mod myna;
 mod screenshot;
 mod view;
@@ -47,6 +49,13 @@ fn main() -> glib::ExitCode {
     app.connect_activate(|app| {
         let overlay = view::Overlay::new(app);
         let shots = screenshot::ScreenshotUi::new(app);
+        // Fetch the assistant's model in the background at login.
+        let weak = std::rc::Rc::downgrade(&overlay);
+        std::mem::forget(model::ModelWatcher::start(move |status| {
+            if let Some(o) = weak.upgrade() {
+                o.set_model_status(status);
+            }
+        }));
         export(overlay, shots);
         // Keep the process alive while the overlay window is hidden.
         std::mem::forget(app.hold());

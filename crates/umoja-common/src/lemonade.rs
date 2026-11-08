@@ -48,6 +48,11 @@ pub fn chat_completions_url() -> String {
     format!("{}/api/v1/chat/completions", base_url())
 }
 
+/// Model download endpoint (`POST`, SSE progress with `"stream": true`).
+pub fn pull_url() -> String {
+    format!("{}/api/v1/pull", base_url())
+}
+
 /// Health endpoint, used to check the service is up before querying.
 pub fn health_url() -> String {
     format!("{}/api/v1/health", base_url())

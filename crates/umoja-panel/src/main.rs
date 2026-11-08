@@ -10,6 +10,7 @@ mod bus;
 mod clock;
 mod dbusmenu;
 mod network;
+mod notifications;
 mod quick_settings;
 mod sni;
 mod volume;
@@ -41,12 +42,15 @@ fn main() -> glib::ExitCode {
 thread_local! {
     static WALLPAPER: std::cell::OnceCell<std::rc::Rc<wallpaper::Wallpaper>> =
         const { std::cell::OnceCell::new() };
+    static NOTIFICATIONS: std::cell::OnceCell<std::rc::Rc<notifications::Center>> =
+        const { std::cell::OnceCell::new() };
 }
 
 fn build(app: &adw::Application) {
     WALLPAPER.with(|w| {
         w.get_or_init(|| wallpaper::Wallpaper::start(app));
     });
+    let center = NOTIFICATIONS.with(|n| n.get_or_init(|| notifications::Center::start(app)).clone());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -64,7 +68,7 @@ fn build(app: &adw::Application) {
 
     let bar = gtk::CenterBox::new();
     bar.set_start_widget(Some(&activities_button()));
-    bar.set_center_widget(Some(&clock::ClockButton::new().widget()));
+    bar.set_center_widget(Some(&clock::ClockButton::new(&center).widget()));
 
     let end = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     end.append(&sni::Tray::start().widget());
