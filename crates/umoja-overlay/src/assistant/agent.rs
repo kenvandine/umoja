@@ -80,6 +80,11 @@ pub fn initial_messages(q: &Question) -> Vec<Value> {
 /// Answer `question`, calling tools as the model asks. Returns the final
 /// answer text (empty when cancelled or failed; errors are shown via `ui`).
 pub async fn run(client: LemonadeClient, question: Question, ui: Rc<dyn Ui>) -> String {
+    // Troubleshooting questions start from a read-only system report.
+    let question = super::diagnostics::ground(question, ui.as_ref()).await;
+    if ui.cancelled() {
+        return String::new();
+    }
     run_with(client, question, ui, registry()).await
 }
 
