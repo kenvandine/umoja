@@ -10,7 +10,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::time::Duration;
-use umoja_common::{gsettings as gs, lemonade};
+use umoja_common::{diagnostics, gsettings as gs, i18n, lemonade};
 
 /// Shared Tokio runtime for network I/O; GTK stays on its own main loop.
 pub static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
@@ -33,6 +33,13 @@ these shapes:\n\
 {\"action\": \"launch_app\", \"app_id\": \"<desktop file id>\"}\n\
 {\"action\": \"set_setting\", \"schema\": \"org.gnome...\", \"key\": \"<key>\", \"value\": <json>}\n\
 Mark anything that deletes data, needs sudo or changes the system as medium or high risk.";
+
+/// Added when the question is about a problem and we gathered a report.
+const DIAGNOSIS_PROMPT: &str = "The user is troubleshooting. Below is a read-only report \
+gathered just now from this computer (journal, systemd, NetworkManager, sensors, /proc). \
+Base your answer on it: name the most likely cause and quote the specific evidence (a \
+process, a temperature, a log line). If the report shows nothing wrong, say so and suggest \
+what to check next. Never invent readings that are not in the report.\n\n";
 
 #[derive(Serialize)]
 struct ChatMessage {
@@ -86,6 +93,8 @@ struct StreamDelta {
 
 #[derive(Debug)]
 pub enum StreamEvent {
+    /// Progress text shown before the first token, e.g. while diagnosing.
+    Status(String),
     Delta(String),
     Done,
     Error(String),
@@ -114,18 +123,31 @@ impl LemonadeClient {
     }
 
     fn request(&self, user_query: &str, stream: bool) -> CompletionRequest {
+        self.request_with(user_query, None, stream)
+    }
+
+    fn request_with(
+        &self,
+        user_query: &str,
+        report: Option<&str>,
+        stream: bool,
+    ) -> CompletionRequest {
+        // One system message: some chat templates reject a second one.
+        let system = match report {
+            Some(report) => format!("{SYSTEM_PROMPT}\n\n{DIAGNOSIS_PROMPT}{report}"),
+            None => SYSTEM_PROMPT.to_string(),
+        };
+        let mut messages = vec![ChatMessage {
+            role: "system".into(),
+            content: system,
+        }];
+        messages.push(ChatMessage {
+            role: "user".into(),
+            content: user_query.into(),
+        });
         CompletionRequest {
             model: self.model.clone(),
-            messages: vec![
-                ChatMessage {
-                    role: "system".into(),
-                    content: SYSTEM_PROMPT.into(),
-                },
-                ChatMessage {
-                    role: "user".into(),
-                    content: user_query.into(),
-                },
-            ],
+            messages,
             temperature: 0.2,
             stream,
         }
@@ -156,11 +178,28 @@ impl LemonadeClient {
     }
 
     /// Stream tokens to `tx` as they arrive (OpenAI SSE format).
+    ///
+    /// Troubleshooting questions ("why is my fan loud?") first gather a
+    /// read-only system report and send it along with the question.
     pub async fn stream_guidance(&self, user_query: &str, tx: async_channel::Sender<StreamEvent>) {
+        let mut report = None;
+        if !diagnostics::topics_for(user_query).is_empty() {
+            let _ = tx
+                .send(StreamEvent::Status(i18n::umoja("Checking your system…")))
+                .await;
+            let q = user_query.to_string();
+            report = tokio::task::spawn_blocking(move || diagnostics::report_for(&q))
+                .await
+                .ok()
+                .flatten();
+            if tx.is_closed() {
+                return; // query changed while we were collecting
+            }
+        }
         let resp = self
             .client
             .post(&self.endpoint)
-            .json(&self.request(user_query, true))
+            .json(&self.request_with(user_query, report.as_deref(), true))
             .send()
             .await;
         let resp = match resp.and_then(|r| r.error_for_status()) {
@@ -239,6 +278,7 @@ pub fn looks_like_question(query: &str) -> bool {
     ];
     q.ends_with('?')
         || q.split_whitespace().count() >= 4
+        || !diagnostics::topics_for(&q).is_empty()
         || STARTERS.iter().any(|s| q.starts_with(&format!("{s} ")))
 }
 
@@ -262,7 +302,10 @@ mod tests {
         assert!(looks_like_question("How do I set up a WireGuard VPN?"));
         assert!(looks_like_question("Scale my secondary 4K display to 150%"));
         assert!(looks_like_question("convert sample.png to webp"));
+        assert!(looks_like_question("wifi broken"));
+        assert!(looks_like_question("fan loud"));
         assert!(!looks_like_question("firefox"));
+        assert!(!looks_like_question("bluetooth"));
         assert!(!looks_like_question("text editor"));
     }
 

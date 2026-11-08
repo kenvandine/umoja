@@ -393,6 +393,7 @@ impl Overlay {
                     return; // superseded; dropping rx cancels the stream
                 }
                 match ev {
+                    StreamEvent::Status(s) => o.answer.set_text(&s),
                     StreamEvent::Delta(d) => {
                         text.push_str(&d);
                         o.answer.set_text(&strip_actions(&text));
@@ -470,9 +471,10 @@ impl Overlay {
             let action = action.clone();
             dialog.connect_response(None, move |_, response| {
                 if response == "run"
-                    && let Some(o) = weak.upgrade() {
-                        o.execute(&action);
-                    }
+                    && let Some(o) = weak.upgrade()
+                {
+                    o.execute(&action);
+                }
             });
             dialog.present(Some(&self.window));
         } else {
@@ -638,7 +640,9 @@ mod terminal_tests {
         assert!(needs_terminal("flatpak install flathub org.gimp.GIMP"));
         assert!(needs_terminal("cd /tmp && /usr/bin/sudo make install"));
         assert!(!needs_terminal("xdg-open ~/Downloads"));
-        assert!(!needs_terminal("gsettings set org.gnome.desktop.interface color-scheme prefer-dark"));
+        assert!(!needs_terminal(
+            "gsettings set org.gnome.desktop.interface color-scheme prefer-dark"
+        ));
         assert!(!needs_terminal("echo snapshot"));
     }
 }
