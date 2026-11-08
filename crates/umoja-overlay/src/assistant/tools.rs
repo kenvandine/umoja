@@ -143,6 +143,7 @@ const PROVIDERS: &[fn() -> Vec<ToolSpec>] = &[
     super::settings::tools,
     super::notifications::tools,
     super::screen::tools,
+    super::diagnostics::tools,
 ];
 
 /// All registered tools, in registration order.

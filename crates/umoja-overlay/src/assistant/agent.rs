@@ -25,8 +25,8 @@ settings, call list_settings to find the right one and its current value, then c
 in the same answer; don't stop to ask. \"Show X\" or \"turn on X\" means set it to true. For \
 relative changes like \"bigger\" or \"slower to dim\", compute the new value from the current \
 one rather than switching the feature off. For windows, pass the app name as window (e.g. \
-arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. After acting, \
-reply in one short sentence saying what you did. For questions, answer in at most four short \
+arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. If you called a tool, \
+reply in one short sentence saying what it did. For questions, answer in at most four short \
 sentences of practical guidance.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,11 @@ pub fn initial_messages(q: &Question) -> Vec<Value> {
 /// Answer `question`, calling tools as the model asks. Returns the final
 /// answer text (empty when cancelled or failed; errors are shown via `ui`).
 pub async fn run(client: LemonadeClient, question: Question, ui: Rc<dyn Ui>) -> String {
+    // Troubleshooting questions start from a read-only system report.
+    let question = super::diagnostics::ground(question, ui.as_ref()).await;
+    if ui.cancelled() {
+        return String::new();
+    }
     run_with(client, question, ui, registry()).await
 }
 
@@ -277,10 +282,19 @@ fn visible_text(text: &str, tools: &[ToolSpec]) -> String {
     {
         t.truncate(s);
     }
-    t.replace("<tool_call>", "")
+    let t = t
+        .replace("<tool_call>", "")
         .replace("</tool_call>", "")
         .replace("```json", "")
-        .replace("```", "")
+        .replace("```", "");
+    // Removing a call can leave its trailing "." or "," on a line of its own.
+    t.lines()
+        .filter(|l| {
+            let l = l.trim();
+            l.is_empty() || l.chars().any(char::is_alphanumeric)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
         .trim()
         .to_string()
 }
@@ -309,6 +323,7 @@ mod tests {
         assert_eq!(visible_text("<think>hmm", &tools), "");
         assert_eq!(visible_text("<think>a</think>Done.", &tools), "Done.");
         assert_eq!(visible_text("Ok <tool_call>{\"name\": \"set_", &tools), "Ok");
+        assert_eq!(visible_text("It is running.\n.", &tools), "It is running.");
     }
 
     #[test]
