@@ -4,6 +4,7 @@
 
 use super::tools::{Risk, Run, ToolSpec, arg_bool, arg_str, arg_u64};
 use gio::prelude::*;
+use gtk4::prelude::DisplayExt;
 use gtk4::glib;
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -91,7 +92,7 @@ pub fn tools() -> Vec<ToolSpec> {
         .with_summary(|a| format!("Switch to {}", window_name(a))),
         ToolSpec::new(
             "arrange_window",
-            "Tile, maximize, restore, minimize or fullscreen a window, or move it to another monitor.",
+            "Put a window somewhere: the left or right half of the screen, a quarter, maximized, restored, minimized, fullscreen, or another monitor. Use this directly for requests like \"put the terminal on the left\" (pass the app name as window); no need to focus it first.",
             window_schema(json!({"position": {"type": "string", "enum": POSITIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>()}})),
             Run::Main(|a| Box::pin(arrange_window(a))),
         )
@@ -438,7 +439,7 @@ async fn bt_adapter(c: &gio::DBusConnection) -> Result<(String, bool), String> {
                 continue;
             }
             let props = iface.child_value(1);
-            let powered = props
+            let powered = glib::VariantDict::new(Some(&props))
                 .lookup_value("Powered", None)
                 .and_then(|v| v.get::<bool>())
                 .unwrap_or(false);
@@ -657,10 +658,10 @@ fn pick_window<'a>(wins: &'a [Win], a: &Value) -> Option<&'a Win> {
     if want.is_empty() || want.eq_ignore_ascii_case("focused") || want.eq_ignore_ascii_case("current") {
         return wins.iter().find(|w| w.flags & FOCUSED != 0).or(wins.first());
     }
-    if let Ok(n) = want.parse::<u64>() {
-        if let Some(id) = SHORT_IDS.with(|m| m.borrow().get(&n).copied()) {
-            return wins.iter().find(|w| w.id == id);
-        }
+    if let Ok(n) = want.parse::<u64>()
+        && let Some(id) = SHORT_IDS.with(|m| m.borrow().get(&n).copied())
+    {
+        return wins.iter().find(|w| w.id == id);
     }
     let q = want.to_lowercase();
     // MRU order, so "the terminal" means the one used last.

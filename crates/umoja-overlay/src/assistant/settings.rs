@@ -60,8 +60,8 @@ pub const CATALOG: &[Entry] = &[
     e!("sticky_keys", "org.gnome.desktop.a11y.keyboard", "stickykeys-enable", "Sticky keys: press shortcuts one key at a time"),
     e!("visual_alerts", "org.gnome.desktop.wm.preferences", "visual-bell", "Flash the screen instead of the alert sound"),
     // Screen, lock and power
-    e!("screen_blank_delay", "org.gnome.desktop.session", "idle-delay", "Seconds of inactivity before the screen turns off (0 = never). GNOME offers 60, 120, 180, 240, 300, 480, 600, 720, 900"),
-    e!("dim_screen", POWER, "idle-dim", "Dim the screen shortly before it turns off"),
+    e!("screen_blank_delay", "org.gnome.desktop.session", "idle-delay", "Seconds of inactivity before the screen dims and turns off (0 = never). Lengthen this when the screen dims or blanks too fast. GNOME offers 60, 120, 180, 240, 300, 480, 600, 720, 900"),
+    e!("dim_screen", POWER, "idle-dim", "Dim the screen shortly before it turns off. For \"dims too fast\" lengthen screen_blank_delay instead"),
     e!("auto_brightness", POWER, "ambient-enabled", "Adjust brightness automatically from the light sensor"),
     e!("auto_lock", "org.gnome.desktop.screensaver", "lock-enabled", "Lock the screen when it turns off"),
     e!("lock_delay", "org.gnome.desktop.screensaver", "lock-delay", "Seconds after the screen turns off before it locks (0 = immediately)"),
@@ -397,7 +397,9 @@ mod tests {
 
     #[test]
     fn loose_values_convert() {
-        let t = |s: &str| glib::VariantTy::new(s).unwrap();
+        fn t(s: &str) -> &glib::VariantTy {
+            glib::VariantTy::new(s).unwrap()
+        }
         assert_eq!(from_json(t("b"), &json!("on")).unwrap().get::<bool>(), Some(true));
         assert_eq!(from_json(t("d"), &json!("1.25")).unwrap().get::<f64>(), Some(1.25));
         assert_eq!(from_json(t("u"), &json!(300.0)).unwrap().get::<u32>(), Some(300));

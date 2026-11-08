@@ -653,7 +653,7 @@ impl agent::Ui for OverlayUi {
             },
         );
         let window = o.window.clone();
-        Box::pin(async move { dialog.choose_future(Some(&window)).await == "allow" })
+        Box::pin(async move { dialog.choose_future(&window).await == "allow" })
     }
 
     fn cancelled(&self) -> bool {

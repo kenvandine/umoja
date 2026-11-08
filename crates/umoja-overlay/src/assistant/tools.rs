@@ -26,6 +26,8 @@ pub use umoja_common::types::Risk;
 /// A tool future running on the GTK main loop.
 pub type LocalFuture = Pin<Box<dyn Future<Output = String>>>;
 
+// Blocking/read_only are for diagnostics and other contributed tools.
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub enum Run {
     /// Blocking work, run on a worker thread. Must not touch GTK.
@@ -75,6 +77,7 @@ impl ToolSpec {
         }
     }
 
+    #[allow(dead_code)]
     /// A blocking tool that only reads state (never asks for confirmation).
     pub fn read_only(
         name: &'static str,

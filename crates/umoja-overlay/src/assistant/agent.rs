@@ -21,9 +21,11 @@ pub const SYSTEM_PROMPT: &str = "You are Umoja OS Assistant, built into the user
 desktop. You can act on the desktop with the provided tools: open apps, change settings, \
 switch Wi-Fi, Bluetooth, power mode and dark style, and arrange windows and workspaces. When \
 the user asks you to do something, do it with a tool call instead of explaining how. For \
-settings, call list_settings to find the right one and its current value, then change_setting; \
-for relative changes like \"bigger\" or \"longer\", compute the new value from the current one. \
-For windows, call list_windows first to get window ids. Never invent tool results. After acting, \
+settings, call list_settings to find the right one and its current value, then change_setting \
+in the same answer; don't stop to ask. \"Show X\" or \"turn on X\" means set it to true. For \
+relative changes like \"bigger\" or \"slower to dim\", compute the new value from the current \
+one rather than switching the feature off. For windows, pass the app name as window (e.g. \
+arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. After acting, \
 reply in one short sentence saying what you did. For questions, answer in at most four short \
 sentences of practical guidance.";
 
@@ -114,7 +116,7 @@ pub async fn run_with(
             match ev {
                 ChatEvent::Text(d) => {
                     text.push_str(&d);
-                    ui.text(&join(&shown, &visible_text(&text, &tools)));
+                    ui.text(&visible_text(&text, &tools));
                 }
                 ChatEvent::ToolCalls(c) => calls = c,
                 ChatEvent::Done => break,
@@ -132,10 +134,15 @@ pub async fn run_with(
             calls = inline_tool_calls(&text, &tools);
         }
         let prose = visible_text(&text, &tools);
-        shown = join(&shown, &prose);
-        ui.text(&shown);
         if calls.is_empty() {
-            return shown;
+            // Only the final round's words are the answer; "I'll do that
+            // now" from rounds that called tools is stale by now.
+            let answer = if prose.is_empty() { shown } else { prose };
+            ui.text(&answer);
+            return answer;
+        }
+        if !prose.is_empty() {
+            shown = prose.clone();
         }
 
         messages.push(json!({
@@ -207,14 +214,6 @@ fn parse_args(raw: &str) -> Value {
     }
 }
 
-fn join(a: &str, b: &str) -> String {
-    match (a.trim().is_empty(), b.trim().is_empty()) {
-        (true, _) => b.trim().to_string(),
-        (_, true) => a.trim().to_string(),
-        _ => format!("{}\n\n{}", a.trim(), b.trim()),
-    }
-}
-
 /// JSON objects in `text` that look like `{"name": <a tool>, "arguments": {...}}`,
 /// with their byte ranges. Qwen-style templates wrap them in `<tool_call>`.
 fn inline_spans(text: &str, tools: &[ToolSpec]) -> Vec<(usize, usize, ToolCall)> {
@@ -273,10 +272,10 @@ fn visible_text(text: &str, tools: &[ToolSpec]) -> String {
         t.replace_range(s..e, "");
     }
     // Hide a tool call that is still streaming in.
-    if let Some(s) = t.find("<tool_call>") {
-        if !t[s..].contains("</tool_call>") {
-            t.truncate(s);
-        }
+    if let Some(s) = t.find("<tool_call>")
+        && !t[s..].contains("</tool_call>")
+    {
+        t.truncate(s);
     }
     t.replace("<tool_call>", "")
         .replace("</tool_call>", "")
