@@ -138,7 +138,11 @@ impl ToolSpec {
 }
 
 /// Every module that contributes tools. Add yours here.
-const PROVIDERS: &[fn() -> Vec<ToolSpec>] = &[super::desktop::tools, super::settings::tools];
+const PROVIDERS: &[fn() -> Vec<ToolSpec>] = &[
+    super::desktop::tools,
+    super::settings::tools,
+    super::screen::tools,
+];
 
 /// All registered tools, in registration order.
 pub fn registry() -> Vec<ToolSpec> {

@@ -10,6 +10,11 @@
 //!   Myna dictation typing into the focused application.
 //! * `zwlr_screencopy_manager_v1` — screenshots/screencast for the portal.
 //! * `ext_session_lock_manager_v1` — the lock screen.
+//! * `zwp_primary_selection_device_manager_v1` — select-to-copy and
+//!   middle-click paste, as on GNOME.
+//! * `ext_data_control_manager_v1` — umoja-overlay's clipboard history.
+//!   Only offered to Umoja's own `umoja-*` binaries (see the shim), so apps
+//!   can't watch the clipboard.
 //! * `wp_fractional_scale_manager_v1` / `wp_viewporter` — crisp fractional
 //!   scaling (125%, 150%, 175%...) for GTK4, Qt6, Firefox and Chromium, as
 //!   with mutter's scale-monitor-framebuffer. Skipped on Mir builds that
@@ -30,6 +35,8 @@ pub const ENABLED: &[&str] = &[
     "zwp_input_method_manager_v2",
     "zwlr_screencopy_manager_v1",
     "ext_session_lock_manager_v1",
+    "zwp_primary_selection_device_manager_v1",
+    "ext_data_control_manager_v1",
     "wp_fractional_scale_manager_v1",
     "wp_viewporter",
 ];
