@@ -24,6 +24,8 @@ use umoja_common::{dbus, i18n};
 
 const APP_ID: &str = "org.umoja.Dock";
 const HIDDEN_SIZE: i32 = 2;
+/// Gap between the dock and the screen edges it sits against.
+const EDGE_GAP: i32 = 8;
 
 #[derive(Clone, Copy, Debug)]
 struct Config {
@@ -176,7 +178,34 @@ impl Dock {
         } else {
             gtk::Orientation::Horizontal
         });
-        let thickness = cfg.icon_size + 16;
+        // Float the rounded dock slightly off the screen edge, and off both
+        // ends too when it spans the edge (panel mode).
+        let gap = |on: bool| if on { EDGE_GAP } else { 0 };
+        let (vertical, along) = (cfg.position.is_vertical(), cfg.extend);
+        self.list.set_margin_start(gap(
+            cfg.position == DockPosition::Left || (!vertical && along)
+        ));
+        self.list.set_margin_end(gap(
+            cfg.position == DockPosition::Right || (!vertical && along)
+        ));
+        self.list
+            .set_margin_top(gap(cfg.position == DockPosition::Top || (vertical && along)));
+        self.list.set_margin_bottom(gap(
+            cfg.position == DockPosition::Bottom || (vertical && along)
+        ));
+        for (pos, class) in [
+            (DockPosition::Left, "left"),
+            (DockPosition::Right, "right"),
+            (DockPosition::Top, "top"),
+            (DockPosition::Bottom, "bottom"),
+        ] {
+            if pos == cfg.position {
+                self.window.add_css_class(class);
+            } else {
+                self.window.remove_css_class(class);
+            }
+        }
+        let thickness = cfg.icon_size + 16 + EDGE_GAP;
         if cfg.position.is_vertical() {
             self.window.set_default_size(thickness, -1);
         } else {
@@ -283,9 +312,33 @@ impl Dock {
         overlay.set_child(Some(&button));
 
         if !wins.is_empty() {
-            let dots = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-            dots.set_halign(gtk::Align::Center);
-            dots.set_valign(gtk::Align::End);
+            // Pips sit on the screen-edge side of the icon, as in Ubuntu Dock.
+            let (orientation, halign, valign) = match self.config.borrow().position {
+                DockPosition::Left => (
+                    gtk::Orientation::Vertical,
+                    gtk::Align::Start,
+                    gtk::Align::Center,
+                ),
+                DockPosition::Right => (
+                    gtk::Orientation::Vertical,
+                    gtk::Align::End,
+                    gtk::Align::Center,
+                ),
+                DockPosition::Top => (
+                    gtk::Orientation::Horizontal,
+                    gtk::Align::Center,
+                    gtk::Align::Start,
+                ),
+                DockPosition::Bottom => (
+                    gtk::Orientation::Horizontal,
+                    gtk::Align::Center,
+                    gtk::Align::End,
+                ),
+            };
+            let dots = gtk::Box::new(orientation, 2);
+            dots.set_halign(halign);
+            dots.set_valign(valign);
+            dots.set_can_target(false);
             for _ in 0..wins.len().min(4) {
                 let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 dot.add_css_class("running-dot");

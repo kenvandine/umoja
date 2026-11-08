@@ -1,8 +1,16 @@
 window.umoja-dock {
-  background-color: alpha(#1d1d1d, 0.85);
+  background-color: transparent;
 }
+/* The visible dock: rounded and floating off the screen edge (the gap is
+   set as widget margins in apply_layout). */
 .dock-list {
+  background-color: alpha(#1d1d1d, 0.85);
+  border-radius: 16px;
   padding: 6px 4px;
+}
+window.umoja-dock.top .dock-list,
+window.umoja-dock.bottom .dock-list {
+  padding: 4px 6px;
 }
 .dock-item {
   padding: 4px;
@@ -16,7 +24,7 @@ window.umoja-dock {
   min-height: 6px;
   border-radius: 999px;
   background-color: #E95420;
-  margin-bottom: 1px;
+  margin: 1px;
 }
 
 .dock-menu {
