@@ -14,7 +14,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tracker::{Command, Event, WindowId, WindowInfo};
@@ -54,6 +54,10 @@ struct Dock {
     config: RefCell<Config>,
     windows: RefCell<BTreeMap<WindowId, WindowInfo>>,
     commands: Option<async_channel::Sender<Command>>,
+    /// A menu or window list is open. Rebuilding would destroy the button it
+    /// hangs off (and close it), so rebuilds wait until it closes.
+    menu_open: Cell<bool>,
+    rebuild_pending: Cell<bool>,
     _settings: Vec<gio::Settings>,
 }
 
@@ -97,6 +101,8 @@ fn build(app: &adw::Application) {
         config: RefCell::new(Config::load()),
         windows: RefCell::default(),
         commands: tracker.as_ref().map(|t| t.commands.clone()),
+        menu_open: Cell::new(false),
+        rebuild_pending: Cell::new(false),
         _settings: settings.clone(),
     });
 
@@ -187,15 +193,21 @@ impl Dock {
         let leave = Rc::downgrade(self);
         motion.connect_leave(move |_| {
             if let Some(d) = leave.upgrade()
-                && !d.config.borrow().fixed {
-                    d.list.set_visible(false);
-                    d.window.set_default_size(HIDDEN_SIZE, HIDDEN_SIZE);
-                }
+                && !d.config.borrow().fixed
+            {
+                d.list.set_visible(false);
+                d.window.set_default_size(HIDDEN_SIZE, HIDDEN_SIZE);
+            }
         });
         self.window.add_controller(motion);
     }
 
     fn rebuild(self: &Rc<Self>) {
+        if self.menu_open.get() {
+            self.rebuild_pending.set(true);
+            return;
+        }
+        self.rebuild_pending.set(false);
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -276,6 +288,7 @@ impl Dock {
         let commands = self.commands.clone();
         let app_c = app.clone();
         let wins_c = wins.clone();
+        let weak = Rc::downgrade(self);
         button.connect_clicked(move |b| match (wins_c.as_slice(), &commands) {
             ([], _) | (_, None) => launcher::launch(&app_c),
             // Ubuntu Dock "focus-or-previews": click a focused single window to minimize it.
@@ -287,7 +300,9 @@ impl Dock {
                 });
             }
             (many, Some(tx)) => {
-                show_popover(&previews::popover(many, tx.clone()), b);
+                if let Some(d) = weak.upgrade() {
+                    d.show_popover(&previews::popover(many, tx.clone()), b);
+                }
             }
         });
 
@@ -298,12 +313,14 @@ impl Dock {
             let (Some(d), Some(widget)) = (weak.upgrade(), g.widget()) else {
                 return;
             };
-            show_popover(&d.context_menu(&app_m, pinned, &wins), &widget);
+            d.show_popover(&d.context_menu(&app_m, pinned, &wins), &widget);
         });
         button.add_controller(menu_click);
         overlay.upcast()
     }
 
+    /// Ubuntu Dock's app menu: open windows, New Window, the app's own
+    /// desktop actions, Pin to Dock / Unpin, App Details and Quit.
     fn context_menu(
         &self,
         app: &gio::DesktopAppInfo,
@@ -311,37 +328,138 @@ impl Dock {
         wins: &[WindowInfo],
     ) -> gtk::Popover {
         let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let popover = gtk::Popover::builder().child(&col).build();
-        let item = |label: &str| {
+        col.add_css_class("dock-menu");
+        let popover = gtk::Popover::builder()
+            .child(&col)
+            .has_arrow(true)
+            .position(self.menu_side())
+            .build();
+        let weak_pop = popover.downgrade();
+        let item = |label: &str, action: Box<dyn Fn()>| {
             let b = gtk::Button::builder()
-                .label(label)
+                .child(&gtk::Label::builder().label(label).xalign(0.0).build())
                 .css_classes(["flat"])
                 .build();
+            let pop = weak_pop.clone();
+            b.connect_clicked(move |_| {
+                if let Some(p) = pop.upgrade() {
+                    p.popdown();
+                }
+                action();
+            });
             col.append(&b);
-            b
         };
+        let separator = || col.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+        // Open windows, so one can be picked directly.
+        if let (false, Some(tx)) = (wins.is_empty(), &self.commands) {
+            for w in wins {
+                let title = if w.title.is_empty() {
+                    app.display_name().to_string()
+                } else {
+                    w.title.clone()
+                };
+                let (tx, id) = (tx.clone(), w.id);
+                item(
+                    &title,
+                    Box::new(move || {
+                        let _ = tx.try_send(Command::Activate(id));
+                    }),
+                );
+            }
+            separator();
+        }
 
         let a = app.clone();
-        item(&i18n::shell("New Window")).connect_clicked(move |_| launcher::launch(&a));
+        item(
+            &i18n::shell("New Window"),
+            Box::new(move || launcher::launch(&a)),
+        );
+        let actions = app.list_actions();
+        if !actions.is_empty() {
+            separator();
+            for action in actions {
+                let label = app.action_name(&action).to_string();
+                let a = app.clone();
+                item(
+                    &label,
+                    Box::new(move || launcher::launch_action(&a, &action)),
+                );
+            }
+        }
 
+        separator();
         let id = app.id().map(|s| s.to_string()).unwrap_or_default();
         let label = if pinned {
             i18n::shell("Unpin")
         } else {
-            i18n::shell("Pin to Dash")
+            i18n::dock("Pin to Dock")
         };
-        item(&label).connect_clicked(move |_| umoja_common::apps::set_favorite(&id, !pinned));
+        let pin_id = id.clone();
+        item(
+            &label,
+            Box::new(move || umoja_common::apps::set_favorite(&pin_id, !pinned)),
+        );
+        if umoja_common::apps::can_show_details() {
+            item(
+                &i18n::shell("App Details"),
+                Box::new(move || umoja_common::apps::show_details(&id)),
+            );
+        }
 
         if let (false, Some(tx)) = (wins.is_empty(), &self.commands) {
+            separator();
             let tx = tx.clone();
             let ids: Vec<_> = wins.iter().map(|w| w.id).collect();
-            item(&i18n::shell("Quit")).connect_clicked(move |_| {
-                for id in &ids {
-                    let _ = tx.try_send(Command::Close(*id));
-                }
-            });
+            let label = if ids.len() == 1 {
+                i18n::shell("Quit")
+            } else {
+                i18n::dock_n("Quit %d Window", "Quit %d Windows", ids.len() as u32)
+                    .replace("%d", &ids.len().to_string())
+            };
+            item(
+                &label,
+                Box::new(move || {
+                    for id in &ids {
+                        let _ = tx.try_send(Command::Close(*id));
+                    }
+                }),
+            );
         }
         popover
+    }
+
+    /// Menus open away from the screen edge the dock sits on.
+    fn menu_side(&self) -> gtk::PositionType {
+        match self.config.borrow().position {
+            DockPosition::Left => gtk::PositionType::Right,
+            DockPosition::Right => gtk::PositionType::Left,
+            DockPosition::Top => gtk::PositionType::Bottom,
+            DockPosition::Bottom => gtk::PositionType::Top,
+        }
+    }
+
+    /// Attach a transient popover, hold rebuilds while it is open, and drop
+    /// it again once it closes.
+    fn show_popover(self: &Rc<Self>, popover: &gtk::Popover, parent: &impl IsA<gtk::Widget>) {
+        popover.set_position(self.menu_side());
+        popover.set_parent(parent);
+        self.menu_open.set(true);
+        let weak = Rc::downgrade(self);
+        popover.connect_closed(move |p| {
+            let p = p.clone();
+            let weak = weak.clone();
+            glib::idle_add_local_once(move || {
+                p.unparent();
+                if let Some(d) = weak.upgrade() {
+                    d.menu_open.set(false);
+                    if d.rebuild_pending.get() {
+                        d.rebuild();
+                    }
+                }
+            });
+        });
+        popover.popup();
     }
 
     fn show_apps_button(&self, size: i32) -> gtk::Widget {
@@ -355,16 +473,6 @@ impl Dock {
         b.connect_clicked(|_| toggle_overlay());
         b.upcast()
     }
-}
-
-/// Attach a transient popover and drop it again once it closes.
-fn show_popover(popover: &gtk::Popover, parent: &impl IsA<gtk::Widget>) {
-    popover.set_parent(parent);
-    popover.connect_closed(|p| {
-        let p = p.clone();
-        glib::idle_add_local_once(move || p.unparent());
-    });
-    popover.popup();
 }
 
 fn toggle_overlay() {

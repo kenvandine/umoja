@@ -574,19 +574,20 @@ impl Overlay {
         });
 
         // Right-click (or long-press) menu, as in GNOME's app grid.
-        if let Some(id) = app.id().map(|s| s.to_string()) {
+        if let Ok(desktop) = app.clone().downcast::<gio::DesktopAppInfo>() {
             let menu = gtk::GestureClick::builder().button(3).build();
-            let id_m = id.clone();
+            let (weak, d) = (Rc::downgrade(self), desktop.clone());
             menu.connect_pressed(move |g, _, _, _| {
-                if let Some(w) = g.widget() {
-                    show_tile_menu(&w, &id_m);
+                if let (Some(o), Some(w)) = (weak.upgrade(), g.widget()) {
+                    o.show_tile_menu(&w, &d);
                 }
             });
             button.add_controller(menu);
             let press = gtk::GestureLongPress::builder().touch_only(true).build();
+            let weak = Rc::downgrade(self);
             press.connect_pressed(move |g, _, _| {
-                if let Some(w) = g.widget() {
-                    show_tile_menu(&w, &id);
+                if let (Some(o), Some(w)) = (weak.upgrade(), g.widget()) {
+                    o.show_tile_menu(&w, &desktop);
                 }
             });
             button.add_controller(press);
@@ -600,6 +601,80 @@ impl Overlay {
             tracing::warn!(error = %e, "launch failed");
         }
         self.hide();
+    }
+
+    /// GNOME's app-grid menu: the app's desktop actions, Pin to Dock /
+    /// Unpin (org.gnome.shell favorite-apps, which the dock follows) and
+    /// App Details.
+    fn show_tile_menu(self: &Rc<Self>, parent: &gtk::Widget, app: &gio::DesktopAppInfo) {
+        let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let popover = gtk::Popover::builder().child(&col).build();
+        let weak_pop = popover.downgrade();
+        let item = |label: &str, action: Box<dyn Fn()>| {
+            let b = gtk::Button::builder()
+                .child(&gtk::Label::builder().label(label).xalign(0.0).build())
+                .css_classes(["flat"])
+                .build();
+            let pop = weak_pop.clone();
+            b.connect_clicked(move |_| {
+                if let Some(p) = pop.upgrade() {
+                    p.popdown();
+                }
+                action();
+            });
+            col.append(&b);
+        };
+
+        let actions = app.list_actions();
+        for action in &actions {
+            let label = app.action_name(action).to_string();
+            let (weak, a, action) = (Rc::downgrade(self), app.clone(), action.to_string());
+            item(
+                &label,
+                Box::new(move || {
+                    if let Some(o) = weak.upgrade() {
+                        let ctx = gtk::prelude::WidgetExt::display(&o.window).app_launch_context();
+                        a.launch_action(&action, Some(&ctx));
+                        o.hide();
+                    }
+                }),
+            );
+        }
+        if !actions.is_empty() {
+            col.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        }
+
+        let id = app.id().map(|s| s.to_string()).unwrap_or_default();
+        let pinned = umoja_common::apps::is_favorite(&id);
+        let label = if pinned {
+            i18n::shell("Unpin")
+        } else {
+            i18n::dock("Pin to Dock")
+        };
+        let pin_id = id.clone();
+        item(
+            &label,
+            Box::new(move || umoja_common::apps::set_favorite(&pin_id, !pinned)),
+        );
+        if umoja_common::apps::can_show_details() {
+            let weak = Rc::downgrade(self);
+            item(
+                &i18n::shell("App Details"),
+                Box::new(move || {
+                    umoja_common::apps::show_details(&id);
+                    if let Some(o) = weak.upgrade() {
+                        o.hide();
+                    }
+                }),
+            );
+        }
+
+        popover.set_parent(parent);
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
     }
 
     /// Answer a question, letting the assistant act through its tools. Any
@@ -1391,38 +1466,6 @@ fn menu_item(icon: &str, label: &str) -> (gtk::Button, gtk::Label) {
         .css_classes(["flat", "context-item"])
         .build();
     (button, text)
-}
-
-/// "Pin to Dash" / "Unpin" for an app-grid tile; pinning adds the app to
-/// `favorite-apps`, which the dock follows.
-fn show_tile_menu(parent: &gtk::Widget, desktop_id: &str) {
-    let pinned = umoja_common::apps::is_favorite(desktop_id);
-    let label = if pinned {
-        i18n::shell("Unpin")
-    } else {
-        i18n::shell("Pin to Dash")
-    };
-    let item = gtk::Button::builder()
-        .label(label)
-        .css_classes(["flat"])
-        .build();
-    let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    col.append(&item);
-    let popover = gtk::Popover::builder().child(&col).build();
-    popover.set_parent(parent);
-    popover.connect_closed(|p| {
-        let p = p.clone();
-        glib::idle_add_local_once(move || p.unparent());
-    });
-    let id = desktop_id.to_string();
-    let pop = popover.downgrade();
-    item.connect_clicked(move |_| {
-        umoja_common::apps::set_favorite(&id, !pinned);
-        if let Some(p) = pop.upgrade() {
-            p.popdown();
-        }
-    });
-    popover.popup();
 }
 
 fn haystack(app: &gio::AppInfo) -> String {

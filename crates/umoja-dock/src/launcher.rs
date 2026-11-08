@@ -24,6 +24,12 @@ pub fn launch(info: &gio::DesktopAppInfo) {
     }
 }
 
+/// Run one of the app's desktop actions ("New Private Window"...).
+pub fn launch_action(info: &gio::DesktopAppInfo, action: &str) {
+    let ctx = gdk::Display::default().map(|d| d.app_launch_context());
+    info.launch_action(action, ctx.as_ref());
+}
+
 /// `org.gnome.shell favorite-apps`, the same pinned list Ubuntu Dock uses.
 pub fn favorites() -> Vec<gio::DesktopAppInfo> {
     umoja_common::apps::favorites()

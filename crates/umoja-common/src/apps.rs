@@ -59,6 +59,25 @@ fn with_favorite(mut favs: Vec<String>, desktop_id: &str, pinned: bool) -> Vec<S
     favs
 }
 
+/// Whether "App Details" can be offered (GNOME shows it only when GNOME
+/// Software is installed).
+pub fn can_show_details() -> bool {
+    glib::find_program_in_path("gnome-software").is_some()
+}
+
+/// Open the app's page in GNOME Software, as GNOME's "App Details" does.
+pub fn show_details(desktop_id: &str) {
+    // GSubprocess reaps the child, so the long-running dock leaves no zombie.
+    let arg = format!("--details={desktop_id}");
+    let argv = [
+        std::ffi::OsStr::new("gnome-software"),
+        std::ffi::OsStr::new(&arg),
+    ];
+    if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
+        tracing::warn!(error = %e, desktop_id, "could not open GNOME Software");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::with_favorite;
