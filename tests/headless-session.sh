@@ -213,7 +213,7 @@ ours() {
     local p
     for p in /proc/[0-9]*; do
         [ -O "$p" ] && [ "${p#/proc/}" != "$$" ] || continue
-        tr '\0' '\n' <"$p/environ" 2>/dev/null | grep -qx "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" \
+        tr '\0' '\n' 2>/dev/null <"$p/environ" | grep -qx "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" \
             && echo "${p#/proc/}"
     done
 }
