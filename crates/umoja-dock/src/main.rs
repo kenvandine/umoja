@@ -129,6 +129,14 @@ fn build(app: &adw::Application) {
         });
     }
 
+    // Every handler above holds only a weak reference, so the window owns
+    // the dock state. Without this the Dock was freed as soon as build()
+    // returned, the tracker's channel closed, and running apps never showed.
+    let keep = RefCell::new(Some(dock.clone()));
+    window.connect_destroy(move |_| {
+        keep.borrow_mut().take();
+    });
+
     dock.install_autohide();
     dock.apply_layout();
     dock.rebuild();
@@ -322,7 +330,7 @@ impl Dock {
         } else {
             i18n::shell("Pin to Dash")
         };
-        item(&label).connect_clicked(move |_| toggle_favorite(&id, pinned));
+        item(&label).connect_clicked(move |_| umoja_common::apps::set_favorite(&id, !pinned));
 
         if let (false, Some(tx)) = (wins.is_empty(), &self.commands) {
             let tx = tx.clone();
@@ -357,24 +365,6 @@ fn show_popover(popover: &gtk::Popover, parent: &impl IsA<gtk::Widget>) {
         glib::idle_add_local_once(move || p.unparent());
     });
     popover.popup();
-}
-
-fn toggle_favorite(desktop_id: &str, pinned: bool) {
-    let Some(s) = gs::settings(gs::SHELL) else {
-        return;
-    };
-    let mut favs: Vec<String> = s
-        .strv("favorite-apps")
-        .iter()
-        .map(|g| g.to_string())
-        .collect();
-    if pinned {
-        favs.retain(|f| f != desktop_id);
-    } else if !favs.iter().any(|f| f == desktop_id) {
-        favs.push(desktop_id.to_string());
-    }
-    let refs: Vec<&str> = favs.iter().map(String::as_str).collect();
-    let _ = s.set_strv("favorite-apps", refs);
 }
 
 fn toggle_overlay() {

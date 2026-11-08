@@ -566,11 +566,31 @@ impl Overlay {
             .build();
         let weak = Rc::downgrade(self);
         let app = app.clone();
+        let app_c = app.clone();
         button.connect_clicked(move |_| {
             if let Some(o) = weak.upgrade() {
-                o.launch(&app);
+                o.launch(&app_c);
             }
         });
+
+        // Right-click (or long-press) menu, as in GNOME's app grid.
+        if let Some(id) = app.id().map(|s| s.to_string()) {
+            let menu = gtk::GestureClick::builder().button(3).build();
+            let id_m = id.clone();
+            menu.connect_pressed(move |g, _, _, _| {
+                if let Some(w) = g.widget() {
+                    show_tile_menu(&w, &id_m);
+                }
+            });
+            button.add_controller(menu);
+            let press = gtk::GestureLongPress::builder().touch_only(true).build();
+            press.connect_pressed(move |g, _, _| {
+                if let Some(w) = g.widget() {
+                    show_tile_menu(&w, &id);
+                }
+            });
+            button.add_controller(press);
+        }
         button.upcast()
     }
 
@@ -1371,6 +1391,38 @@ fn menu_item(icon: &str, label: &str) -> (gtk::Button, gtk::Label) {
         .css_classes(["flat", "context-item"])
         .build();
     (button, text)
+}
+
+/// "Pin to Dash" / "Unpin" for an app-grid tile; pinning adds the app to
+/// `favorite-apps`, which the dock follows.
+fn show_tile_menu(parent: &gtk::Widget, desktop_id: &str) {
+    let pinned = umoja_common::apps::is_favorite(desktop_id);
+    let label = if pinned {
+        i18n::shell("Unpin")
+    } else {
+        i18n::shell("Pin to Dash")
+    };
+    let item = gtk::Button::builder()
+        .label(label)
+        .css_classes(["flat"])
+        .build();
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    col.append(&item);
+    let popover = gtk::Popover::builder().child(&col).build();
+    popover.set_parent(parent);
+    popover.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+    let id = desktop_id.to_string();
+    let pop = popover.downgrade();
+    item.connect_clicked(move |_| {
+        umoja_common::apps::set_favorite(&id, !pinned);
+        if let Some(p) = pop.upgrade() {
+            p.popdown();
+        }
+    });
+    popover.popup();
 }
 
 fn haystack(app: &gio::AppInfo) -> String {

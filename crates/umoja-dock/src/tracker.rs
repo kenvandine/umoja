@@ -82,7 +82,8 @@ pub fn start() -> Option<Tracker> {
                 while let Ok(cmd) = cmd_rx.try_recv() {
                     state.apply(cmd);
                 }
-                if queue.flush().is_err() {
+                if let Err(e) = queue.flush() {
+                    tracing::warn!(error = %e, "tracker flush failed");
                     break;
                 }
                 if let Some(guard) = queue.prepare_read() {
@@ -94,14 +95,18 @@ pub fn start() -> Option<Tracker> {
                     // Short timeout so queued commands are applied promptly.
                     let ready = unsafe { libc::poll(&mut fd, 1, 50) };
                     if ready > 0
-                        && guard.read().is_err() {
-                            break;
-                        }
+                        && let Err(e) = guard.read()
+                    {
+                        tracing::warn!(error = %e, "tracker read failed");
+                        break;
+                    }
                 }
-                if queue.dispatch_pending(&mut state).is_err() {
+                if let Err(e) = queue.dispatch_pending(&mut state) {
+                    tracing::warn!(error = %e, "tracker dispatch failed");
                     break;
                 }
                 if state.events.is_closed() {
+                    tracing::warn!("tracker event channel closed");
                     break;
                 }
             }

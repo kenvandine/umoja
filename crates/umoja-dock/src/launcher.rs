@@ -26,7 +26,7 @@ pub fn launch(info: &gio::DesktopAppInfo) {
 
 /// `org.gnome.shell favorite-apps`, the same pinned list Ubuntu Dock uses.
 pub fn favorites() -> Vec<gio::DesktopAppInfo> {
-    umoja_common::gsettings::get_strv(umoja_common::gsettings::SHELL, "favorite-apps")
+    umoja_common::apps::favorites()
         .iter()
         .filter_map(|id| gio::DesktopAppInfo::new(id))
         .collect()
