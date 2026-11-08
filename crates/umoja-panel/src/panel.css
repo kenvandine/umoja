@@ -264,3 +264,39 @@ window.umoja-quick-reply {
   background-color: alpha(currentColor, 0.1);
   color: alpha(currentColor, 0.5);
 }
+
+/* ---- PolicyKit authentication dialog, like gnome-shell's modal ---- */
+window.umoja-polkit {
+  background-color: transparent;
+}
+.umoja-polkit .polkit-backdrop {
+  background-color: alpha(#000000, 0.45);
+}
+.umoja-polkit .polkit-card {
+  padding: 28px 32px 24px 32px;
+  border-radius: 24px;
+  background-color: @dialog_bg_color;
+  color: @dialog_fg_color;
+  box-shadow: 0 8px 32px alpha(#000000, 0.35), 0 0 0 1px alpha(#000000, 0.06);
+}
+.umoja-polkit .polkit-title {
+  font-size: 20px;
+  font-weight: 800;
+}
+.umoja-polkit .polkit-body {
+  opacity: 0.85;
+}
+.umoja-polkit .polkit-user {
+  font-weight: 700;
+}
+.umoja-polkit .polkit-entry {
+  border-radius: 999px;
+  min-height: 40px;
+  padding: 0 12px;
+}
+.umoja-polkit .polkit-message {
+  color: @error_color;
+}
+.umoja-polkit .polkit-message:backdrop {
+  color: @error_color;
+}

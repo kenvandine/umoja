@@ -15,6 +15,7 @@ mod lock;
 mod login;
 mod network;
 mod notifications;
+mod polkit;
 mod quick_settings;
 mod sni;
 mod volume;
@@ -54,7 +55,8 @@ fn build(app: &adw::Application) {
     WALLPAPER.with(|w| {
         w.get_or_init(|| wallpaper::Wallpaper::start(app));
     });
-    let center = NOTIFICATIONS.with(|n| n.get_or_init(|| notifications::Center::start(app)).clone());
+    let center =
+        NOTIFICATIONS.with(|n| n.get_or_init(|| notifications::Center::start(app)).clone());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -82,6 +84,7 @@ fn build(app: &adw::Application) {
     window.set_child(Some(&bar));
     window.present();
     lock::init();
+    polkit::start();
 }
 
 fn activities_button() -> gtk::Button {

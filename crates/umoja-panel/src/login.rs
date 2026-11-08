@@ -42,6 +42,17 @@ pub fn session_path(conn: &gio::DBusConnection) -> Option<String> {
     (path != "/").then_some(path)
 }
 
+/// logind's id for that session ("2", "c1"...), as polkit names it.
+pub fn session_id(conn: &gio::DBusConnection) -> Option<String> {
+    if let Ok(id) = std::env::var("XDG_SESSION_ID")
+        && !id.is_empty()
+    {
+        return Some(id);
+    }
+    let path = session_path(conn)?;
+    bus::get_all(conn, LOGIN1, &path, SESSION)?.str("Id")
+}
+
 pub fn locked_hint(conn: &gio::DBusConnection, session: &str) -> bool {
     bus::get_all(conn, LOGIN1, session, SESSION)
         .and_then(|p| p.bool("LockedHint"))
