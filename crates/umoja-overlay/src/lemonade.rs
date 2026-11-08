@@ -191,6 +191,11 @@ impl LemonadeClient {
                 .ok()
                 .flatten()
         };
+        let token = token.map(|t| backend::clean_key(&t));
+        if self.backend.cloud {
+            let shape = token.as_deref().map(backend::key_shape);
+            tracing::info!(url = %self.endpoint, key = ?shape, "cloud chat request");
+        }
         let mut retried = false;
         loop {
             let mut req = self.client.post(&self.endpoint).json(&body);

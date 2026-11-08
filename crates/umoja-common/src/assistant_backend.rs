@@ -162,6 +162,49 @@ pub fn provider_error(body: &str) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// Tidy a pasted API key: drop whitespace and invisible characters
+/// (zero-width spaces, BOMs, which `trim` keeps), surrounding quotes and a
+/// leading "Bearer ". API keys never contain any of these.
+pub fn clean_key(raw: &str) -> String {
+    let mut k: String = raw
+        .chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}' | '\u{00AD}'
+                )
+        })
+        .collect();
+    loop {
+        let before = k.len();
+        k = k
+            .trim_matches(|c| matches!(c, '"' | '\'' | '`' | '“' | '”' | '‘' | '’'))
+            .to_string();
+        if k.len() >= 6 && k[..6].eq_ignore_ascii_case("bearer") {
+            k = k[6..].trim_start_matches(':').to_string();
+        }
+        if k.len() == before {
+            return k;
+        }
+    }
+}
+
+/// What a key looks like, without revealing it: for logs.
+pub fn key_shape(key: &str) -> String {
+    let prefix: String = key.chars().take(6).collect();
+    format!(
+        "{} chars, starts {prefix:?}{}",
+        key.chars().count(),
+        if key.is_ascii() {
+            ""
+        } else {
+            ", has non-ASCII"
+        }
+    )
+}
+
 /// A sentence for the user about a failed cloud request.
 pub fn describe_status(ep: &Endpoint, status: u16, body: &str) -> String {
     let detail = provider_error(body)
@@ -169,6 +212,9 @@ pub fn describe_status(ep: &Endpoint, status: u16, body: &str) -> String {
         .unwrap_or_default();
     let host = ep.host();
     match status {
+        401 if body.contains("Missing Authentication header") => format!(
+            "{host} doesn't recognise that as an API key{detail}. OpenRouter keys start with “sk-or-v1-”."
+        ),
         401 | 403 => format!("{host} rejected the API key{detail}."),
         404 => format!(
             "{host} doesn't have the model “{}”, or the server URL is wrong{detail}.",
@@ -228,7 +274,7 @@ pub mod token {
             .stdin
             .take()
             .ok_or("no stdin")?
-            .write_all(key.trim().as_bytes())
+            .write_all(super::clean_key(key).as_bytes())
             .map_err(|e| e.to_string())?;
         let out = child.wait_with_output().map_err(|e| e.to_string())?;
         if out.status.success() {
@@ -311,6 +357,19 @@ mod tests {
         strip_local_only_fields(&mut m);
         assert_eq!(m[0]["name"], "ken");
         assert!(m[1].get("name").is_none());
+    }
+
+    #[test]
+    fn keys_are_cleaned() {
+        let k = "sk-or-v1-abc123";
+        assert_eq!(clean_key(k), k);
+        assert_eq!(clean_key(" \u{FEFF}sk-or-v1-abc123\u{200B}\n"), k);
+        assert_eq!(clean_key("Bearer sk-or-v1-abc123"), k);
+        assert_eq!(clean_key("\"sk-or-v1-abc123\""), k);
+        assert_eq!(clean_key("“Bearer sk-or-v1-abc123”"), k);
+        assert_eq!(clean_key("sk-or-v1-abc\n123"), k);
+        assert_eq!(clean_key(""), "");
+        assert_eq!(key_shape(k), "15 chars, starts \"sk-or-\"");
     }
 
     #[test]

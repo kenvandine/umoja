@@ -277,7 +277,7 @@ impl CloudForm {
                 Some(false),
             );
         }
-        let typed = self.key.text().trim().to_string();
+        let typed = backend::clean_key(&self.key.text());
         self.set_busy(true);
         self.show_status(&i18n::umoja("Loading models…"), None);
         let (tx, rx) = async_channel::bounded(1);
@@ -386,7 +386,7 @@ impl CloudForm {
             Ok(v) => v,
             Err(e) => return self.show_status(&e, Some(false)),
         };
-        let typed = self.key.text().trim().to_string();
+        let typed = backend::clean_key(&self.key.text());
         self.set_busy(true);
         self.show_status(&i18n::umoja("Testing…"), None);
         let ep = Endpoint::cloud(&url, &model);
@@ -421,7 +421,7 @@ impl CloudForm {
             Ok(v) => v,
             Err(e) => return self.show_status(&e, Some(false)),
         };
-        let typed = self.key.text().trim().to_string();
+        let typed = backend::clean_key(&self.key.text());
         self.set_busy(true);
         let (tx, rx) = async_channel::bounded(1);
         RUNTIME.spawn_blocking(move || {
