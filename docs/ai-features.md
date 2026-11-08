@@ -18,6 +18,7 @@ button for it (and **Super+D**); see Myna's own documentation for setup.
 - [Choosing the model](#choosing-the-model)
 - [Using a cloud model](#using-a-cloud-model)
 - [Doing things on the desktop](#doing-things-on-the-desktop)
+- [Finding and removing apps](#finding-and-removing-apps)
 - [Asking about what's on screen](#asking-about-whats-on-screen)
 - [Clipboard history](#clipboard-history)
 - [Notifications: digest and quick replies](#notifications-digest-and-quick-replies)
@@ -26,6 +27,7 @@ button for it (and **Super+D**); see Myna's own documentation for setup.
 - [Privacy](#privacy)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Settings reference](#settings-reference)
+- [Using Umoja's tools from other AI apps (MCP)](#using-umojas-tools-from-other-ai-apps-mcp)
 - [When something doesn't work](#when-something-doesnt-work)
 
 ## Asking the assistant
@@ -120,6 +122,8 @@ Ask in plain words and the assistant does it, instead of telling you how.
 | Desktop settings | "make text bigger", "stop the screen dimming so fast", "show battery percentage", "turn on night light", "put the dock at the bottom" |
 | Reset a setting | "put the touchpad speed back to default" |
 | Close a window | "close the calculator" |
+| Find or remove apps | "how is Firefox installed?", "remove Discord" |
+| Explain a setting | "what does the hot corner setting do?" |
 | Run a command | "how much space is left in my home folder? run df for me" |
 
 The settings it knows by name cover text and cursor size, accent colour,
@@ -127,8 +131,12 @@ animations, the top bar clock and battery percentage, accessibility
 (high contrast, screen reader, on-screen keyboard, zoom, sticky keys),
 screen blanking, dimming, locking and suspend, the power button, Night
 Light, notification banners, sounds, touchpad, mouse and keyboard repeat,
-the dock, and workspaces. It reads the current value first, so relative
-requests like "bigger" or "slower" work.
+the dock, workspaces, the wallpaper, and Umoja's own file search,
+clipboard history and shortcuts. It reads the current value first, so
+relative requests like "bigger" or "slower" work. For anything else it
+searches every GNOME and Umoja setting installed on your computer by name
+and description, and can explain any of them (what it does, allowed
+values, default and current value).
 
 ### What it asks before doing
 
@@ -146,6 +154,7 @@ unless you click **Allow**.
 | Change any other `org.gnome.*` setting by its raw key | Yes |
 | Send a reply to a notification | Yes |
 | Open a file that is executable or a `.desktop` launcher | Yes |
+| Remove an app | Always, with what will be removed |
 
 Commands are handled carefully:
 
@@ -157,6 +166,47 @@ Commands are handled carefully:
   password yourself.
 
 If you decline, the assistant is told not to try again.
+
+These rules are enforced by Umoja's tool server (see
+[Using Umoja's tools from other AI apps](#using-umojas-tools-from-other-ai-apps-mcp)),
+not by the model, so they are the same whichever model you use, local or
+cloud.
+
+## Finding and removing apps
+
+Apps on Ubuntu can come from several places: snaps, apt (deb packages),
+Flatpak, an AppImage you downloaded, or a launcher someone made by hand.
+The assistant works out which one it is itself, so you never have to run
+`snap list` or `dpkg -l` to find out.
+
+- **"How is Discord installed?"** tells you the source, package name,
+  version and, for snaps, the channel and publisher. If an app is installed
+  more than one way (say, both a snap and a deb), it says so.
+- **"What apps do I have from Flatpak?"** lists installed apps by source.
+- **"Remove Discord"** removes it the right way for where it came from.
+  The **Allow** dialog (with a red **Allow** button) shows exactly what
+  will happen, for example *Runs: snap remove discord*. For a deb it first
+  asks apt what else would go and lists those packages too. If an app is
+  installed more than one way, the assistant asks which one you mean.
+
+How the removal runs:
+
+| Installed as | Removal |
+| --- | --- |
+| Snap | `snap remove`; snapd keeps a snapshot of the app's data for a while |
+| Deb (apt) | `apt-get remove` (configuration files are kept) |
+| Flatpak | `flatpak uninstall`, user or system installation |
+| AppImage | The AppImage and its launcher go to the Trash |
+| Hand-made launcher | The launcher goes to the Trash; the program it points to stays |
+
+Removing snaps, debs and system Flatpaks needs administrator rights. The
+assistant asks for your password the usual way; if it can't show a
+password prompt, it opens a terminal running the `sudo` command so you can
+type it there.
+
+It won't remove Umoja itself, base and runtime snaps other snaps need
+(`core*`, `gnome-*`, `mesa-*`…), or a deb whose removal would take part
+of the system with it (apt, sudo, systemd, NetworkManager and similar).
 
 ## Asking about what's on screen
 
@@ -362,6 +412,39 @@ All in the `org.umoja.shell` schema, for example
 The embedded Lemonade server's port and memory limits are covered in
 [Embedded Lemonade](../README.md#embedded-lemonade) in the README.
 
+## Using Umoja's tools from other AI apps (MCP)
+
+Everything the assistant can do on the desktop comes from `umoja-mcp`, a
+[Model Context Protocol](https://modelcontextprotocol.io) server installed
+with Umoja. The overlay starts it for you. Any other MCP client, such as
+Claude Code, can use it too and gets the same tools and the same
+**Allow** rules:
+
+```sh
+claude mcp add umoja -- umoja-mcp
+```
+
+Other clients take a stdio server with the command `umoja-mcp` and no
+arguments. Risky tools ask for your OK through the client when it supports
+MCP elicitation, and otherwise with a desktop dialog; with neither, they
+refuse to run.
+
+From a terminal:
+
+- `umoja-mcp --list` lists the tools and their risk.
+- `umoja-mcp call find_app '{"name": "discord"}'` runs one tool (risky
+  ones still ask first).
+- `umoja-mcp --dry-run` serves as usual but only pretends to change
+  things, for testing a client.
+
+The tools: apps (`find_app`, `list_apps`, `launch_app`, `remove_app`),
+settings (`list_settings`, `describe_setting`, `change_setting`,
+`reset_setting`, `set_gsetting`, `open_settings`), `set_dark_style`,
+`set_power_mode`, `set_wifi`, `set_bluetooth` and `desktop_status`,
+windows and workspaces, notifications, file search, `run_command`, and the
+read-only troubleshooting reports. The overlay adds three of its own:
+reading the selection, the clipboard history and the current window.
+
 ## When something doesn't work
 
 - **The assistant says it can't connect.** Check the local server with
@@ -381,6 +464,9 @@ The embedded Lemonade server's port and memory limits are covered in
   on mains power; plug in and give it time. `systemctl --user status
   umoja-files` shows whether the service is running. Install
   `poppler-utils` for PDFs.
+- **The assistant can't do anything on the desktop** (it only answers in
+  words, and the log says `umoja-mcp isn't available`). Check that
+  `umoja-mcp --list` runs; it ships in the `umoja-desktop` package.
 - **No digest or Reply button.** The digest needs at least two unseen
   notifications. Reply is offered for chat and mail messages, not for
   system notices or progress bars.

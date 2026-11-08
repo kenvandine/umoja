@@ -39,7 +39,7 @@ macro_rules! e {
 
 pub const CATALOG: &[Entry] = &[
     // Appearance and text
-    e!("text_size", IFACE, "text-scaling-factor", "Text size multiplier: 1.0 normal, 1.25 large, 1.5 larger (0.5–3.0)"),
+    e!("text_size", IFACE, "text-scaling-factor", "Text (font) size multiplier: 1.0 normal, 1.25 large, 1.5 larger (0.5–3.0)"),
     e!("cursor_size", IFACE, "cursor-size", "Mouse pointer size in pixels: 24 default, 32, 48, 64, 96"),
     e!("accent_color", IFACE, "accent-color", "Accent colour: blue, teal, green, yellow, orange, red, pink, purple, slate"),
     e!("animations", IFACE, "enable-animations", "Window and interface animations (false = reduce motion)"),
@@ -347,7 +347,7 @@ fn list_settings(a: &Value) -> String {
 }
 
 /// Keys in the installed schemas whose name or summary has all of
-/// `words` (or, failing that, most of them), as "schema key = value — summary".
+/// `words`, as "schema key = value — summary".
 fn search_schemas(words: &[String], limit: usize) -> Vec<String> {
     let Some(source) = gio::SettingsSchemaSource::default() else { return Vec::new() };
     let (non_reloc, _) = source.list_schemas(true);
@@ -368,7 +368,7 @@ fn search_schemas(words: &[String], limit: usize) -> Vec<String> {
             let summary = k.summary().map(|s| s.to_string()).unwrap_or_default();
             let hay = format!("{} {} {}", id.rsplit('.').next().unwrap_or(""), key.replace('-', " "), summary).to_lowercase();
             let n = words.iter().filter(|w| hay.contains(w.as_str())).count();
-            if n == 0 || (words.len() > 1 && n < words.len().div_ceil(2) + usize::from(words.len() > 2)) {
+            if n < words.len() {
                 continue;
             }
             let value = gs::settings(&id).map(|s| show(&to_json(&s.value(&key)))).unwrap_or_default();

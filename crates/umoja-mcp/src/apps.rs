@@ -421,6 +421,22 @@ pub fn lookup(query: &str) -> Vec<App> {
             detail: String::new(),
         });
     }
+    // Ubuntu's transitional debs (firefox 1:1snap1…) only install the snap.
+    let snap_names: Vec<String> = apps
+        .iter()
+        .filter_map(|a| match &a.source {
+            Source::Snap { name } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    apps.retain(|a| match &a.source {
+        Source::Deb { package } => {
+            !(a.desktop_id.is_none()
+                && snap_names.contains(package)
+                && deb_version(package).is_some_and(|v| v.contains("snap")))
+        }
+        _ => true,
+    });
     // Details, and drop duplicates (two launchers from one package).
     let mut seen = Vec::new();
     apps.retain(|a| {

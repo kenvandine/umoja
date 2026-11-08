@@ -62,9 +62,12 @@ are lost, but the panel, dock, overlay and Lemonade come back.
 Press **Super** and type a question or a request: the assistant answers,
 and can open apps, change settings, arrange windows, read what's on screen
 (**Super+Shift+A**), work with the clipboard history (**Super+Shift+V**),
-summarize and reply to notifications, troubleshoot the computer and find
-files by what they're about. Everything runs on the embedded Lemonade by
-default; an OpenAI-compatible cloud model is optional. See
+summarize and reply to notifications, troubleshoot the computer, find
+files by what they're about, and find or remove apps however they were
+installed. Everything runs on the embedded Lemonade by default; an
+OpenAI-compatible cloud model is optional. The desktop tools come from
+`umoja-mcp`, an MCP server other AI apps (Claude Code, for example) can use
+too. See
 [docs/ai-features.md](docs/ai-features.md) for how to use each feature,
 what the assistant asks before acting, and what stays on your computer.
 

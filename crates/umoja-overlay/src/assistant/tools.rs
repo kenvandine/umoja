@@ -62,6 +62,7 @@ pub fn low(_: &Value) -> Risk {
     Risk::Low
 }
 
+#[allow(dead_code)]
 pub fn medium(_: &Value) -> Risk {
     Risk::Medium
 }
@@ -95,11 +96,13 @@ impl ToolSpec {
     }
 
     /// Always ask the user before running.
+    #[allow(dead_code)]
     pub fn confirm(mut self) -> Self {
         self.risk = medium;
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_risk(mut self, risk: fn(&Value) -> Risk) -> Self {
         self.risk = risk;
         self
@@ -152,10 +155,12 @@ pub fn registry() -> Vec<ToolSpec> {
 }
 
 /// Helpers for reading tool arguments.
+#[allow(dead_code)]
 pub fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)?.as_str().map(str::trim).filter(|s| !s.is_empty())
 }
 
+#[allow(dead_code)]
 pub fn arg_bool(args: &Value, key: &str) -> Option<bool> {
     match args.get(key)? {
         Value::Bool(b) => Some(*b),
