@@ -693,7 +693,55 @@ pub fn network() -> String {
         "Recent network log warnings:\n{}",
         indent(&log, 12)
     ));
+    // Without drop history the model guesses "weak signal" from a 100%
+    // reading, so count the actual disconnects.
+    out.push_str(&connection_events());
     truncate(&out, MAX_SECTION)
+}
+
+/// Wi-Fi/link drops in the last two hours from NetworkManager and
+/// wpa_supplicant (info level, which the warnings above don't include).
+fn connection_events() -> String {
+    let text = run_any(
+        "journalctl",
+        &[
+            "--no-pager",
+            "--quiet",
+            "-o",
+            "short",
+            "-b",
+            "--since=-120min",
+            "-u",
+            "NetworkManager.service",
+            "-u",
+            "wpa_supplicant.service",
+            "--grep=CTRL-EVENT-DISCONNECTED|CTRL-EVENT-BEACON-LOSS|deauthenticat|disassoc|state change: activated -> |connectivity.*(NONE|LIMITED|PORTAL)|device .*: state change: .*-> disconnected",
+            "-n",
+            "200",
+        ],
+    )
+    .unwrap_or_default();
+    let host = hostname();
+    let events: Vec<String> = text
+        .lines()
+        .filter(|l| !l.starts_with("-- "))
+        .map(|l| strip_host(l, &host))
+        .collect();
+    let drops = events
+        .iter()
+        .filter(|l| l.contains("CTRL-EVENT-DISCONNECTED") || l.contains("activated -> "))
+        .count();
+    if events.is_empty() {
+        return "Connection drops in the last 2 hours: none\n".into();
+    }
+    let skip = events.len().saturating_sub(8);
+    let mut out = format!(
+        "Connection drops in the last 2 hours: {drops} (latest events below)\n"
+    );
+    for l in &events[skip..] {
+        out.push_str(&format!("  {}\n", truncate(l, 220).trim_end()));
+    }
+    out
 }
 
 /// SSIDs NetworkManager has an active Wi-Fi connection on.

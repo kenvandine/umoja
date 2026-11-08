@@ -29,7 +29,8 @@ pub fn tools() -> Vec<ToolSpec> {
 const PREAMBLE: &str = "The user is troubleshooting this computer. Below is a read-only \
 report gathered just now from it (sensors, /proc, systemd, the journal, NetworkManager). \
 Answer from it: name the most likely cause and quote the evidence (a process and its CPU %, a \
-temperature, a log line). CPU % is processor load; memory use does not make a fan spin. If \
+temperature, a log line). CPU % is processor load; memory use does not make a fan spin. \
+Wi-Fi signal above 60% is good, so blame signal only when it is low or drops are logged. If \
 nothing in the report looks wrong, say so plainly and suggest what to check next. Never invent \
 readings. Only suggest commands installed on Ubuntu by default (nmcli, journalctl, \
 systemctl, powerprofilesctl, wpctl, bluetoothctl, df, top); diagnosis never needs sudo. Call \
