@@ -183,15 +183,38 @@ gsettings reset org.gnome.desktop.session idle-delay
 gsettings reset org.gnome.desktop.screensaver lock-enabled
 wtype -k shift 2>>"$LOG"
 
+# Only this test's processes: everything it started, directly or through
+# its private D-Bus (activated apps, wsdd, the portal), carries its private
+# XDG_RUNTIME_DIR. Never match on names, which would also hit the real
+# desktop of whoever runs this on a live machine.
+ours() {
+    local p
+    for p in /proc/[0-9]*; do
+        [ -O "$p" ] && [ "${p#/proc/}" != "$$" ] || continue
+        tr '\0' '\n' <"$p/environ" 2>/dev/null | grep -qx "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" \
+            && echo "${p#/proc/}"
+    done
+}
+# Is one of this test's processes called $1 (as in /proc/PID/comm)?
+running() {
+    local p
+    for p in $(ours); do
+        [ "$(cat /proc/$p/comm 2>/dev/null)" = "$1" ] && return 0
+    done
+    return 1
+}
 for p in mir panel dock overlay; do
-    pgrep -u "$(id -u)" -x "umoja-$p" >/dev/null && pass "umoja-$p still running" \
-        || fail "umoja-$p exited (see umoja-$p.log)"
+    running "umoja-$p" && pass "umoja-$p still running" || fail "umoja-$p exited (see umoja-$p.log)"
 done
-pgrep -u "$(id -u)" -f 'gnome-text-editor' >/dev/null && pass "Text Editor running" || fail "Text Editor exited"
-pgrep -u "$(id -u)" -x nautilus >/dev/null && pass "Files running" || fail "Files exited"
+running gnome-text-edit && pass "Text Editor running" || fail "Text Editor exited"
+running nautilus && pass "Files running" || fail "Files exited"
 
-# Anchored on the command line's start, so a shell whose arguments merely
-# mention these names (e.g. a log path) is left alone.
-pkill -u "$(id -u)" -f '^(gnome-text-editor|nautilus|umoja-(panel|dock|overlay)|/usr/libexec/xdg-desktop-portal-umoja)( |$)'
+
+pids=$(ours)
+[ -n "$pids" ] && kill $pids 2>/dev/null
+sleep 1
+pids=$(ours)
+[ -n "$pids" ] && kill -9 $pids 2>/dev/null
+fusermount -u "$XDG_RUNTIME_DIR/doc" 2>/dev/null
 kill $MIR $DBUS_SESSION_BUS_PID 2>/dev/null
 exit $FAILED
