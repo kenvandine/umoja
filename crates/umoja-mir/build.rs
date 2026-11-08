@@ -7,6 +7,7 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.cpp");
+    println!("cargo:rerun-if-changed=src/shim/natural_scroll.cpp");
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.h");
 
     // Probe without emitting link flags yet: the static shim must come
@@ -28,6 +29,7 @@ fn main() {
         .cpp(true)
         .std("c++20")
         .file("src/shim/umoja_shim.cpp")
+        .file("src/shim/natural_scroll.cpp")
         .warnings(true)
         .flag_if_supported("-Wno-deprecated-declarations");
     for path in miral.include_paths.iter().chain(&mircommon.include_paths) {
