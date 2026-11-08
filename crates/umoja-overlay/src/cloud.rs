@@ -186,12 +186,16 @@ impl CloudForm {
     }
 
     /// Fill the form from the saved settings (called when the popover opens).
+    /// Unsaved typing is kept: going off to copy the API key from a browser
+    /// closes the overlay, and the pasted key must survive reopening it.
     pub fn load(&self) {
         let (url, model) = backend::cloud_settings();
-        self.url.set_text(&url);
-        self.model.set_text(&model);
-        self.key.set_text("");
-        self.models_box.set_visible(false);
+        if self.url.text().trim().is_empty() {
+            self.url.set_text(&url);
+        }
+        if self.model.text().trim().is_empty() {
+            self.model.set_text(&model);
+        }
         if backend::cloud_selected() && backend::current().cloud {
             self.show_status(
                 &i18n::umoja("In use: %s on %s.")
@@ -460,6 +464,12 @@ impl CloudForm {
                 let _ = s.set_string(backend::BACKEND_KEY, backend::CLOUD);
             }
             tracing::info!(%url, %model, "assistant switched to the cloud model");
+            // Saved: the field goes back to "Saved in your keyring".
+            if !form.key.text().trim().is_empty() {
+                form.has_key.set(true);
+                form.key.set_text("");
+                form.set_key_hint(true);
+            }
             popover.popdown();
         });
     }
@@ -617,6 +627,14 @@ pub async fn test(ep: Endpoint, key: String) -> (bool, String) {
             ChatEvent::Text(t) => answered |= !t.trim().is_empty(),
             ChatEvent::ToolCalls(c) => called |= c.iter().any(|c| c.name == "ping"),
             ChatEvent::Done => {}
+            ChatEvent::Error(e) if key.is_empty() && e.contains("rejected the API key") => {
+                return (
+                    false,
+                    "No API key was sent: the API Key field is empty and none is saved in your \
+                     keyring. Paste your key into API Key and press Test again."
+                        .into(),
+                );
+            }
             ChatEvent::Error(e) => {
                 let hint = model_hint(&ep, &key).await.unwrap_or_default();
                 return (false, format!("{e}{hint}"));
