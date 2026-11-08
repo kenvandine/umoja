@@ -1,0 +1,7 @@
+{
+  "ctx_size": 16384,
+  "max_loaded_models": 1,
+  "llamacpp": {
+    "args": "--parallel 1"
+  }
+}

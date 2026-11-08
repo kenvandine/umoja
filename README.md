@@ -44,6 +44,18 @@ in `~/.cache/umoja/lemonade`. It never uses Lemonade's default port 13305,
 so the `lemonade-server` package can be installed alongside it. To change
 the port, put `UMOJA_LEMONADE_PORT=<port>` in `~/.config/umoja/lemonade.env`.
 
+The GPU in most laptops shares memory with the desktop, so Umoja seeds
+Lemonade with limits from `/usr/share/umoja/lemonade/defaults.json`: a 16k
+token context (Lemonade's auto-tune would otherwise size it to fill VRAM and
+GTT), one request at a time, and one loaded model per type. llama.cpp's
+Vulkan buffers go in GTT rather than the VRAM carve-out the compositor needs
+(`UMOJA_LEMONADE_PREFER_HOST_MEMORY=0` in `lemonade.env` turns that off).
+Anything in `~/.config/umoja/lemonade/config.json` overrides these defaults.
+
+If the compositor crashes during a session, `umoja-session` restarts it in
+place (up to 3 times in 10 minutes) instead of logging you out. Open apps
+are lost, but the panel, dock, overlay and Lemonade come back.
+
 ### Screen and clipboard context
 
 The assistant can look at what you're looking at. Press **Super+Shift+A**

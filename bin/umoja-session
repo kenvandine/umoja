@@ -57,17 +57,69 @@ run_mir() {
 
 # umoja-mir is the session master. Once Wayland is up it starts
 # umoja-session.target (panel, dock, overlay, portal, embedded Lemonade).
-wait_active
-started=$(date +%s)
-run_mir "$@"
-status=$?
-# A compositor that dies straight away most likely lost the race for the
-# GPU; give it one more go before giving up and returning to the greeter.
-if [ $status -ne 0 ] && [ $(( $(date +%s) - started )) -lt 3 ]; then
-    log "umoja-mir exited with $status during start-up; retrying once"
-    sleep 1
+# If umoja-mir crashes mid-session (for example Mesa calls abort() when the
+# GPU rejects a command submission because memory ran out), start it again
+# inside this login instead of dropping back to the greeter. Wayland clients
+# can't outlive their compositor, so open apps are lost, but the panel, dock,
+# overlay and Lemonade come back with it. Give up after MAX_CRASHES crashes
+# in CRASH_WINDOW seconds so a compositor that can't run doesn't loop forever.
+MAX_CRASHES=${UMOJA_MAX_COMPOSITOR_RESTARTS:-3}
+CRASH_WINDOW=600
+crashes=""        # start times of recent crashes, oldest first
+startup_retry=yes
+
+# True if umoja-mir died from a crash rather than a normal exit or a
+# request to stop (SIGHUP/SIGINT/SIGTERM from logout or the DM).
+crashed() {
+    [ "$1" -gt 128 ] || return 1
+    case $(( $1 - 128 )) in
+        1|2|15) return 1 ;;
+    esac
+    return 0
+}
+
+# Drop crashes older than CRASH_WINDOW and set n to how many are left.
+# (Not called in $(...), so the trimmed list survives.)
+count_recent_crashes() {
+    kept=""; n=0
+    for t in $crashes; do
+        if [ $(( $1 - t )) -lt $CRASH_WINDOW ]; then
+            kept="$kept $t"; n=$((n + 1))
+        fi
+    done
+    crashes=$kept
+}
+
+while :; do
     wait_active
+    started=$(date +%s)
     run_mir "$@"
     status=$?
-fi
+    [ $status -eq 0 ] && break
+    now=$(date +%s)
+
+    # A compositor that dies straight away most likely lost the race for the
+    # GPU; give it one more go before giving up and returning to the greeter.
+    if [ $(( now - started )) -lt 3 ]; then
+        [ $startup_retry = yes ] || break
+        startup_retry=no
+        log "umoja-mir exited with $status during start-up; retrying once"
+        sleep 1
+        continue
+    fi
+
+    crashed $status || break
+    crashes="$crashes $now"
+    count_recent_crashes "$now"
+    if [ "$n" -gt "$MAX_CRASHES" ]; then
+        log "umoja-mir crashed $n times in ${CRASH_WINDOW}s (last status $status); ending the session"
+        break
+    fi
+    log "umoja-mir crashed (status $status) after $(( now - started ))s; restarting it ($n/$MAX_CRASHES)"
+    # Stop the shell services and Lemonade so they let go of the GPU and
+    # reconnect cleanly; umoja-mir starts the target again once it's up.
+    systemctl --user stop umoja-session.target
+    startup_retry=yes
+    sleep 1
+done
 exit $status

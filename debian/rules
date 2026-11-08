@@ -73,6 +73,7 @@ override_dh_auto_install:
 	install -d $(DESKTOP)/usr/lib/umoja/lemonade
 	cp -a $(LEMONADE_SRC)/. $(DESKTOP)/usr/lib/umoja/lemonade/
 	install -D -m 0755 bin/umoja-lemonade $(DESKTOP)/usr/lib/umoja/umoja-lemonade
+	install -D -m 0644 data/lemonade/defaults.json $(DESKTOP)/usr/share/umoja/lemonade/defaults.json
 
 	# Greeter
 	install -D -m 0644 data/lightdm-umoja-greeter.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter.desktop

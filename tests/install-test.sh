@@ -66,6 +66,7 @@ for b in /usr/bin/umoja-mir /usr/bin/umoja-panel /usr/bin/umoja-dock /usr/bin/um
     if [ -n "$missing" ]; then fail "$b: $missing"; else pass "$b links"; fi
 done
 /usr/lib/umoja/lemonade/lemond --version >>"$LOG" 2>&1 && pass "embedded lemond runs" || fail "embedded lemond does not run"
+[ -r /usr/share/umoja/lemonade/defaults.json ] && pass "Lemonade GPU memory defaults installed" || fail "missing /usr/share/umoja/lemonade/defaults.json"
 
 step "Display manager"
 dm=$(cat /etc/X11/default-display-manager 2>/dev/null)
