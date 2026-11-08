@@ -16,7 +16,8 @@ glib.workspace = true
 tracing.workspace = true
 async-channel.workspace = true
 tokio.workspace = true
-reqwest.workspace = true
+# HTTPS for the optional cloud model; the system CA store is used.
+reqwest = { workspace = true, features = ["rustls-tls-native-roots"] }
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true

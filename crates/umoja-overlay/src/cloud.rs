@@ -567,16 +567,10 @@ async fn list_models(base_url: &str, key: &str) -> Result<Vec<RemoteModel>, Stri
     if !key.is_empty() {
         req = req.bearer_auth(key);
     }
-    let resp = req.send().await.map_err(|e| {
-        if e.is_connect() || e.is_timeout() {
-            format!(
-                "Couldn't reach {}. Check the server URL and your internet connection.",
-                ep.host()
-            )
-        } else {
-            e.to_string()
-        }
-    })?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| crate::lemonade::describe_cloud(&ep.host(), &e))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {

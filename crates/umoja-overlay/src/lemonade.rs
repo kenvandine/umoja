@@ -230,14 +230,7 @@ impl LemonadeClient {
         if !self.backend.cloud {
             return describe(e);
         }
-        if e.is_connect() || e.is_timeout() {
-            format!(
-                "Couldn't reach {}. Check the server URL and your internet connection.",
-                self.backend.host()
-            )
-        } else {
-            e.to_string()
-        }
+        describe_cloud(&self.backend.host(), e)
     }
 
     fn request(&self, user_query: &str, stream: bool) -> CompletionRequest {
@@ -461,6 +454,28 @@ impl CallAssembler {
                 c
             })
             .collect()
+    }
+}
+
+/// A sentence about a failed cloud request, with the underlying cause
+/// (DNS, TLS, refused…) so a wrong URL and a network problem look different.
+pub fn describe_cloud(host: &str, e: &reqwest::Error) -> String {
+    let mut cause: &dyn std::error::Error = e;
+    while let Some(next) = cause.source() {
+        cause = next;
+    }
+    let cause = cause.to_string();
+    let detail = if cause.is_empty() || cause == e.to_string() {
+        String::new()
+    } else {
+        format!(" ({cause})")
+    };
+    if e.is_timeout() {
+        format!("{host} didn't respond in time{detail}. Check your internet connection.")
+    } else if e.is_connect() {
+        format!("Couldn't reach {host}{detail}. Check the server URL and your internet connection.")
+    } else {
+        format!("The request to {host} failed: {e}{detail}")
     }
 }
 
