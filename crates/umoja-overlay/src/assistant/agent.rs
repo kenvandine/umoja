@@ -27,7 +27,7 @@ relative changes like \"bigger\" or \"slower to dim\", compute the new value fro
 one rather than switching the feature off. For windows, pass the app name as window (e.g. \
 arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. If you called a tool, \
 reply in one short sentence saying what it did. For questions, answer in at most four short \
-sentences of practical guidance.";
+sentences of practical guidance. Write plain text: no Markdown, no backticks, no bold.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepState {
@@ -286,7 +286,10 @@ fn visible_text(text: &str, tools: &[ToolSpec]) -> String {
         .replace("<tool_call>", "")
         .replace("</tool_call>", "")
         .replace("```json", "")
-        .replace("```", "");
+        .replace("```", "")
+        // The answer is a plain label: drop Markdown emphasis and code marks.
+        .replace("**", "")
+        .replace('`', "");
     // Removing a call can leave its trailing "." or "," on a line of its own.
     t.lines()
         .filter(|l| {
@@ -324,6 +327,7 @@ mod tests {
         assert_eq!(visible_text("<think>a</think>Done.", &tools), "Done.");
         assert_eq!(visible_text("Ok <tool_call>{\"name\": \"set_", &tools), "Ok");
         assert_eq!(visible_text("It is running.\n.", &tools), "It is running.");
+        assert_eq!(visible_text("Open **`a.png`**", &tools), "Open a.png");
     }
 
     #[test]
