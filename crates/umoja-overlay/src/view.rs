@@ -19,7 +19,10 @@ const MAX_RESULTS: usize = 48;
 
 pub struct Overlay {
     model_status: gtk::Label,
-    window: gtk::ApplicationWindow,
+    // An Adwaita window so dialogs (the "Run this command?" prompt) show
+    // inside the overlay; on a plain GTK window they became a separate
+    // toplevel underneath the overlay layer.
+    window: adw::ApplicationWindow,
     entry: gtk::SearchEntry,
     grid: gtk::FlowBox,
     ask_button: gtk::Button,
@@ -36,7 +39,7 @@ pub struct Overlay {
 
 impl Overlay {
     pub fn new(app: &adw::Application) -> Rc<Self> {
-        let window = gtk::ApplicationWindow::builder()
+        let window = adw::ApplicationWindow::builder()
             .application(app)
             .css_classes(["umoja-overlay"])
             .build();
@@ -121,7 +124,7 @@ impl Overlay {
         root.append(&ask_button);
         root.append(&assistant);
         root.append(&scroller);
-        window.set_child(Some(&root));
+        window.set_content(Some(&root));
 
         let overlay = Rc::new(Self {
             window,
@@ -484,7 +487,17 @@ impl Overlay {
                 }
                 c.spawn().map(|_| ())
             }
-            // Isolated in a transient scope that can't gain privileges.
+            // Commands that install software or need root run in a terminal,
+            // where sudo can ask for the password and the output is visible.
+            AssistantAction::RunCommand { cmd, .. } if needs_terminal(cmd) => {
+                let r = spawn_in_terminal(cmd);
+                if r.is_ok() {
+                    self.hide();
+                }
+                r
+            }
+            // Anything else is isolated in a transient scope that can't gain
+            // privileges.
             AssistantAction::RunCommand { cmd, .. } => Command::new("systemd-run")
                 .args([
                     "--user",
@@ -565,4 +578,64 @@ fn json_to_variant(v: &serde_json::Value) -> Option<glib::Variant> {
             .to_variant(),
         _ => return None,
     })
+}
+
+/// Whether a suggested command needs a terminal: it asks for privileges
+/// (sudo, pkexec) or uses a package manager, which prompts and prints
+/// progress the user should see.
+fn needs_terminal(cmd: &str) -> bool {
+    const TOOLS: &[&str] = &[
+        "sudo", "pkexec", "apt", "apt-get", "aptitude", "dpkg", "snap", "flatpak",
+    ];
+    cmd.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+        .filter(|w| !w.is_empty())
+        .any(|w| TOOLS.contains(&w.rsplit('/').next().unwrap_or(w)))
+}
+
+/// Run `cmd` in the user's terminal, kept open afterwards so the result
+/// can be read.
+fn spawn_in_terminal(cmd: &str) -> std::io::Result<()> {
+    let script = format!("{cmd}\nstatus=$?\necho\nprintf '%s' \"$1\"\nread -r _\nexit $status");
+    let prompt = i18n::umoja("Press Enter to close this window.");
+    let shell = ["sh", "-c", script.as_str(), "umoja-run", prompt.as_str()];
+    // xdg-terminal-exec takes the command directly; the others after a flag.
+    let candidates: [(&str, &[&str]); 4] = [
+        ("xdg-terminal-exec", &[]),
+        ("ptyxis", &["--"]),
+        ("gnome-terminal", &["--"]),
+        ("x-terminal-emulator", &["-e"]),
+    ];
+    let mut last = std::io::Error::from(std::io::ErrorKind::NotFound);
+    for (bin, flag) in candidates {
+        if glib::find_program_in_path(bin).is_none() {
+            continue;
+        }
+        match Command::new(bin)
+            .args(flag)
+            .args(shell)
+            .current_dir(glib::home_dir())
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::needs_terminal;
+
+    #[test]
+    fn install_commands_use_a_terminal() {
+        assert!(needs_terminal("sudo apt install vlc"));
+        assert!(needs_terminal("pkexec apt-get install -y gimp"));
+        assert!(needs_terminal("snap install spotify"));
+        assert!(needs_terminal("flatpak install flathub org.gimp.GIMP"));
+        assert!(needs_terminal("cd /tmp && /usr/bin/sudo make install"));
+        assert!(!needs_terminal("xdg-open ~/Downloads"));
+        assert!(!needs_terminal("gsettings set org.gnome.desktop.interface color-scheme prefer-dark"));
+        assert!(!needs_terminal("echo snapshot"));
+    }
 }
