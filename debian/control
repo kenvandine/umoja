@@ -45,7 +45,8 @@ Recommends: umoja-greeter,
             poppler-utils,
             unzip,
             power-profiles-daemon,
-            gnome-keyring
+            gnome-keyring,
+            tesseract-ocr
 Description: AI-native, Rust-based desktop shell for Ubuntu
  Umoja is a resilient, modern desktop environment built in Rust, powered by
  Mir and GTK4. It features seamless GNOME/Ubuntu settings fidelity,

@@ -25,3 +25,10 @@ pub const COMPOSITOR_INTERFACE: &str = "org.umoja.Compositor";
 pub const FILES_BUS_NAME: &str = "org.umoja.Files";
 pub const FILES_OBJECT_PATH: &str = "/org/umoja/Files";
 pub const FILES_INTERFACE: &str = "org.umoja.Files";
+
+/// Notification history, digest and quick replies served by umoja-panel
+/// (next to its `org.freedesktop.Notifications` server), so the assistant
+/// can answer "what did I miss?" and draft replies.
+pub const NOTIFICATIONS_BUS_NAME: &str = "org.umoja.Notifications";
+pub const NOTIFICATIONS_OBJECT_PATH: &str = "/org/umoja/Notifications";
+pub const NOTIFICATIONS_INTERFACE: &str = "org.umoja.Notifications";

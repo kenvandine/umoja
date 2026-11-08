@@ -40,6 +40,50 @@ window.umoja-overlay {
   background-color: alpha(#E95420, 0.9);
   color: #ffffff;
 }
+/* Context attached to a question, and the clipboard history. */
+.attach-pill {
+  background-color: alpha(#ffffff, 0.12);
+  border-radius: 999px;
+  padding: 2px 4px 2px 12px;
+  min-height: 30px;
+}
+.attach-pill > image {
+  opacity: 0.8;
+}
+.attach-pill .attach-remove {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+}
+.context-button:checked,
+.clip-button:checked {
+  background-color: alpha(#E95420, 0.9);
+  color: #ffffff;
+}
+.clip-list,
+.clip-list > row {
+  background-color: transparent;
+}
+.clip-list > row {
+  border-radius: 14px;
+  margin-bottom: 6px;
+}
+.clip-row {
+  background-color: alpha(#ffffff, 0.06);
+  border-radius: 14px;
+  padding: 10px 10px 10px 16px;
+}
+.clip-row:hover {
+  background-color: alpha(#ffffff, 0.1);
+}
+.clip-text {
+  font-family: monospace;
+  font-size: 0.92em;
+}
+.clip-action {
+  padding: 4px 12px;
+  min-height: 28px;
+}
 .myna-pill.listening {
   background-color: #E95420;
   color: #ffffff;

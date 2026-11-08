@@ -2,8 +2,11 @@
 
 use crate::assistant::agent::{self, Question, StepState};
 use crate::assistant::tools::Risk;
-use crate::lemonade::{self, LemonadeClient};
+use crate::clipboard::{self, RowAction};
+use crate::context::{self, Attachment, FocusedWindow, Kind, OcrError, Transform};
+use crate::lemonade::{self, ChatEvent, LemonadeClient, RUNTIME};
 use crate::myna::{Myna, MynaEvent};
+use crate::screenshot::ScreenshotUi;
 use adw::prelude::*;
 use gio::prelude::*;
 use gtk::glib;
@@ -16,11 +19,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::process::Command;
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 use umoja_common::gsettings as gs;
 use umoja_common::i18n;
 use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
 
 const MAX_RESULTS: usize = 48;
+/// How long the overlay hides before a capture so it isn't in the shot.
+const STEP_ASIDE: Duration = Duration::from_millis(250);
 
 pub struct Overlay {
     model_status: gtk::Label,
@@ -47,6 +53,27 @@ pub struct Overlay {
     myna: Myna,
     /// Bumped on every new question so stale streams are dropped.
     generation: Cell<u64>,
+    // Context attached to the next question (window, area, selection...).
+    context_button: gtk::MenuButton,
+    pick_selection: gtk::Button,
+    pick_window: (gtk::Button, gtk::Label),
+    pick_area: gtk::Button,
+    pick_clipboard: gtk::Button,
+    attach_row: gtk::Box,
+    pending: gtk::Box,
+    pending_label: gtk::Label,
+    attachments: RefCell<Vec<Attachment>>,
+    /// The window the user was in when the overlay opened.
+    last_window: RefCell<Option<FocusedWindow>>,
+    shots: RefCell<Weak<ScreenshotUi>>,
+    // Clipboard history page, in place of the app grid.
+    history: Rc<clipboard::History>,
+    clip_button: gtk::ToggleButton,
+    stack: gtk::Stack,
+    clip_list: gtk::ListBox,
+    clip_empty: gtk::Label,
+    copy_button: gtk::Button,
+    answer_text: RefCell<String>,
 }
 
 impl Overlay {
@@ -76,7 +103,42 @@ impl Overlay {
             .build();
         let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         search_row.set_halign(gtk::Align::Center);
+        // "Add context" menu and the clipboard history toggle.
+        let pick_selection = menu_item("edit-select-all-symbolic", &i18n::umoja("Selected Text")).0;
+        let pick_window = menu_item("focus-windows-symbolic", &i18n::umoja("Current Window"));
+        let pick_area = menu_item("screenshot-recorded-symbolic", &i18n::umoja("Screen Area…")).0;
+        let pick_clipboard = menu_item("edit-paste-symbolic", &i18n::umoja("Last Copied Text")).0;
+        let picks = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        picks.set_margin_top(6);
+        picks.set_margin_bottom(6);
+        picks.set_margin_start(6);
+        picks.set_margin_end(6);
+        picks.append(
+            &gtk::Label::builder()
+                .label(i18n::umoja("Ask About"))
+                .xalign(0.0)
+                .margin_start(8)
+                .margin_bottom(4)
+                .css_classes(["heading"])
+                .build(),
+        );
+        for b in [&pick_selection, &pick_window.0, &pick_area, &pick_clipboard] {
+            picks.append(b);
+        }
+        let context_button = gtk::MenuButton::builder()
+            .icon_name("mail-attachment-symbolic")
+            .tooltip_text(i18n::umoja("Ask about something on screen"))
+            .css_classes(["circular", "context-button"])
+            .popover(&gtk::Popover::builder().child(&picks).build())
+            .build();
+        let clip_button = gtk::ToggleButton::builder()
+            .icon_name("edit-paste-symbolic")
+            .tooltip_text(i18n::umoja("Clipboard History"))
+            .css_classes(["circular", "clip-button"])
+            .build();
         search_row.append(&entry);
+        search_row.append(&context_button);
+        search_row.append(&clip_button);
         search_row.append(&myna_pill);
         search_row.append(&crate::model_picker::button());
 
@@ -86,6 +148,21 @@ impl Overlay {
             .css_classes(["dim-label", "model-status"])
             .visible(false)
             .build();
+
+        // Attached context, as removable pills under the search entry.
+        let attach_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        attach_row.set_halign(gtk::Align::Center);
+        attach_row.add_css_class("attach-row");
+        let pending_label = gtk::Label::new(None);
+        let pending = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        pending.add_css_class("attach-pill");
+        pending.append(&gtk::Spinner::builder().spinning(true).build());
+        pending.append(&pending_label);
+        pending.set_visible(false);
+        let attach_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        attach_box.set_halign(gtk::Align::Center);
+        attach_box.append(&attach_row);
+        attach_box.append(&pending);
 
         let ask_button = gtk::Button::builder()
             .label(i18n::umoja("Ask the assistant"))
@@ -106,12 +183,24 @@ impl Overlay {
             .selection_mode(gtk::SelectionMode::None)
             .max_children_per_line(4)
             .build();
+        let copy_button = gtk::Button::builder()
+            .icon_name("edit-copy-symbolic")
+            .tooltip_text(i18n::umoja("Copy"))
+            .css_classes(["flat", "circular"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .visible(false)
+            .build();
+        let answer_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        answer.set_hexpand(true);
+        answer_row.append(&answer);
+        answer_row.append(&copy_button);
         let assistant = gtk::Box::new(gtk::Orientation::Vertical, 12);
         assistant.add_css_class("assistant-card");
         assistant.set_halign(gtk::Align::Center);
         assistant.set_width_request(640);
         assistant.append(&steps);
-        assistant.append(&answer);
+        assistant.append(&answer_row);
         assistant.append(&chips);
         assistant.set_visible(false);
 
@@ -130,16 +219,63 @@ impl Overlay {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
 
+        let clip_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["clip-list"])
+            .build();
+        let clip_empty = gtk::Label::builder()
+            .css_classes(["dim-label"])
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .vexpand(true)
+            .valign(gtk::Align::Start)
+            .margin_top(48)
+            .build();
+        let clip_clear = gtk::Button::builder()
+            .label(i18n::umoja("Clear History"))
+            .css_classes(["pill", "flat"])
+            .halign(gtk::Align::End)
+            .build();
+        let clip_header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        clip_header.append(
+            &gtk::Label::builder()
+                .label(i18n::umoja("Clipboard History"))
+                .xalign(0.0)
+                .hexpand(true)
+                .css_classes(["title-4"])
+                .build(),
+        );
+        clip_header.append(&clip_clear);
+        let clip_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        clip_page.set_halign(gtk::Align::Center);
+        clip_page.set_width_request(760);
+        clip_page.append(&clip_header);
+        clip_page.append(&clip_empty);
+        clip_page.append(
+            &gtk::ScrolledWindow::builder()
+                .child(&clip_list)
+                .vexpand(true)
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .build(),
+        );
+        let stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .vexpand(true)
+            .build();
+        stack.add_named(&scroller, Some("apps"));
+        stack.add_named(&clip_page, Some("clipboard"));
+
         let root = gtk::Box::new(gtk::Orientation::Vertical, 24);
         root.set_margin_top(64);
         root.set_margin_start(96);
         root.set_margin_end(96);
         root.set_margin_bottom(48);
         root.append(&search_row);
+        root.append(&attach_box);
         root.append(&model_status);
         root.append(&ask_button);
         root.append(&assistant);
-        root.append(&scroller);
+        root.append(&stack);
         window.set_content(Some(&root));
 
         let overlay = Rc::new_cyclic(|weak: &std::rc::Weak<Self>| Self {
@@ -166,9 +302,44 @@ impl Overlay {
             lemonade: LemonadeClient::new(),
             myna: Myna::start(),
             generation: Cell::new(0),
+            context_button,
+            pick_selection,
+            pick_window,
+            pick_area,
+            pick_clipboard,
+            attach_row,
+            pending,
+            pending_label,
+            attachments: RefCell::default(),
+            last_window: RefCell::default(),
+            shots: RefCell::new(Weak::new()),
+            history: clipboard::history(),
+            clip_button,
+            stack,
+            clip_list,
+            clip_empty,
+            copy_button,
+            answer_text: RefCell::default(),
+        });
+        let weak = Rc::downgrade(&overlay);
+        clip_clear.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.history.clear();
+            }
         });
         root.insert_child_after(&overlay.files.widget, Some(&overlay.assistant));
         overlay.connect_signals();
+        overlay.connect_context();
+        // The assistant's read_focused_window tool steps the overlay aside too.
+        let weak = Rc::downgrade(&overlay);
+        context::set_window_reader(Rc::new(move |rect| {
+            let weak = weak.clone();
+            Box::pin(async move {
+                let o = weak.upgrade().ok_or(OcrError::CaptureFailed)?;
+                let image = o.capture_aside(Some(rect)).await?;
+                context::blocking(move || context::ocr_file(&image.0)).await
+            })
+        }));
         overlay.refresh_results();
         overlay
     }
@@ -188,7 +359,10 @@ impl Overlay {
             if crate::files::looks_like_file_search(&q) && o.files.activate_first() {
                 return;
             }
-            if lemonade::looks_like_question(&q) || o.grid.first_child().is_none() {
+            if !o.attachments.borrow().is_empty()
+                || lemonade::looks_like_question(&q)
+                || o.grid.first_child().is_none()
+            {
                 o.ask(&q);
             } else if let Some(app) = o.matches(&q).into_iter().next() {
                 o.launch(&app);
@@ -254,12 +428,26 @@ impl Overlay {
         self.window.is_visible()
     }
 
-    pub fn show(&self) {
+    pub fn show(self: &Rc<Self>) {
         self.entry.set_text("");
         self.assistant.set_visible(false);
         self.files.clear();
+        self.clear_attachments();
+        self.clip_button.set_active(false);
+        self.remember_window();
         self.window.present();
         self.entry.grab_focus();
+    }
+
+    /// Bring the overlay back after a capture, keeping what was typed.
+    fn reveal(&self) {
+        self.window.present();
+        self.entry.grab_focus();
+        self.entry.set_position(-1);
+    }
+
+    pub fn set_screenshot_ui(&self, shots: &Rc<ScreenshotUi>) {
+        *self.shots.borrow_mut() = Rc::downgrade(shots);
     }
 
     pub fn set_model_status(&self, status: Option<String>) {
@@ -268,7 +456,7 @@ impl Overlay {
     }
 
     /// Open the app search with `text` already typed (from the overview).
-    pub fn show_with_text(&self, text: &str) {
+    pub fn show_with_text(self: &Rc<Self>, text: &str) {
         self.show();
         self.entry.set_text(text);
         self.entry.set_position(-1);
@@ -279,7 +467,7 @@ impl Overlay {
         self.window.set_visible(false);
     }
 
-    pub fn toggle(&self) {
+    pub fn toggle(self: &Rc<Self>) {
         if self.is_visible() {
             self.hide()
         } else {
@@ -348,13 +536,16 @@ impl Overlay {
         for app in found.iter().take(MAX_RESULTS) {
             self.grid.append(&self.app_tile(app));
         }
+        let attached = !self.attachments.borrow().is_empty();
         self.ask_button.set_visible(
-            !q.trim().is_empty() && (found.is_empty() || lemonade::looks_like_question(&q)),
+            attached
+                || (!q.trim().is_empty() && (found.is_empty() || lemonade::looks_like_question(&q))),
         );
-        if q.trim().is_empty() {
+        if q.trim().is_empty() && !attached && self.stack.visible_child_name().as_deref() != Some("clipboard") {
             self.assistant.set_visible(false);
         }
         self.files.update(&q);
+        self.refresh_clipboard();
     }
 
     fn app_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::Widget {
@@ -393,9 +584,18 @@ impl Overlay {
         self.hide();
     }
 
-    /// Answer a question, letting the assistant act through its tools.
+    /// Answer a question, letting the assistant act through its tools. Any
+    /// attached context goes with it.
     fn ask(self: &Rc<Self>, query: &str) {
-        self.ask_question(Question::from(query.trim()));
+        let attachments = self.attachments.borrow().clone();
+        let text = match query.trim() {
+            "" if !attachments.is_empty() => context::DEFAULT_QUESTION.to_string(),
+            q => q.to_string(),
+        };
+        self.ask_question(Question {
+            text,
+            context: context::build_context(&attachments),
+        });
     }
 
     /// [`Self::ask`] with optional context (selected text, window contents).
@@ -406,18 +606,11 @@ impl Overlay {
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
-        self.assistant.set_visible(true);
-        self.answer.set_visible(true);
+        self.reset_card();
         self.answer.set_text(&i18n::umoja("Thinking…"));
         // Typed-query matches would disagree with the answer; the
         // search_files tool fills the list with its own results instead.
         self.files.clear();
-        for b in [self.chips.upcast_ref::<gtk::Widget>(), self.steps.upcast_ref()] {
-            while let Some(c) = b.first_child() {
-                c.unparent();
-            }
-        }
-        self.steps.set_visible(false);
         crate::assistant::take_hide_request();
 
         let ui: Rc<dyn agent::Ui> = Rc::new(OverlayUi {
@@ -440,11 +633,494 @@ impl Overlay {
             if text.is_empty() && o.answer.text() == i18n::umoja("Thinking…") {
                 o.answer.set_visible(false);
             }
+            let shown = strip_actions(&text);
+            o.copy_button.set_visible(!shown.trim().is_empty());
+            *o.answer_text.borrow_mut() = shown;
             // A tool opened an app or moved a window: get out of the way.
             if crate::assistant::take_hide_request() {
                 o.hide();
             }
         });
+    }
+
+    /// Translate, reformat, summarize or explain `text`. A plain chat with
+    /// its own system prompt: no tools, no desktop actions.
+    fn transform(self: &Rc<Self>, text: String, t: Transform) {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.reset_card();
+        self.answer.set_text(&i18n::umoja("Thinking…"));
+
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": t.system_prompt(&context::user_language())}),
+            serde_json::json!({"role": "user", "content": context::truncate_chars(&text, context::MAX_CONTEXT_CHARS)}),
+        ];
+        let (tx, rx) = async_channel::unbounded();
+        let client = self.lemonade.clone();
+        RUNTIME.spawn(async move { client.stream_chat(messages, Vec::new(), tx).await });
+
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let mut text = String::new();
+            while let Ok(ev) = rx.recv().await {
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation {
+                    return; // superseded; dropping rx cancels the stream
+                }
+                match ev {
+                    ChatEvent::Text(d) => {
+                        text.push_str(&d);
+                        o.answer.set_text(&context::strip_fences(&text));
+                    }
+                    ChatEvent::ToolCalls(_) => {}
+                    ChatEvent::Done => {
+                        let shown = context::strip_fences(&text);
+                        o.answer.set_text(&shown);
+                        o.copy_button.set_visible(!shown.is_empty());
+                        *o.answer_text.borrow_mut() = shown;
+                        return;
+                    }
+                    ChatEvent::Error(e) => {
+                        o.answer.set_text(&e);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    fn reset_card(&self) {
+        self.assistant.set_visible(true);
+        self.answer.set_visible(true);
+        self.copy_button.set_visible(false);
+        self.answer_text.borrow_mut().clear();
+        for b in [self.chips.upcast_ref::<gtk::Widget>(), self.steps.upcast_ref()] {
+            while let Some(c) = b.first_child() {
+                c.unparent();
+            }
+        }
+        self.steps.set_visible(false);
+    }
+
+    fn show_error(&self, text: &str) {
+        self.generation.set(self.generation.get() + 1);
+        self.reset_card();
+        self.answer.set_text(text);
+    }
+
+    // ---- Context: window, screen area, selection, clipboard ----------------
+
+    fn connect_context(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.pick_selection.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.context_button.popdown();
+                o.attach_selection();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.pick_window.0.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.context_button.popdown();
+                o.attach_window();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.pick_area.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.context_button.popdown();
+                o.attach_area();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.pick_clipboard.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.context_button.popdown();
+                if let Some(text) = o.history.latest() {
+                    o.add_attachment(Attachment::new(Kind::Clipboard, text));
+                }
+            }
+        });
+        if let Some(popover) = self.context_button.popover() {
+            let weak = Rc::downgrade(self);
+            popover.connect_show(move |_| {
+                if let Some(o) = weak.upgrade() {
+                    o.refresh_context_menu();
+                }
+            });
+        }
+        let weak = Rc::downgrade(self);
+        self.clip_button.connect_toggled(move |b| {
+            if let Some(o) = weak.upgrade() {
+                o.stack
+                    .set_visible_child_name(if b.is_active() { "clipboard" } else { "apps" });
+                o.refresh_clipboard();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.history.connect_changed(move || {
+            if let Some(o) = weak.upgrade() {
+                o.refresh_clipboard();
+            }
+        });
+        // Wayland only hands the clipboard to the focused client, so the
+        // fallback read waits until the overlay actually has focus.
+        let weak = Rc::downgrade(self);
+        self.window.connect_is_active_notify(move |w| {
+            if w.is_active()
+                && let Some(o) = weak.upgrade()
+            {
+                o.read_clipboard_fallback();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.copy_button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                let text = o.answer_text.borrow().clone();
+                o.copy_text(&text);
+            }
+        });
+    }
+
+    /// Note which window the user was in, for "Current Window".
+    fn remember_window(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let win = context::focused_window().await;
+            if let Some(o) = weak.upgrade() {
+                *o.last_window.borrow_mut() = win;
+            }
+        });
+    }
+
+    /// Without a clipboard watcher, at least pick up what's on the clipboard
+    /// and selected whenever the overlay (which has focus then) opens.
+    fn read_clipboard_fallback(self: &Rc<Self>) {
+        if self.history.is_watching() {
+            return;
+        }
+        let display = gtk::prelude::WidgetExt::display(&self.window);
+        let weak = Rc::downgrade(self);
+        let clip = display.clipboard();
+        let primary = display.primary_clipboard();
+        glib::spawn_future_local(async move {
+            match clip.read_text_future().await {
+                Ok(Some(t)) => {
+                    tracing::debug!(chars = t.len(), "read the clipboard on open");
+                    if let Some(o) = weak.upgrade() {
+                        o.history.add(t.to_string());
+                    }
+                }
+                Ok(None) => tracing::debug!("clipboard has no text"),
+                Err(e) => tracing::info!(error = %e, "couldn't read the clipboard"),
+            }
+            match primary.read_text_future().await {
+                Ok(Some(t)) => {
+                    if let Some(o) = weak.upgrade() {
+                        o.history.set_selection(t.to_string());
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::debug!(error = %e, "couldn't read the primary selection"),
+            }
+        });
+    }
+
+    fn refresh_context_menu(&self) {
+        self.pick_selection
+            .set_sensitive(self.history.selection().is_some());
+        let win = self.last_window.borrow();
+        self.pick_window.0.set_sensitive(win.is_some());
+        self.pick_window.1.set_text(&match win.as_ref() {
+            Some(w) if !w.title.is_empty() => format!(
+                "{} — {}",
+                i18n::umoja("Current Window"),
+                context::truncate_chars(&w.title, 32)
+            ),
+            _ => i18n::umoja("Current Window"),
+        });
+        self.pick_clipboard
+            .set_sensitive(self.history.latest().is_some());
+    }
+
+    fn clear_attachments(self: &Rc<Self>) {
+        self.attachments.borrow_mut().clear();
+        self.rebuild_attachments();
+    }
+
+    fn add_attachment(self: &Rc<Self>, a: Attachment) {
+        {
+            let mut list = self.attachments.borrow_mut();
+            // Re-attaching the same kind replaces it.
+            list.retain(|x| std::mem::discriminant(&x.kind) != std::mem::discriminant(&a.kind));
+            list.push(a);
+        }
+        self.rebuild_attachments();
+        self.reveal();
+    }
+
+    fn rebuild_attachments(self: &Rc<Self>) {
+        while let Some(c) = self.attach_row.first_child() {
+            self.attach_row.remove(&c);
+        }
+        let list = self.attachments.borrow().clone();
+        for (i, a) in list.iter().enumerate() {
+            let pill = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            pill.add_css_class("attach-pill");
+            pill.set_tooltip_text(Some(&context::truncate_chars(&a.text, 600)));
+            pill.append(&gtk::Image::from_icon_name(a.icon()));
+            pill.append(
+                &gtk::Label::builder()
+                    .label(a.label())
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .max_width_chars(32)
+                    .build(),
+            );
+            let remove = gtk::Button::builder()
+                .icon_name("window-close-symbolic")
+                .tooltip_text(i18n::umoja("Remove"))
+                .css_classes(["flat", "circular", "attach-remove"])
+                .build();
+            let weak = Rc::downgrade(self);
+            remove.connect_clicked(move |_| {
+                if let Some(o) = weak.upgrade() {
+                    if i < o.attachments.borrow().len() {
+                        o.attachments.borrow_mut().remove(i);
+                    }
+                    o.rebuild_attachments();
+                }
+            });
+            pill.append(&remove);
+            self.attach_row.append(&pill);
+        }
+        self.entry.set_placeholder_text(Some(&if list.is_empty() {
+            i18n::umoja("Search apps, or ask anything…")
+        } else {
+            i18n::umoja("Ask about this, or press Enter to explain it…")
+        }));
+        self.refresh_results();
+    }
+
+    fn set_pending(&self, text: Option<&str>) {
+        self.pending.set_visible(text.is_some());
+        self.pending_label.set_text(text.unwrap_or(""));
+    }
+
+    fn attach_selection(self: &Rc<Self>) {
+        match self.history.selection() {
+            Some((text, _)) => self.add_attachment(Attachment::new(Kind::Selection, text)),
+            None => self.show_error(&i18n::umoja(
+                "Nothing is selected. Select some text in a window first.",
+            )),
+        }
+    }
+
+    /// Read the window the user was in. The overlay steps aside for the
+    /// capture, then comes back.
+    pub fn attach_window(self: &Rc<Self>) {
+        let Some(win) = self.last_window.borrow().clone() else {
+            self.show_error(&i18n::umoja("There's no window to read on this workspace."));
+            return;
+        };
+        let kind = Kind::Window {
+            app_id: win.app_id.clone(),
+            title: win.title.clone(),
+        };
+        self.read_screen(Some(win.rect), kind, i18n::umoja("Reading the window…"));
+    }
+
+    fn attach_area(self: &Rc<Self>) {
+        let Some(shots) = self.shots.borrow().upgrade() else {
+            return;
+        };
+        if !context::ocr_available() {
+            self.ocr_failed(OcrError::NotInstalled);
+            return;
+        }
+        self.window.set_visible(false);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(STEP_ASIDE, move || {
+            shots.open_for_ask(Box::new(move |pixbuf| {
+                let Some(o) = weak.upgrade() else { return };
+                o.reveal();
+                let Some(pixbuf) = pixbuf else { return };
+                let path = context::temp_png();
+                if pixbuf.savev(&path, "png", &[]).is_err() {
+                    o.ocr_failed(OcrError::CaptureFailed);
+                    return;
+                }
+                let image = context::TempImage(path);
+                o.ocr_and_attach(image, Kind::Area, i18n::umoja("Reading the screen…"));
+            }));
+        });
+    }
+
+    /// Capture `rect` with the overlay out of the way, then OCR it.
+    fn read_screen(self: &Rc<Self>, rect: Option<(i32, i32, i32, i32)>, kind: Kind, pending: String) {
+        let o = self.clone();
+        glib::spawn_future_local(async move {
+            match o.capture_aside(rect).await {
+                Ok(image) => o.ocr_and_attach(image, kind, pending),
+                Err(e) => {
+                    tracing::warn!(error = ?e, ?rect, "screen capture failed");
+                    o.ocr_failed(e)
+                }
+            }
+        });
+    }
+
+    /// Hide the overlay, grab `rect` (or the whole screen) and show it again.
+    async fn capture_aside(
+        self: &Rc<Self>,
+        rect: Option<(i32, i32, i32, i32)>,
+    ) -> Result<context::TempImage, OcrError> {
+        if !context::ocr_available() {
+            self.reveal();
+            return Err(OcrError::NotInstalled);
+        }
+        let was_visible = self.is_visible();
+        self.window.set_visible(false);
+        // Give the compositor a frame or two to drop the overlay.
+        glib::timeout_future(if was_visible {
+            STEP_ASIDE
+        } else {
+            Duration::from_millis(16)
+        })
+        .await;
+        let shot = context::blocking(move || context::capture(rect)).await;
+        self.reveal();
+        shot
+    }
+
+    fn ocr_and_attach(self: &Rc<Self>, image: context::TempImage, kind: Kind, pending: String) {
+        self.set_pending(Some(&pending));
+        let o = self.clone();
+        glib::spawn_future_local(async move {
+            let result = context::blocking(move || context::ocr_file(&image.0)).await;
+            match &result {
+                Ok(t) => tracing::info!(chars = t.len(), "read text from the screen"),
+                Err(e) => tracing::info!(error = ?e, "no text read from the screen"),
+            }
+            o.set_pending(None);
+            if !o.is_visible() {
+                return; // dismissed meanwhile
+            }
+            match result {
+                Ok(text) => o.add_attachment(Attachment::new(kind, text)),
+                Err(e) => o.ocr_failed(e),
+            }
+        });
+    }
+
+    fn ocr_failed(self: &Rc<Self>, e: OcrError) {
+        self.set_pending(None);
+        self.show_error(&e.message());
+        if e == OcrError::NotInstalled {
+            self.chips.append(&self.chip(AssistantAction::RunCommand {
+                cmd: "sudo apt install tesseract-ocr".into(),
+                risk: Risk::Medium,
+            }));
+        }
+    }
+
+    /// Super+Shift+A: ask about what the user is looking at. A fresh text
+    /// selection wins; otherwise the current window is read.
+    pub fn ask_about_screen(self: &Rc<Self>) {
+        let opening = !self.is_visible();
+        if let Some((text, true)) = self.history.selection() {
+            tracing::info!(chars = text.len(), "ask about the selection");
+            if opening {
+                self.show();
+            }
+            self.add_attachment(Attachment::new(Kind::Selection, text));
+            return;
+        }
+        if !opening {
+            self.attach_window();
+            return;
+        }
+        // Not open yet: read the window first, so the overlay isn't in the shot.
+        self.entry.set_text("");
+        self.assistant.set_visible(false);
+        self.clear_attachments();
+        self.clip_button.set_active(false);
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let win = context::focused_window().await;
+            tracing::info!(window = ?win, "ask about screen");
+            let Some(o) = weak.upgrade() else { return };
+            let found = win.is_some();
+            *o.last_window.borrow_mut() = win;
+            if found {
+                o.attach_window();
+            } else {
+                o.reveal();
+                o.show_error(&i18n::umoja("There's no window to read on this workspace."));
+            }
+        });
+    }
+
+    /// Super+Shift+V: open straight to the clipboard history.
+    pub fn show_clipboard(self: &Rc<Self>) {
+        if !self.is_visible() {
+            self.show();
+        }
+        self.clip_button.set_active(true);
+    }
+
+    fn refresh_clipboard(self: &Rc<Self>) {
+        if self.stack.visible_child_name().as_deref() != Some("clipboard") {
+            return;
+        }
+        while let Some(c) = self.clip_list.first_child() {
+            self.clip_list.remove(&c);
+        }
+        let filter = self.entry.text().trim().to_lowercase();
+        let weak = Rc::downgrade(self);
+        let on: Rc<dyn Fn(RowAction)> = Rc::new(move |a| {
+            if let Some(o) = weak.upgrade() {
+                o.on_clip_row(a);
+            }
+        });
+        let mut shown = 0;
+        for (i, text) in self.history.items().iter().enumerate() {
+            if !filter.is_empty() && !text.to_lowercase().contains(&filter) {
+                continue;
+            }
+            self.clip_list.append(&clipboard::row(i, text, on.clone()));
+            shown += 1;
+        }
+        self.clip_empty.set_visible(shown == 0);
+        self.clip_empty.set_text(&if !self.history.is_enabled() {
+            i18n::umoja("Clipboard history is turned off.")
+        } else if !filter.is_empty() && !self.history.items().is_empty() {
+            i18n::umoja("Nothing you copied matches.")
+        } else {
+            i18n::umoja("Text you copy shows up here, so you can paste it again, translate it, tidy it up or summarize it. It's kept in memory only.")
+        });
+    }
+
+    fn on_clip_row(self: &Rc<Self>, action: RowAction) {
+        match action {
+            RowAction::Copy(text) => {
+                self.copy_text(&text);
+                self.hide();
+            }
+            RowAction::Attach(text) => {
+                self.clip_button.set_active(false);
+                self.add_attachment(Attachment::new(Kind::Clipboard, text));
+            }
+            RowAction::Transform(text, t) => self.transform(text, t),
+            RowAction::Remove(i) => self.history.remove(i),
+        }
+    }
+
+    fn copy_text(&self, text: &str) {
+        gtk::prelude::WidgetExt::display(&self.window)
+            .clipboard()
+            .set_text(text);
+        // Without the watcher we wouldn't otherwise see our own copy.
+        self.history.add(text.to_string());
     }
 
     fn chip(self: &Rc<Self>, action: AssistantAction) -> gtk::Widget {
@@ -678,6 +1354,24 @@ impl agent::Ui for OverlayUi {
     fn cancelled(&self) -> bool {
         self.live().is_none()
     }
+}
+
+/// A flat popover menu entry with an icon.
+fn menu_item(icon: &str, label: &str) -> (gtk::Button, gtk::Label) {
+    let text = gtk::Label::builder()
+        .label(label)
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(40)
+        .build();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    content.append(&gtk::Image::from_icon_name(icon));
+    content.append(&text);
+    let button = gtk::Button::builder()
+        .child(&content)
+        .css_classes(["flat", "context-item"])
+        .build();
+    (button, text)
 }
 
 fn haystack(app: &gio::AppInfo) -> String {

@@ -1994,18 +1994,23 @@ dependencies = [
  "gtk4",
  "gtk4-layer-shell",
  "libadwaita",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "umoja-common",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]
 name = "umoja-panel"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "futures-util",
  "gio",
  "glib",
  "gtk4",
@@ -2013,6 +2018,10 @@ dependencies = [
  "gtk4-session-lock",
  "libadwaita",
  "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
  "umoja-common",
 ]

@@ -272,7 +272,10 @@ impl Bubbles {
             text.append(&gauge);
         }
         let buttons: Vec<_> = note.buttons().cloned().collect();
-        if !buttons.is_empty() {
+        // Quick reply: opens the message list at a reply field with replies
+        // drafted by the assistant (keyboard input can't reach a banner).
+        let reply = note.can_reply() && !buttons.iter().any(|(k, _)| k == "reply");
+        if !buttons.is_empty() || reply {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             row.set_homogeneous(true);
             row.add_css_class("osd-actions");
@@ -282,6 +285,17 @@ impl Bubbles {
                 b.connect_clicked(move |_| {
                     if let Some(c) = center.upgrade() {
                         c.invoke(id, &key);
+                    }
+                });
+                row.append(&b);
+            }
+            if reply {
+                let b = gtk::Button::with_label(&umoja_common::i18n::shell("Reply"));
+                b.add_css_class("osd-reply");
+                let center = self.center.clone();
+                b.connect_clicked(move |_| {
+                    if let Some(c) = center.upgrade() {
+                        c.request_reply(id);
                     }
                 });
                 row.append(&b);

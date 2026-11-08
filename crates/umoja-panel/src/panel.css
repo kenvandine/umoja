@@ -207,3 +207,60 @@ window.umoja-lock {
   color: #ffffff;
   opacity: 0.9;
 }
+
+/* ---- Assistant: missed-notification digest and quick replies ---- */
+.message-list .message-digest {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background-color: alpha(@accent_bg_color, 0.14);
+}
+.message-list .message-digest-text {
+  line-height: 1.35;
+}
+.message-list .message-reply {
+  margin-top: 8px;
+  margin-left: 44px;
+}
+.message-list .message-suggestion {
+  border-radius: 999px;
+  padding: 2px 12px;
+  background-color: alpha(currentColor, 0.1);
+  font-weight: normal;
+}
+.message-list .message-reply-hint,
+.message-list .message-reply-status {
+  font-size: 0.85em;
+}
+/* The popover button:hover rule above would grey out Send. */
+window.umoja-panel popover .message-reply button.suggested-action,
+window.umoja-panel popover .message-reply button.suggested-action:hover {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+window.umoja-panel popover .message-reply button.suggested-action:disabled {
+  background-color: alpha(currentColor, 0.1);
+  color: alpha(currentColor, 0.5);
+}
+/* Quick-reply window (banner Reply button, OpenReply). */
+window.umoja-quick-reply {
+  background: transparent;
+}
+.quick-reply {
+  margin: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background-color: @popover_bg_color;
+  color: @popover_fg_color;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
+}
+.quick-reply .message-reply {
+  margin-left: 44px;
+}
+.quick-reply button.suggested-action {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+.quick-reply button.suggested-action:disabled {
+  background-color: alpha(currentColor, 0.1);
+  color: alpha(currentColor, 0.5);
+}

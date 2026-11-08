@@ -75,7 +75,12 @@ pub struct ScreenshotUi {
     mode: Cell<Mode>,
     show_pointer: Cell<bool>,
     drag: Cell<Option<DragKind>>,
+    /// Set while the assistant asked for an area: the capture goes here
+    /// instead of to ~/Pictures (`None` if the user cancelled).
+    ask: RefCell<Option<AskCallback>>,
 }
+
+pub type AskCallback = Box<dyn FnOnce(Option<Pixbuf>)>;
 
 #[derive(Clone, Copy)]
 enum DragKind {
@@ -147,6 +152,7 @@ impl ScreenshotUi {
             mode: Cell::new(Mode::Selection),
             show_pointer: Cell::new(false),
             drag: Cell::new(None),
+            ask: RefCell::new(None),
         });
 
         overlay.add_overlay(&ui.panel());
@@ -416,10 +422,26 @@ impl ScreenshotUi {
             .unwrap_or((1280.0, 800.0))
     }
 
+    /// Open the same UI to pick an area for the assistant to read.
+    pub fn open_for_ask(self: &Rc<Self>, done: AskCallback) {
+        *self.ask.borrow_mut() = Some(done);
+        self.open();
+        if !self.window.is_visible() {
+            // grim failed
+            if let Some(done) = self.ask.borrow_mut().take() {
+                done(None);
+            }
+        }
+    }
+
     fn close(&self) {
         self.window.set_visible(false);
         self.picture.set_paintable(None::<&gdk::Paintable>);
         self.frame.borrow_mut().take();
+        let ask = self.ask.borrow_mut().take();
+        if let Some(done) = ask {
+            done(None);
+        }
     }
 
     fn capture(&self) {
@@ -444,8 +466,12 @@ impl ScreenshotUi {
                 full.new_subpixbuf(x, y, w, h)
             }
         };
+        let ask = self.ask.borrow_mut().take();
         self.close();
-        save_and_notify(&self.app, &pixbuf);
+        match ask {
+            Some(done) => done(Some(pixbuf)),
+            None => save_and_notify(&self.app, &pixbuf),
+        }
     }
 
     /// Shift+Print: whole screen, no UI.

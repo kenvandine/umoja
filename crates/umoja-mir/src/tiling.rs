@@ -46,6 +46,8 @@ pub enum Action {
     SwitchWindows = 34,
     SwitchWindowsBackward = 35,
     ToggleOverview = 36,
+    AskAboutScreen = 37,
+    ClipboardHistory = 38,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -89,6 +91,8 @@ impl Action {
             34 => SwitchWindows,
             35 => SwitchWindowsBackward,
             36 => ToggleOverview,
+            37 => AskAboutScreen,
+            38 => ClipboardHistory,
             _ => None,
         }
     }

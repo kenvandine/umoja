@@ -20,6 +20,8 @@ pub const PORT_ENV: &str = "UMOJA_LEMONADE_PORT";
 pub const URL_ENV: &str = "UMOJA_LEMONADE_URL";
 pub const BINARY_PATH: &str = "/usr/lib/umoja/lemonade/lemond";
 pub const SYSTEMD_UNIT: &str = "umoja-lemonade.service";
+/// Model used when `org.umoja.shell lemonade-model` is unset.
+pub const DEFAULT_MODEL: &str = "Qwen3-4B-Instruct-2507-GGUF";
 
 /// Base URL of the embedded server, e.g. `http://127.0.0.1:13345`.
 ///

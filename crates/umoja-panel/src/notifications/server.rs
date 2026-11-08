@@ -47,6 +47,10 @@ const XML: &str = r#"
       <arg type="u" name="id"/>
       <arg type="s" name="action_key"/>
     </signal>
+    <signal name="NotificationReplied">
+      <arg type="u" name="id"/>
+      <arg type="s" name="text"/>
+    </signal>
   </interface>
 </node>"#;
 
@@ -58,6 +62,8 @@ const CAPABILITIES: &[&str] = &[
     "body-hyperlinks",
     "body-markup",
     "icon-static",
+    // KDE's reply field: the `inline-reply` action and NotificationReplied.
+    "inline-reply",
     "persistence",
     "x-canonical-private-synchronous",
 ];
@@ -138,7 +144,7 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
     };
 
     let app_id = hint_str("desktop-entry")
-        .map(|d| d.trim_end_matches(".desktop").to_string())
+        .map(|d| desktop_id(&d))
         .filter(|d| !d.is_empty());
 
     let urgency = match hints.get("urgency").and_then(|v| v.get::<u8>()) {
@@ -195,8 +201,22 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
         resident: hint_bool("resident"),
         expire_timeout,
         time: glib::DateTime::now_local().ok()?,
+        category: hint_str("category").filter(|c| !c.is_empty()),
+        reply_placeholder: hint_str("x-kde-reply-placeholder-text").filter(|c| !c.is_empty()),
     };
     Some((note, replaces_id))
+}
+
+/// The `desktop-entry` hint should have no `.desktop` suffix, but some apps
+/// send one. Telegram's id is itself `org.telegram.desktop`, so strip the
+/// suffix only when that names an installed app and the hint as given
+/// doesn't; otherwise pass the hint through.
+fn desktop_id(hint: &str) -> String {
+    let installed = |id: &str| gio::DesktopAppInfo::new(&format!("{id}.desktop")).is_some();
+    match hint.strip_suffix(".desktop") {
+        Some(stripped) if !installed(hint) && installed(stripped) => stripped.to_string(),
+        _ => hint.to_string(),
+    }
 }
 
 fn icon_from_string(s: String) -> Icon {

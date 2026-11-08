@@ -5,6 +5,9 @@
 
 mod assistant;
 mod chrome;
+mod clipboard;
+mod clipwatch;
+mod context;
 mod files;
 mod lemonade;
 mod model;
@@ -31,6 +34,8 @@ const IFACE_XML: &str = r#"
     <method name="Show"/>
     <method name="Hide"/>
     <method name="ToggleDictation"/>
+    <method name="AskAboutScreen"/>
+    <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ScreenshotScreen"/>
     <method name="ScreenshotArea">
@@ -86,6 +91,7 @@ fn main() -> glib::ExitCode {
     app.connect_activate(|app| {
         let overlay = view::Overlay::new(app);
         let shots = screenshot::ScreenshotUi::new(app);
+        overlay.set_screenshot_ui(&shots);
         // Fetch the assistant's model in the background at login.
         let weak = std::rc::Rc::downgrade(&overlay);
         std::mem::forget(model::ModelWatcher::start(move |status| {
@@ -189,6 +195,14 @@ fn export(
                     }
                     "Hide" => methods.hide(),
                     "ToggleDictation" => methods.toggle_dictation(),
+                    "AskAboutScreen" => {
+                        spread.hide();
+                        methods.ask_about_screen()
+                    }
+                    "ShowClipboard" => {
+                        spread.hide();
+                        methods.show_clipboard()
+                    }
                     _ => {
                         invocation
                             .return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method);

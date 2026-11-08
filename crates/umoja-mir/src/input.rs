@@ -225,6 +225,8 @@ const SOURCES: &[(&str, &str, Action)] = &[
         Action::TileBottomRight,
     ),
     (gs::UMOJA_SHELL, "dictation-hotkey", Action::ToggleDictation),
+    (gs::UMOJA_SHELL, "ask-about-screen-hotkey", Action::AskAboutScreen),
+    (gs::UMOJA_SHELL, "clipboard-history-hotkey", Action::ClipboardHistory),
 ];
 
 /// Fallbacks used when a schema is missing (e.g. running nested for development).
@@ -252,6 +254,8 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>KP_8", Action::TileTopHalf as u32),
     ("<Super>KP_2", Action::TileBottomHalf as u32),
     ("<Super>d", Action::ToggleDictation as u32),
+    ("<Super><Shift>a", Action::AskAboutScreen as u32),
+    ("<Super><Shift>v", Action::ClipboardHistory as u32),
     ("<Super>Page_Up", Action::WorkspacePrev as u32),
     ("<Super>Page_Down", Action::WorkspaceNext as u32),
     ("<Control><Alt>Left", Action::WorkspacePrev as u32),
