@@ -17,6 +17,12 @@ fn main() {
         .probe("miral")
         .expect("miral (libmiral-dev) >= 3.9 is required to build umoja-mir");
 
+    // Mir's event classes, used to rewrite scroll axes (natural scrolling).
+    let mircommon = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("mircommon")
+        .expect("mircommon (libmircommon-dev) is required to build umoja-mir");
+
     let mut build = cc::Build::new();
     build
         .cpp(true)
@@ -24,15 +30,15 @@ fn main() {
         .file("src/shim/umoja_shim.cpp")
         .warnings(true)
         .flag_if_supported("-Wno-deprecated-declarations");
-    for path in &miral.include_paths {
+    for path in miral.include_paths.iter().chain(&mircommon.include_paths) {
         build.include(path);
     }
     build.compile("umoja_shim");
 
-    for path in &miral.link_paths {
+    for path in miral.link_paths.iter().chain(&mircommon.link_paths) {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
-    for lib in &miral.libs {
+    for lib in miral.libs.iter().chain(&mircommon.libs) {
         println!("cargo:rustc-link-lib={lib}");
     }
 }

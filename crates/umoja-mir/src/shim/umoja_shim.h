@@ -143,6 +143,15 @@ void umoja_output_update(int32_t id, char const* name, UmojaRect extents, float 
                          uint32_t height_mm, uint32_t orientation);
 void umoja_output_remove(int32_t id);
 void umoja_session_started(char const* wayland_display);
+
+// Scroll source classes for umoja_natural_scroll (peripherals.rs).
+enum {
+    UMOJA_SCROLL_TOUCHPAD = 1,
+    UMOJA_SCROLL_MOUSE = 2,
+};
+// True when scrolls from this source should be inverted (GNOME's
+// org.gnome.desktop.peripherals.{touchpad,mouse} natural-scroll).
+bool umoja_natural_scroll(uint32_t source);
 bool umoja_is_switcher_action(uint32_t action);
 bool umoja_switcher_open(uint32_t action, uint32_t mods, UmojaSwitchWindow const* windows, size_t n);
 uint32_t umoja_switcher_key(uint32_t keysym, uint32_t mods, bool down, UmojaSwitchResult* out);
