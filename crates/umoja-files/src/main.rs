@@ -480,7 +480,7 @@ fn document_chunks(path: &str, repo: bool, text: &str) -> Vec<String> {
     // "lease_2026-03.pdf" reads better to the model as "lease 2026 03 pdf".
     let words: String = name.replace(['_', '-', '.'], " ");
     let head = if repo {
-        format!("{words}: a software project (git repository) in {folder}")
+        format!("{words}: a software project (source code) in {folder}")
     } else {
         format!("{words} (in {folder})")
     };
@@ -518,6 +518,6 @@ mod tests {
             document_chunks("/a/b.txt", false, &long).len(),
             index::MAX_CHUNKS
         );
-        assert!(document_chunks("/a/proj", true, "")[0].contains("git repository"));
+        assert!(document_chunks("/a/proj", true, "")[0].contains("software project"));
     }
 }

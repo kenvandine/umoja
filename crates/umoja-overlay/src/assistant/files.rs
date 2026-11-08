@@ -94,8 +94,8 @@ async fn open_file(a: Value) -> String {
     if !p.exists() {
         return format!("error: {} doesn't exist", p.display());
     }
+    use gtk4::prelude::*;
     let ctx = gtk4::gdk::Display::default().map(|d| d.app_launch_context());
-    use gtk4::prelude::Cast;
     match crate::files::open(&p.to_string_lossy(), ctx.as_ref().map(|c| c.upcast_ref())) {
         Ok(()) => {
             super::hide_when_done();

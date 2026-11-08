@@ -8,7 +8,8 @@
 //!   `target/`, many caches) is skipped with everything below it;
 //! * `~/snap` (per-snap app data) and package-manager folders such as
 //!   `node_modules` are skipped;
-//! * a git working tree becomes one entry for the repository itself, with
+//! * a git working tree (or any source tree with a Cargo.toml, package.json,
+//!   meson.build...) becomes one entry for the project itself, with
 //!   its README as the description, instead of thousands of source files.
 //!   Source code is better searched with the tools made for it.
 
@@ -27,6 +28,20 @@ const SKIP_DIRS: &[&str] = &[
     "venv",
     "bower_components",
     "lost+found",
+];
+
+/// A folder holding one of these is a software project (a git checkout,
+/// or an unpacked source tree), listed as one entry.
+const PROJECT_MARKERS: &[&str] = &[
+    ".git",
+    "Cargo.toml",
+    "package.json",
+    "meson.build",
+    "CMakeLists.txt",
+    "go.mod",
+    "pyproject.toml",
+    "setup.py",
+    "configure.ac",
 ];
 
 const MARKERS: &[&str] = &[".nomedia", ".trackerignore", "CACHEDIR.TAG"];
@@ -73,7 +88,7 @@ pub fn walk(root: &Path) -> Vec<Found> {
             if p == snap {
                 return false;
             }
-            if p != root_dir && p.join(".git").exists() {
+            if p != root_dir && PROJECT_MARKERS.iter().any(|m| p.join(m).exists()) {
                 repos_seen.lock().unwrap().push(p.to_path_buf());
                 return false;
             }
@@ -160,6 +175,8 @@ mod tests {
         w("src/proj/.git/HEAD");
         w("src/proj/README.md");
         w("src/proj/main.rs");
+        w("src/unpacked/Cargo.toml");
+        w("src/unpacked/src/lib.rs");
 
         let mut got: Vec<_> = walk(&h)
             .into_iter()
@@ -181,6 +198,7 @@ mod tests {
                 ("Documents/notes.md".into(), Kind::File),
                 ("Pictures/a.jpg".into(), Kind::File),
                 ("src/proj".into(), Kind::Repo),
+                ("src/unpacked".into(), Kind::Repo),
             ]
         );
     }
