@@ -107,6 +107,7 @@ impl ClockButton {
                 // back on hide.
                 if !popover.is_visible() {
                     popover.set_autohide(false);
+                    list.opening_for_reply();
                 }
                 popover.popup();
                 list.open_reply(id);

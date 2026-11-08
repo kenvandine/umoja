@@ -480,13 +480,16 @@ impl Center {
 }
 
 /// Let the panel take keyboard focus (for the reply field) or give it back.
-/// Layer surfaces default to no keyboard at all.
+/// Layer surfaces default to no keyboard at all. OnDemand rather than
+/// Exclusive: a menu opened for a reply has no grab (see clock.rs), so an
+/// exclusive panel would keep the keyboard from every other window until
+/// the menu closed.
 pub fn want_keyboard(widget: &impl IsA<gtk::Widget>, on: bool) {
     use gtk4_layer_shell::{KeyboardMode, LayerShell};
     let Some(win) = widget.as_ref().root().and_downcast::<gtk::Window>() else { return };
     // The clock menu is a popover; its root is the panel window.
     if win.is_layer_window() {
-        win.set_keyboard_mode(if on { KeyboardMode::Exclusive } else { KeyboardMode::None });
+        win.set_keyboard_mode(if on { KeyboardMode::OnDemand } else { KeyboardMode::None });
     }
 }
 

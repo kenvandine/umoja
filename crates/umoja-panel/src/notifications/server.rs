@@ -208,13 +208,13 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
 }
 
 /// The `desktop-entry` hint should have no `.desktop` suffix, but some apps
-/// send one. Telegram's id is itself `org.telegram.desktop`, so only strip
-/// the suffix when the hint isn't already an installed desktop id.
+/// send one. Telegram's id is itself `org.telegram.desktop`, so strip the
+/// suffix only when that names an installed app and the hint as given
+/// doesn't; otherwise pass the hint through.
 fn desktop_id(hint: &str) -> String {
+    let installed = |id: &str| gio::DesktopAppInfo::new(&format!("{id}.desktop")).is_some();
     match hint.strip_suffix(".desktop") {
-        Some(stripped) if gio::DesktopAppInfo::new(&format!("{hint}.desktop")).is_none() => {
-            stripped.to_string()
-        }
+        Some(stripped) if !installed(hint) && installed(stripped) => stripped.to_string(),
         _ => hint.to_string(),
     }
 }

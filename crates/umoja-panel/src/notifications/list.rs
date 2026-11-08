@@ -34,6 +34,7 @@ struct Inner {
     /// Built rows by notification id, with what they were built from.
     built: RefCell<HashMap<u32, (Fingerprint, Row)>>,
     digest: Digest,
+    skip_digest: Cell<bool>,
 }
 
 #[derive(PartialEq)]
@@ -133,6 +134,7 @@ impl MessageList {
             rows,
             built: RefCell::default(),
             digest,
+            skip_digest: Cell::new(false),
         });
 
         let refresh = {
@@ -162,6 +164,11 @@ impl MessageList {
 
     /// The clock menu opened: summarize a pile of new notifications.
     pub fn opened(&self) {
+        // Opened for a reply: drafting it comes first, and Lemonade answers
+        // one request at a time.
+        if self.inner.skip_digest.replace(false) {
+            return;
+        }
         let Some(c) = self.inner.center.upgrade() else { return };
         let missed = c.missed();
         if missed.len() >= AUTO_DIGEST {
@@ -179,6 +186,11 @@ impl MessageList {
         if let Some(c) = self.inner.center.upgrade() {
             c.mark_seen();
         }
+    }
+
+    /// The menu is about to open for a reply: don't start a digest.
+    pub fn opening_for_reply(&self) {
+        self.inner.skip_digest.set(true);
     }
 
     /// Open the reply field under notification `id`.
@@ -555,6 +567,7 @@ impl Digest {
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
             .selectable(true)
+            .max_width_chars(44)
             .visible(false)
             .css_classes(["message-digest-text"])
             .build();
@@ -648,7 +661,7 @@ fn start(
             match ev {
                 Event::Delta(d) => {
                     acc.push_str(&d);
-                    let shown = assistant::clean(&acc);
+                    let shown = assistant::render_digest(&acc);
                     if !shown.is_empty() {
                         text.set_text(&shown);
                     }
@@ -665,7 +678,7 @@ fn start(
             }
         }
         spinner.stop();
-        if assistant::clean(&acc).is_empty() {
+        if assistant::render_digest(&acc).is_empty() {
             text.set_text(&i18n::shell("Nothing to summarize."));
         }
     });
