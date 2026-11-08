@@ -159,6 +159,8 @@ done
 pgrep -u "$(id -u)" -f 'gnome-text-editor' >/dev/null && pass "Text Editor running" || fail "Text Editor exited"
 pgrep -u "$(id -u)" -x nautilus >/dev/null && pass "Files running" || fail "Files exited"
 
-pkill -u "$(id -u)" -f 'gnome-text-editor|nautilus|umoja-(panel|dock|overlay)|xdg-desktop-portal-umoja'
+# Anchored on the command line's start, so a shell whose arguments merely
+# mention these names (e.g. a log path) is left alone.
+pkill -u "$(id -u)" -f '^(gnome-text-editor|nautilus|umoja-(panel|dock|overlay)|/usr/libexec/xdg-desktop-portal-umoja)( |$)'
 kill $MIR $DBUS_SESSION_BUS_PID 2>/dev/null
 exit $FAILED
