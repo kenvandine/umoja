@@ -121,6 +121,13 @@ sleep 2
 wtype -P Super_L -k End -p Super_L 2>>"$LOG"
 sleep 1
 [ "$(ws)" = "2 3 " ] && pass "Super+End switched to the last workspace" || fail "after Super+End: $(ws)"
+# The last workspace is the empty spare: nothing may keep focus there, or
+# Mir brings the focused window back on screen.
+sleep 1
+# Each window tuple ends with its flags; bit 1 is "focused".
+comp GetWindows | grep -oE "[0-9]+\)" | tr -d ')' | awk '$1 % 2 == 1 { f = 1 } END { exit !f }' \
+    && fail "a window kept focus on an empty workspace: $(comp GetWindows)" \
+    || pass "no window keeps focus on an empty workspace"
 wtype -P Super_L -k Home -p Super_L 2>>"$LOG"
 sleep 1
 [ "$(ws)" = "0 3 " ] && pass "Super+Home switched to the first workspace" || fail "after Super+Home: $(ws)"

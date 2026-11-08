@@ -701,6 +701,10 @@ private:
             tools.for_each_window_in_workspace(workspaces[index], [&](Window const& w) { arriving.push_back(w); });
             int const dir = index > current ? 1 : -1;
             current = index;
+            // Drop focus before anything is hidden: hiding the active window
+            // makes Mir pass focus on, possibly to a window that is already
+            // hidden, which brings that one back on screen.
+            tools.select_active_window(Window{});
             Slide slide;
             for (auto const& w : leaving) {
                 if (in_workspace(w, workspaces[index])) continue;
@@ -714,7 +718,7 @@ private:
                 if (animate && w != pinned && st != mir_window_state_hidden && st != mir_window_state_minimized)
                     slide.arriving.emplace_back(w, w.top_left());
             }
-            if (!arriving.empty()) tools.select_active_window(arriving.back());
+            focus_current_workspace();
             if (!slide.leaving.empty() || !slide.arriving.empty()) {
                 slide.distance = dir * primary_output().size.width.as_int();
                 slide.start = std::chrono::steady_clock::now();
@@ -740,7 +744,22 @@ private:
     uint64_t slide_generation = 0;
     bool animating = false;
     // gnome-shell's WORKSPACE_SWITCH_TIME.
-    static constexpr double SLIDE_MS = 250.0;
+    // A little longer than gnome-shell's 250 ms: our frames come from a
+    // timer, not the display's vsync, and 250 ms read as a jump.
+    static constexpr double SLIDE_MS = 400.0;
+
+    // Focus the most recently used visible window on this workspace, or
+    // nothing when it is empty (as GNOME does).
+    void focus_current_workspace() {
+        for (auto const& w : mru) {
+            if (!on_current_workspace(w)) continue;
+            auto const st = tools.info_for(w).state();
+            if (st == mir_window_state_hidden || st == mir_window_state_minimized) continue;
+            tools.select_active_window(w);
+            return;
+        }
+        tools.select_active_window(Window{});
+    }
 
     void place(Window const& w, geom::Point p) {
         if (!all_windows.count(w)) return;
@@ -778,11 +797,16 @@ private:
         bool const was_applying = applying;
         applying = true;
         guarded("finish slide", [&] {
+            Window const active = tools.active_window();
+            bool const active_leaving = std::any_of(done.leaving.begin(), done.leaving.end(),
+                                                    [&](auto const& l) { return l.first == active; });
+            if (active_leaving) tools.select_active_window(Window{});
             for (auto const& [w, p] : done.leaving) {
                 place(w, p);
                 if (all_windows.count(w) && !in_workspace(w, workspaces[current])) hide(w);
             }
             for (auto const& [w, p] : done.arriving) place(w, p);
+            if (active_leaving || !tools.active_window()) focus_current_workspace();
         });
         applying = was_applying;
         animating = false;
