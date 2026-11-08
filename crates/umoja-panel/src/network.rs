@@ -547,9 +547,11 @@ fn saved_wifi(c: &gio::DBusConnection) -> HashMap<String, String> {
         ) else {
             continue;
         };
+        // a{sa{sv}}: not an a{sv}, so VariantDict would abort the panel.
         let settings = reply.child_value(0);
-        let dict = glib::VariantDict::new(Some(&settings));
-        let Some(wifi) = dict.lookup_value("802-11-wireless", None) else {
+        let Some(wifi) = settings.iter().find_map(|e| {
+            (e.child_value(0).str() == Some("802-11-wireless")).then(|| e.child_value(1))
+        }) else {
             continue;
         };
         let wifi = glib::VariantDict::new(Some(&wifi));

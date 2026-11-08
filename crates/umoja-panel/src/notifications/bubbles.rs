@@ -20,6 +20,9 @@ use super::{banner_timeout, Center, CloseReason, Icon, Note, Urgency};
 const MAX_BUBBLES: usize = 3;
 const BUBBLE_WIDTH: i32 = 320;
 const FADE_MS: u32 = 250;
+/// Room for the bubbles plus their shadows. Fixed, see `Bubbles::new`.
+const SURFACE_WIDTH: i32 = BUBBLE_WIDTH + 40;
+const SURFACE_HEIGHT: i32 = 640;
 
 struct Bubble {
     note: Note,
@@ -48,18 +51,51 @@ impl Bubbles {
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-notifications");
         window.set_keyboard_mode(KeyboardMode::None);
+        // A fixed-size surface in the top-right corner. Mir places a
+        // Top|Right layer surface from its size when it maps, but doesn't
+        // move it when it grows afterwards, so a surface that grew with each
+        // new bubble ran off the right edge. The empty part lets clicks
+        // through: the input region is just the bubbles (see below).
         window.set_anchor(Edge::Top, true);
         window.set_anchor(Edge::Right, true);
+        window.set_size_request(SURFACE_WIDTH, SURFACE_HEIGHT);
         // Stay out of the exclusive-zone layout: with the default zone of 0,
         // Mir re-lays out the panel around this surface whenever it maps,
         // and the panel came back short. Clear the panel by hand instead.
         window.set_exclusive_zone(-1);
         window.set_margin(Edge::Top, crate::PANEL_HEIGHT + 8);
-        window.set_margin(Edge::Right, 8);
 
         let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
         column.set_valign(gtk::Align::Start);
+        column.set_halign(gtk::Align::End);
+        column.set_margin_end(8);
         window.set_child(Some(&column));
+
+        // Keep the input region to the bubbles themselves, so the rest of
+        // the transparent strip doesn't swallow clicks meant for windows.
+        {
+            let column = column.clone();
+            window.connect_realize(move |w| {
+                let Some(clock) = w.frame_clock() else { return };
+                let w = w.clone();
+                let column = column.clone();
+                clock.connect_after_paint(move |_| {
+                    let Some(surface) = w.surface() else { return };
+                    let rect = column
+                        .compute_bounds(&w)
+                        .map(|b| {
+                            gtk::cairo::RectangleInt::new(
+                                b.x().floor() as i32,
+                                b.y().floor() as i32,
+                                b.width().ceil() as i32,
+                                b.height().ceil() as i32,
+                            )
+                        })
+                        .unwrap_or_else(|| gtk::cairo::RectangleInt::new(0, 0, 0, 0));
+                    surface.set_input_region(&gtk::cairo::Region::create_rectangle(&rect));
+                });
+            });
+        }
         Self {
             window,
             column,

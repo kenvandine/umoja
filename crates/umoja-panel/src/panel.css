@@ -164,3 +164,13 @@ overlay:hover > .osd-close {
 .message .message-gauge {
   margin-top: 4px;
 }
+
+/* The bar's white-on-black button style must not leak into its menus:
+   popovers are children of the bar, and in the light style their
+   background is light. */
+window.umoja-panel popover button {
+  color: inherit;
+}
+window.umoja-panel popover button:hover {
+  background-color: alpha(currentColor, 0.1);
+}
