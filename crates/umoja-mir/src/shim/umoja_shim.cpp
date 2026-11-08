@@ -26,6 +26,7 @@
 #include <miral/zone.h>
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -33,8 +34,10 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <unistd.h>
@@ -300,6 +303,9 @@ public:
 
     void advise_move_to(WindowInfo const& info, geom::Point top_left) override {
         MinimalWindowManager::advise_move_to(info, top_left);
+        // Windows sliding during a workspace switch are not being moved by
+        // the user, and must not turn sticky as they leave the monitor.
+        if (animating) return;
         if (all_windows.count(info.window()) && update_workspace_membership(info.window())) relayout_workspaces();
         if (applying) return;
         // The user dragged a tiled window away: it leaves its tile group.
@@ -682,21 +688,121 @@ private:
         tools.modify_window(tools.info_for(w), spec);
     }
 
-    void switch_to(size_t index) {
+    // `animate`: GNOME's horizontal slide (the old workspace's windows go
+    // out one side, the new one's come in from the other). `pinned` is a
+    // window being moved along, which stays still while the rest slide.
+    void switch_to(size_t index, bool animate = false, Window const& pinned = Window{}) {
         if (index >= workspaces.size() || index == current) return;
+        finish_slide();
         applying = true;
         guarded("switch workspace", [&] {
             std::vector<Window> leaving, arriving;
             tools.for_each_window_in_workspace(workspaces[current], [&](Window const& w) { leaving.push_back(w); });
             tools.for_each_window_in_workspace(workspaces[index], [&](Window const& w) { arriving.push_back(w); });
-            for (auto const& w : leaving)
-                if (!in_workspace(w, workspaces[index])) hide(w);
-            for (auto const& w : arriving) unhide(w);
+            int const dir = index > current ? 1 : -1;
             current = index;
+            Slide slide;
+            for (auto const& w : leaving) {
+                if (in_workspace(w, workspaces[index])) continue;
+                auto const st = tools.info_for(w).state();
+                if (!animate || st == mir_window_state_hidden || st == mir_window_state_minimized) hide(w);
+                else slide.leaving.emplace_back(w, w.top_left());
+            }
+            for (auto const& w : arriving) {
+                unhide(w);
+                auto const st = tools.info_for(w).state();
+                if (animate && w != pinned && st != mir_window_state_hidden && st != mir_window_state_minimized)
+                    slide.arriving.emplace_back(w, w.top_left());
+            }
             if (!arriving.empty()) tools.select_active_window(arriving.back());
+            if (!slide.leaving.empty() || !slide.arriving.empty()) {
+                slide.distance = dir * primary_output().size.width.as_int();
+                slide.start = std::chrono::steady_clock::now();
+                slide.generation = ++slide_generation;
+                this->slide = std::move(slide);
+                step_slide(this->slide->generation);
+                run_slide(this->slide->generation);
+            }
         });
         applying = false;
         relayout_workspaces();
+    }
+
+    // ---- workspace slide ---------------------------------------------------
+
+    struct Slide {
+        std::vector<std::pair<Window, geom::Point>> leaving, arriving;
+        int distance = 0;
+        std::chrono::steady_clock::time_point start;
+        uint64_t generation = 0;
+    };
+    std::optional<Slide> slide;
+    uint64_t slide_generation = 0;
+    bool animating = false;
+    // gnome-shell's WORKSPACE_SWITCH_TIME.
+    static constexpr double SLIDE_MS = 250.0;
+
+    void place(Window const& w, geom::Point p) {
+        if (!all_windows.count(w)) return;
+        WindowSpecification spec;
+        spec.top_left() = p;
+        tools.modify_window(tools.info_for(w), spec);
+    }
+
+    // One frame; false once the slide is over (or replaced).
+    bool step_slide(uint64_t generation) {
+        if (!slide || slide->generation != generation) return false;
+        double const t = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slide->start).count() / SLIDE_MS;
+        if (t >= 1.0) {
+            finish_slide();
+            return false;
+        }
+        double const e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
+        int const out = static_cast<int>(-slide->distance * e);
+        int const in = static_cast<int>(slide->distance * (1.0 - e));
+        animating = true;
+        guarded("slide", [&] {
+            for (auto const& [w, p] : slide->leaving) place(w, geom::Point{p.x.as_int() + out, p.y.as_int()});
+            for (auto const& [w, p] : slide->arriving) place(w, geom::Point{p.x.as_int() + in, p.y.as_int()});
+        });
+        animating = false;
+        return true;
+    }
+
+    // Put everything where it belongs and hide what left.
+    void finish_slide() {
+        if (!slide) return;
+        auto done = std::move(*slide);
+        slide.reset();
+        animating = true;
+        bool const was_applying = applying;
+        applying = true;
+        guarded("finish slide", [&] {
+            for (auto const& [w, p] : done.leaving) {
+                place(w, p);
+                if (all_windows.count(w) && !in_workspace(w, workspaces[current])) hide(w);
+            }
+            for (auto const& [w, p] : done.arriving) place(w, p);
+        });
+        applying = was_applying;
+        animating = false;
+    }
+
+    // Frames come from a helper thread that takes the WM lock for each one.
+    void run_slide(uint64_t generation) {
+        std::thread([generation] {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                bool more = false;
+                guarded("slide frame", [&] {
+                    if (!g_wm) return;
+                    g_wm->invoke([&] {
+                        if (g_wm) more = g_wm->step_slide(generation);
+                    });
+                });
+                if (!more) return;
+            }
+        }).detach();
     }
 
     void move_active_to(size_t index) { move_window_to(tools.active_window(), index); }
@@ -710,7 +816,7 @@ public:
     // Switch from outside a key binding (org.umoja.Compositor), with the popup.
     void switch_workspace(size_t index) {
         if (index >= workspaces.size()) return;
-        switch_to(index);
+        switch_to(index, true);
         umoja_workspace_switched(current, workspaces.size());
     }
 
@@ -729,6 +835,7 @@ public:
     // The overview's drag and drop: the window goes, the view stays.
     void send_to_workspace(Window w, size_t index) {
         if (!w || index >= workspaces.size() || !all_windows.count(w)) return;
+        finish_slide();
         if (!in_any_workspace(w) || in_workspace(w, workspaces[index])) return;
         guarded("send to workspace", [&] {
             std::vector<std::shared_ptr<Workspace>> containing;
@@ -762,8 +869,9 @@ private:
         if (!in_any_workspace(w)) return; // sticky (secondary monitor)
         tools.remove_tree_from_workspace(w, workspaces[current]);
         tools.add_tree_to_workspace(w, workspaces[index]);
-        // GNOME follows the window to its new workspace.
-        switch_to(index);
+        // GNOME follows the window to its new workspace: the workspaces
+        // slide while the window stays where it is.
+        switch_to(index, true, w);
         tools.select_active_window(w);
     }
 
@@ -844,7 +952,7 @@ private:
         uint32_t kind = 0;
         size_t index = 0;
         if (umoja_workspace_resolve(action, current, workspaces.size(), &kind, &index)) {
-            if (kind == UMOJA_WORKSPACE_SWITCH) switch_to(index);
+            if (kind == UMOJA_WORKSPACE_SWITCH) switch_to(index, true);
             else move_active_to(index);
             // GNOME's workspace switcher popup, for keyboard switches.
             umoja_workspace_switched(current, workspaces.size());
