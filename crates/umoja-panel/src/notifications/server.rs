@@ -144,7 +144,7 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
     };
 
     let app_id = hint_str("desktop-entry")
-        .map(|d| d.trim_end_matches(".desktop").to_string())
+        .map(|d| desktop_id(&d))
         .filter(|d| !d.is_empty());
 
     let urgency = match hints.get("urgency").and_then(|v| v.get::<u8>()) {
@@ -205,6 +205,18 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
         reply_placeholder: hint_str("x-kde-reply-placeholder-text").filter(|c| !c.is_empty()),
     };
     Some((note, replaces_id))
+}
+
+/// The `desktop-entry` hint should have no `.desktop` suffix, but some apps
+/// send one. Telegram's id is itself `org.telegram.desktop`, so only strip
+/// the suffix when the hint isn't already an installed desktop id.
+fn desktop_id(hint: &str) -> String {
+    match hint.strip_suffix(".desktop") {
+        Some(stripped) if gio::DesktopAppInfo::new(&format!("{hint}.desktop")).is_none() => {
+            stripped.to_string()
+        }
+        _ => hint.to_string(),
+    }
 }
 
 fn icon_from_string(s: String) -> Icon {

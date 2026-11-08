@@ -15,7 +15,7 @@
 use std::rc::Rc;
 
 use gio::prelude::*;
-use gtk::glib::{self, ToVariant};
+use gtk::glib;
 use gtk4 as gtk;
 use umoja_common::dbus;
 

@@ -231,3 +231,13 @@ window.umoja-lock {
 .message-list .message-reply-status {
   font-size: 0.85em;
 }
+/* The popover button:hover rule above would grey out Send. */
+window.umoja-panel popover .message-reply button.suggested-action,
+window.umoja-panel popover .message-reply button.suggested-action:hover {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+window.umoja-panel popover .message-reply button.suggested-action:disabled {
+  background-color: alpha(currentColor, 0.1);
+  color: alpha(currentColor, 0.5);
+}

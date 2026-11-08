@@ -468,13 +468,16 @@ impl Reply {
     }
 
     fn draft(&self) {
+        self.spinner.set_visible(true);
         self.spinner.start();
         self.status.set_text(&i18n::shell("Drafting replies…"));
         self.status.set_visible(true);
         let this = self.clone();
         glib::MainContext::default().spawn_local(async move {
             let result = assistant::draft_replies(&this.note).await;
+            // A stopped spinner still draws a faint ring in Yaru.
             this.spinner.stop();
+            this.spinner.set_visible(false);
             match result {
                 Ok(replies) => {
                     this.status.set_visible(false);
@@ -536,6 +539,11 @@ impl Digest {
             .build();
         header.append(&title);
         let spinner = gtk::Spinner::new();
+        // Only take room while spinning (a stopped spinner still draws).
+        spinner
+            .bind_property("spinning", &spinner, "visible")
+            .sync_create()
+            .build();
         header.append(&spinner);
         let button = gtk::Button::with_label(&i18n::shell("Summarize"));
         button.add_css_class("message-digest-button");

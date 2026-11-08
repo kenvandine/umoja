@@ -486,7 +486,7 @@ pub fn want_keyboard(widget: &impl IsA<gtk::Widget>, on: bool) {
     let Some(win) = widget.as_ref().root().and_downcast::<gtk::Window>() else { return };
     // The clock menu is a popover; its root is the panel window.
     if win.is_layer_window() {
-        win.set_keyboard_mode(if on { KeyboardMode::OnDemand } else { KeyboardMode::None });
+        win.set_keyboard_mode(if on { KeyboardMode::Exclusive } else { KeyboardMode::None });
     }
 }
 
