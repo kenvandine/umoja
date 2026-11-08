@@ -31,7 +31,7 @@ struct Bubble {
 }
 
 pub struct Bubbles {
-    window: gtk::Window,
+    _window: gtk::Window,
     column: gtk::Box,
     items: RefCell<HashMap<u32, Bubble>>,
     /// Ids top to bottom, newest first.
@@ -96,8 +96,12 @@ impl Bubbles {
                 });
             });
         }
+        // Mapped once and never hidden: Mir places a re-mapped surface off
+        // the right edge, and with no bubbles the input region is empty so
+        // the transparent surface doesn't get in the way.
+        window.present();
         Self {
-            window,
+            _window: window,
             column,
             items: RefCell::default(),
             order: RefCell::default(),
@@ -142,7 +146,6 @@ impl Bubbles {
                     timer: None,
                 },
             );
-            self.window.present();
             glib::idle_add_local_once(move || revealer.set_reveal_child(true));
         }
         self.arm_timer(id, banner_timeout(note));
@@ -195,12 +198,8 @@ impl Bubbles {
         let revealer = b.revealer;
         revealer.set_reveal_child(false);
         let column = self.column.clone();
-        let window = self.window.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(FADE_MS as u64), move || {
             column.remove(&revealer);
-            if column.first_child().is_none() {
-                window.set_visible(false);
-            }
         });
         true
     }
