@@ -80,12 +80,19 @@ async fn search_files(a: Value) -> String {
             "error: file search isn't available (umoja-files isn't running)".into()
         }
         Ok(hits) if hits.is_empty() => format!("No files matched “{query}”."),
-        Ok(hits) => hits
-            .iter()
-            .enumerate()
-            .map(|(i, h)| format!("{}. {} — {}", i + 1, tilde(&h.path), h.detail))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Ok(hits) => {
+            crate::files::show_tool_hits(&hits);
+            let list = hits
+                .iter()
+                .enumerate()
+                .map(|(i, h)| format!("{}. {} — {}", i + 1, tilde(&h.path), h.detail))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{list}\n(The first {} are shown to the user as clickable rows under your answer, in this order; name only the best one or two.)",
+                hits.len().min(5)
+            )
+        }
     }
 }
 

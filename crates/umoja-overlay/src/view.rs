@@ -409,6 +409,9 @@ impl Overlay {
         self.assistant.set_visible(true);
         self.answer.set_visible(true);
         self.answer.set_text(&i18n::umoja("Thinking…"));
+        // Typed-query matches would disagree with the answer; the
+        // search_files tool fills the list with its own results instead.
+        self.files.clear();
         for b in [self.chips.upcast_ref::<gtk::Widget>(), self.steps.upcast_ref()] {
             while let Some(c) = b.first_child() {
                 c.unparent();

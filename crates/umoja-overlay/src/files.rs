@@ -82,6 +82,22 @@ pub fn show_in_folder(path: &str) {
     });
 }
 
+/// The file's icon as Files shows it (from its real content type).
+fn file_icon(path: &str) -> gio::Icon {
+    let file = gio::File::for_path(path);
+    file.query_info(
+        "standard::icon,standard::content-type",
+        gio::FileQueryInfoFlags::NONE,
+        gio::Cancellable::NONE,
+    )
+    .ok()
+    .and_then(|i| i.icon())
+    .unwrap_or_else(|| {
+        let (ctype, _) = gio::content_type_guess(Some(path), &[]);
+        gio::content_type_get_icon(&ctype)
+    })
+}
+
 /// Words that say "I'm looking for a file", so Enter opens the top file
 /// instead of asking the assistant.
 pub fn looks_like_file_search(query: &str) -> bool {
@@ -92,6 +108,20 @@ pub fn looks_like_file_search(query: &str) -> bool {
         "presentation", "folder", "video", "recording", "invoice", "receipt", "notes",
     ];
     STARTERS.iter().any(|s| q.starts_with(s)) && NOUNS.iter().any(|n| q.contains(n))
+}
+
+thread_local! {
+    /// The overlay's section, so the assistant's tools can fill it.
+    static SECTION: std::cell::RefCell<std::rc::Weak<FilesSection>> = Default::default();
+}
+
+/// Show `hits` (from the assistant's search_files call) as the Files list,
+/// so the rows match the answer and can be clicked.
+pub fn show_tool_hits(hits: &[Hit]) {
+    if let Some(s) = SECTION.with(|s| s.borrow().upgrade()) {
+        s.generation.set(s.generation.get() + 1);
+        s.show_hits(hits.iter().take(ROWS as usize).cloned().collect());
+    }
 }
 
 /// The "Files" group in the overlay.
@@ -121,13 +151,15 @@ impl FilesSection {
         widget.append(&title);
         widget.append(&list);
         widget.set_visible(false);
-        Rc::new(Self {
+        let section = Rc::new(Self {
             widget,
             list,
             generation: Rc::default(),
             first: Rc::default(),
             on_opened: Rc::new(on_opened),
-        })
+        });
+        SECTION.with(|s| *s.borrow_mut() = Rc::downgrade(&section));
+        section
     }
 
     pub fn clear(&self) {
@@ -205,12 +237,7 @@ impl FilesSection {
             .activatable(true)
             .tooltip_text(&h.path)
             .build();
-        let icon = if std::path::Path::new(&h.path).is_dir() {
-            gtk::Image::from_icon_name("folder")
-        } else {
-            let (ctype, _) = gio::content_type_guess(Some(h.path.as_str()), &[]);
-            gtk::Image::from_gicon(&gio::content_type_get_icon(&ctype))
-        };
+        let icon = gtk::Image::from_gicon(&file_icon(&h.path));
         icon.set_pixel_size(32);
         row.add_prefix(&icon);
 

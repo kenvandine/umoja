@@ -22,10 +22,11 @@ window.umoja-overlay {
 }
 .files-heading {
   color: alpha(#ffffff, 0.8);
-  margin-start: 6px;
+  margin-left: 6px;
 }
 .files-list {
-  background-color: alpha(#ffffff, 0.08);
+  /* Nearly opaque: windows behind the overlay must not show through text. */
+  background-color: alpha(#241f23, 0.94);
   border-radius: 18px;
 }
 .files-list row {
