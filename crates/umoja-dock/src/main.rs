@@ -32,6 +32,9 @@ struct Config {
     fixed: bool,
     extend: bool,
     show_apps_at_top: bool,
+    /// Ubuntu Dock lists windows under an "All Windows" submenu when set.
+    show_windows_preview: bool,
+    default_windows_preview_to_open: bool,
 }
 
 impl Config {
@@ -44,6 +47,12 @@ impl Config {
             fixed: gs::get_bool(d, "dock-fixed", true),
             extend: gs::get_bool(d, "extend-height", true),
             show_apps_at_top: gs::get_bool(d, "show-apps-at-top", false),
+            show_windows_preview: gs::get_bool(d, "show-windows-preview", true),
+            default_windows_preview_to_open: gs::get_bool(
+                d,
+                "default-windows-preview-to-open",
+                false,
+            ),
         }
     }
 }
@@ -319,23 +328,24 @@ impl Dock {
         overlay.upcast()
     }
 
-    /// Ubuntu Dock's app menu: open windows, New Window, the app's own
-    /// desktop actions, Pin to Dock / Unpin, App Details and Quit.
+    /// Ubuntu Dock's app menu, in its order: the app name, its windows
+    /// ("All Windows" submenu or an "Open Windows" list), New Window, the
+    /// app's desktop actions, Pin to Dock / Unpin, App Details and Quit.
     fn context_menu(
         &self,
         app: &gio::DesktopAppInfo,
         pinned: bool,
         wins: &[WindowInfo],
     ) -> gtk::Popover {
+        let cfg = *self.config.borrow();
         let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
         col.add_css_class("dock-menu");
         let popover = gtk::Popover::builder()
             .child(&col)
-            .has_arrow(true)
             .position(self.menu_side())
             .build();
         let weak_pop = popover.downgrade();
-        let item = |label: &str, action: Box<dyn Fn()>| {
+        let button = |label: &str, action: Box<dyn Fn()>| {
             let b = gtk::Button::builder()
                 .child(&gtk::Label::builder().label(label).xalign(0.0).build())
                 .css_classes(["flat"])
@@ -347,63 +357,92 @@ impl Dock {
                 }
                 action();
             });
-            col.append(&b);
+            b
         };
+        let item = |label: &str, action: Box<dyn Fn()>| col.append(&button(label, action));
         let separator = || col.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        let heading = |text: &str| {
+            let l = gtk::Label::builder().label(text).xalign(0.0).build();
+            l.add_css_class("dock-menu-heading");
+            col.append(&l);
+        };
 
-        // Open windows, so one can be picked directly.
+        heading(&app.display_name());
+
         if let (false, Some(tx)) = (wins.is_empty(), &self.commands) {
-            for w in wins {
+            let window_button = |w: &WindowInfo| {
                 let title = if w.title.is_empty() {
                     app.display_name().to_string()
                 } else {
                     w.title.clone()
                 };
                 let (tx, id) = (tx.clone(), w.id);
-                item(
+                button(
                     &title,
                     Box::new(move || {
                         let _ = tx.try_send(Command::Activate(id));
                     }),
-                );
-            }
-            separator();
-        }
-
-        let a = app.clone();
-        item(
-            &i18n::shell("New Window"),
-            Box::new(move || launcher::launch(&a)),
-        );
-        let actions = app.list_actions();
-        if !actions.is_empty() {
-            separator();
-            for action in actions {
-                let label = app.action_name(&action).to_string();
-                let a = app.clone();
-                item(
-                    &label,
-                    Box::new(move || launcher::launch_action(&a, &action)),
-                );
+                )
+            };
+            if cfg.show_windows_preview {
+                let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                for w in wins {
+                    list.append(&window_button(w));
+                }
+                let expander = gtk::Expander::builder()
+                    .label(i18n::dock("All Windows"))
+                    .child(&list)
+                    .expanded(cfg.default_windows_preview_to_open)
+                    .build();
+                expander.add_css_class("dock-menu-submenu");
+                col.append(&expander);
+            } else {
+                heading(&i18n::shell("Open Windows"));
+                for w in wins {
+                    col.append(&window_button(w));
+                }
             }
         }
 
         separator();
+        let actions = app.list_actions();
+        if umoja_common::apps::can_open_new_window(app)
+            && !actions.iter().any(|a| a == "new-window")
+        {
+            let a = app.clone();
+            item(
+                &i18n::shell("New Window"),
+                Box::new(move || launcher::launch(&a)),
+            );
+            separator();
+        }
+        for action in actions {
+            let label = app.action_name(&action).to_string();
+            let a = app.clone();
+            item(
+                &label,
+                Box::new(move || launcher::launch_action(&a, &action)),
+            );
+        }
+
         let id = app.id().map(|s| s.to_string()).unwrap_or_default();
-        let label = if pinned {
-            i18n::shell("Unpin")
-        } else {
-            i18n::dock("Pin to Dock")
-        };
-        let pin_id = id.clone();
-        item(
-            &label,
-            Box::new(move || umoja_common::apps::set_favorite(&pin_id, !pinned)),
-        );
-        if umoja_common::apps::can_show_details() {
+        if gs::settings(gs::SHELL).is_some_and(|s| s.is_writable("favorite-apps")) {
+            separator();
+            let label = if pinned {
+                i18n::shell("Unpin")
+            } else {
+                i18n::dock("Pin to Dock")
+            };
+            item(
+                &label,
+                Box::new(move || umoja_common::apps::set_favorite(&id, !pinned)),
+            );
+        }
+        if let Some(details) = umoja_common::apps::details_for(app) {
+            separator();
             item(
                 &i18n::shell("App Details"),
-                Box::new(move || umoja_common::apps::show_details(&id)),
+                Box::new(move || umoja_common::apps::show_details(&details)),
             );
         }
 

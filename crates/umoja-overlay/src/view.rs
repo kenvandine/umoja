@@ -656,12 +656,12 @@ impl Overlay {
             &label,
             Box::new(move || umoja_common::apps::set_favorite(&pin_id, !pinned)),
         );
-        if umoja_common::apps::can_show_details() {
+        if let Some(details) = umoja_common::apps::details_for(app) {
             let weak = Rc::downgrade(self);
             item(
                 &i18n::shell("App Details"),
                 Box::new(move || {
-                    umoja_common::apps::show_details(&id);
+                    umoja_common::apps::show_details(&details);
                     if let Some(o) = weak.upgrade() {
                         o.hide();
                     }

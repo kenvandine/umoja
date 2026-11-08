@@ -59,23 +59,100 @@ fn with_favorite(mut favs: Vec<String>, desktop_id: &str, pinned: bool) -> Vec<S
     favs
 }
 
-/// Whether "App Details" can be offered (GNOME shows it only when GNOME
-/// Software is installed).
-pub fn can_show_details() -> bool {
-    glib::find_program_in_path("gnome-software").is_some()
+/// App Center's desktop id, which Ubuntu Dock uses for snaps' App Details.
+const APP_CENTER: &str = "snap-store_snap-store.desktop";
+const GNOME_SOFTWARE: &str = "org.gnome.Software.desktop";
+
+/// Where "App Details" opens, decided as Ubuntu Dock does: a snap (its
+/// desktop file has `X-SnapInstanceName`) goes to App Center, anything else
+/// to GNOME Software. `None` when the matching store isn't installed.
+pub enum Details {
+    AppCenter {
+        store: gio::DesktopAppInfo,
+        snap: String,
+    },
+    Software {
+        desktop_id: String,
+    },
 }
 
-/// Open the app's page in GNOME Software, as GNOME's "App Details" does.
-pub fn show_details(desktop_id: &str) {
-    // GSubprocess reaps the child, so the long-running dock leaves no zombie.
-    let arg = format!("--details={desktop_id}");
-    let argv = [
-        std::ffi::OsStr::new("gnome-software"),
-        std::ffi::OsStr::new(&arg),
-    ];
-    if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
-        tracing::warn!(error = %e, desktop_id, "could not open GNOME Software");
+pub fn details_for(info: &gio::DesktopAppInfo) -> Option<Details> {
+    match info.string("X-SnapInstanceName").filter(|s| !s.is_empty()) {
+        Some(snap) => gio::DesktopAppInfo::new(APP_CENTER).map(|store| Details::AppCenter {
+            store,
+            snap: snap.to_string(),
+        }),
+        None => {
+            gio::DesktopAppInfo::new(GNOME_SOFTWARE)?;
+            Some(Details::Software {
+                desktop_id: info.id()?.to_string(),
+            })
+        }
     }
+}
+
+/// Open the app's store page, as Ubuntu Dock's "App Details" does.
+pub fn show_details(details: &Details) {
+    match details {
+        Details::AppCenter { store, snap } => {
+            // Ubuntu Dock runs App Center's command line with the snap name
+            // appended; drop the desktop-entry field codes (%U...) first.
+            let mut argv: Vec<String> = store
+                .commandline()
+                .map(|c| c.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .split_whitespace()
+                .filter(|a| !a.starts_with('%'))
+                .map(str::to_string)
+                .collect();
+            if argv.is_empty() {
+                return;
+            }
+            argv.push(snap.clone());
+            let argv: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsStr::new).collect();
+            // GSubprocess reaps the child, so the long-running dock leaves no zombie.
+            if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
+                tracing::warn!(error = %e, snap, "could not open App Center");
+            }
+        }
+        Details::Software { desktop_id } => {
+            // org.gtk.Actions.Activate("details", [<(id, "")>], {}), as GNOME does.
+            let target = (desktop_id.as_str(), "").to_variant();
+            let params = glib::Variant::tuple_from_iter([
+                "details".to_variant(),
+                glib::Variant::array_from_iter_with_type(
+                    glib::VariantTy::VARIANT,
+                    [target.to_variant()],
+                ),
+                glib::VariantDict::new(None).end(),
+            ]);
+            gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, move |conn| {
+                let Ok(conn) = conn else { return };
+                conn.call(
+                    Some("org.gnome.Software"),
+                    "/org/gnome/Software",
+                    "org.gtk.Actions",
+                    "Activate",
+                    Some(&params),
+                    None,
+                    gio::DBusCallFlags::NONE,
+                    -1,
+                    gio::Cancellable::NONE,
+                    |r| {
+                        if let Err(e) = r {
+                            tracing::warn!(error = %e, "could not open GNOME Software");
+                        }
+                    },
+                );
+            });
+        }
+    }
+}
+
+/// GNOME's `shell_app_can_open_new_window()` for a desktop entry: not when
+/// the app declares a single main window.
+pub fn can_open_new_window(info: &gio::DesktopAppInfo) -> bool {
+    !(info.boolean("SingleMainWindow") || info.boolean("X-GNOME-SingleWindow"))
 }
 
 #[cfg(test)]

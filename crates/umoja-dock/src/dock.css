@@ -18,3 +18,15 @@ window.umoja-dock {
   background-color: #E95420;
   margin-bottom: 1px;
 }
+
+.dock-menu {
+  min-width: 200px;
+}
+.dock-menu-heading {
+  font-weight: bold;
+  opacity: 0.7;
+  padding: 4px 10px;
+}
+.dock-menu-submenu > title {
+  padding: 4px 10px;
+}
