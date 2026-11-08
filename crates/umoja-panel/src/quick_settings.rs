@@ -15,6 +15,8 @@ use umoja_common::{gsettings as gs, i18n};
 
 const POWER_PROFILES_BUS: &str = "net.hadess.PowerProfiles";
 const POWER_PROFILES_PATH: &str = "/net/hadess/PowerProfiles";
+const POWER_PROFILES_BUS_NEW: &str = "org.freedesktop.UPower.PowerProfiles";
+const POWER_PROFILES_PATH_NEW: &str = "/org/freedesktop/UPower/PowerProfiles";
 
 /// The system status area: network, VPN, volume and battery icons (or the
 /// power icon on machines without a battery), opening Quick Settings.
@@ -59,6 +61,7 @@ fn menu() -> gtk::Box {
         .column_spacing(8)
         .build();
     let (wifi, networks) = network::wifi_tile(tile);
+    let (power, profiles) = power_profile_tile();
     let tiles: Vec<gtk::Widget> = vec![
         network::wired_tile(tile).upcast(),
         wifi.upcast(),
@@ -68,7 +71,7 @@ fn menu() -> gtk::Box {
             "bluetooth",
         )
         .upcast(),
-        power_profile_tile().upcast(),
+        power.upcast(),
         dark_style_tile().upcast(),
         night_light_tile().upcast(),
     ];
@@ -85,6 +88,7 @@ fn menu() -> gtk::Box {
     }
     root.append(&flow);
     root.append(&networks);
+    root.append(&profiles);
     root
 }
 
@@ -127,6 +131,20 @@ fn bool_tile(icon: &str, label: &str, schema: &str, key: &'static str) -> gtk::T
 
 fn dark_style_tile() -> gtk::ToggleButton {
     let t = tile("dark-mode-symbolic", &i18n::shell("Dark Style"));
+    // gnome-shell draws dark-mode-symbolic from its own resources; icon
+    // themes may not have it, so fall back to a themed moon.
+    if let Some(img) = t
+        .child()
+        .and_then(|c| c.first_child())
+        .and_downcast::<gtk::Image>()
+    {
+        let icon = gio::ThemedIcon::from_names(&[
+            "dark-mode-symbolic",
+            "weather-clear-night-symbolic",
+            "night-light-symbolic",
+        ]);
+        img.set_from_gicon(&icon);
+    }
     let Some(settings) = gs::settings(gs::DESKTOP_INTERFACE) else {
         t.set_sensitive(false);
         return t;
@@ -159,73 +177,189 @@ fn night_light_tile() -> gtk::ToggleButton {
     )
 }
 
-/// Cycles power-saver / balanced / performance through power-profiles-daemon.
-fn power_profile_tile() -> gtk::ToggleButton {
-    let t = tile(
+const PROFILES: [(&str, &str, &str); 3] = [
+    (
+        "performance",
+        "Performance",
+        "power-profile-performance-symbolic",
+    ),
+    ("balanced", "Balanced", "power-profile-balanced-symbolic"),
+    (
+        "power-saver",
+        "Power Saver",
+        "power-profile-power-saver-symbolic",
+    ),
+];
+
+/// power-profiles-daemon renamed its bus name in 0.20; try the new one first.
+fn power_profiles_proxy() -> Option<gio::DBusProxy> {
+    [
+        (POWER_PROFILES_BUS_NEW, POWER_PROFILES_PATH_NEW),
+        (POWER_PROFILES_BUS, POWER_PROFILES_PATH),
+    ]
+    .into_iter()
+    .find_map(|(bus, path)| {
+        gio::DBusProxy::for_bus_sync(
+            gio::BusType::System,
+            gio::DBusProxyFlags::NONE,
+            None,
+            bus,
+            path,
+            bus,
+            gio::Cancellable::NONE,
+        )
+        .ok()
+        .filter(|p| p.name_owner().is_some())
+    })
+}
+
+/// gnome-shell's Power Mode tile: shows the active profile, and the tile
+/// or its arrow opens a list of the three profiles to pick from.
+fn power_profile_tile() -> (gtk::Box, gtk::Revealer) {
+    let toggle = tile(
         "power-profile-balanced-symbolic",
         &i18n::shell("Power Mode"),
     );
-    let proxy = gio::DBusProxy::for_bus_sync(
-        gio::BusType::System,
-        gio::DBusProxyFlags::NONE,
-        None,
-        POWER_PROFILES_BUS,
-        POWER_PROFILES_PATH,
-        POWER_PROFILES_BUS,
-        gio::Cancellable::NONE,
+    toggle.set_hexpand(true);
+    let arrow = gtk::ToggleButton::builder()
+        .icon_name("go-next-symbolic")
+        .css_classes(["tile", "tile-arrow"])
+        .build();
+    let split = gtk::Box::builder()
+        .css_classes(["linked", "split-tile"])
+        .build();
+    split.append(&toggle);
+    split.append(&arrow);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    list.add_css_class("network-list");
+    list.append(
+        &gtk::Label::builder()
+            .label(i18n::shell("Power Mode"))
+            .xalign(0.0)
+            .css_classes(["heading", "network-list-header"])
+            .build(),
     );
-    let Ok(proxy) = proxy else {
-        t.set_sensitive(false);
-        return t;
+    let revealer = gtk::Revealer::builder()
+        .child(&list)
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .build();
+
+    let Some(proxy) = power_profiles_proxy() else {
+        tracing::info!("power-profiles-daemon not running; Power Mode disabled");
+        split.set_sensitive(false);
+        return (split, revealer);
     };
-    let current = move |p: &gio::DBusProxy| {
-        p.cached_property("ActiveProfile")
-            .and_then(|v| v.get::<String>())
-            .unwrap_or_else(|| "balanced".into())
-    };
+    let bus = proxy.interface_name().to_string();
+
+    let mut rows = Vec::new();
+    for (id, label, icon) in PROFILES {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.append(&gtk::Image::from_icon_name(icon));
+        row.append(
+            &gtk::Label::builder()
+                .label(i18n::shell(label))
+                .xalign(0.0)
+                .hexpand(true)
+                .build(),
+        );
+        let check = gtk::Image::from_icon_name("object-select-symbolic");
+        row.append(&check);
+        let button = gtk::Button::builder()
+            .child(&row)
+            .css_classes(["flat", "network-row"])
+            .build();
+        button.connect_clicked({
+            let (proxy, bus) = (proxy.clone(), bus.clone());
+            move |_| {
+                let args = (
+                    bus.as_str(),
+                    "ActiveProfile",
+                    glib::Variant::from_variant(&id.to_variant()),
+                );
+                proxy.call(
+                    "org.freedesktop.DBus.Properties.Set",
+                    Some(&args.to_variant()),
+                    gio::DBusCallFlags::NONE,
+                    -1,
+                    gio::Cancellable::NONE,
+                    |r| {
+                        if let Err(e) = r {
+                            tracing::warn!(error = %e, "could not change power profile");
+                        }
+                    },
+                );
+            }
+        });
+        list.append(&button);
+        rows.push((id, button, check));
+    }
+
+    let updating = Rc::new(Cell::new(false));
     let sync = {
-        let t = t.clone();
+        let (toggle, updating) = (toggle.clone(), updating.clone());
         move |p: &gio::DBusProxy| {
-            let profile = current(p);
-            t.set_active(profile != "balanced");
-            t.set_tooltip_text(Some(&profile));
+            let active = p
+                .cached_property("ActiveProfile")
+                .and_then(|v| v.get::<String>())
+                .unwrap_or_else(|| "balanced".into());
+            // Only offer profiles this machine has (performance needs
+            // platform support).
+            let available: Vec<String> = p
+                .cached_property("Profiles")
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|d| {
+                            glib::VariantDict::new(Some(&d))
+                                .lookup_value("Profile", None)
+                                .and_then(|p| p.get::<String>())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (id, button, check) in &rows {
+                button.set_visible(available.is_empty() || available.iter().any(|a| a == id));
+                check.set_opacity(if *id == active { 1.0 } else { 0.0 });
+            }
+            let (_, label, icon) = PROFILES
+                .iter()
+                .find(|(id, _, _)| *id == active)
+                .copied()
+                .unwrap_or(PROFILES[1]);
+            network::set_tile_icon(&toggle, icon);
+            network::set_tile_label(&toggle, &i18n::shell(label));
+            updating.set(true);
+            toggle.set_active(active != "balanced");
+            updating.set(false);
         }
     };
     sync(&proxy);
-    proxy.connect_local("g-properties-changed", false, {
-        let sync = sync.clone();
-        move |args| {
-            if let Ok(p) = args[0].get::<gio::DBusProxy>() {
-                sync(&p);
+    proxy.connect_local("g-properties-changed", false, move |args| {
+        if let Ok(p) = args[0].get::<gio::DBusProxy>() {
+            sync(&p);
+        }
+        None
+    });
+
+    // The tile body opens the list too, like gnome-shell's menu toggle.
+    toggle.connect_clicked({
+        let arrow = arrow.clone();
+        move |t| {
+            if updating.get() {
+                return;
             }
-            None
+            // Keep showing the profile state, not the click.
+            updating.set(true);
+            t.set_active(!t.is_active());
+            updating.set(false);
+            arrow.set_active(!arrow.is_active());
         }
     });
-    t.connect_clicked(move |_| {
-        let next = match current(&proxy).as_str() {
-            "power-saver" => "balanced",
-            "balanced" => "performance",
-            _ => "power-saver",
-        };
-        let args = (
-            POWER_PROFILES_BUS,
-            "ActiveProfile",
-            glib::Variant::from_variant(&next.to_variant()),
-        );
-        proxy.call(
-            "org.freedesktop.DBus.Properties.Set",
-            Some(&args.to_variant()),
-            gio::DBusCallFlags::NONE,
-            -1,
-            gio::Cancellable::NONE,
-            |r| {
-                if let Err(e) = r {
-                    tracing::warn!(error = %e, "could not change power profile");
-                }
-            },
-        );
+    arrow.connect_toggled({
+        let revealer = revealer.clone();
+        move |b| revealer.set_reveal_child(b.is_active())
     });
-    t
+    (split, revealer)
 }
 
 /// Output volume slider; the speaker icon mutes, like gnome-shell.
@@ -311,7 +445,10 @@ fn session_row() -> gtk::Box {
 /// Close Quick Settings before acting, as gnome-shell does, so the menu
 /// is not left open over a new window or the lock screen.
 pub fn close_menu(w: &impl IsA<gtk::Widget>) {
-    if let Some(p) = w.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>() {
+    if let Some(p) = w
+        .ancestor(gtk::Popover::static_type())
+        .and_downcast::<gtk::Popover>()
+    {
         p.popdown();
     }
 }
