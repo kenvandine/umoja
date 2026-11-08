@@ -345,9 +345,11 @@ mod tests {
     #[ignore]
     fn live_tool_choice() {
         use std::cell::RefCell;
-        struct Rec(RefCell<Vec<String>>);
+        struct Rec(RefCell<Vec<String>>, RefCell<String>);
         impl Ui for Rec {
-            fn text(&self, _: &str) {}
+            fn text(&self, t: &str) {
+                *self.1.borrow_mut() = t.to_string();
+            }
             fn step(&self, _: usize, label: &str, state: StepState) {
                 if state != StepState::Running {
                     self.0.borrow_mut().push(format!("{label} [{state:?}]"));
@@ -391,7 +393,7 @@ mod tests {
         ];
         let ctx = glib::MainContext::default();
         for p in prompts {
-            let rec = Rc::new(Rec(RefCell::new(Vec::new())));
+            let rec = Rc::new(Rec(RefCell::new(Vec::new()), RefCell::new(String::new())));
             let t0 = std::time::Instant::now();
             let answer = ctx.block_on(run_with(
                 LemonadeClient::new(),
@@ -404,6 +406,11 @@ mod tests {
                 println!("  - {s}");
             }
             println!("  = {}", answer.replace('\n', " "));
+            assert!(
+                !answer.is_empty(),
+                "no answer for {p:?}; last shown: {:?}",
+                rec.1.borrow()
+            );
         }
     }
 
