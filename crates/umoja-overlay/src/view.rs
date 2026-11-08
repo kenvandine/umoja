@@ -1,6 +1,8 @@
 //! The overlay window: search entry, app grid and assistant answers.
 
-use crate::lemonade::{self, LemonadeClient, RUNTIME, StreamEvent};
+use crate::assistant::agent::{self, Question, StepState};
+use crate::assistant::tools::Risk;
+use crate::lemonade::{self, LemonadeClient};
 use crate::myna::{Myna, MynaEvent};
 use adw::prelude::*;
 use gio::prelude::*;
@@ -9,8 +11,11 @@ use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::process::Command;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use umoja_common::gsettings as gs;
 use umoja_common::i18n;
 use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
@@ -27,6 +32,8 @@ pub struct Overlay {
     grid: gtk::FlowBox,
     ask_button: gtk::Button,
     answer: gtk::Label,
+    /// One line per tool call ("✓ Turn on Dark Style").
+    steps: gtk::Box,
     chips: gtk::FlowBox,
     assistant: gtk::Box,
     /// Matching files from umoja-files, under the assistant card.
@@ -92,6 +99,9 @@ impl Overlay {
             .selectable(true)
             .max_width_chars(80)
             .build();
+        let steps = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        steps.add_css_class("assistant-steps");
+        steps.set_visible(false);
         let chips = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .max_children_per_line(4)
@@ -100,6 +110,7 @@ impl Overlay {
         assistant.add_css_class("assistant-card");
         assistant.set_halign(gtk::Align::Center);
         assistant.set_width_request(640);
+        assistant.append(&steps);
         assistant.append(&answer);
         assistant.append(&chips);
         assistant.set_visible(false);
@@ -145,6 +156,7 @@ impl Overlay {
             grid,
             ask_button,
             answer,
+            steps,
             chips,
             assistant,
             myna_pill,
@@ -381,50 +393,53 @@ impl Overlay {
         self.hide();
     }
 
-    /// Stream the query to Lemonade and render text + action chips.
+    /// Answer a question, letting the assistant act through its tools.
     fn ask(self: &Rc<Self>, query: &str) {
-        let query = query.trim().to_string();
-        if query.is_empty() {
+        self.ask_question(Question::from(query.trim()));
+    }
+
+    /// [`Self::ask`] with optional context (selected text, window contents).
+    pub fn ask_question(self: &Rc<Self>, question: Question) {
+        if question.text.trim().is_empty() {
             return;
         }
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
         self.assistant.set_visible(true);
+        self.answer.set_visible(true);
         self.answer.set_text(&i18n::umoja("Thinking…"));
-        while let Some(c) = self.chips.first_child() {
-            self.chips.remove(&c);
+        for b in [self.chips.upcast_ref::<gtk::Widget>(), self.steps.upcast_ref()] {
+            while let Some(c) = b.first_child() {
+                c.unparent();
+            }
         }
+        self.steps.set_visible(false);
+        crate::assistant::take_hide_request();
 
-        let (tx, rx) = async_channel::unbounded();
+        let ui: Rc<dyn agent::Ui> = Rc::new(OverlayUi {
+            overlay: Rc::downgrade(self),
+            generation,
+            rows: RefCell::new(HashMap::new()),
+        });
         let client = self.lemonade.clone();
-        RUNTIME.spawn(async move { client.stream_guidance(&query, tx).await });
-
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let mut text = String::new();
-            while let Ok(ev) = rx.recv().await {
-                let Some(o) = weak.upgrade() else { return };
-                if o.generation.get() != generation {
-                    return; // superseded; dropping rx cancels the stream
-                }
-                match ev {
-                    StreamEvent::Delta(d) => {
-                        text.push_str(&d);
-                        o.answer.set_text(&strip_actions(&text));
-                    }
-                    StreamEvent::Done => {
-                        o.answer.set_text(&strip_actions(&text));
-                        for action in extract_actions(&text) {
-                            o.chips.append(&o.chip(action));
-                        }
-                        return;
-                    }
-                    StreamEvent::Error(e) => {
-                        o.answer.set_text(&e);
-                        return;
-                    }
-                }
+            let text = agent::run(client, question, ui).await;
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() != generation {
+                return;
+            }
+            // Older models may still answer with action JSON: offer chips.
+            for action in extract_actions(&text) {
+                o.chips.append(&o.chip(action));
+            }
+            if text.is_empty() && o.answer.text() == i18n::umoja("Thinking…") {
+                o.answer.set_visible(false);
+            }
+            // A tool opened an app or moved a window: get out of the way.
+            if crate::assistant::take_hide_request() {
+                o.hide();
             }
         });
     }
@@ -560,6 +575,108 @@ impl Overlay {
     }
 }
 
+/// The overlay as the assistant agent sees it.
+struct OverlayUi {
+    overlay: Weak<Overlay>,
+    generation: u64,
+    rows: RefCell<HashMap<usize, (gtk::Box, gtk::Label)>>,
+}
+
+impl OverlayUi {
+    fn live(&self) -> Option<Rc<Overlay>> {
+        self.overlay
+            .upgrade()
+            .filter(|o| o.generation.get() == self.generation)
+    }
+}
+
+impl agent::Ui for OverlayUi {
+    fn text(&self, text: &str) {
+        let Some(o) = self.live() else { return };
+        let text = strip_actions(text);
+        // Keep "Thinking…" up until the first words arrive.
+        if !text.is_empty() {
+            o.answer.set_visible(true);
+            o.answer.set_text(&text);
+        } else if !self.rows.borrow().is_empty() {
+            o.answer.set_visible(false);
+        }
+    }
+
+    fn step(&self, id: usize, label: &str, state: StepState) {
+        let Some(o) = self.live() else { return };
+        o.steps.set_visible(true);
+        if o.answer.text() == i18n::umoja("Thinking…") {
+            o.answer.set_visible(false);
+        }
+        let mut rows = self.rows.borrow_mut();
+        let (row, text) = rows.entry(id).or_insert_with(|| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.add_css_class("assistant-step");
+            let text = gtk::Label::builder()
+                .xalign(0.0)
+                .wrap(true)
+                .hexpand(true)
+                .build();
+            row.append(&text);
+            o.steps.append(&row);
+            (row, text)
+        });
+        // Swap the leading status icon.
+        if let Some(first) = row.first_child()
+            && first != *text.upcast_ref::<gtk::Widget>()
+        {
+            row.remove(&first);
+        }
+        let icon: gtk::Widget = match state {
+            StepState::Running => adw::Spinner::new().upcast(),
+            StepState::Done => gtk::Image::from_icon_name("object-select-symbolic").upcast(),
+            StepState::Failed => gtk::Image::from_icon_name("dialog-warning-symbolic").upcast(),
+            StepState::Declined => gtk::Image::from_icon_name("action-unavailable-symbolic").upcast(),
+        };
+        icon.set_size_request(16, 16);
+        row.prepend(&icon);
+        text.set_text(label);
+        for c in ["running", "done", "failed", "declined"] {
+            row.remove_css_class(c);
+        }
+        row.add_css_class(match state {
+            StepState::Running => "running",
+            StepState::Done => "done",
+            StepState::Failed => "failed",
+            StepState::Declined => "declined",
+        });
+    }
+
+    fn confirm(&self, label: &str, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>> {
+        let Some(o) = self.live() else {
+            return Box::pin(async { false });
+        };
+        let dialog = adw::AlertDialog::new(
+            Some(&i18n::umoja("Allow the assistant to do this?")),
+            Some(label),
+        );
+        dialog.add_response("cancel", &i18n::gtk("_Cancel"));
+        dialog.add_response("allow", &i18n::umoja("Allow"));
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.set_response_appearance(
+            "allow",
+            if risk == Risk::High {
+                adw::ResponseAppearance::Destructive
+            } else {
+                adw::ResponseAppearance::Suggested
+            },
+        );
+        let window = o.window.clone();
+        Box::pin(async move { dialog.choose_future(&window).await == "allow" })
+    }
+
+    fn cancelled(&self) -> bool {
+        self.live().is_none()
+    }
+}
+
 fn haystack(app: &gio::AppInfo) -> String {
     let mut s = app
         .description()
@@ -602,7 +719,7 @@ fn json_to_variant(v: &serde_json::Value) -> Option<glib::Variant> {
 /// Whether a suggested command needs a terminal: it asks for privileges
 /// (sudo, pkexec) or uses a package manager, which prompts and prints
 /// progress the user should see.
-fn needs_terminal(cmd: &str) -> bool {
+pub(crate) fn needs_terminal(cmd: &str) -> bool {
     const TOOLS: &[&str] = &[
         "sudo", "pkexec", "apt", "apt-get", "aptitude", "dpkg", "snap", "flatpak",
     ];
@@ -613,7 +730,7 @@ fn needs_terminal(cmd: &str) -> bool {
 
 /// Run `cmd` in the user's terminal, kept open afterwards so the result
 /// can be read.
-fn spawn_in_terminal(cmd: &str) -> std::io::Result<()> {
+pub(crate) fn spawn_in_terminal(cmd: &str) -> std::io::Result<()> {
     let script = format!("{cmd}\nstatus=$?\necho\nprintf '%s' \"$1\"\nread -r _\nexit $status");
     let prompt = i18n::umoja("Press Enter to close this window.");
     let shell = ["sh", "-c", script.as_str(), "umoja-run", prompt.as_str()];
