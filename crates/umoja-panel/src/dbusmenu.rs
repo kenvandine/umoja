@@ -248,7 +248,8 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect();
-        let kids: Vec<glib::Variant> = children.iter().map(glib::Variant::from_variant).collect();
+        // `av` boxes each child once, as a real GetLayout reply does.
+        let kids = children;
         (id, p, kids).to_variant()
     }
 
