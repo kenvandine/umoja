@@ -88,9 +88,19 @@ impl Settings {
 }
 
 /// Seconds before the outputs turn off (unlocked, locked); 0 = never.
-pub fn timeouts(s: &Settings, inhibited: bool) -> (u32, u32) {
+///
+/// While the screen is off after idling unlocked, the locked timeout matches the
+/// unlocked one. Mir restarts its idle timers when the session locks only if
+/// the two differ, and doing so turns the outputs back on for a moment
+/// (then straight off, the idle time being past 30s): a flash of the lock
+/// screen just after blanking. Once the screen wakes, the lock screen's own
+/// 30 seconds apply again.
+pub fn timeouts(s: &Settings, inhibited: bool, blanked: bool) -> (u32, u32) {
     if inhibited {
         return (0, 0);
+    }
+    if blanked && s.idle_delay > 0 {
+        return (s.idle_delay, s.idle_delay);
     }
     (s.idle_delay, LOCKED_BLANK_SECONDS)
 }
@@ -118,6 +128,11 @@ struct State {
     /// film that ends after an hour without input would blank at once.
     hold_until: Option<Instant>,
     blanked: bool,
+    /// The session lock (ext-session-lock) is engaged.
+    locked: bool,
+    /// The screen went off while unlocked and hasn't woken since; see
+    /// [`timeouts`].
+    blanked_unlocked: bool,
     /// Bumped on every blank and wake, so a pending lock-after-blank can
     /// tell the screen came back in the meantime.
     generation: u64,
@@ -157,7 +172,11 @@ fn apply(st: &mut State) {
     if !st.held() {
         st.hold_until = None;
     }
-    let t = timeouts(&st.settings, st.idle_inhibited() || st.held());
+    let t = timeouts(
+        &st.settings,
+        st.idle_inhibited() || st.held(),
+        st.blanked_unlocked,
+    );
     if st.applied == Some(t) {
         return;
     }
@@ -219,7 +238,9 @@ fn on_mir_state(code: u32) {
         2 => {
             tracing::info!("screen off");
             st.blanked = true;
+            st.blanked_unlocked = !st.locked;
             st.generation += 1;
+            apply(&mut st);
             if let Some(delay) = lock_after_blank(&st.settings) {
                 let generation = st.generation;
                 RUNTIME.spawn(async move {
@@ -237,8 +258,12 @@ fn on_mir_state(code: u32) {
         3 => {
             tracing::info!("screen on");
             st.blanked = false;
+            st.blanked_unlocked = false;
             st.generation += 1;
+            apply(&mut st);
         }
+        4 => st.locked = true,
+        5 => st.locked = false,
         _ => {}
     }
 }
@@ -465,7 +490,7 @@ mod tests {
             idle_delay: 300,
             ..Default::default()
         };
-        assert_eq!(timeouts(&s, false), (300, LOCKED_BLANK_SECONDS));
+        assert_eq!(timeouts(&s, false, false), (300, LOCKED_BLANK_SECONDS));
     }
 
     #[test]
@@ -474,14 +499,25 @@ mod tests {
             idle_delay: 0,
             ..Default::default()
         };
-        assert_eq!(timeouts(&s, false).0, 0);
+        assert_eq!(timeouts(&s, false, false).0, 0);
         // The lock screen still turns the screen off, as in GNOME.
-        assert_eq!(timeouts(&s, false).1, LOCKED_BLANK_SECONDS);
+        assert_eq!(timeouts(&s, false, false).1, LOCKED_BLANK_SECONDS);
+    }
+
+    #[test]
+    fn locking_after_blank_keeps_screen_off() {
+        let s = Settings::default();
+        assert_eq!(timeouts(&s, false, true), (300, 300));
+        let never = Settings {
+            idle_delay: 0,
+            ..Default::default()
+        };
+        assert_eq!(timeouts(&never, false, true), (0, LOCKED_BLANK_SECONDS));
     }
 
     #[test]
     fn inhibitor_keeps_screen_on() {
-        assert_eq!(timeouts(&Settings::default(), true), (0, 0));
+        assert_eq!(timeouts(&Settings::default(), true, false), (0, 0));
     }
 
     #[test]

@@ -15,6 +15,7 @@
 #include "umoja_shim.h"
 
 #include <mir/server.h>
+#include <mir/scene/session_lock.h>
 #include <mir/shell/idle_handler.h>
 
 #include <chrono>
@@ -31,7 +32,13 @@ struct Observer : mir::shell::IdleHandlerObserver {
     void wake() override { umoja_idle_state(UMOJA_IDLE_WAKE); }
 };
 
+struct LockObserver : mir::scene::SessionLockObserver {
+    void on_lock() override { umoja_idle_state(UMOJA_IDLE_LOCKED); }
+    void on_unlock() override { umoja_idle_state(UMOJA_IDLE_UNLOCKED); }
+};
+
 std::mutex g_mutex;
+std::shared_ptr<LockObserver> const g_lock_observer = std::make_shared<LockObserver>();
 std::weak_ptr<mir::shell::IdleHandler> g_handler;
 std::shared_ptr<Observer> const g_observer = std::make_shared<Observer>();
 // Last requested timeouts, in seconds (0 = never). Kept so a request made
@@ -57,6 +64,7 @@ void umoja_idle_setup(mir::Server& server) {
     server.add_init_callback([&server] {
         auto const handler = server.the_idle_handler();
         handler->register_interest(g_observer);
+        server.the_session_lock()->register_interest(g_lock_observer);
         std::lock_guard lock{g_mutex};
         g_handler = handler;
         apply(handler);

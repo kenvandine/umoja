@@ -196,8 +196,10 @@ enum {
     UMOJA_IDLE_DIM = 1,
     UMOJA_IDLE_OFF = 2,
     UMOJA_IDLE_WAKE = 3,
+    UMOJA_IDLE_LOCKED = 4, // ext-session-lock engaged
+    UMOJA_IDLE_UNLOCKED = 5,
 };
-// Mir's idle state changed (called on a Mir thread).
+// Mir's idle or session-lock state changed (called on a Mir thread).
 void umoja_idle_state(uint32_t state);
 
 #ifdef __cplusplus
