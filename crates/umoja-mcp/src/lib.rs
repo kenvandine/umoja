@@ -15,6 +15,7 @@
 //! [`Tool::new`] for low-risk changes, and [`Tool::confirm`] /
 //! [`Tool::with_risk`] for anything hard to undo.
 
+pub mod actions;
 pub mod apps;
 pub mod desktop;
 pub mod diagnostics;
@@ -30,6 +31,7 @@ pub use tool::{Outcome, Risk, Tool};
 const PROVIDERS: &[fn() -> Vec<Tool>] = &[
     apps::tools,
     desktop::tools,
+    actions::tools,
     settings::tools,
     files::tools,
     notifications::tools,

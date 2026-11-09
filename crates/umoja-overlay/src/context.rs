@@ -227,7 +227,40 @@ pub struct FocusedWindow {
     pub rect: (i32, i32, i32, i32),
 }
 
+/// umoja-mir's windows, most recently used first:
+/// (id, app_id, title, x, y, w, h, flags).
+pub type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
+
 pub async fn focused_window() -> Option<FocusedWindow> {
+    pick_focused(windows_mru().await?)
+}
+
+/// A window on the current workspace whose app or title matches `name`.
+pub async fn find_window(name: &str) -> Option<(u64, FocusedWindow)> {
+    let rows = windows_mru().await?;
+    let q = name.trim().to_lowercase();
+    let usable = |f: u32| f & 2 == 0;
+    let matches = |r: &&WindowRow| {
+        let app = r.1.to_lowercase();
+        let short = app.rsplit('.').next().unwrap_or(&app).to_string();
+        usable(r.7) && (app.contains(&q) || q.contains(&short) || r.2.to_lowercase().contains(&q))
+    };
+    let row = rows
+        .iter()
+        .filter(|r| r.7 & 4 != 0)
+        .find(matches)
+        .or_else(|| rows.iter().find(matches))?;
+    Some((
+        row.0,
+        FocusedWindow {
+            app_id: row.1.clone(),
+            title: row.2.clone(),
+            rect: (row.3, row.4, row.5.max(1), row.6.max(1)),
+        },
+    ))
+}
+
+async fn windows_mru() -> Option<Vec<WindowRow>> {
     use umoja_common::dbus;
     let conn = gio::bus_get_future(gio::BusType::Session).await.ok()?;
     let reply = conn
@@ -244,8 +277,8 @@ pub async fn focused_window() -> Option<FocusedWindow> {
         .await
         .map_err(|e| tracing::warn!(error = %e, "GetWindowsMru failed"))
         .ok()?;
-    let (rows,) = reply.get::<(Vec<(u64, String, String, i32, i32, i32, i32, u32)>,)>()?;
-    pick_focused(rows)
+    let (rows,) = reply.get::<(Vec<WindowRow>,)>()?;
+    Some(rows)
 }
 
 /// Flags as in umoja-mir's `WindowDesc`: 1 focused, 2 minimized, 4 on the

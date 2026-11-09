@@ -226,19 +226,19 @@ fn set_dark_style(a: &Value) -> String {
 
 // ---- system bus helpers ------------------------------------------------------
 
-async fn system_bus() -> Result<gio::DBusConnection, String> {
+pub(crate) async fn system_bus() -> Result<gio::DBusConnection, String> {
     gio::bus_get_future(gio::BusType::System)
         .await
         .map_err(|e| e.to_string())
 }
 
-async fn session_bus() -> Result<gio::DBusConnection, String> {
+pub(crate) async fn session_bus() -> Result<gio::DBusConnection, String> {
     gio::bus_get_future(gio::BusType::Session)
         .await
         .map_err(|e| e.to_string())
 }
 
-async fn get_prop(
+pub(crate) async fn get_prop(
     c: &gio::DBusConnection,
     bus: &str,
     path: &str,
@@ -261,7 +261,7 @@ async fn get_prop(
     Ok(v.child_value(0).as_variant().unwrap_or(v))
 }
 
-async fn set_prop(
+pub(crate) async fn set_prop(
     c: &gio::DBusConnection,
     bus: &str,
     path: &str,
@@ -344,10 +344,10 @@ async fn set_power_mode(a: Value) -> String {
 
 // ---- Wi-Fi ----------------------------------------------------------------------
 
-const NM: &str = "org.freedesktop.NetworkManager";
-const NM_PATH: &str = "/org/freedesktop/NetworkManager";
+pub(crate) const NM: &str = "org.freedesktop.NetworkManager";
+pub(crate) const NM_PATH: &str = "/org/freedesktop/NetworkManager";
 
-async fn set_wifi(a: Value) -> String {
+pub(crate) async fn set_wifi(a: Value) -> String {
     let Some(on) = arg_bool(&a, "enabled") else {
         return err("enabled must be true or false");
     };
@@ -397,7 +397,7 @@ async fn bt_adapter(c: &gio::DBusConnection) -> Result<(String, bool), String> {
     Err("this computer has no Bluetooth adapter".into())
 }
 
-async fn set_bluetooth(a: Value) -> String {
+pub(crate) async fn set_bluetooth(a: Value) -> String {
     let Some(on) = arg_bool(&a, "enabled") else {
         return err("enabled must be true or false");
     };
@@ -768,7 +768,7 @@ const LOGIN1_PATH: &str = "/org/freedesktop/login1";
 
 /// The user's graphical session. umoja-mcp runs under the overlay's user
 /// service, outside the session scope and usually without XDG_SESSION_ID.
-async fn login_session(c: &gio::DBusConnection) -> Result<String, String> {
+pub(crate) async fn login_session(c: &gio::DBusConnection) -> Result<String, String> {
     if let Ok(id) = std::env::var("XDG_SESSION_ID")
         && !id.is_empty()
         && let Ok(r) = c
@@ -801,7 +801,7 @@ async fn login_session(c: &gio::DBusConnection) -> Result<String, String> {
     Ok(path)
 }
 
-async fn session_action(a: Value) -> String {
+pub(crate) async fn session_action(a: Value) -> String {
     let action = arg_str(&a, "action").unwrap_or("");
     if action == "log_out" {
         // Ask the panel first: it fades to black, like its Log Out button.

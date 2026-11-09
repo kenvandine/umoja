@@ -2,6 +2,7 @@
 //! served by umoja-mcp ([`mcp`]) and the overlay's own ([`tools`]).
 
 pub mod agent;
+pub mod capture;
 pub mod diagnostics;
 pub mod mcp;
 pub mod screen;

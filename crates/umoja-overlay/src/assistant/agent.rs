@@ -27,7 +27,15 @@ switch Wi-Fi, Bluetooth, power mode and dark style, arrange windows and workspac
 or remove installed apps. When the user asks you to do something, do it with a tool call \
 instead of explaining how, and never ask the user to run a command to find something out: \
 look it up with a tool. To uninstall an app, call remove_app with its name; it works out how \
-the app was installed and asks the user itself. For \
+the app was installed and asks the user itself; to install one, call install_app with its name. \
+Everyday actions each have their own tool, so use it and never run_command for them: \
+take_screenshot (target window by default, screen, area, or overlay only if the user asks for a \
+picture of you), screen_recording, session (log out, lock, suspend, restart, power off), \
+set_volume, set_audio_device, set_brightness, media_control, set_do_not_disturb, \
+set_night_light, set_airplane_mode, connect_wifi, bluetooth_device, open_url (web pages and \
+web searches), open_folder, set_wallpaper, empty_trash, eject_drive, force_quit_app, \
+check_updates, install_updates, copy_to_clipboard, and date_time or system_info for facts \
+about now and this computer. Those tools ask the user themselves when needed. For \
 settings, call list_settings to find the right one and its current value, then change_setting \
 in the same answer; don't stop to ask. \"Show X\" or \"turn on X\" means set it to true. For \
 relative changes like \"bigger\" or \"slower to dim\", compute the new value from the current \
@@ -509,6 +517,24 @@ mod tests {
             "remove discord",
             "how is firefox installed?",
             "make the mouse pointer bigger",
+            "take a screenshot of this window",
+            "screenshot the whole screen",
+            "shut down the computer",
+            "restart",
+            "log me out",
+            "turn the volume down",
+            "mute my microphone",
+            "make the screen brighter",
+            "pause the music",
+            "turn on do not disturb",
+            "install vlc",
+            "are there any updates?",
+            "empty the trash",
+            "what time is it?",
+            "what version of ubuntu am I running?",
+            "search the web for gtk4 layer shell",
+            "open my downloads folder",
+            "firefox is frozen, kill it",
         ];
         for p in prompts {
             let rec = Rc::new(Rec(RefCell::new(Vec::new()), RefCell::new(String::new())));

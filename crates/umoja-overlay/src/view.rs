@@ -347,6 +347,7 @@ impl Overlay {
                 context::blocking(move || context::ocr_file(&image.0)).await
             })
         }));
+        crate::assistant::capture::set_capturer(Rc::new(OverlayCapturer(Rc::downgrade(&overlay))));
         overlay.refresh_results();
         overlay
     }
@@ -889,6 +890,7 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let win = context::focused_window().await;
+            crate::assistant::capture::set_previous_window(win.as_ref().map(window_name));
             if let Some(o) = weak.upgrade() {
                 *o.last_window.borrow_mut() = win;
             }
@@ -1096,6 +1098,101 @@ impl Overlay {
         let shot = context::blocking(move || context::capture(rect)).await;
         self.reveal();
         shot
+    }
+
+    /// The assistant's take_screenshot: step aside (unless the overlay
+    /// itself was asked for), capture, come back.
+    async fn assistant_screenshot(
+        self: &Rc<Self>,
+        target: crate::assistant::capture::Target,
+        delay: u64,
+    ) -> Result<String, String> {
+        use crate::assistant::capture::Target;
+        let shots = self
+            .shots
+            .borrow()
+            .upgrade()
+            .ok_or("screenshots aren't available")?;
+        let was_visible = self.is_visible();
+        let wait = Duration::from_secs(delay);
+        let (region, what, raise) = match &target {
+            Target::Overlay => (None, "the assistant".to_string(), None),
+            Target::Screen => (None, "the screen".to_string(), None),
+            Target::Area => (None, String::new(), None),
+            Target::Window(Some(name)) => match context::find_window(name).await {
+                Some((id, w)) => (Some(w.rect), window_name(&w), Some(id)),
+                None => return Err(format!("no open window matches “{name}”")),
+            },
+            Target::Window(None) => match self.last_window.borrow().clone() {
+                Some(w) => (Some(w.rect), window_name(&w), None),
+                None => (None, "the screen (no window was open)".to_string(), None),
+            },
+        };
+        if target == Target::Overlay {
+            glib::timeout_future(wait).await;
+            let path = context::blocking(|| crate::screenshot::grab_to_file(None)).await?;
+            shots.announce(&path);
+            return Ok(saved(&what, &path));
+        }
+        self.window.set_visible(false);
+        if let Some(id) = raise {
+            crate::screenshot::raise_window(id);
+        }
+        // Let the compositor drop the overlay (and raise the window).
+        glib::timeout_future(wait + if was_visible || raise.is_some() { STEP_ASIDE } else { Duration::from_millis(16) }).await;
+        let result = if target == Target::Area {
+            let (tx, rx) = async_channel::bounded(1);
+            shots.pick_area(Box::new(move |p| {
+                let _ = tx.try_send(p);
+            }));
+            match rx.recv().await.ok().flatten() {
+                Some(p) => shots
+                    .save_pixbuf(&p)
+                    .map(|path| saved("the area the user picked", &path))
+                    .ok_or_else(|| "the screenshot couldn't be saved".to_string()),
+                None => Err("the user cancelled the screenshot".into()),
+            }
+        } else {
+            match context::blocking(move || crate::screenshot::grab_to_file(region)).await {
+                Ok(path) => {
+                    shots.announce(&path);
+                    Ok(saved(&what, &path))
+                }
+                Err(e) => Err(e),
+            }
+        };
+        if was_visible {
+            self.reveal();
+        }
+        result
+    }
+
+    async fn assistant_record(self: &Rc<Self>, start: bool) -> Result<String, String> {
+        let shots = self
+            .shots
+            .borrow()
+            .upgrade()
+            .ok_or("screen recording isn't available")?;
+        let rec = shots.recorder().clone();
+        if !start {
+            if !rec.is_recording() {
+                return Err("no screen recording is running".into());
+            }
+            rec.stop();
+            return Ok("Stopped the screen recording; the video is in Videos/Screencasts".into());
+        }
+        if rec.is_recording() {
+            return Err("the screen is already being recorded".into());
+        }
+        // Out of the picture for good: the recording starts with the next frame.
+        self.window.set_visible(false);
+        glib::timeout_future(STEP_ASIDE).await;
+        rec.start(shots.screen_region());
+        if rec.is_recording() {
+            Ok("Recording the screen to Videos/Screencasts. Stop it with the red button in the top bar, or ask me to stop.".into())
+        } else {
+            Err("the screen recording couldn't start (is wf-recorder installed?)".into())
+        }
     }
 
     fn ocr_and_attach(self: &Rc<Self>, image: context::TempImage, kind: Kind, pending: String) {
@@ -1464,6 +1561,54 @@ impl agent::Ui for OverlayUi {
     fn cancelled(&self) -> bool {
         self.live().is_none()
     }
+}
+
+/// The overlay's side of the assistant's capture tools.
+struct OverlayCapturer(Weak<Overlay>);
+
+impl crate::assistant::capture::Capturer for OverlayCapturer {
+    fn screenshot(
+        &self,
+        target: crate::assistant::capture::Target,
+        delay: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>>>> {
+        let o = self.0.upgrade();
+        Box::pin(async move {
+            o.ok_or("the overlay is gone")?
+                .assistant_screenshot(target, delay)
+                .await
+        })
+    }
+
+    fn record(&self, start: bool) -> Pin<Box<dyn Future<Output = Result<String, String>>>> {
+        let o = self.0.upgrade();
+        Box::pin(async move { o.ok_or("the overlay is gone")?.assistant_record(start).await })
+    }
+
+    fn copy(&self, text: &str) {
+        if let Some(o) = self.0.upgrade() {
+            o.copy_text(text);
+        }
+    }
+}
+
+/// "Firefox", "Terminal": a window's app name for the user, else its title.
+fn window_name(w: &FocusedWindow) -> String {
+    let id = w.app_id.trim_end_matches(".desktop");
+    gio::DesktopAppInfo::new(&format!("{id}.desktop"))
+        .map(|a| a.display_name().to_string())
+        .filter(|n| !n.is_empty())
+        .or_else(|| (!w.title.is_empty()).then(|| w.title.clone()))
+        .unwrap_or_else(|| id.to_string())
+}
+
+fn saved(what: &str, path: &std::path::Path) -> String {
+    let home = glib::home_dir();
+    let shown = path
+        .strip_prefix(&home)
+        .map(|p| format!("~/{}", p.display()))
+        .unwrap_or_else(|_| path.display().to_string());
+    format!("Saved a screenshot of {what} to {shown} and copied it to the clipboard")
 }
 
 /// A flat popover menu entry with an icon.

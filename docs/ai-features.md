@@ -127,10 +127,45 @@ Ask in plain words and the assistant does it, instead of telling you how.
 | Desktop settings | "make text bigger", "stop the screen dimming so fast", "show battery percentage", "turn on night light", "put the dock at the bottom" |
 | Reset a setting | "put the touchpad speed back to default" |
 | Close a window | "close the calculator" |
-| Log out, lock, suspend, restart, power off | "log me out", "lock the screen", "restart the computer" |
+| Log out, lock, suspend, restart, power off | "log me out", "lock the screen", "restart the computer", "shut down" |
+| Screenshots | "take a screenshot of this window", "screenshot the whole screen", "screenshot an area", "screenshot Firefox in 3 seconds" |
+| Screen recording | "record my screen", "stop recording" |
+| Volume and sound devices | "turn it down", "volume to 30%", "mute my mic", "play sound through my headphones" |
+| Screen brightness | "make the screen brighter", "brightness 40%" |
+| Music and video | "pause the music", "next song", "what's playing?" |
+| Do Not Disturb, Night Light, airplane mode | "turn on do not disturb", "night light off", "airplane mode on" |
+| Wi-Fi networks and Bluetooth devices | "connect to the CoffeeShop Wi-Fi", "connect my headphones", "disconnect the speaker" |
+| The web | "open ubuntu.com", "search the web for GTK 4 layer shell" |
+| Folders and the wallpaper | "open my Downloads", "show the Trash", "use this photo as my background" |
+| The Trash and USB drives | "empty the trash", "eject the USB stick" |
+| A frozen app | "Firefox is frozen, force quit it" |
+| Install apps and updates | "install VLC", "are there any updates?", "install the updates" |
+| The date, time and this computer | "what time is it?", "what week is it?", "which Ubuntu version is this?", "what's my IP address?", "how much RAM do I have?" |
+| The clipboard | "copy that command to the clipboard" |
 | Find or remove apps | "how is Firefox installed?", "remove Discord" |
 | Explain a setting | "what does the hot corner setting do?" |
-| Run a command | "how much space is left in my home folder? run df for me" |
+| Run a command | "list the files in my Projects folder with their sizes" |
+
+Each of these is a single step with its own tool, so the assistant never
+asks you to run or approve a shell command for them. When one needs your
+OK, the dialog says what will happen in plain words ("Take a screenshot
+of the Firefox window", "Power off the computer", "Install vlc"), not the
+command behind it. If a model still tries a command such as `systemctl
+poweroff`, `grim` or `apt install vlc`, Umoja's tool server turns it into
+the matching action instead of asking you to approve the command. Web
+searches open DuckDuckGo in your default browser.
+
+### Screenshots
+
+"Take a screenshot" captures the window you were working in before you
+opened the overlay. The overlay gets out of the way first, so it isn't in
+the picture, and comes back afterwards. You can also ask for the whole
+screen, for an area (the screenshot UI opens so you can drag one out), for
+another window by name ("screenshot the terminal"), or for a short delay.
+Only when you ask for a picture of the assistant itself ("screenshot the
+overlay") does it stay on screen. Screenshots are saved to
+Pictures/Screenshots and copied to the clipboard, with the usual
+*Screenshot captured* notification, exactly like the **Print** key.
 
 The settings it knows by name cover text and cursor size, accent colour,
 animations, the top bar clock and battery percentage, accessibility
@@ -153,10 +188,13 @@ unless you click **Allow**.
 
 | Action | Asks first? |
 | --- | --- |
-| Open apps, Settings pages, files and folders; change settings by name; Dark Style, Power Mode, Wi-Fi, Bluetooth; arrange, focus and move windows; switch workspaces | No |
-| Reading things: window list, settings, notifications, selection, clipboard, current window, diagnostics, file search | No |
-| Close a window (unsaved work could be lost) | Yes |
+| Open apps, Settings pages, files, folders and web pages; change settings by name; Dark Style, Power Mode, Wi-Fi, Bluetooth, airplane mode, Do Not Disturb, Night Light; volume, sound device, brightness, media playback; join a Wi-Fi network, connect a Bluetooth device; set the wallpaper; eject a drive; copy to the clipboard; arrange, focus and move windows; switch workspaces; stop a screen recording | No |
+| Reading things: window list, settings, notifications, selection, clipboard, current window, diagnostics, file search, date and time, system details, available updates, what's playing | No |
+| Take a screenshot, start a screen recording | Yes |
+| Close a window, force quit an app (unsaved work could be lost) | Yes |
+| Empty the Trash (says how many items) | Yes |
 | Log out, suspend, restart, power off (locking doesn't ask) | Yes |
+| Install an app (says which package, version and publisher) or install updates (lists them) | Always, with a red **Allow** button |
 | Run a command | Always |
 | Change any other `org.gnome.*` setting by its raw key | Yes |
 | Send a reply to a notification | Yes |
@@ -210,6 +248,16 @@ Removing snaps, debs and system Flatpaks needs administrator rights. The
 assistant asks for your password the usual way; if it can't show a
 password prompt, it opens a terminal running the `sudo` command so you can
 type it there.
+
+**"Install VLC"** works the same way in reverse. The assistant looks for
+a snap first (as App Center does), then for a deb in the Ubuntu archive,
+and the **Allow** dialog says what it found, for example *vlc 3.0.21 from
+the Snap Store, published by VideoLAN*. Snaps that run without the
+sandbox (classic confinement) say so. If nothing has that exact name, it
+suggests close matches. **"Are there any updates?"** lists waiting deb and
+snap updates, and **"install the updates"** shows that list in the dialog
+and then runs the upgrade and a snap refresh, asking for your password
+the usual way.
 
 It won't remove Umoja itself, base and runtime snaps other snaps need
 (`core*`, `gnome-*`, `mesa-*`…), or a deb whose removal would take part

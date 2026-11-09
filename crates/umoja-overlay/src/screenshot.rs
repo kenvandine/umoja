@@ -875,7 +875,9 @@ impl ScreenshotUi {
         self.close();
         match ask {
             Some(done) => done(Some(pixbuf)),
-            None => save_and_notify(&self.app, &pixbuf),
+            None => {
+                save_and_notify(&self.app, &pixbuf);
+            }
         }
     }
 
@@ -907,7 +909,9 @@ impl ScreenshotUi {
             let _ = std::fs::remove_file(&path);
             match (ask, pixbuf) {
                 (Some(done), p) => done(p),
-                (None, Some(p)) => save_and_notify(&app, &p),
+                (None, Some(p)) => {
+                    save_and_notify(&app, &p);
+                }
                 (None, None) => tracing::warn!("window screenshot failed"),
             }
         });
@@ -939,6 +943,55 @@ impl ScreenshotUi {
     pub fn capture_area(&self, x: i32, y: i32, w: i32, h: i32) {
         save_and_notify_file(&self.app, Some((x, y, w, h)));
     }
+
+    /// For the assistant: open the UI to pick an area (selection mode);
+    /// `done` gets the picked pixels, or `None` if the user cancelled.
+    pub fn pick_area(self: &Rc<Self>, done: AskCallback) {
+        self.open_for_ask(done);
+        if self.window.is_visible() {
+            self.set_mode(Mode::Selection);
+        }
+    }
+
+    /// For the assistant: save `pixbuf` like a capture from the UI
+    /// (~/Pictures/Screenshots, clipboard, notification).
+    pub fn save_pixbuf(&self, pixbuf: &Pixbuf) -> Option<PathBuf> {
+        save_and_notify(&self.app, pixbuf)
+    }
+
+    /// For the assistant: copy and announce a capture already saved with
+    /// [`grab_to_file`].
+    pub fn announce(&self, path: &Path) {
+        match Pixbuf::from_file(path) {
+            Ok(p) => finish(&self.app, path, &p),
+            Err(e) => tracing::warn!(error = %e, "could not load the screenshot"),
+        }
+    }
+
+    /// The first monitor's area in layout pixels, for a full-screen recording.
+    pub fn screen_region(&self) -> (i32, i32, i32, i32) {
+        let ((x, y), (w, h)) = self.monitor_geometry();
+        (x as i32, y as i32, w as i32, h as i32)
+    }
+}
+
+/// Capture `region` (all outputs when `None`) to a new file in
+/// ~/Pictures/Screenshots. Blocking; safe off the main thread.
+pub fn grab_to_file(region: Option<(i32, i32, i32, i32)>) -> Result<PathBuf, String> {
+    let path = screenshot_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if grim(&path, region, false) {
+        Ok(path)
+    } else {
+        Err("the screen couldn't be captured (is grim installed?)".into())
+    }
+}
+
+/// Raise and focus a window through umoja-mir (for the assistant).
+pub fn raise_window(id: u64) {
+    activate_window(id);
 }
 
 /// Raise and focus a window through umoja-mir.
@@ -1001,16 +1054,17 @@ fn save_and_notify_file(app: &adw::Application, region: Option<(i32, i32, i32, i
     }
 }
 
-fn save_and_notify(app: &adw::Application, pixbuf: &Pixbuf) {
+fn save_and_notify(app: &adw::Application, pixbuf: &Pixbuf) -> Option<PathBuf> {
     let path = screenshot_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Err(e) = pixbuf.savev(&path, "png", &[]) {
         tracing::warn!(error = %e, "could not save screenshot");
-        return;
+        return None;
     }
     finish(app, &path, pixbuf);
+    Some(path)
 }
 
 /// Clipboard + "Screenshot captured" notification, as gnome-shell does.

@@ -31,7 +31,10 @@ an app is installed, open it, remove it), desktop settings in plain language (li
 change_setting), Wi-Fi, Bluetooth, power mode, windows and workspaces, notifications, files and \
 read-only troubleshooting reports. Prefer these tools over shell commands: to remove an app call \
 remove_app with its name; it works out whether it is a snap, a deb, a Flatpak or an AppImage and \
-asks the user itself. Risky tools ask the user before they run; if a result says the user \
+asks the user itself. Use the dedicated tools for everyday actions (session for log out, lock, \
+suspend, restart and power off; set_volume, set_brightness, media_control, connect_wifi, \
+install_app, install_updates, empty_trash, force_quit_app, open_url, open_folder, date_time, \
+system_info...) instead of run_command. Risky tools ask the user before they run; if a result says the user \
 declined, don't try again.";
 
 pub fn risk_name(r: Risk) -> &'static str {
@@ -139,7 +142,12 @@ impl Server {
                 let Some(tool) = self.tools.iter().find(|t| t.name == name) else {
                     return Err((-32602, format!("unknown tool: {name}")));
                 };
-                Ok(json!({"label": tool.describe(&args), "risk": risk_name((tool.risk)(&args))}))
+                let (label, risk) = match self.redirect(tool, args.clone()) {
+                    Ok((t, a)) => (t.describe(&a), (t.risk)(&a)),
+                    // Nothing runs: say what the assistant is really doing.
+                    Err(_) => ("Pick the right tool".to_string(), Risk::Low),
+                };
+                Ok(json!({"label": label, "risk": risk_name(risk)}))
             }
             m if m.starts_with("notifications/") => Ok(Value::Null),
             "resources/list" => Ok(json!({"resources": []})),
@@ -148,8 +156,33 @@ impl Server {
         }
     }
 
+    /// A `run_command` call that one of our tools does better becomes a
+    /// call to that tool (or a hint for the model), so the user is asked
+    /// in plain words ("Power off the computer") or not at all.
+    fn redirect<'a>(&'a self, tool: &'a Tool, args: Value) -> Result<(&'a Tool, Value), String> {
+        if tool.name != "run_command" {
+            return Ok((tool, args));
+        }
+        let cmd = crate::tool::arg_str(&args, "command").unwrap_or("");
+        match crate::actions::redirect(cmd) {
+            Some(crate::actions::Redirect::Call(name, a)) => match self.tools.iter().find(|t| t.name == name) {
+                Some(t) => {
+                    tracing::info!(command = cmd, tool = name, "run_command redirected");
+                    Ok((t, a))
+                }
+                None => Ok((tool, args)),
+            },
+            Some(crate::actions::Redirect::Hint(h)) => Err(h.to_string()),
+            None => Ok((tool, args)),
+        }
+    }
+
     /// Confirm if needed, then run.
     pub async fn call(self: &Rc<Self>, tool: &Tool, args: Value) -> CallResult {
+        let (tool, args) = match self.redirect(tool, args) {
+            Ok(v) => v,
+            Err(hint) => return CallResult::from(Outcome::err(hint)),
+        };
         let risk = (tool.risk)(&args);
         if risk != Risk::Low {
             let detail = match tool.preflight {

@@ -150,12 +150,12 @@ fn extra_words(app: &gio::AppInfo) -> String {
 
 // ---- package managers ----------------------------------------------------------
 
-fn output(argv: &[&str]) -> Option<String> {
+pub(crate) fn output(argv: &[&str]) -> Option<String> {
     let o = Command::new(argv[0]).args(&argv[1..]).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-fn have(bin: &str) -> bool {
+pub(crate) fn have(bin: &str) -> bool {
     glib::find_program_in_path(bin).is_some()
 }
 
@@ -616,7 +616,7 @@ pub enum Privileged {
     NeedsTerminal,
 }
 
-fn run(argv: &[&str]) -> (bool, Option<i32>, String) {
+pub(crate) fn run(argv: &[&str]) -> (bool, Option<i32>, String) {
     match Command::new(argv[0]).args(&argv[1..]).env("LC_ALL", "C").output() {
         Ok(o) => {
             let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -629,7 +629,7 @@ fn run(argv: &[&str]) -> (bool, Option<i32>, String) {
 
 /// Run `argv` as root: `sudo -n` if that needs no password, else pkexec
 /// (polkit asks), else report that a terminal is needed.
-fn privileged(argv: &[&str]) -> Privileged {
+pub(crate) fn privileged(argv: &[&str]) -> Privileged {
     if have("sudo") && run(&["sudo", "-n", "true"]).0 {
         let mut a = vec!["sudo", "-n"];
         a.extend_from_slice(argv);
@@ -651,7 +651,7 @@ fn privileged(argv: &[&str]) -> Privileged {
 }
 
 /// snapd/flatpak errors that mean "polkit couldn't ask".
-fn needs_auth(text: &str) -> bool {
+pub(crate) fn needs_auth(text: &str) -> bool {
     let t = text.to_lowercase();
     t.contains("access denied") || t.contains("not authorized") || t.contains("authentication") || t.contains("polkit")
 }
@@ -663,7 +663,7 @@ enum Removal {
     Terminal(String),
 }
 
-fn last_lines(s: &str) -> String {
+pub(crate) fn last_lines(s: &str) -> String {
     let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
     lines[lines.len().saturating_sub(4)..].join("\n")
 }
