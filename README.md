@@ -21,6 +21,7 @@ down. Press **Super+/** for a guide to every keyboard shortcut. It also adds a l
 | `crates/umoja-common` | GSettings, i18n (reuses gnome-shell/GTK/control-center translations), HiDPI rules, shared types. |
 | `data/` | Session file, GSettings schema, systemd user units, portal + LightDM config. |
 | `debian/` | Packaging for `umoja-desktop` and `umoja-greeter`. |
+| `tools/demo` | `umoja-demo`: drives a hands-free tour of a live session and captures screenshots, clips and a Markdown page ([how](tools/demo/README.md)). |
 
 ## Building
 

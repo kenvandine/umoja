@@ -48,6 +48,7 @@ const IFACE_XML: &str = r#"
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
     <method name="ShowCopyTextUI"/>
+    <method name="HideScreenshotUI"/>
     <method name="ToggleShortcuts"/>
     <method name="StopScreencast"/>
     <method name="IsScreencasting">
@@ -190,6 +191,9 @@ fn export(
                         methods.hide();
                         shots.open_copy_text();
                     }
+                    // Close the screenshot UI without taking a shot, as
+                    // Escape does (tools/demo drives it hands-free).
+                    "HideScreenshotUI" => shots.dismiss(),
                     "ToggleShortcuts" => {
                         if !guide.is_visible() {
                             methods.hide();

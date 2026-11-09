@@ -966,6 +966,13 @@ impl ScreenshotUi {
         }
     }
 
+    /// Close the UI if it is open, taking nothing (Escape).
+    pub fn dismiss(&self) {
+        if self.is_open() {
+            self.close();
+        }
+    }
+
     fn close(&self) {
         // Keep the panel for next time; the surfaces go.
         let surfaces = std::mem::take(&mut *self.surfaces.borrow_mut());

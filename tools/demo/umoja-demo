@@ -1,0 +1,828 @@
+#!/usr/bin/python3
+"""Drive a hands-free tour of a live Umoja session and capture it.
+
+Run it from a terminal inside an Umoja session, then keep your hands off the
+keyboard and mouse until it says it is done (about three minutes). It opens a
+few apps, walks through the app grid, the workspaces overview, Quick Settings,
+notifications, the keyboard shortcuts guide, the screenshot UI, the
+screensaver and the AI assistant (asked through the local model), and writes
+
+    <out>/README.md        a tour page with every shot and clip
+    <out>/snippet.md       a short gallery to paste into the top-level README
+    <out>/images/*.png     stills (grim)
+    <out>/videos/*.gif     short clips that GitHub plays inline (needs ffmpeg)
+    <out>/videos/*.mp4     the same clips as H.264 (needs ffmpeg)
+
+<out> defaults to docs/demo in this checkout, so `git add docs/demo` is all
+that is left to do. See tools/demo/README.md for the options.
+
+Everything is driven over Umoja's own D-Bus APIs (org.umoja.Overlay,
+org.umoja.Panel, org.umoja.Compositor, org.freedesktop.Notifications); no
+keyboard or mouse input is injected. While it runs it holds an idle
+inhibitor, and before every step it checks that the screen is neither blanked
+nor locked: if it is, the tour stops and only tidies up over D-Bus.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+try:
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+except (ImportError, ValueError):
+    sys.exit("umoja-demo needs PyGObject: sudo apt install python3-gi")
+
+OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
+PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
+COMPOSITOR = ("org.umoja.Compositor", "/org/umoja/Compositor", "org.umoja.Compositor")
+NOTIFY = (
+    "org.freedesktop.Notifications",
+    "/org/freedesktop/Notifications",
+    "org.freedesktop.Notifications",
+)
+SCREENSAVER = (
+    "org.freedesktop.ScreenSaver",
+    "/org/freedesktop/ScreenSaver",
+    "org.freedesktop.ScreenSaver",
+)
+DISPLAY_CONFIG = (
+    "org.gnome.Mutter.DisplayConfig",
+    "/org/gnome/Mutter/DisplayConfig",
+    "org.gnome.Mutter.DisplayConfig",
+)
+
+# Apps opened for the tour, first ones found win. Two are tiled side by side
+# on the first workspace, the third goes to the second workspace.
+APP_CANDIDATES = [
+    "org.gnome.Nautilus.desktop",
+    "org.gnome.TextEditor.desktop",
+    "org.gnome.Calculator.desktop",
+    "org.gnome.SystemMonitor.desktop",
+    "org.gnome.Characters.desktop",
+    "org.gnome.Settings.desktop",
+]
+TILE_LEFT, TILE_RIGHT = 1, 2
+
+DEMO_NOTIFICATIONS = [
+    ("Calendar", "x-office-calendar", "Design review in 10 minutes",
+     "Umoja style refresh, Room 3 / video call"),
+    ("Mail", "mail-unread", "Priya Shah",
+     "Can you send me the screenshots for the release notes before Friday?"),
+    ("Software", "system-software-update", "Updates installed",
+     "umoja and 4 other packages were updated."),
+]
+
+DEFAULT_QUESTIONS = [
+    "Which apps are open right now, and on which workspace?",
+    "What did I miss in my notifications?",
+]
+
+SCENES = [
+    "desktop", "app-grid", "overview", "workspaces", "quick-settings",
+    "notifications", "shortcuts", "screenshot-ui", "screensaver", "assistant",
+]
+
+
+class Stop(Exception):
+    """The tour can't go on (screen blanked/locked, session gone)."""
+
+
+def settings(schema):
+    """Gio.Settings for `schema`, or None (Gio aborts on an unknown schema)."""
+    src = Gio.SettingsSchemaSource.get_default()
+    if src is None or src.lookup(schema, True) is None:
+        return None
+    return Gio.Settings.new(schema)
+
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+class Bus:
+    """Thin synchronous wrapper over the session bus (or a printer for --dry-run)."""
+
+    def __init__(self, dry):
+        self.dry = dry
+        self.conn = None if dry else Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.system = None
+
+    def call(self, target, method, args=None, reply=None, timeout=10_000, quiet=False):
+        name, path, iface = target
+        if self.dry:
+            if not quiet:
+                log(f"  dbus {iface}.{method}{'' if args is None else ' ' + str(args.unpack())}")
+            return None
+        try:
+            res = self.conn.call_sync(
+                name, path, iface, method, args,
+                GLib.VariantType(reply) if reply else None,
+                Gio.DBusCallFlags.NONE, timeout, None,
+            )
+        except GLib.Error as e:
+            if not quiet:
+                log(f"  ! {iface}.{method}: {e.message}")
+            return None
+        return res.unpack() if res is not None else None
+
+    def has_method(self, target, method):
+        if self.dry:
+            return True
+        name, path, iface = target
+        try:
+            res = self.conn.call_sync(
+                name, path, "org.freedesktop.DBus.Introspectable", "Introspect",
+                None, GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, 5000, None,
+            )
+        except GLib.Error:
+            return False
+        info = Gio.DBusNodeInfo.new_for_xml(res.unpack()[0])
+        i = info.lookup_interface(iface)
+        return bool(i and i.lookup_method(method))
+
+    def has_name(self, name):
+        if self.dry:
+            return True
+        res = self.call(
+            ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus"),
+            "NameHasOwner", GLib.Variant("(s)", (name,)), "(b)", quiet=True,
+        )
+        return bool(res and res[0])
+
+    def session_locked(self):
+        if self.dry:
+            return False
+        try:
+            if self.system is None:
+                self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            res = self.system.call_sync(
+                "org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                "org.freedesktop.DBus.Properties", "Get",
+                GLib.Variant("(ss)", ("org.freedesktop.login1.Session", "LockedHint")),
+                GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 5000, None,
+            )
+            return bool(res.unpack()[0])
+        except GLib.Error:
+            return False
+
+
+class Recorder:
+    """One wf-recorder clip at a time, on the primary monitor."""
+
+    def __init__(self, demo):
+        self.demo = demo
+        self.proc = None
+        self.path = None
+
+    def start(self, name):
+        if not self.demo.video:
+            return
+        self.path = self.demo.raw_dir / f"{name}.webm"
+        cmd = [
+            "wf-recorder", "-y", "-c", "libvpx", "-x", "yuv420p",
+            "-p", "deadline=realtime", "-p", "cpu-used=8", "-p", "b=8M",
+            "-f", str(self.path),
+        ]
+        if self.demo.output:
+            cmd[1:1] = ["-o", self.demo.output]
+        if self.demo.dry:
+            log(f"  rec  {' '.join(cmd)}")
+            self.proc = True
+            return
+        self.proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=open(self.demo.raw_dir / f"{name}.log", "w"),
+        )
+        time.sleep(1.0)  # wf-recorder needs a moment before the first frame
+        if self.proc.poll() is not None:
+            log(f"  ! wf-recorder exited at once (see {self.demo.raw_dir}/{name}.log)")
+            self.proc = None
+
+    def stop(self, caption):
+        if not self.proc:
+            return
+        if self.demo.dry:
+            log("  rec  stop")
+        else:
+            time.sleep(0.5)
+            self.proc.send_signal(signal.SIGINT)  # finishes the file
+            try:
+                self.proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.demo.clips.append((self.path, caption))
+        self.proc = None
+
+    def abort(self):
+        if self.proc and self.proc is not True:
+            self.proc.send_signal(signal.SIGINT)
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+
+class Demo:
+    def __init__(self, opts):
+        self.opts = opts
+        self.dry = opts.dry_run
+        self.bus = Bus(self.dry)
+        self.out = opts.out
+        self.img_dir = self.out / "images"
+        self.vid_dir = self.out / "videos"
+        self.raw_dir = self.out / ".raw"
+        self.video = not opts.no_video
+        self.output = None
+        self.shots = {}  # scene -> [(file, caption)]
+        self.clips = []  # (raw webm, caption)
+        self.videos = {}  # scene -> [(gif or None, mp4/webm, caption)]
+        self.scene = None
+        self.opened = []  # window ids this tour opened
+        self.notes = []
+        self.inhibit_cookie = None
+        self.start_workspace = None
+        self.banners = None
+        self.saver = None
+        self.recorder = Recorder(self)
+
+    # ---- safety -------------------------------------------------------
+
+    def check_screen(self):
+        """Never drive the desktop while the screen is blanked or locked."""
+        res = self.bus.call(SCREENSAVER, "GetActive", None, "(b)", quiet=True)
+        if res and res[0]:
+            raise Stop("the screen is blanked")
+        if self.bus.session_locked():
+            raise Stop("the session is locked")
+
+    def wait(self, seconds):
+        """Sleep in small steps, checking the screen as we go."""
+        if self.dry:
+            return
+        end = time.monotonic() + seconds * self.opts.pace
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(left, 0.5))
+            self.check_screen()
+
+    # ---- capture ------------------------------------------------------
+
+    def shot(self, name, caption):
+        self.check_screen()
+        path = self.img_dir / f"{name}.png"
+        cmd = ["grim"]
+        if not self.opts.hidpi:
+            cmd += ["-s", "1"]  # logical size: keeps the PNGs README-sized
+        if self.output:
+            cmd += ["-o", self.output]
+        cmd.append(str(path))
+        if self.dry:
+            log(f"  shot {' '.join(cmd)}")
+        else:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                log(f"  ! grim failed: {r.stderr.strip()}")
+                return
+            log(f"  shot {path.name}")
+        self.shots.setdefault(self.scene, []).append((path, caption))
+
+    # ---- setup / teardown --------------------------------------------
+
+    def preflight(self):
+        problems = []
+        if not os.environ.get("WAYLAND_DISPLAY"):
+            problems.append("run this inside the Umoja session (no WAYLAND_DISPLAY)")
+        if "Umoja" not in os.environ.get("XDG_CURRENT_DESKTOP", ""):
+            problems.append("XDG_CURRENT_DESKTOP doesn't say Umoja; is this an Umoja session?")
+        for tool in ["grim"] + (["wf-recorder"] if self.video else []):
+            if not shutil.which(tool):
+                problems.append(f"{tool} is missing (sudo apt install {tool})")
+        for target in (OVERLAY, PANEL, COMPOSITOR):
+            if not self.bus.has_name(target[0]):
+                problems.append(f"{target[0]} isn't on the session bus")
+        if problems and not self.dry:
+            for p in problems:
+                log(f"! {p}")
+            sys.exit(1)
+        self.ffmpeg = bool(shutil.which("ffmpeg"))
+        if self.video and not self.ffmpeg:
+            log("note: ffmpeg is missing, so clips stay .webm (no GIFs for the README). "
+                "sudo apt install ffmpeg, then rerun.")
+        self.output = self.opts.output or self.primary_connector()
+        log(f"capturing monitor {self.output or '(all)'}; writing to {self.out}")
+
+    def primary_connector(self):
+        res = self.bus.call(DISPLAY_CONFIG, "GetCurrentState", None, quiet=True)
+        if not res:
+            return None
+        _serial, _monitors, logical, _props = res
+        for lm in logical:
+            # (x, y, scale, transform, primary, monitors a(ssss), props)
+            if lm[4] and lm[5]:
+                return lm[5][0][0]
+        return logical[0][5][0][0] if logical and logical[0][5] else None
+
+    def prepare_out(self):
+        if self.dry:
+            return
+        manifest = self.out / ".umoja-demo-files"
+        if manifest.exists():  # remove what an earlier run wrote, nothing else
+            for line in manifest.read_text().splitlines():
+                p = self.out / line
+                if p.is_file() and p.resolve().is_relative_to(self.out.resolve()):
+                    p.unlink()
+        for d in (self.img_dir, self.vid_dir, self.raw_dir):
+            d.mkdir(parents=True, exist_ok=True)
+
+    def inhibit(self):
+        res = self.bus.call(
+            SCREENSAVER, "Inhibit",
+            GLib.Variant("(ss)", ("umoja-demo", "Recording a demo of the desktop")), "(u)",
+        )
+        self.inhibit_cookie = res[0] if res else None
+
+    def uninhibit(self):
+        if self.inhibit_cookie is not None:
+            self.bus.call(SCREENSAVER, "UnInhibit", GLib.Variant("(u)", (self.inhibit_cookie,)),
+                          quiet=True)
+
+    def notifications_on(self):
+        """Do Not Disturb would hide the bubbles; lift it for the tour."""
+        if self.dry:
+            return
+        s = settings("org.gnome.desktop.notifications")
+        if not s:
+            return
+        self.banners = s.get_boolean("show-banners")
+        if not self.banners:
+            log("turning Do Not Disturb off for the tour (restored afterwards)")
+            s.set_boolean("show-banners", True)
+            Gio.Settings.sync()
+
+    def windows(self):
+        rows = self.bus.call(COMPOSITOR, "GetWindows", None, "(a(tssiiiiu))", quiet=True)
+        return rows[0] if rows else []
+
+    def open_apps(self):
+        if self.opts.no_apps:
+            return
+        found = []
+        for desktop_id in APP_CANDIDATES:
+            try:
+                info = Gio.DesktopAppInfo.new(desktop_id)
+            except TypeError:
+                info = None
+            if info:
+                found.append(info)
+            if len(found) == 3:
+                break
+        before = {w[0] for w in self.windows()}
+        for info in found:
+            log(f"  open {info.get_id()}")
+            if self.dry:
+                continue
+            ids = {w[0] for w in self.windows()}
+            try:
+                info.launch([], None)
+            except GLib.Error as e:
+                log(f"  ! could not open {info.get_id()}: {e.message}")
+                continue
+            new = self.wait_for_window(ids)
+            if new is not None:
+                self.opened.append(new)
+        if self.dry:
+            return
+        self.opened = [w for w in self.opened if w not in before]
+        if len(self.opened) >= 1:
+            self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.opened[0], TILE_LEFT)))
+        if len(self.opened) >= 2:
+            self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.opened[1], TILE_RIGHT)))
+        if len(self.opened) >= 3 and self.bus.has_method(COMPOSITOR, "SendWindowToWorkspace"):
+            cur, _count = self.workspaces()
+            self.bus.call(COMPOSITOR, "SendWindowToWorkspace",
+                          GLib.Variant("(tu)", (self.opened[2], cur + 1)))
+        self.wait(1.5)
+
+    def wait_for_window(self, known, timeout=10):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            time.sleep(0.4)
+            new = [w[0] for w in self.windows() if w[0] not in known]
+            if new:
+                time.sleep(0.6)  # let it draw its first frames
+                return new[-1]
+        log("  ! no new window appeared")
+        return None
+
+    def workspaces(self):
+        res = self.bus.call(COMPOSITOR, "GetWorkspaces", None, "(uu)", quiet=True)
+        return res if res else (0, 1)
+
+    def tidy(self):
+        """Put the desktop back. D-Bus calls only, safe on a blanked screen."""
+        log("tidying up")
+        self.recorder.abort()
+        if self.saver and self.saver.poll() is None:
+            self.saver.terminate()
+        self.bus.call(OVERLAY, "Hide", quiet=True)
+        if self.bus.has_method(OVERLAY, "HideScreenshotUI"):
+            self.bus.call(OVERLAY, "HideScreenshotUI", quiet=True)
+        for nid in self.notes:
+            self.bus.call(NOTIFY, "CloseNotification", GLib.Variant("(u)", (nid,)), quiet=True)
+        for wid in self.opened:
+            self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)), quiet=True)
+        if self.start_workspace is not None:
+            self.bus.call(COMPOSITOR, "ShowWorkspace",
+                          GLib.Variant("(u)", (self.start_workspace,)), quiet=True)
+        if self.banners is False:
+            s = settings("org.gnome.desktop.notifications")
+            s.set_boolean("show-banners", False)
+            Gio.Settings.sync()
+        self.uninhibit()
+
+    # ---- scenes -------------------------------------------------------
+
+    def scene_desktop(self):
+        self.shot("desktop", "The desktop: top bar, Ubuntu-style dock and half-tiled windows.")
+
+    def scene_app_grid(self):
+        self.bus.call(OVERLAY, "Show")
+        self.wait(1.5)
+        self.shot("app-grid", "The app grid with search. Type to find apps, files or ask the assistant.")
+        self.bus.call(OVERLAY, "Hide")
+        self.wait(0.8)
+
+    def scene_overview(self):
+        self.recorder.start("overview")
+        self.bus.call(OVERLAY, "ToggleOverview")
+        self.wait(1.8)
+        self.shot("overview", "The Activities overview (Super): windows, workspace thumbnails and their neighbours.")
+        if self.bus.has_method(OVERLAY, "ShiftOverview"):
+            self.bus.call(OVERLAY, "ShiftOverview", GLib.Variant("(b)", (True,)))
+            self.wait(1.5)
+            self.bus.call(OVERLAY, "ShiftOverview", GLib.Variant("(b)", (False,)))
+            self.wait(1.5)
+        self.bus.call(OVERLAY, "ToggleOverview")
+        self.wait(1.0)
+        self.recorder.stop("Desktop, overview and app grid are steps on one ladder, as in GNOME.")
+
+    def scene_workspaces(self):
+        cur, count = self.workspaces()
+        target = cur + 1 if cur + 1 < count else max(cur - 1, 0)
+        if target == cur:
+            log("  only one workspace, skipping")
+            return
+        self.recorder.start("workspaces")
+        self.bus.call(COMPOSITOR, "SwitchWorkspace", GLib.Variant("(u)", (target,)))
+        self.wait(1.5)
+        self.shot("workspace-2", "Dynamic workspaces, switched with Super+Page Down or a three-finger swipe.")
+        self.bus.call(COMPOSITOR, "SwitchWorkspace", GLib.Variant("(u)", (cur,)))
+        self.wait(1.5)
+        self.recorder.stop("Workspaces slide like GNOME's, with a popup showing where you are.")
+
+    def scene_quick_settings(self):
+        self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("quick-settings",)))
+        self.wait(1.2)
+        self.shot("quick-settings", "Quick Settings: network, Bluetooth, power mode, VPN, keyboard backlight and more.")
+        self.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("quick-settings",)))
+        self.wait(0.8)
+
+    def notify(self, app, icon, summary, body):
+        res = self.bus.call(
+            NOTIFY, "Notify",
+            GLib.Variant("(susssasa{sv}i)", (app, 0, icon, summary, body, [], {}, 8000)),
+            "(u)",
+        )
+        if res:
+            self.notes.append(res[0])
+
+    def scene_notifications(self):
+        self.recorder.start("notifications")
+        for i, n in enumerate(DEMO_NOTIFICATIONS):
+            self.notify(*n)
+            self.wait(1.0)
+            if i == len(DEMO_NOTIFICATIONS) - 1:
+                self.shot("notifications", "Notifications behave like GNOME's and look like Unity's notify-osd bubbles.")
+        self.wait(2.0)
+        self.recorder.stop("Notification bubbles stacking up.")
+        self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("calendar",)))
+        self.wait(1.2)
+        self.shot("calendar", "The date menu keeps the notification list next to the calendar.")
+        self.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("calendar",)))
+        self.wait(0.8)
+
+    def scene_shortcuts(self):
+        if not self.bus.has_method(OVERLAY, "ToggleShortcuts"):
+            log("  this overlay has no shortcuts guide, skipping")
+            return
+        self.bus.call(OVERLAY, "ToggleShortcuts")
+        self.wait(1.5)
+        self.shot("shortcuts", "Super+/ shows every keyboard shortcut, read live from the compositor.")
+        self.bus.call(OVERLAY, "ToggleShortcuts")
+        self.wait(0.8)
+
+    def scene_screenshot_ui(self):
+        # Closing it needs HideScreenshotUI; older overlays only close on
+        # Escape, and this tour never presses keys.
+        if not self.bus.has_method(OVERLAY, "HideScreenshotUI"):
+            log("  this overlay can't close the screenshot UI over D-Bus (update umoja), skipping")
+            return
+        self.bus.call(OVERLAY, "ShowScreenshotUI")
+        self.wait(1.5)
+        self.shot("screenshot-ui", "The screenshot UI (Print): selection, screen or window, picture or screencast.")
+        self.bus.call(OVERLAY, "HideScreenshotUI")
+        self.wait(0.8)
+
+    def scene_screensaver(self):
+        exe = shutil.which("umoja-screensaver")
+        if not exe and not self.dry:
+            log("  umoja-screensaver isn't installed, skipping")
+            return
+        effect = self.opts.effect
+        cmd = [exe or "umoja-screensaver"] + (["--effect", effect] if effect else [])
+        self.recorder.start("screensaver")
+        log(f"  run  {' '.join(cmd)}")
+        if not self.dry:
+            # A preview ends on real input only; nothing here touches it.
+            self.saver = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.wait(3.5)
+        self.shot("screensaver", "The screensaver: \"umoja\" in Ubuntu-orange circles, a new effect each cycle.")
+        self.wait(3.5)
+        if self.saver:
+            self.saver.terminate()
+            try:
+                self.saver.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.saver.kill()
+            self.saver = None
+        self.wait(0.8)
+        self.recorder.stop("Screensaver preview (umoja-screensaver).")
+
+    # ---- assistant ----------------------------------------------------
+
+    def lemonade(self):
+        url = os.environ.get("UMOJA_LEMONADE_URL", "").strip().rstrip("/")
+        if not url:
+            port = os.environ.get("UMOJA_LEMONADE_PORT", "").strip() or "13345"
+            url = f"http://127.0.0.1:{port}"
+        return url
+
+    def local_model(self):
+        s = settings("org.umoja.shell")
+        model = s.get_string("lemonade-model") if s else ""
+        return model or "Qwen3-4B-Instruct-2507-GGUF"
+
+    def http(self, path, body=None, timeout=10):
+        req = urllib.request.Request(
+            self.lemonade() + path,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+
+    def warm_model(self):
+        """Load the local model first so the asks answer in seconds."""
+        if self.dry:
+            log(f"  warm {self.lemonade()} model {self.local_model()}")
+            return True
+        model = self.local_model()
+        try:
+            models = self.http("/api/v1/models").get("data", [])
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            log(f"  ! Lemonade isn't answering on {self.lemonade()} ({e}), skipping the assistant")
+            return False
+        if model not in [m.get("id") for m in models]:
+            log(f"  ! the local model {model} isn't downloaded yet, skipping the assistant")
+            return False
+        log(f"  loading {model} (the first answer can take ~10 s)")
+        try:
+            self.http("/api/v1/chat/completions", {
+                "model": model, "max_tokens": 1,
+                "messages": [{"role": "user", "content": "Hi"}],
+            }, timeout=180)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            log(f"  ! warming the model failed ({e}); asking anyway")
+        return True
+
+    def scene_assistant(self):
+        if not self.warm_model():
+            return
+        questions = self.opts.ask or DEFAULT_QUESTIONS
+        for i, q in enumerate(questions, 1):
+            self.check_screen()
+            if i == 1:
+                self.recorder.start("assistant")
+            log(f"  ask  {q!r}")
+            # Ask() opens the overlay with the question and answers it with
+            # the local model, whatever the cloud setting says.
+            self.bus.call(OVERLAY, "Ask", GLib.Variant("(s)", (q,)))
+            self.wait(self.opts.answer_wait)
+            self.shot(f"assistant-{i}", f"Asking the local assistant: “{q}”")
+            if i == 1:
+                self.recorder.stop(f"The assistant answering “{q}” on the local model, using desktop tools.")
+            self.bus.call(OVERLAY, "Hide")
+            self.wait(1.0)
+
+    # ---- output -------------------------------------------------------
+
+    def encode(self):
+        """webm -> GIF (inline on GitHub) + MP4, after capture so it can't stutter."""
+        for raw, caption in self.clips:
+            scene = raw.stem
+            gif = self.vid_dir / f"{scene}.gif"
+            mp4 = self.vid_dir / f"{scene}.mp4"
+            if self.dry:
+                self.videos.setdefault(scene, []).append((gif, mp4, caption))
+                continue
+            if not raw.exists() or raw.stat().st_size == 0:
+                log(f"  ! {raw.name} is empty, dropping it")
+                continue
+            if not self.ffmpeg:
+                dest = self.vid_dir / raw.name
+                shutil.move(raw, dest)
+                self.videos.setdefault(scene, []).append((None, dest, caption))
+                continue
+            log(f"  encode {scene}")
+            ok_mp4 = subprocess.run([
+                "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw),
+                "-vf", "scale='min(1920,iw)':-2", "-c:v", "libx264", "-preset", "slow",
+                "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(mp4),
+            ]).returncode == 0
+            ok_gif = subprocess.run([
+                "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-vf",
+                f"fps=12,scale={self.opts.gif_width}:-1:flags=lanczos,split[a][b];"
+                "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
+                str(gif),
+            ]).returncode == 0
+            if not ok_mp4:
+                mp4 = self.vid_dir / raw.name
+                shutil.copy(raw, mp4)
+            self.videos.setdefault(scene, []).append((gif if ok_gif else None, mp4, caption))
+
+    def version(self):
+        if self.dry:
+            return "dry run"
+        r = subprocess.run(["dpkg-query", "-W", "-f", "${Version}", "umoja-desktop"],
+                           capture_output=True, text=True)
+        return r.stdout.strip() or "unknown version"
+
+    def rel(self, p):
+        return os.path.relpath(p, self.out)
+
+    def write_markdown(self):
+        titles = {
+            "desktop": "Desktop", "app-grid": "App grid and search",
+            "overview": "Activities overview", "workspaces": "Workspaces",
+            "quick-settings": "Quick Settings", "notifications": "Notifications",
+            "shortcuts": "Keyboard shortcuts guide", "screenshot-ui": "Screenshot UI",
+            "screensaver": "Screensaver", "assistant": "AI assistant (local model)",
+        }
+        today = datetime.date.today().isoformat()
+        lines = [
+            "# A tour of Umoja",
+            "",
+            f"Captured hands-free by `tools/demo/umoja-demo` on {today} "
+            f"(umoja-desktop {self.version()}).",
+            "",
+        ]
+        for scene in SCENES:
+            shots = self.shots.get(scene, [])
+            vids = self.videos.get(scene, [])
+            if not shots and not vids:
+                continue
+            lines += [f"## {titles[scene]}", ""]
+            for path, caption in shots:
+                lines += [f"![{caption}]({self.rel(path)})", "", f"*{caption}*", ""]
+            for gif, video, caption in vids:
+                if gif:
+                    lines += [f"[![{caption}]({self.rel(gif)})]({self.rel(video)})", "",
+                              f"*{caption}* ([video]({self.rel(video)}))", ""]
+                else:
+                    lines += [f"[{caption} (video)]({self.rel(video)})", ""]
+        if not self.dry:
+            (self.out / "README.md").write_text("\n".join(lines))
+
+        # A compact gallery for the top-level README (paths from the repo root).
+        try:
+            root = Path(__file__).resolve().parents[2]
+            base = os.path.relpath(self.out.resolve(), root)
+        except (IndexError, ValueError):
+            base = str(self.out)
+        if base.startswith(".."):
+            base = str(self.out)
+        hero = [s for s in ("overview", "app-grid", "quick-settings", "assistant") if s in self.shots]
+        snippet = ["## Screenshots", ""]
+        if "overview" in self.videos and self.videos["overview"][0][0]:
+            gif, video, caption = self.videos["overview"][0]
+            snippet += [f"[![{caption}]({base}/{self.rel(gif)})]({base}/{self.rel(video)})", ""]
+        cells = [self.shots[s][0] for s in hero]
+        if cells:
+            snippet += ["| " + " | ".join(titles[s] for s in hero) + " |",
+                        "| " + " | ".join("---" for _ in hero) + " |",
+                        "| " + " | ".join(f"![{titles[s]}]({base}/{self.rel(p)})"
+                                          for s, (p, _c) in zip(hero, cells)) + " |", ""]
+        snippet += [f"More in the [tour]({base}/README.md).", ""]
+        if not self.dry:
+            (self.out / "snippet.md").write_text("\n".join(snippet))
+            files = [self.rel(p) for v in self.shots.values() for p, _ in v]
+            files += [self.rel(p) for v in self.videos.values() for g, m, _ in v for p in (g, m) if p]
+            files += ["README.md", "snippet.md"]
+            (self.out / ".umoja-demo-files").write_text("\n".join(files) + "\n")
+            shutil.rmtree(self.raw_dir, ignore_errors=True)
+        else:
+            log("README.md would be:\n" + "\n".join(lines))
+            log("snippet.md would be:\n" + "\n".join(snippet))
+
+    # ---- main ---------------------------------------------------------
+
+    def run(self):
+        self.preflight()
+        scenes = [s for s in SCENES if (not self.opts.only or s in self.opts.only)
+                  and s not in (self.opts.skip or [])]
+        if not self.dry:
+            self.check_screen()
+            log(f"Hands off the keyboard and mouse: the tour starts in {self.opts.countdown} s.")
+            for n in range(self.opts.countdown, 0, -1):
+                print(f"  {n}...", flush=True)
+                time.sleep(1)
+        self.prepare_out()
+        self.inhibit()
+        stopped = None
+        try:
+            self.check_screen()
+            self.notifications_on()
+            self.start_workspace = self.workspaces()[0] if not self.dry else None
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            log("opening apps")
+            self.open_apps()
+            for s in scenes:
+                self.scene = s
+                log(f"scene: {s}")
+                self.check_screen()
+                getattr(self, "scene_" + s.replace("-", "_"))()
+        except Stop as e:
+            stopped = str(e)
+            log(f"! stopping: {stopped}. Nothing more is driven; only tidying up.")
+        except KeyboardInterrupt:
+            stopped = "interrupted"
+            log("! interrupted")
+        finally:
+            self.tidy()
+        log("encoding clips")
+        self.encode()
+        self.write_markdown()
+        n_shots = sum(len(v) for v in self.shots.values())
+        n_vids = sum(len(v) for v in self.videos.values())
+        log(f"done: {n_shots} screenshots and {n_vids} clips in {self.out}")
+        if not self.dry:
+            log(f"review {self.out / 'README.md'}, then: git add {self.out} && git commit")
+        return 1 if stopped else 0
+
+
+def main():
+    here = Path(__file__).resolve().parent
+    default_out = here.parent.parent / "docs" / "demo"
+    if not (here.parent.parent / ".git").exists():
+        default_out = Path.home() / f"umoja-demo-{time.strftime('%Y%m%d-%H%M')}"
+    p = argparse.ArgumentParser(
+        description="Drive a hands-free tour of a live Umoja session and capture screenshots and clips.")
+    p.add_argument("--out", type=Path, default=default_out,
+                   help=f"output directory (default: {default_out})")
+    p.add_argument("--only", nargs="+", choices=SCENES, metavar="SCENE",
+                   help="run only these scenes: " + ", ".join(SCENES))
+    p.add_argument("--skip", nargs="+", choices=SCENES, metavar="SCENE", help="skip these scenes")
+    p.add_argument("--ask", action="append", metavar="QUESTION",
+                   help="question for the assistant (repeatable; replaces the defaults)")
+    p.add_argument("--answer-wait", type=float, default=15.0,
+                   help="seconds to let each answer stream in (default 15)")
+    p.add_argument("--effect", help="screensaver effect to show (see umoja-screensaver --list-effects)")
+    p.add_argument("--output", help="monitor connector to capture, e.g. eDP-1 (default: primary)")
+    p.add_argument("--no-video", action="store_true", help="stills only")
+    p.add_argument("--no-apps", action="store_true", help="don't open apps for the tour")
+    p.add_argument("--hidpi", action="store_true", help="full-resolution stills (default: logical size)")
+    p.add_argument("--gif-width", type=int, default=960, help="GIF width in pixels (default 960)")
+    p.add_argument("--pace", type=float, default=1.0, help="multiply every pause by this (e.g. 1.5 on a slow machine)")
+    p.add_argument("--countdown", type=int, default=5, help="seconds before it starts (default 5)")
+    p.add_argument("--dry-run", action="store_true", help="print the steps without touching the desktop")
+    opts = p.parse_args()
+    sys.exit(Demo(opts).run())
+
+
+if __name__ == "__main__":
+    main()
