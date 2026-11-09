@@ -44,8 +44,8 @@ pub const ENABLED: &[&str] = &[
     "zwp_idle_inhibit_manager_v1",
 ];
 
-pub fn as_cstrings() -> Vec<CString> {
-    ENABLED
+pub fn to_cstrings(names: &[&str]) -> Vec<CString> {
+    names
         .iter()
         .map(|s| CString::new(*s).expect("no NUL"))
         .collect()

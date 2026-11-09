@@ -51,6 +51,7 @@ override_dh_auto_install:
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
 	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
+	install -D -m 0755 bin/umoja-greeter-session $(GREETER)/usr/libexec/umoja-greeter-session
 
 	# Lock screen PAM service
 	install -D -m 0644 data/pam/umoja-lock $(DESKTOP)/etc/pam.d/umoja-lock
@@ -78,6 +79,7 @@ override_dh_auto_install:
 
 	# Greeter
 	install -D -m 0644 data/lightdm-umoja-greeter.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter.desktop
+	install -D -m 0644 data/lightdm-umoja-greeter-x11.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter-x11.desktop
 	install -D -m 0644 data/lightdm/60-umoja.conf $(GREETER)/usr/share/lightdm/lightdm.conf.d/60-umoja.conf
 
 override_dh_shlibdeps:

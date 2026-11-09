@@ -190,7 +190,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         .unwrap_or(0);
     select_user(&state, initial);
 
-    // LightDM runs greeters without a window manager, so "fullscreen" is
+    // On the X11 fallback there is no window manager, so "fullscreen" is
     // only a hint: size the window to the monitor ourselves.
     if let Some(mon) = gtk::gdk::Display::default()
         .and_then(|d| d.monitors().item(0))
@@ -201,8 +201,8 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     }
     window.set_decorated(false);
     window.fullscreen();
-    // There's no window manager under LightDM to set a pointer, so name one
-    // explicitly instead of inheriting the bare X root window's.
+    // Name a pointer explicitly rather than inherit the bare X root
+    // window's on the X11 fallback.
     window.set_cursor_from_name(Some("default"));
     // Fade up from black once the window is on screen, then bring the card in.
     let content = overlay.clone();

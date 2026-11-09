@@ -25,6 +25,8 @@ unsafe extern "C" {
         argv: *const *const c_char,
         config: *const UmojaConfig,
     ) -> c_int;
+    /// Stop the compositor from any thread; `umoja_mir_run` returns `code`.
+    pub fn umoja_mir_stop(code: c_int);
 }
 
 fn guard<T>(what: &str, fallback: T, f: impl FnOnce() -> T) -> T {
@@ -43,6 +45,9 @@ fn tiling() -> std::sync::MutexGuard<'static, TilingState> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_lookup_binding(keysym: u32, modifiers: u32) -> u32 {
+    if crate::greeter::enabled() {
+        return 0;
+    }
     guard("lookup_binding", 0, || input::lookup(keysym, modifiers))
 }
 
@@ -59,6 +64,9 @@ pub extern "C" fn umoja_media_key(action: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_overlay_key_matches(keysym: u32) -> bool {
+    if crate::greeter::enabled() {
+        return false;
+    }
     guard("overlay_key", false, || input::is_overlay_key(keysym))
 }
 
@@ -113,6 +121,9 @@ pub extern "C" fn umoja_tiling_resized(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_handle_action(action: u32) {
+    if crate::greeter::enabled() {
+        return;
+    }
     guard("handle_action", (), || {
         if action >= input::CUSTOM_BASE {
             input::run_custom(action)
@@ -530,6 +541,10 @@ pub extern "C" fn umoja_workspaces_changed(current: usize, count: usize) {
 /// Mir dimmed, blanked or woke the screen (`UMOJA_IDLE_*`).
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_idle_state(state: u32) {
+    // The login screen blanks but has no session to lock.
+    if crate::greeter::enabled() {
+        return;
+    }
     guard("idle_state", (), || crate::idle::mir_state(state))
 }
 
@@ -633,6 +648,10 @@ pub extern "C" fn umoja_touch(
     screen: Rect,
     out: *mut UmojaTouchResult,
 ) -> bool {
+    // No workspace swipes, overview or edge menus on the login screen.
+    if crate::greeter::enabled() {
+        return false;
+    }
     guard("touch", false, || {
         if points.is_null() || out.is_null() {
             return false;

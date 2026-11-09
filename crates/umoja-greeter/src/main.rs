@@ -51,12 +51,13 @@ fn main() -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
-/// LightDM runs greeters on X11, where GTK only scales by whole numbers and
-/// only when told to. Round the panel's preferred (mutter) scale: 150% and
-/// up becomes 2x, so e.g. a 166⅔% OLED laptop isn't tiny. Must run before
-/// GTK starts.
+/// On X11 (the fallback greeter session), GTK only scales by whole numbers
+/// and only when told to. Round the panel's preferred (mutter) scale: 150%
+/// and up becomes 2x, so e.g. a 166⅔% OLED laptop isn't tiny. Under
+/// umoja-mir (the default) the compositor sets the fractional scale itself.
+/// Must run before GTK starts.
 fn apply_hidpi_scale() {
-    if std::env::var_os("GDK_SCALE").is_some() {
+    if std::env::var_os("GDK_SCALE").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some() {
         return;
     }
     let Some(panel) = umoja_common::hidpi::connected_panels().into_iter().next() else {

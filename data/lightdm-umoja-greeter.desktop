@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=Umoja Greeter
 Comment=Umoja login screen for LightDM
-Exec=/usr/sbin/umoja-greeter
+Exec=/usr/libexec/umoja-greeter-session
 Type=Application
+X-LightDM-Session-Type=wayland
 X-Ubuntu-Gettext-Domain=umoja-shell

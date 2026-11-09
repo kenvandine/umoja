@@ -26,6 +26,7 @@
 #include <miral/zone.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <cstdio>
@@ -34,6 +35,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -1631,8 +1633,47 @@ bool is_privileged_extension(std::string const& name) {
 }
 }
 
+namespace {
+// Set while umoja_mir_run is running, for umoja_mir_stop. The mutex keeps
+// the runner alive for the duration of a stop() from another thread.
+std::mutex g_runner_mutex;
+MirRunner* g_runner = nullptr;
+std::atomic<int> g_exit_code{-1};
+// Mir is already shutting down (e.g. LightDM's SIGTERM): the greeter then
+// dies with its connection, and that is not a failure worth reporting.
+std::atomic<bool> g_stopping{false};
+}
+
+// Greeter mode: the greeter exited, so the compositor does too. Called from
+// a Rust thread, possibly while Mir is already shutting down (LightDM
+// signalled us and the greeter died with the connection): never let an
+// exception unwind into Rust.
+extern "C" void umoja_mir_stop(int code) {
+    if (g_stopping) return;
+    int expected = -1;
+    g_exit_code.compare_exchange_strong(expected, code);
+    std::lock_guard lock{g_runner_mutex};
+    if (!g_runner) return;
+    try {
+        g_runner->stop();
+    } catch (std::exception const& e) {
+        std::fprintf(stderr, "umoja-mir: stop failed: %s\n", e.what());
+    } catch (...) {
+    }
+}
+
 extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* config) {
     MirRunner runner{argc, argv};
+    {
+        std::lock_guard lock{g_runner_mutex};
+        g_runner = &runner;
+    }
+    struct Clear {
+        ~Clear() {
+            std::lock_guard lock{g_runner_mutex};
+            g_runner = nullptr;
+        }
+    } clear;
 
     WaylandExtensions extensions;
     auto const supported = WaylandExtensions::supported();
@@ -1659,6 +1700,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     DisplayConfiguration display_config{runner};
     PrependEventFilter natural_scroll{umoja_apply_natural_scroll};
 
+    runner.add_stop_callback([] { g_stopping = true; });
     runner.add_start_callback([&runner] {
         auto display = runner.wayland_display();
         umoja_session_started(display.is_set() ? display.value().c_str() : "");
@@ -1677,8 +1719,9 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     auto const idle = [](mir::Server& server) { umoja_idle_setup(server); };
     auto const input = [](mir::Server& server) { umoja_input_setup(server); };
 
+    auto const result = [](int code) { return g_exit_code >= 0 ? g_exit_code.load() : code; };
     if (config->enable_x11) {
-        return runner.run_with({
+        return result(runner.run_with({
             idle,
             input,
             display_config,
@@ -1687,9 +1730,9 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
             extensions,
             X11Support{},
             set_window_management_policy<UmojaWindowManager>(),
-        });
+        }));
     }
-    return runner.run_with({
+    return result(runner.run_with({
         idle,
         input,
         display_config,
@@ -1697,5 +1740,5 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         natural_scroll,
         extensions,
         set_window_management_policy<UmojaWindowManager>(),
-    });
+    }));
 }

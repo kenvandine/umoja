@@ -149,6 +149,8 @@ typedef struct {
 
 // Implemented by the shim, called from Rust main().
 int umoja_mir_run(int argc, char const** argv, UmojaConfig const* config);
+// Stop a running compositor from any thread; umoja_mir_run returns code.
+void umoja_mir_stop(int code);
 
 // Implemented in Rust (src/ffi.rs), called by the shim.
 uint32_t umoja_lookup_binding(uint32_t keysym, uint32_t modifiers);
