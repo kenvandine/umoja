@@ -164,7 +164,7 @@ sleep 2
 gdbus call --session --dest org.umoja.Compositor --object-path /org/umoja/Compositor \
     --method org.umoja.Compositor.GetShortcuts 2>>"$LOG" | grep -q "'shortcuts-guide-hotkey', '<Super>slash'" \
     && pass "compositor lists its shortcuts" || fail "GetShortcuts misses the guide's own shortcut"
-wtype -M logo -k slash -m logo 2>>"$LOG"
+wtype -P Super_L -k slash -p Super_L 2>>"$LOG"
 sleep 5
 shot 10-shortcuts
 wtype -k Escape 2>>"$LOG"

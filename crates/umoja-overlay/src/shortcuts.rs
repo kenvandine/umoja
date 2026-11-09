@@ -311,7 +311,7 @@ pub fn model(shortcuts: &[(String, String)]) -> Vec<(Group, Vec<Row>)> {
         };
         match rows.iter_mut().find(|r| r.label == label) {
             Some(row) => {
-                let dup = row.keys.iter().any(|k| *k == caps);
+                let dup = row.keys.contains(&caps);
                 if !dup {
                     row.keys.push(caps);
                 }
