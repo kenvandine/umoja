@@ -93,10 +93,11 @@ popover button:active {
 
 /* Unity LauncherEntry badges, as on Ubuntu Dock: the unread count in the
    top corner, a progress bar over the bottom of the icon, and a pulse for
-   urgent apps. Flat accent color, white text. */
+   urgent apps. The count is a fixed green (GNOME palette green 5), not the
+   accent color, so unread messages never read as an error. */
 .dock-badge {
-  background-color: @accent_bg_color;
-  color: @accent_fg_color;
+  background-color: #26a269;
+  color: #ffffff;
   font-size: 0.75em;
   font-weight: bold;
   min-width: 12px;
