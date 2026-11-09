@@ -7,6 +7,7 @@
 
 mod battery;
 mod bluetooth;
+mod brightness;
 mod bus;
 mod clock;
 mod dbusmenu;
@@ -14,10 +15,13 @@ mod fade;
 mod launch;
 mod lock;
 mod login;
+mod media_keys;
 mod menu_api;
+mod mpris;
 mod myna;
 mod network;
 mod notifications;
+mod osd;
 mod polkit;
 mod quick_settings;
 mod sni;
@@ -112,6 +116,10 @@ fn build(app: &adw::Application) {
     window.present();
     lock::init();
     polkit::start();
+    // Volume, brightness and playback keys, and their on-screen display.
+    osd::init(app);
+    media_keys::own_name();
+    brightness::Brightness::get();
 }
 
 /// GNOME 45+'s Activities button: one dot per workspace, the active one a

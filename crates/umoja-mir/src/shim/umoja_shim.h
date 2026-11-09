@@ -138,6 +138,14 @@ void umoja_tiling_register(uint64_t id, uint32_t action, UmojaRect rect);
 void umoja_tiling_unregister(uint64_t id);
 size_t umoja_tiling_resized(uint64_t id, UmojaRect new_rect, uint64_t* out_ids, UmojaRect* out_rects, size_t max);
 void umoja_handle_action(uint32_t action);
+
+// Media and hardware keys (volume, brightness, playback...), handled by
+// umoja-panel. umoja_media_action says whether a binding code is one.
+#define UMOJA_MEDIA_NONE 0u
+#define UMOJA_MEDIA_KEY 1u
+#define UMOJA_MEDIA_REPEATS 3u
+uint32_t umoja_media_action(uint32_t action);
+void umoja_media_key(uint32_t action);
 bool umoja_workspace_resolve(uint32_t code, size_t current, size_t count, uint32_t* out_kind, size_t* out_index);
 size_t umoja_workspace_layout(bool const* occupied, size_t n, size_t current, size_t* out_remove, size_t max_remove,
                               size_t* out_n_remove);

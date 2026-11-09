@@ -41,3 +41,11 @@ pub const FILES_INTERFACE: &str = "org.umoja.Files";
 pub const NOTIFICATIONS_BUS_NAME: &str = "org.umoja.Notifications";
 pub const NOTIFICATIONS_OBJECT_PATH: &str = "/org/umoja/Notifications";
 pub const NOTIFICATIONS_INTERFACE: &str = "org.umoja.Notifications";
+
+/// Media keys and the on-screen display (volume, brightness...), served by
+/// umoja-panel. The compositor grabs the keys and calls `Press`; anything
+/// else can show the OSD with `ShowOSD`, which takes the same dictionary as
+/// gnome-shell's `org.gnome.Shell.ShowOSD`.
+pub const MEDIA_KEYS_BUS_NAME: &str = "org.umoja.MediaKeys";
+pub const MEDIA_KEYS_OBJECT_PATH: &str = "/org/umoja/MediaKeys";
+pub const MEDIA_KEYS_INTERFACE: &str = "org.umoja.MediaKeys";

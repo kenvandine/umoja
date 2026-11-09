@@ -160,6 +160,19 @@ where
     )
 }
 
+/// A media or hardware key press for umoja-panel (see media_keys.rs).
+pub fn media_key(name: &'static str) {
+    send_call(
+        (
+            dbus::MEDIA_KEYS_BUS_NAME,
+            dbus::MEDIA_KEYS_OBJECT_PATH,
+            dbus::MEDIA_KEYS_INTERFACE,
+        ),
+        "Press",
+        (name,),
+    )
+}
+
 fn send_call<B>(to: (&'static str, &'static str, &'static str), method: &'static str, body: B)
 where
     B: serde::Serialize + zbus::zvariant::DynamicType + Send + Sync + 'static,

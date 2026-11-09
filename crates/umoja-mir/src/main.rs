@@ -11,6 +11,7 @@ mod ffi;
 mod gestures;
 mod idle;
 mod input;
+mod media_keys;
 mod outputs;
 mod peripherals;
 mod protocols;

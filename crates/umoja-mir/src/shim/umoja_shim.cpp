@@ -230,9 +230,19 @@ public:
             return false;
         }
         if (action == mir_keyboard_action_down) overlay_key_armed = false;
-        if (action == mir_keyboard_action_up) return MinimalWindowManager::handle_keyboard_event(event);
 
+        // Volume, brightness and playback keys work whatever has focus, as
+        // in GNOME. Volume and brightness keep stepping while held. The
+        // release is swallowed too, since the client never saw the press.
         uint32_t const bound = umoja_lookup_binding(keysym, mods);
+        if (uint32_t const media = umoja_media_action(bound); media != UMOJA_MEDIA_NONE) {
+            if (action == mir_keyboard_action_down ||
+                (action == mir_keyboard_action_repeat && media == UMOJA_MEDIA_REPEATS))
+                umoja_media_key(bound);
+            return true;
+        }
+
+        if (action == mir_keyboard_action_up) return MinimalWindowManager::handle_keyboard_event(event);
         if (bound != UMOJA_ACTION_NONE && umoja_is_switcher_action(bound)) {
             if (action == mir_keyboard_action_down) open_switcher(bound, mods);
             return true;

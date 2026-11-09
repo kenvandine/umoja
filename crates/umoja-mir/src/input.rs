@@ -386,6 +386,9 @@ pub fn reload() {
             })
             .collect();
     }
+    // Volume, brightness and playback keys, from gnome-settings-daemon's
+    // schema (or its defaults when that isn't installed).
+    bindings.extend(crate::media_keys::bindings());
     // GNOME custom shortcuts come after the built-in ones, so a built-in
     // binding on the same key wins (gsd-media-keys can't grab a key the
     // shell already holds either).
@@ -519,6 +522,7 @@ pub fn start_watching() {
                 schemas.push(gs::MUTTER);
                 schemas.push(gs::WM_PREFERENCES);
                 schemas.push(gs::SHELL);
+                schemas.push(gs::MEDIA_KEYS);
                 schemas.sort_unstable();
                 schemas.dedup();
                 for schema in schemas {
@@ -626,6 +630,9 @@ pub fn parse_accelerator(accel: &str) -> Option<(u32, u32)> {
 
 /// Subset of X keysym names that show up in GNOME's default bindings.
 pub fn keysym_from_name(name: &str) -> Option<u32> {
+    if let Some(k) = crate::media_keys::keysym(name) {
+        return Some(k);
+    }
     let named = match name {
         "Left" => 0xff51,
         "Up" => 0xff52,

@@ -46,6 +46,17 @@ pub extern "C" fn umoja_lookup_binding(keysym: u32, modifiers: u32) -> u32 {
     guard("lookup_binding", 0, || input::lookup(keysym, modifiers))
 }
 
+/// Whether a binding code is a media key (`UMOJA_MEDIA_*`).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_media_action(action: u32) -> u32 {
+    guard("media_action", 0, || crate::media_keys::classify(action))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_media_key(action: u32) {
+    guard("media_key", (), || crate::media_keys::press(action))
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_overlay_key_matches(keysym: u32) -> bool {
     guard("overlay_key", false, || input::is_overlay_key(keysym))

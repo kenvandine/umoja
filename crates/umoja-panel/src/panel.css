@@ -326,3 +326,30 @@ window.umoja-panel button.myna-indicator {
 window.umoja-panel button.myna-indicator.recording {
   color: #f99b11;
 }
+
+/* ---- OSD (volume, brightness...), gnome-shell's .osd-window ---- */
+window.umoja-osd {
+  background: transparent;
+}
+.osd-window {
+  color: #ffffff;
+  /* $osd_bg_color: lighten(#222226, 5%) */
+  background-color: #2e2e33;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+  border-radius: 999px;
+  padding: 12px 18px;
+  margin-bottom: 4em;
+  font-size: 11pt;
+  font-weight: 700;
+}
+.osd-window .osd-label {
+  margin-right: 6px;
+}
+.osd-window .osd-level {
+  margin-right: 6px;
+}
+.osd-window:dir(rtl) .osd-label,
+.osd-window:dir(rtl) .osd-level {
+  margin-right: 0;
+  margin-left: 6px;
+}
