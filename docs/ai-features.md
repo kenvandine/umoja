@@ -137,7 +137,7 @@ Ask in plain words and the assistant does it, instead of telling you how.
 | Wi-Fi networks and Bluetooth devices | "connect to the CoffeeShop Wi-Fi", "connect my headphones", "disconnect the speaker" |
 | The web | "open ubuntu.com", "search the web for GTK 4 layer shell" |
 | Folders and the wallpaper | "open my Downloads", "show the Trash", "use this photo as my background" |
-| The Trash and USB drives | "empty the trash", "eject the USB stick" |
+| The Trash, clearing a folder, USB drives | "empty the trash", "clear out my Downloads", "eject the USB stick" |
 | A frozen app | "Firefox is frozen, force quit it" |
 | Install apps and updates | "install VLC", "are there any updates?", "install the updates" |
 | The date, time and this computer | "what time is it?", "what week is it?", "which Ubuntu version is this?", "what's my IP address?", "how much RAM do I have?" |
@@ -192,7 +192,8 @@ unless you click **Allow**.
 | Reading things: window list, settings, notifications, selection, clipboard, current window, diagnostics, file search, date and time, system details, available updates, what's playing | No |
 | Take a screenshot, start a screen recording | Yes |
 | Close a window, force quit an app (unsaved work could be lost) | Yes |
-| Empty the Trash (says how many items) | Yes |
+| Empty the Trash (says how many items; an empty Trash doesn't ask) | Yes |
+| Clear a folder (moves its contents to the Trash, lists what goes; only folders inside your home folder) | Yes |
 | Log out, suspend, restart, power off (locking doesn't ask) | Yes |
 | Install an app (says which package, version and publisher) or install updates (lists them) | Always, with a red **Allow** button |
 | Run a command | Always |

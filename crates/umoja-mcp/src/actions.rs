@@ -12,7 +12,7 @@
 
 use crate::apps::{have, last_lines, needs_auth, privileged, run, Privileged};
 use crate::desktop::{login_session, session_bus, set_bluetooth, set_prop, set_wifi, system_bus, NM, NM_PATH};
-use crate::tool::{arg_bool, arg_str, arg_u64, blocking, expand, high, tilde, LocalFuture, Outcome, Tool};
+use crate::tool::{Risk, arg_bool, arg_str, arg_u64, blocking, expand, high, tilde, LocalFuture, Outcome, Tool};
 use gio::prelude::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -172,9 +172,19 @@ pub fn tools() -> Vec<Tool> {
             obj(json!({}), &[]),
             |_| Box::pin(empty_trash()),
         )
-        .confirm()
+        // Nothing to ask about when it's already empty.
+        .with_risk(|_| if trash_count().unwrap_or(1) == 0 { Risk::Low } else { Risk::Medium })
         .with_preflight(trash_preflight)
         .with_summary(|_| "Empty the Trash".into()),
+        Tool::new(
+            "clear_folder",
+            "Move everything inside a folder (e.g. Downloads, Desktop, or a path) to the Trash, keeping the folder itself. Use for \"delete everything in Downloads\" or \"clean up my desktop\". Items can be restored from the Trash. The user is asked first.",
+            obj(json!({"folder": {"type": "string", "description": "A well-known folder name (downloads, desktop...) or a path"}}), &["folder"]),
+            |a| Box::pin(clear_folder(a)),
+        )
+        .confirm()
+        .with_preflight(clear_folder_preflight)
+        .with_summary(|a| format!("Move everything in {} to the Trash", folder_label(arg_str(a, "folder").unwrap_or("")))),
         Tool::new(
             "eject_drive",
             "Safely remove (eject or unmount) a USB stick, SD card or external disk. Call without drive to list them.",
@@ -861,7 +871,7 @@ fn trash_count() -> Result<usize, String> {
 fn trash_preflight(_: Value) -> LocalFuture<Result<Option<String>, String>> {
     Box::pin(async {
         match blocking(trash_count).await? {
-            Ok(0) => Err("the Trash is already empty".into()),
+            Ok(0) => Ok(None),
             Ok(n) => Ok(Some(format!(
                 "{n} item{} will be deleted permanently.",
                 if n == 1 { "" } else { "s" }
@@ -873,11 +883,84 @@ fn trash_preflight(_: Value) -> LocalFuture<Result<Option<String>, String>> {
 
 async fn empty_trash() -> Outcome {
     let n = blocking(trash_count).await.ok().and_then(Result::ok).unwrap_or(0);
+    if n == 0 {
+        return Outcome::ok("The Trash is already empty");
+    }
     let (ok, out) = cmd(&["gio", "trash", "--empty"]).await;
     if ok {
         Outcome::ok(format!("Emptied the Trash ({n} item{})", if n == 1 { "" } else { "s" }))
     } else {
         err(out)
+    }
+}
+
+/// A folder to clear: a well-known name or a path under home (never home
+/// itself or anything outside it).
+fn clearable_folder(name: &str) -> Result<PathBuf, String> {
+    let home = glib::home_dir();
+    let path = match folder_uri(name) {
+        Some(uri) if uri.starts_with("file://") => gio::File::for_uri(&uri).path(),
+        Some(_) => return Err("use empty_trash for the Trash".into()),
+        None => Some(expand(name)),
+    }
+    .ok_or("that folder can't be cleared")?;
+    let path = path.canonicalize().map_err(|_| format!("there is no folder {name}"))?;
+    if !path.is_dir() {
+        return Err(format!("{name} isn't a folder"));
+    }
+    if path == home || !path.starts_with(&home) {
+        return Err("only folders inside the home folder (not the home folder itself) can be cleared".into());
+    }
+    Ok(path)
+}
+
+fn folder_entries(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    Ok(std::fs::read_dir(dir).map_err(|e| e.to_string())?.filter_map(Result::ok).map(|e| e.path()).collect())
+}
+
+fn clear_folder_preflight(a: Value) -> LocalFuture<Result<Option<String>, String>> {
+    Box::pin(async move {
+        let dir = clearable_folder(arg_str(&a, "folder").unwrap_or(""))?;
+        let items = folder_entries(&dir)?;
+        if items.is_empty() {
+            return Err(format!("{} is already empty", tilde(&dir.to_string_lossy())));
+        }
+        let mut names: Vec<String> = items.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+        names.sort();
+        let more = names.len().saturating_sub(6);
+        names.truncate(6);
+        Ok(Some(format!(
+            "{} item{} in {} go to the Trash, where they can be restored: {}{}",
+            items.len(),
+            if items.len() == 1 { "" } else { "s" },
+            tilde(&dir.to_string_lossy()),
+            names.join(", "),
+            if more > 0 { format!(" and {more} more") } else { String::new() }
+        )))
+    })
+}
+
+async fn clear_folder(a: Value) -> Outcome {
+    let dir = match clearable_folder(arg_str(&a, "folder").unwrap_or("")) {
+        Ok(d) => d,
+        Err(e) => return err(e),
+    };
+    let items = match folder_entries(&dir) {
+        Ok(i) => i,
+        Err(e) => return err(e),
+    };
+    let (mut moved, mut failed) = (0, Vec::new());
+    for p in &items {
+        match gio::File::for_path(p).trash(gio::Cancellable::NONE) {
+            Ok(()) => moved += 1,
+            Err(e) => failed.push(format!("{}: {e}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())),
+        }
+    }
+    let where_ = tilde(&dir.to_string_lossy());
+    match (moved, failed.is_empty()) {
+        (_, true) => Outcome::ok(format!("Moved {moved} item{} from {where_} to the Trash", if moved == 1 { "" } else { "s" })),
+        (0, false) => err(failed.join("; ")),
+        _ => Outcome::ok(format!("Moved {moved} items from {where_} to the Trash; couldn't move {}", failed.join("; "))),
     }
 }
 
@@ -1388,6 +1471,9 @@ pub fn redirect(command: &str) -> Option<Redirect> {
         "apt" | "apt-get" | "snap" | "flatpak" if has("upgrade") || has("full-upgrade") || has("dist-upgrade") || has("update") || has("refresh") => {
             "Use check_updates to see updates and install_updates to install them."
         }
+        "rm" | "find" | "gio" if c.contains("-delete") || c.contains("trash") || first == "rm" => {
+            "Use clear_folder to move a folder's contents to the Trash (or empty_trash), instead of a command."
+        }
         "kill" | "pkill" | "killall" | "xkill" => "Use force_quit_app with the app's name (or close_window) instead of a command.",
         "udisksctl" | "umount" | "eject" => "Use eject_drive instead of a command.",
         "gsettings" if has("set") || has("reset") => {
@@ -1466,6 +1552,8 @@ mod tests {
         assert_eq!(folder_uri("Trash").unwrap(), "trash:///");
         assert_eq!(folder_label("downloads"), "Downloads folder");
         assert_eq!(folder_label("my trash"), "the Trash");
+        assert!(clearable_folder("~").is_err());
+        assert!(clearable_folder("/etc").is_err());
     }
 
     #[test]
@@ -1499,6 +1587,8 @@ mod tests {
         assert!(call("sudo apt update && sudo apt upgrade").contains("install_updates"));
         assert!(call("xdg-open https://ubuntu.com").contains("open_url"));
         assert!(call("pkill firefox").contains("force_quit_app"));
+        assert!(call("find ~/Downloads -mindepth 1 -exec gio trash {} +").contains("clear_folder"));
+        assert!(call("rm -rf ~/Downloads/*").contains("clear_folder"));
         assert_eq!(call("ls ~/Downloads"), "none");
         assert_eq!(call("date +%s"), "none");
         assert_eq!(call("systemctl status bluetooth"), "none");
