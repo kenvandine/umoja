@@ -28,6 +28,8 @@ const APP_ID: &str = "org.umoja.Dock";
 const HIDDEN_SIZE: i32 = 2;
 /// Gap between the dock and the screen edges it sits against.
 const EDGE_GAP: i32 = 8;
+/// Pixels between the dock card and its menus, as umoja-panel's menu_gap.
+const MENU_GAP: i32 = 6;
 
 #[derive(Clone, Copy, Debug)]
 struct Config {
@@ -558,8 +560,31 @@ impl Dock {
     /// Attach a transient popover, hold rebuilds while it is open, and drop
     /// it again once it closes.
     fn show_popover(self: &Rc<Self>, popover: &gtk::Popover, parent: &impl IsA<gtk::Widget>) {
-        popover.set_position(self.menu_side());
+        let side = self.menu_side();
+        popover.set_position(side);
         popover.set_parent(parent);
+        // Open MENU_GAP clear of the dock card itself, not of the icon, so
+        // the right-click menu sits like the panel's menus do under the bar.
+        if let Some(at) = parent
+            .as_ref()
+            .compute_point(&self.list, &gtk::graphene::Point::new(0.0, 0.0))
+        {
+            let (w, h) = (parent.as_ref().width(), parent.as_ref().height());
+            let rect = match side {
+                gtk::PositionType::Left | gtk::PositionType::Right => {
+                    gtk::gdk::Rectangle::new(-(at.x() as i32), 0, self.list.width(), h)
+                }
+                _ => gtk::gdk::Rectangle::new(0, -(at.y() as i32), w, self.list.height()),
+            };
+            popover.set_pointing_to(Some(&rect));
+            let (dx, dy) = match side {
+                gtk::PositionType::Right => (MENU_GAP, 0),
+                gtk::PositionType::Left => (-MENU_GAP, 0),
+                gtk::PositionType::Bottom => (0, MENU_GAP),
+                _ => (0, -MENU_GAP),
+            };
+            popover.set_offset(dx, dy);
+        }
         self.menu_open.set(true);
         let weak = Rc::downgrade(self);
         popover.connect_closed(move |p| {
