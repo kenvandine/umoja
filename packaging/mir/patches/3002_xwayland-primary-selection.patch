@@ -1,0 +1,347 @@
+Description: Bridge the PRIMARY selection between Xwayland and Wayland
+ Mir's Xwayland support only syncs CLIPBOARD, so text selected in an X11 app
+ can't be middle-click pasted into a Wayland app and vice versa. Parameterise
+ XWaylandClipboardSource/Provider by the X11 selection atom and run a second
+ pair for PRIMARY against the primary selection clipboard that
+ zwp_primary_selection_device_manager_v1 already uses.
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/server/frontend_wayland/wayland_default_configuration.cpp
++++ b/src/server/frontend_wayland/wayland_default_configuration.cpp
+@@ -302,6 +302,7 @@ ExtensionBuilder const xwayland_builder {
+                 ctx.shell,
+                 ctx.session_authorizer,
+                 ctx.main_clipboard,
++                ctx.primary_selection_clipboard,
+                 *ctx.seat,
+                 ctx.surface_stack,
+                 ctx.surface_registry);
+--- a/src/server/frontend_xwayland/xwayland_clipboard_provider.cpp
++++ b/src/server/frontend_xwayland/xwayland_clipboard_provider.cpp
+@@ -298,11 +298,13 @@ private:
+ mf::XWaylandClipboardProvider::XWaylandClipboardProvider(
+     std::shared_ptr<XCBConnection> const& connection,
+     std::shared_ptr<md::MultiplexingDispatchable> const& dispatcher,
+-    std::shared_ptr<scene::Clipboard> const& clipboard)
++    std::shared_ptr<scene::Clipboard> const& clipboard,
++    xcb_atom_t selection)
+     : threadsafe_self{std::make_shared<ThreadsafeSelf>(this)},
+       connection{connection},
+       dispatcher{dispatcher},
+       clipboard{clipboard},
++      selection{selection},
+       clipboard_observer{std::make_shared<ClipboardObserver>(this)},
+       selection_window{create_selection_window(*connection)}
+ {
+@@ -342,12 +344,12 @@ void mf::XWaylandClipboardProvider::selection_request_event(xcb_selection_reques
+         return;
+     }
+ 
+-    if (event->selection == connection->CLIPBOARD_MANAGER)
++    if (event->selection == connection->CLIPBOARD_MANAGER && selection == connection->CLIPBOARD)
+     {
+         // TODO: figure out what to do here
+         log_warning("XCB_SELECTION_REQUEST with selection=CLIPBOARD_MANAGER (needs to be handled somehow)");
+     }
+-    else if (event->selection != connection->CLIPBOARD)
++    else if (event->selection != selection)
+     {
+         // TODO: ignore this? or handle it?
+         log_warning("Got non-clipboard selection request event");
+@@ -380,7 +382,7 @@ void mf::XWaylandClipboardProvider::selection_request_event(xcb_selection_reques
+ 
+ void mf::XWaylandClipboardProvider::xfixes_selection_notify_event(xcb_xfixes_selection_notify_event_t* event)
+ {
+-    if (event->owner == selection_window && event->selection == connection->CLIPBOARD)
++    if (event->owner == selection_window && event->selection == selection)
+     {
+         // We have to use XCB_TIME_CURRENT_TIME when we claim the selection, so grab the actual timestamp here so we can
+         // answer TIMESTAMP conversion requests correctly (this is what Weston does)
+@@ -414,7 +416,7 @@ void mf::XWaylandClipboardProvider::send_targets(
+     };
+ 
+     connection->set_property<XCBType::ATOM>(requester, property, targets);
+-    send_selection_notify(*connection, time, requester, property, connection->CLIPBOARD, connection->TARGETS);
++    send_selection_notify(*connection, time, requester, property, selection, connection->TARGETS);
+ }
+ 
+ void mf::XWaylandClipboardProvider::send_timestamp(
+@@ -431,7 +433,7 @@ void mf::XWaylandClipboardProvider::send_timestamp(
+             property,
+             static_cast<int32_t>(clipboard_ownership_timestamp));
+     }
+-    send_selection_notify(*connection, time, requester, property, connection->CLIPBOARD, connection->TIMESTAMP);
++    send_selection_notify(*connection, time, requester, property, selection, connection->TIMESTAMP);
+ }
+ 
+ void mf::XWaylandClipboardProvider::send_data(
+@@ -446,7 +448,7 @@ void mf::XWaylandClipboardProvider::send_data(
+     if (pipe2(fds, O_CLOEXEC) != 0)
+     {
+         log_warning("failed to send clipboard data to X11 client: pipe2 error: %s", mir::errno_to_cstr(errno));
+-        send_selection_notify(*connection, time, requester, XCB_ATOM_NONE, connection->CLIPBOARD, target);
++        send_selection_notify(*connection, time, requester, XCB_ATOM_NONE, selection, target);
+         return;
+     }
+ 
+@@ -459,7 +461,7 @@ void mf::XWaylandClipboardProvider::send_data(
+         if (!current_source)
+         {
+             log_warning("failed to send clipboard data to X11 client: no source");
+-            send_selection_notify(*connection, time, requester, XCB_ATOM_NONE, connection->CLIPBOARD, target);
++            send_selection_notify(*connection, time, requester, XCB_ATOM_NONE, selection, target);
+             return;
+         }
+         current_source->initiate_send(mime_type, std::move(in_fd));
+@@ -471,7 +473,7 @@ void mf::XWaylandClipboardProvider::send_data(
+         std::move(out_fd),
+         time,
+         requester,
+-        connection->CLIPBOARD,
++        selection,
+         property,
+         target));
+ }
+@@ -496,7 +498,7 @@ void mf::XWaylandClipboardProvider::paste_source_set(std::shared_ptr<ms::DataExc
+             {
+                 log_debug("Taking ownership of the XWayland clipboard");
+             }
+-            xcb_set_selection_owner(*connection, selection_window, connection->CLIPBOARD, XCB_TIME_CURRENT_TIME);
++            xcb_set_selection_owner(*connection, selection_window, selection, XCB_TIME_CURRENT_TIME);
+         }
+         else
+         {
+@@ -505,7 +507,7 @@ void mf::XWaylandClipboardProvider::paste_source_set(std::shared_ptr<ms::DataExc
+             {
+                 log_debug("Clearing our ownership of the XWayland clipboard");
+             }
+-            xcb_set_selection_owner(*connection, XCB_WINDOW_NONE, connection->CLIPBOARD, clipboard_ownership_timestamp);
++            xcb_set_selection_owner(*connection, XCB_WINDOW_NONE, selection, clipboard_ownership_timestamp);
+         }
+     }
+ 
+--- a/src/server/frontend_xwayland/xwayland_clipboard_provider.h
++++ b/src/server/frontend_xwayland/xwayland_clipboard_provider.h
+@@ -44,7 +44,8 @@ public:
+     XWaylandClipboardProvider(
+         std::shared_ptr<XCBConnection> const& connection,
+         std::shared_ptr<dispatch::MultiplexingDispatchable> const& dispatcher,
+-        std::shared_ptr<scene::Clipboard> const& clipboard);
++        std::shared_ptr<scene::Clipboard> const& clipboard,
++        xcb_atom_t selection);
+     ~XWaylandClipboardProvider();
+ 
+     /// Called by the wm
+@@ -102,6 +103,8 @@ private:
+     std::shared_ptr<XCBConnection> const connection;
+     std::shared_ptr<dispatch::MultiplexingDispatchable> const dispatcher;
+     std::shared_ptr<scene::Clipboard> const clipboard;
++    /// The X11 selection this bridges: CLIPBOARD or PRIMARY
++    xcb_atom_t const selection;
+     std::shared_ptr<ClipboardObserver> const clipboard_observer;
+     xcb_window_t const selection_window;
+ 
+--- a/src/server/frontend_xwayland/xwayland_clipboard_source.cpp
++++ b/src/server/frontend_xwayland/xwayland_clipboard_source.cpp
+@@ -34,7 +34,7 @@ namespace md = mir::dispatch;
+ 
+ namespace
+ {
+-auto create_receiving_window(mf::XCBConnection const& connection) -> xcb_window_t
++auto create_receiving_window(mf::XCBConnection const& connection, xcb_atom_t selection) -> xcb_window_t
+ {
+     uint32_t const attrib_values[]{XCB_EVENT_MASK_PROPERTY_CHANGE};
+ 
+@@ -49,13 +49,16 @@ auto create_receiving_window(mf::XCBConnection const& connection) -> xcb_window_
+         connection.screen()->root_visual,
+         XCB_CW_EVENT_MASK, attrib_values);
+ 
+-    xcb_set_selection_owner(connection, receiving_window, connection.CLIPBOARD_MANAGER, XCB_TIME_CURRENT_TIME);
++    if (selection == connection.CLIPBOARD)
++    {
++        xcb_set_selection_owner(connection, receiving_window, connection.CLIPBOARD_MANAGER, XCB_TIME_CURRENT_TIME);
++    }
+ 
+     uint32_t const mask =
+         XCB_XFIXES_SELECTION_EVENT_MASK_SET_SELECTION_OWNER |
+         XCB_XFIXES_SELECTION_EVENT_MASK_SELECTION_WINDOW_DESTROY |
+         XCB_XFIXES_SELECTION_EVENT_MASK_SELECTION_CLIENT_CLOSE;
+-    xcb_xfixes_select_selection_input(connection, receiving_window, connection.CLIPBOARD, mask);
++    xcb_xfixes_select_selection_input(connection, receiving_window, selection, mask);
+ 
+     return receiving_window;
+ }
+@@ -199,11 +202,13 @@ private:
+ mf::XWaylandClipboardSource::XWaylandClipboardSource(
+     XCBConnection& connection,
+     std::shared_ptr<md::MultiplexingDispatchable> const& dispatcher,
+-    std::shared_ptr<scene::Clipboard> const& clipboard)
++    std::shared_ptr<scene::Clipboard> const& clipboard,
++    xcb_atom_t selection)
+     : connection{connection},
+       dispatcher{dispatcher},
+       clipboard{clipboard},
+-      receiving_window{create_receiving_window(connection)}
++      selection{selection},
++      receiving_window{create_receiving_window(connection, selection)}
+ {
+ }
+ 
+@@ -258,7 +263,7 @@ void mf::XWaylandClipboardSource::initiate_send(xcb_atom_t target_type, Fd const
+     xcb_convert_selection(
+         connection,
+         receiving_window,
+-        connection.CLIPBOARD,
++        selection,
+         target_type,
+         connection._WL_SELECTION,
+         XCB_TIME_CURRENT_TIME);
+@@ -269,6 +274,12 @@ void mf::XWaylandClipboardSource::initiate_send(xcb_atom_t target_type, Fd const
+ 
+ void mf::XWaylandClipboardSource::selection_notify_event(xcb_selection_notify_event_t* event)
+ {
++    if (event->requestor != receiving_window || event->selection != selection)
++    {
++        // A conversion requested by the source for another selection
++        return;
++    }
++
+     if (event->property != connection._WL_SELECTION)
+     {
+         // Convert selection failed
+@@ -311,8 +322,8 @@ void mf::XWaylandClipboardSource::selection_notify_event(xcb_selection_notify_ev
+ 
+ void mf::XWaylandClipboardSource::xfixes_selection_notify_event(xcb_xfixes_selection_notify_event_t* event)
+ {
+-    if (event->selection != connection.CLIPBOARD) {
+-        // Ignore events pertaining to selections other than CLIPBOARD
++    if (event->selection != selection) {
++        // Ignore events pertaining to other selections
+         return;
+     }
+ 
+@@ -336,7 +347,7 @@ void mf::XWaylandClipboardSource::xfixes_selection_notify_event(xcb_xfixes_selec
+         xcb_convert_selection(
+             connection,
+             receiving_window,
+-            connection.CLIPBOARD,
++            selection,
+             connection.TARGETS,
+             connection._WL_SELECTION,
+             event->timestamp);
+--- a/src/server/frontend_xwayland/xwayland_clipboard_source.h
++++ b/src/server/frontend_xwayland/xwayland_clipboard_source.h
+@@ -41,7 +41,8 @@ public:
+     XWaylandClipboardSource(
+         XCBConnection& connection,
+         std::shared_ptr<dispatch::MultiplexingDispatchable> const& dispatcher,
+-        std::shared_ptr<scene::Clipboard> const& clipboard);
++        std::shared_ptr<scene::Clipboard> const& clipboard,
++        xcb_atom_t selection);
+     ~XWaylandClipboardSource();
+ 
+     /// Return's if the given clipboard source is an XWayland source for the given connection. This is used to prevent
+@@ -79,6 +80,8 @@ private:
+     XCBConnection& connection;
+     std::shared_ptr<dispatch::MultiplexingDispatchable> const dispatcher;
+     std::shared_ptr<scene::Clipboard> const clipboard;
++    /// The X11 selection this bridges: CLIPBOARD or PRIMARY
++    xcb_atom_t const selection;
+     xcb_window_t const receiving_window;
+ 
+     std::mutex mutex;
+--- a/src/server/frontend_xwayland/xwayland_wm.cpp
++++ b/src/server/frontend_xwayland/xwayland_wm.cpp
+@@ -142,8 +142,14 @@ mf::XWaylandWM::XWaylandWM(
+       wm_shell{std::static_pointer_cast<XWaylandWMShell>(wayland_connector->get_extension("x11-support"))},
+       wayland_executor{*wm_shell->wayland_executor},
+       cursors{std::make_unique<XWaylandCursors>(connection)},
+-      clipboard_source{std::make_unique<XWaylandClipboardSource>(*connection, dispatcher, wm_shell->clipboard)},
+-      clipboard_provider{std::make_unique<XWaylandClipboardProvider>(connection, dispatcher, wm_shell->clipboard)},
++      clipboard_source{std::make_unique<XWaylandClipboardSource>(
++          *connection, dispatcher, wm_shell->clipboard, connection->CLIPBOARD)},
++      clipboard_provider{std::make_unique<XWaylandClipboardProvider>(
++          connection, dispatcher, wm_shell->clipboard, connection->CLIPBOARD)},
++      primary_selection_source{std::make_unique<XWaylandClipboardSource>(
++          *connection, dispatcher, wm_shell->primary_selection_clipboard, XCB_ATOM_PRIMARY)},
++      primary_selection_provider{std::make_unique<XWaylandClipboardProvider>(
++          connection, dispatcher, wm_shell->primary_selection_clipboard, XCB_ATOM_PRIMARY)},
+       wm_window{create_wm_window(*connection)},
+       scene_observer{std::make_shared<XWaylandSceneObserver>(this)},
+       client_manager{std::make_shared<XWaylandClientManager>(wm_shell->shell, wm_shell->session_authorizer)},
+@@ -653,9 +659,11 @@ void mf::XWaylandWM::handle_event(xcb_generic_event_t* event)
+         break;
+     case XCB_SELECTION_REQUEST:
+         clipboard_provider->selection_request_event(reinterpret_cast<xcb_selection_request_event_t*>(event));
++        primary_selection_provider->selection_request_event(reinterpret_cast<xcb_selection_request_event_t*>(event));
+         break;
+     case XCB_SELECTION_NOTIFY:
+         clipboard_source->selection_notify_event(reinterpret_cast<xcb_selection_notify_event_t*>(event));
++        primary_selection_source->selection_notify_event(reinterpret_cast<xcb_selection_notify_event_t*>(event));
+         break;
+     case xcb_error_type:
+         handle_error(reinterpret_cast<xcb_generic_error_t*>(event));
+@@ -675,6 +683,10 @@ void mf::XWaylandWM::handle_event(xcb_generic_event_t* event)
+                 reinterpret_cast<xcb_xfixes_selection_notify_event_t*>(event));
+             clipboard_source->xfixes_selection_notify_event(
+                 reinterpret_cast<xcb_xfixes_selection_notify_event_t*>(event));
++            primary_selection_provider->xfixes_selection_notify_event(
++                reinterpret_cast<xcb_xfixes_selection_notify_event_t*>(event));
++            primary_selection_source->xfixes_selection_notify_event(
++                reinterpret_cast<xcb_xfixes_selection_notify_event_t*>(event));
+             break;
+         default:
+             break;
+@@ -733,12 +745,14 @@ void mf::XWaylandWM::handle_property_notify(xcb_property_notify_event_t *event)
+     if (event->state == XCB_PROPERTY_DELETE)
+     {
+         clipboard_provider->property_deleted_event(event->window, event->atom);
++        primary_selection_provider->property_deleted_event(event->window, event->atom);
+     }
+ 
+     // Inform the clipboard source, in case its new data for an incremental send
+     if (event->state == XCB_PROPERTY_NEW_VALUE && connection->is_ours(event->window))
+     {
+         clipboard_source->property_notify_event(event->window, event->atom);
++        primary_selection_source->property_notify_event(event->window, event->atom);
+     }
+ }
+ 
+--- a/src/server/frontend_xwayland/xwayland_wm.h
++++ b/src/server/frontend_xwayland/xwayland_wm.h
+@@ -118,6 +118,8 @@ private:
+     std::unique_ptr<XWaylandCursors> const cursors;
+     std::unique_ptr<XWaylandClipboardSource> const clipboard_source;
+     std::unique_ptr<XWaylandClipboardProvider> const clipboard_provider;
++    std::unique_ptr<XWaylandClipboardSource> const primary_selection_source;
++    std::unique_ptr<XWaylandClipboardProvider> const primary_selection_provider;
+     xcb_window_t const wm_window;
+     std::shared_ptr<XWaylandSceneObserver> const scene_observer;
+     std::shared_ptr<XWaylandClientManager> const client_manager;
+--- a/src/server/frontend_xwayland/xwayland_wm_shell.h
++++ b/src/server/frontend_xwayland/xwayland_wm_shell.h
+@@ -50,6 +50,7 @@ public:
+         std::shared_ptr<shell::Shell> const& shell,
+         std::shared_ptr<SessionAuthorizer> const& session_authorizer,
+         std::shared_ptr<scene::Clipboard> const& clipboard,
++        std::shared_ptr<scene::Clipboard> const& primary_selection_clipboard,
+         WlSeat& seat,
+         std::shared_ptr<SurfaceStack> const& surface_stack,
+         std::shared_ptr<SurfaceRegistry> const& surface_registry)
+@@ -57,6 +58,7 @@ public:
+           shell{shell},
+           session_authorizer{session_authorizer},
+           clipboard{clipboard},
++          primary_selection_clipboard{primary_selection_clipboard},
+           seat{seat},
+           surface_stack{surface_stack},
+           surface_registry{surface_registry}
+@@ -67,6 +69,7 @@ public:
+     std::shared_ptr<shell::Shell> const shell;
+     std::shared_ptr<SessionAuthorizer> const session_authorizer;
+     std::shared_ptr<scene::Clipboard> const clipboard;
++    std::shared_ptr<scene::Clipboard> const primary_selection_clipboard;
+     WlSeat& seat;
+     std::shared_ptr<SurfaceStack> const surface_stack;
+     std::shared_ptr<SurfaceRegistry> const surface_registry;
