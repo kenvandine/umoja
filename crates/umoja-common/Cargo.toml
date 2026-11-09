@@ -17,8 +17,9 @@ tracing-subscriber.workspace = true
 gtk4 = { workspace = true, optional = true }
 gdk4-wayland = { workspace = true, optional = true }
 wayland-client = { workspace = true, optional = true }
+wayland-backend = { workspace = true, optional = true }
 wayland-protocols = { workspace = true, optional = true }
 
 [features]
 # Compositor blur behind GTK windows and popovers (ext-background-effect-v1).
-blur = ["dep:gtk4", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-protocols"]
+blur = ["dep:gtk4", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols"]
