@@ -217,6 +217,13 @@ public:
     // above applications, so the window goes up to that layer while it is
     // fullscreen and focused, and back down once it is neither. Leaves its
     // layer to the window menu's Always on Top otherwise.
+    //
+    // This is called from Mir's focus and state callbacks, in the middle of
+    // select_active_window()/modify_window(). Changing the window's layer
+    // there pulls the scene out from under Mir (it aborted at login when
+    // the greeter's fullscreen window took focus), so the change is applied
+    // afterwards from a helper thread that takes the WM lock, as the
+    // workspace slide does.
     std::set<Window> fullscreen_lifted;
 
     void update_fullscreen_layer(Window const& w, MirWindowState state, bool focused) {
@@ -225,12 +232,28 @@ public:
         if (want == bool(fullscreen_lifted.count(w))) return;
         if (want) fullscreen_lifted.insert(w);
         else fullscreen_lifted.erase(w);
+        Window const target = w;
+        std::thread([target] {
+            guarded("fullscreen layer", [&] {
+                if (!g_wm) return;
+                g_wm->invoke([&] {
+                    if (g_wm) g_wm->apply_layer(target);
+                });
+            });
+        }).detach();
+    }
+
+    void apply_layer(Window const& w) {
+        if (!all_windows.count(w)) return;
         if (w == moving && elevated) return;  // end_move() puts it back
+        auto& info = tools.info_for(w);
+        auto const layer = layer_for(w);
+        if (info.depth_layer() == layer) return;
         WindowSpecification spec;
-        spec.depth_layer() = layer_for(w);
+        spec.depth_layer() = layer;
         guarded("fullscreen layer", [&] {
-            tools.modify_window(tools.info_for(w), spec);
-            if (want) tools.raise_tree(w);
+            tools.modify_window(info, spec);
+            if (fullscreen_lifted.count(w)) tools.raise_tree(w);
         });
     }
 
