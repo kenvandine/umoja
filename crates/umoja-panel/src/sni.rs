@@ -45,7 +45,6 @@ struct ItemState {
     proxy: gio::DBusProxy,
     image: gtk::Image,
     button: glib::WeakRef<gtk::Button>,
-    item_is_menu: Cell<bool>,
     menu_path: RefCell<Option<String>>,
     menu: RefCell<Option<Rc<dbusmenu::Menu>>>,
 }
@@ -188,7 +187,6 @@ impl Tray {
             proxy: proxy.clone(),
             image,
             button: button.downgrade(),
-            item_is_menu: Cell::new(false),
             menu_path: RefCell::default(),
             menu: RefCell::default(),
         });
@@ -205,8 +203,9 @@ impl Tray {
             }
         });
 
-        // Left click: Activate, or the menu for menu-only (AppIndicator)
-        // items. Middle click: SecondaryActivate. Right click: the menu.
+        // Like Ubuntu's AppIndicator extension: left or right click opens
+        // the menu, Activate only for items without one. Middle click:
+        // SecondaryActivate.
         let click = gtk::GestureClick::builder().button(0).build();
         click.connect_released({
             let weak = Rc::downgrade(&state);
@@ -214,7 +213,7 @@ impl Tray {
                 let Some(st) = weak.upgrade() else { return };
                 let (rx, ry) = st.root_coords(x, y);
                 match g.current_button() {
-                    1 if st.item_is_menu.get() && st.has_menu() => st.show_menu(),
+                    1 if st.has_menu() => st.show_menu(),
                     1 => st.activate("Activate", rx, ry),
                     2 => st.call("SecondaryActivate", Some((rx, ry).to_variant())),
                     3 if st.has_menu() => st.show_menu(),
@@ -387,8 +386,6 @@ impl ItemState {
         let text = |k: &str| props.str(k).filter(|s| !s.is_empty());
         let status = text("Status").unwrap_or_default();
         button.set_visible(status != "Passive");
-        self.item_is_menu
-            .set(props.bool("ItemIsMenu").unwrap_or(false));
         let menu_path = props.obj("Menu");
         if *self.menu_path.borrow() != menu_path {
             self.menu.borrow_mut().take();
