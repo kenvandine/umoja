@@ -13,6 +13,10 @@ Umoja PPA:
   Wayland apps. The patch runs a second clipboard source/provider pair for
   PRIMARY against the server's primary selection clipboard (the one behind
   `zwp_primary_selection_device_manager_v1`). Internal only, no ABI change.
+- `patches/3003_popup-reposition-aux-rect-offset.patch`: `xdg_popup.reposition`
+  dropped the parent layer surface's margin offset (the create path keeps
+  it), so a repositioned popup, such as a GTK tooltip, landed margin pixels
+  too high. The quick-reply Send tooltip covered the button and ate clicks.
 - `UPSTREAM`: the archive source version we patch; our version adds
   `umoja<N>` (`SUFFIX`), which sorts above it and above `ubuntu<N>` updates.
 

@@ -1,0 +1,43 @@
+Description: Keep a layer surface's margin when a popup is repositioned
+ XdgPopupStable::reposition() took the positioner's anchor rect without
+ adding aux_rect_offset, which the create path (set_aux_rect_offset_now)
+ does add. A popup on a layer surface with a margin (a GTK tooltip, which
+ GTK repositions after mapping) then lands margin pixels off; in Umoja the
+ quick-reply window's Send tooltip covered the button and ate the click.
+Author: Umoja developers
+Forwarded: no
+Last-Update: 2026-11-09
+---
+--- a/src/server/frontend_wayland/xdg_shell_stable.cpp
++++ b/src/server/frontend_wayland/xdg_shell_stable.cpp
+@@ -345,17 +345,28 @@
+     aux_rect = positioner.aux_rect ? positioner.aux_rect.value() : geom::Rectangle{};
+     reposition_token = token;
+ 
++    // Like the create path (set_aux_rect_offset_now), the anchor rect is in
++    // the parent's window geometry and must be moved by aux_rect_offset (a
++    // layer surface's margin, for one). Without it a repositioned popup
++    // lands that many pixels off: GTK tooltips on a layer surface with a
++    // top margin covered the widget they belong to.
++    shell::SurfaceSpecification spec = positioner;
++    if (spec.aux_rect.is_set())
++    {
++        spec.aux_rect.value().top_left += aux_rect_offset;
++    }
++
+     auto const scene_surface_{scene_surface()};
+     if (scene_surface_)
+     {
+         if (auto const session = scene_surface_.value()->session().lock())
+         {
+-            shell->modify_surface(session, scene_surface_.value(), positioner);
++            shell->modify_surface(session, scene_surface_.value(), spec);
+         }
+     }
+     else
+     {
+-        apply_spec(positioner);
++        apply_spec(spec);
+     }
+ }
+ 

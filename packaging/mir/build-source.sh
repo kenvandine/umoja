@@ -23,4 +23,5 @@ QUILT_PATCHES=debian/patches quilt pop -a
 dch --newversion "$upstream$suffix" --distribution "$series" --force-distribution \
     "Pass libinput touchpad gestures to the shell (mir_touchpad_gesture_hook), for Umoja's GNOME-style workspace swipes."
 dch --append "Bridge the PRIMARY selection between Xwayland and Wayland apps, for middle-click paste."
+dch --append "Keep a layer surface's margin when a popup is repositioned, so tooltips stop covering their widget."
 echo "$PWD"
