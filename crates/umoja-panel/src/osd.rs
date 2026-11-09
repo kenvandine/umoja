@@ -8,12 +8,12 @@
 //! over-amplification) turns the overflow red past a separator at 100%,
 //! like gnome-shell's BarLevel.
 //!
-//! Each monitor gets a full-width transparent layer surface along its
-//! bottom edge that is mapped once and never hidden, with an empty input
-//! region so it never takes clicks. Mir places a layer surface from its
-//! size at map time and doesn't move it when it resizes or re-maps (see
-//! the notification bubbles), so the pill is centred inside a surface whose
-//! size never changes.
+//! Each monitor gets a transparent layer surface along its bottom edge,
+//! sized to the monitor's full width (Mir doesn't stretch a surface anchored
+//! to both sides) with an empty input region so it never takes clicks. The
+//! pill is centred inside it. The surface is mapped when the OSD shows and
+//! unmapped once it has faded out; at a fixed full width, Mir places it the
+//! same way on every map.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -175,7 +175,8 @@ impl Window {
                 surface.set_input_region(&gtk::cairo::Region::create());
             }
         });
-        window.present();
+        // Mapped on first show and unmapped once faded out. The surface is
+        // the monitor's full width, so Mir places it the same on every map.
 
         let this = Rc::new(Self {
             monitor: monitor.clone(),
@@ -232,6 +233,9 @@ impl Window {
 
         // Fade in when hidden or on the way out.
         self.pill.set_visible(true);
+        if !self.window.is_visible() {
+            self.window.present();
+        }
         let was_shown = self.shown.replace(true);
         if !was_shown | self.hiding.replace(false) {
             self.fade_to(1.0, None);
@@ -290,6 +294,10 @@ impl Window {
                     // Stop drawing it at all, so no faint last frame of
                     // the fade lingers.
                     t.pill.set_visible(false);
+                    // And unmap the surface: on the laptop Mir stopped
+                    // sending frame callbacks partway through the fade, so
+                    // the last frame stayed on screen at ~15% opacity.
+                    t.window.set_visible(false);
                     t.label.set_visible(false);
                     t.bar.set_visible(false);
                 }
