@@ -123,7 +123,9 @@ pub fn set_property(
     prop: &str,
     value: glib::Variant,
 ) {
-    let args = (iface, prop, glib::Variant::from_variant(&value)).to_variant();
+    // A glib::Variant already serialises as `v`; wrapping it again with
+    // from_variant would send <<value>> and the service rejects the Set.
+    let args = (iface, prop, value).to_variant();
     call(conn, dest, path, PROPERTIES, "Set", Some(args));
 }
 

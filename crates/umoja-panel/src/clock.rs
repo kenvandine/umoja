@@ -67,6 +67,12 @@ impl ClockButton {
 
         let calendar = gtk::Calendar::new();
         calendar.set_valign(gtk::Align::Start);
+        // Settings > Date & Time > Week Numbers, "shown in the dropdown
+        // calendar"; follows the switch live like gnome-shell.
+        let weekdate = gs::watch(gs::DESKTOP_CALENDAR, "show-weekdate", {
+            let calendar = calendar.clone();
+            move |s, k| calendar.set_show_week_numbers(s.boolean(k))
+        });
         let menu = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         menu.add_css_class("date-menu");
         let list = Rc::new(crate::notifications::MessageList::new(center));
@@ -142,7 +148,7 @@ impl ClockButton {
             });
         }
         glib::timeout_add_seconds_local(1, move || {
-            let _keep_alive = &settings;
+            let _keep_alive = (&settings, &weekdate);
             refresh();
             glib::ControlFlow::Continue
         });

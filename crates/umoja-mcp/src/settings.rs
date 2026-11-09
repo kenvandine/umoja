@@ -49,6 +49,7 @@ pub const CATALOG: &[Entry] = &[
     e!("clock_show_seconds", IFACE, "clock-show-seconds", "Show seconds in the top bar clock"),
     e!("clock_show_weekday", IFACE, "clock-show-weekday", "Show the weekday in the top bar clock"),
     e!("clock_show_date", IFACE, "clock-show-date", "Show the date in the top bar clock"),
+    e!("calendar_week_numbers", "org.gnome.desktop.calendar", "show-weekdate", "Show week numbers in the top bar's dropdown calendar"),
     e!("hot_corner", IFACE, "enable-hot-corners", "Open the overview by pushing the pointer into the top-left corner"),
     e!("locate_pointer", IFACE, "locate-pointer", "Highlight the pointer when Ctrl is pressed"),
     // Accessibility

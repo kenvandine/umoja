@@ -12,6 +12,7 @@ use gio::prelude::*;
 
 pub const UMOJA_SHELL: &str = "org.umoja.shell";
 pub const DESKTOP_INTERFACE: &str = "org.gnome.desktop.interface";
+pub const DESKTOP_CALENDAR: &str = "org.gnome.desktop.calendar";
 pub const WM_KEYBINDINGS: &str = "org.gnome.desktop.wm.keybindings";
 pub const WM_PREFERENCES: &str = "org.gnome.desktop.wm.preferences";
 pub const MUTTER: &str = "org.gnome.mutter";

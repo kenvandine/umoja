@@ -259,15 +259,13 @@ fn power_profile_tile() -> (gtk::Box, gtk::Revealer) {
         button.connect_clicked({
             let (proxy, bus) = (proxy.clone(), bus.clone());
             move |_| {
-                let args = (
-                    bus.as_str(),
-                    "ActiveProfile",
-                    glib::Variant::from_variant(&id.to_variant()),
-                );
+                // id.to_variant() is already boxed as `v` inside the tuple;
+                // an extra from_variant made it <<'id'>>, which ppd rejects.
+                let args = (bus.as_str(), "ActiveProfile", id.to_variant());
                 proxy.call(
                     "org.freedesktop.DBus.Properties.Set",
                     Some(&args.to_variant()),
-                    gio::DBusCallFlags::NONE,
+                    gio::DBusCallFlags::ALLOW_INTERACTIVE_AUTHORIZATION,
                     -1,
                     gio::Cancellable::NONE,
                     |r| {

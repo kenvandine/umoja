@@ -206,7 +206,7 @@ impl Menu {
                             &(
                                 id,
                                 "clicked",
-                                glib::Variant::from_variant(&0i32.to_variant()),
+                                0i32.to_variant(),
                                 ts,
                             )
                                 .to_variant(),
