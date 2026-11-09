@@ -210,6 +210,10 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(Default::default);
 /// ends it. Read on every input event, so kept outside the lock.
 static EPISODE: AtomicBool = AtomicBool::new(false);
 static DISMISSING: AtomicBool = AtomicBool::new(false);
+/// Mirrors `State::blanked` for the input thread. Mir only reports the
+/// screen coming back through its dimmer, which it skips for off timeouts
+/// under 20 seconds, so input is what clears a blank in that case.
+static BLANKED: AtomicBool = AtomicBool::new(false);
 /// The connection serving org.freedesktop.ScreenSaver, for ActiveChanged.
 static SCREENSAVER_CONN: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
 
@@ -314,6 +318,13 @@ pub fn start() {
 /// sometimes from inside `umoja_idle_set_timeouts` while [`apply`] holds the
 /// state lock, so the work is moved off that thread.
 pub fn mir_state(code: u32) {
+    // Kept in step here, on Mir's thread, so input right after the blank
+    // sees it (the state work below runs later, on the runtime).
+    match code {
+        2 => BLANKED.store(true, Ordering::SeqCst),
+        3 => BLANKED.store(false, Ordering::SeqCst),
+        _ => {}
+    }
     RUNTIME.spawn(async move { on_mir_state(code) });
 }
 
@@ -332,6 +343,11 @@ fn on_mir_state(code: u32) {
             }
         }
         2 => {
+            if !BLANKED.load(Ordering::SeqCst) {
+                // Input arrived before this ran: the screen is on again.
+                tracing::info!("screen off, and back on at once");
+                return;
+            }
             tracing::info!("screen off");
             st.blanked = true;
             st.blanked_unlocked = !st.locked;
@@ -355,14 +371,7 @@ fn on_mir_state(code: u32) {
                 });
             }
         }
-        3 => {
-            tracing::info!("screen on");
-            st.blanked = false;
-            st.blanked_unlocked = false;
-            st.generation += 1;
-            apply(&mut st);
-            emit_active_changed(false);
-        }
+        3 => screen_on(&mut st),
         4 => {
             st.locked = true;
             if matches!(st.stage, Stage::Showing { .. }) {
@@ -373,6 +382,19 @@ fn on_mir_state(code: u32) {
         5 => st.locked = false,
         _ => {}
     }
+}
+
+/// The outputs are back on, from Mir's wake or (without a dimmer) input.
+fn screen_on(st: &mut State) {
+    if !st.blanked {
+        return;
+    }
+    tracing::info!("screen on");
+    st.blanked = false;
+    st.blanked_unlocked = false;
+    st.generation += 1;
+    apply(st);
+    emit_active_changed(false);
 }
 
 fn saver_on(s: &Settings) -> bool {
@@ -421,6 +443,9 @@ pub fn activate_screensaver() -> bool {
 
 /// Any input event (from the shim's event filter, on Mir's input thread).
 pub fn input_activity() {
+    if BLANKED.swap(false, Ordering::SeqCst) {
+        RUNTIME.spawn(async { screen_on(&mut state()) });
+    }
     if !EPISODE.load(Ordering::Relaxed) || DISMISSING.swap(true, Ordering::SeqCst) {
         return;
     }
