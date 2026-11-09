@@ -136,7 +136,12 @@ public:
         auto spec = MinimalWindowManager::place_new_window(app, requested);
         // org.gnome.mutter center-new-windows
         bool const toplevel = !requested.parent().is_set() || !requested.parent().value().lock();
-        if (toplevel && umoja_center_new_windows() && spec.size().is_set()) {
+        // Not a window that maps fullscreen or maximized: Mir has already put
+        // it over the monitor or work area, and centring a monitor-sized
+        // window in the work area left fullscreen games offset by the panel
+        // and dock (36,16).
+        bool const placed_by_state = spec.state().is_set() && spec.state().value() != mir_window_state_restored;
+        if (toplevel && !placed_by_state && umoja_center_new_windows() && spec.size().is_set()) {
             auto const area = tools.active_application_zone().extents();
             auto const sz = spec.size().value();
             spec.top_left() = geom::Point{
