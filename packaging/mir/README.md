@@ -43,19 +43,6 @@ Umoja PPA:
   session and never resumed after switching back. It now uses
   `XDG_SESSION_ID` (falling back to the active session). Upstream report
   draft: `upstream-bugs/logind-active-session-not-own.md`.
-- `patches/3007_dmabuf-implicit-sync.patch`: a client without
-  linux-drm-syncobj may commit a dmabuf its GPU is still drawing into. On
-  hybrid laptops NVIDIA composites a monitor on its own ports, sampling
-  windows Mesa drew on the Intel iGPU without waiting for that implicit
-  fence, so windows tore. Like mutter, a commit now waits (on the existing
-  acquire-point path) until the dmabuf is readable; a buffer whose commit
-  is superseded before then is released back to the client.
-- `patches/3008_nvidia-finish-before-release.patch`: NVIDIA doesn't add its
-  reads of imported dma-bufs to their implicit fences, so clients got
-  buffers back while the GPU was still sampling them and GTK windows drawn
-  on the Intel iGPU tore on NVIDIA-driven monitors. The GL renderer now
-  calls `glFinish()` after each frame on NVIDIA (`MIR_GL_FINISH_AFTER_RENDER`
-  overrides).
 - `patches/3009_cross-gpu-cpu-copy.patch`: GL/Vulkan windows still showed
   stripes of wrong content on NVIDIA-driven monitors (wl_shm windows were
   fine). A client dma-buf drawn on a GPU other than the one that imported it
