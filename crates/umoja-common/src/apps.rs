@@ -7,7 +7,41 @@ use gio::prelude::*;
 /// Tries, in order: `<app_id>.desktop`, the lower-cased id, the last
 /// reverse-DNS component, and finally any entry whose `StartupWMClass`
 /// matches (this is how Ubuntu Dock matches Electron and X11 apps).
+///
+/// A hidden (`NoDisplay=true`) match gives way to a visible entry for the
+/// same app: Chrome's app-id is `com.google.Chrome`, whose desktop file is a
+/// hidden alias of the `google-chrome.desktop` people pin, so without this
+/// its windows got a second, unpinned dock icon and the pin no dot.
 pub fn app_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
+    let found = lookup(app_id)?;
+    if !found.is_nodisplay() {
+        return Some(found);
+    }
+    let mut classes = vec![app_id.to_string()];
+    if let Some(c) = found.startup_wm_class() {
+        classes.push(c.to_string());
+    }
+    let exec = found.executable();
+    visible_entries()
+        .into_iter()
+        .find(|d| {
+            d.startup_wm_class()
+                .is_some_and(|c| classes.iter().any(|w| c.eq_ignore_ascii_case(w)))
+        })
+        .or_else(|| {
+            // No class to go by: the same program (Exec) shown under another id.
+            (!exec.as_os_str().is_empty())
+                .then(|| {
+                    visible_entries()
+                        .into_iter()
+                        .find(|d| d.executable() == exec)
+                })
+                .flatten()
+        })
+        .or(Some(found))
+}
+
+fn lookup(app_id: &str) -> Option<gio::DesktopAppInfo> {
     if app_id.is_empty() {
         return None;
     }
@@ -18,13 +52,24 @@ pub fn app_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
             return Some(info);
         }
     }
+    all_entries().into_iter().find(|d| {
+        d.startup_wm_class()
+            .is_some_and(|c| c.eq_ignore_ascii_case(app_id))
+    })
+}
+
+fn all_entries() -> Vec<gio::DesktopAppInfo> {
     gio::AppInfo::all()
         .into_iter()
         .filter_map(|a| a.downcast::<gio::DesktopAppInfo>().ok())
-        .find(|d| {
-            d.startup_wm_class()
-                .is_some_and(|c| c.eq_ignore_ascii_case(app_id))
-        })
+        .collect()
+}
+
+fn visible_entries() -> Vec<gio::DesktopAppInfo> {
+    all_entries()
+        .into_iter()
+        .filter(|d| !d.is_nodisplay())
+        .collect()
 }
 
 /// `org.gnome.shell favorite-apps`: the pinned apps Ubuntu Dock shows.

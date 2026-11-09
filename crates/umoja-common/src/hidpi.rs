@@ -208,7 +208,10 @@ mod tests {
             .collect();
         assert_eq!(
             s,
-            ["1.000", "1.250", "1.333", "1.500", "1.667", "2.000", "2.250", "2.500", "2.667", "3.000", "3.333", "3.750"]
+            [
+                "1.000", "1.250", "1.333", "1.500", "1.667", "2.000", "2.250", "2.500", "2.667",
+                "3.000", "3.333", "3.750"
+            ]
         );
         // Every offered scale gives whole logical pixels.
         for sc in supported_scales(1024, 768) {
@@ -256,7 +259,10 @@ mod tests {
         edid[22] = 0x13;
         assert_eq!(parse_edid(&edid), None);
         assert_eq!(edid_size_mm(&edid), Some((300, 190)));
-        assert_eq!(parse_mode("2880x1800\n2880x1800\n1920x1200\n"), Some((2880, 1800)));
+        assert_eq!(
+            parse_mode("2880x1800\n2880x1800\n1920x1200\n"),
+            Some((2880, 1800))
+        );
         assert_eq!(parse_mode("1920x1080i\n"), Some((1920, 1080)));
     }
 }

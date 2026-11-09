@@ -112,7 +112,11 @@ pub const FALLBACK_WALLPAPER: &str = "/usr/share/backgrounds/warty-final-ubuntu.
 pub fn wallpaper_path(prefer_dark: bool) -> Option<std::path::PathBuf> {
     let dark = get_string(BACKGROUND, "picture-uri-dark", "");
     let light = get_string(BACKGROUND, "picture-uri", "");
-    let order = if prefer_dark { [dark, light] } else { [light, dark] };
+    let order = if prefer_dark {
+        [dark, light]
+    } else {
+        [light, dark]
+    };
     order
         .into_iter()
         .filter_map(|uri| {

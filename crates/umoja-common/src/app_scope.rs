@@ -17,7 +17,9 @@ use gio::prelude::*;
 pub fn scoped<C: IsA<gio::AppLaunchContext>>(ctx: C) -> C {
     ctx.upcast_ref::<gio::AppLaunchContext>()
         .connect_launched(|_, info, platform_data| {
-            let Some(pid) = launched_pid(platform_data) else { return };
+            let Some(pid) = launched_pid(platform_data) else {
+                return;
+            };
             let id = info.id().map(|s| s.to_string()).unwrap_or_default();
             move_to_scope(id.trim_end_matches(".desktop"), pid);
         });
@@ -53,7 +55,11 @@ pub fn move_to_scope(app_id: &str, pid: u32) {
             ("PIDs", vec![pid].to_variant()).to_variant(),
             ("Slice", "app.slice".to_variant()).to_variant(),
             ("CollectMode", "inactive-or-failed".to_variant()).to_variant(),
-            ("Description", format!("Application launched by Umoja: {app_id}").to_variant()).to_variant(),
+            (
+                "Description",
+                format!("Application launched by Umoja: {app_id}").to_variant(),
+            )
+                .to_variant(),
         ],
     );
     let aux = glib::Variant::array_from_iter_with_type(
@@ -75,7 +81,9 @@ pub fn move_to_scope(app_id: &str, pid: u32) {
         None::<&gio::Cancellable>,
     ) {
         Ok(_) => tracing::info!(app = app_id, pid, unit, "moved app to its own scope"),
-        Err(e) => tracing::warn!(app = app_id, pid, error = %e, "could not move app to its own scope"),
+        Err(e) => {
+            tracing::warn!(app = app_id, pid, error = %e, "could not move app to its own scope")
+        }
     }
 }
 
@@ -93,7 +101,10 @@ pub fn systemd_escape(s: &str) -> String {
                 c.to_string()
             } else {
                 let mut buf = [0u8; 4];
-                c.encode_utf8(&mut buf).bytes().map(|b| format!("\\x{b:02x}")).collect()
+                c.encode_utf8(&mut buf)
+                    .bytes()
+                    .map(|b| format!("\\x{b:02x}"))
+                    .collect()
             }
         })
         .collect()
@@ -105,8 +116,14 @@ mod tests {
 
     #[test]
     fn unit_names() {
-        assert_eq!(unit_name("org.gnome.Settings", 42), "app-umoja-org.gnome.Settings-42.scope");
-        assert_eq!(unit_name("claude-desktop", 7), "app-umoja-claude\\x2ddesktop-7.scope");
+        assert_eq!(
+            unit_name("org.gnome.Settings", 42),
+            "app-umoja-org.gnome.Settings-42.scope"
+        );
+        assert_eq!(
+            unit_name("claude-desktop", 7),
+            "app-umoja-claude\\x2ddesktop-7.scope"
+        );
         assert_eq!(unit_name("", 7), "app-umoja-unknown-7.scope");
         assert_eq!(systemd_escape("a b"), "a\\x20b");
     }

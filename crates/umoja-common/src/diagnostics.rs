@@ -181,12 +181,18 @@ pub fn tools() -> Vec<ToolSpec> {
                 version, stack trace when recorded, out-of-memory messages and log warnings \
                 around it, and package updates in the days before.",
             parameters: crash_params,
-            summary: |a| match a.get("program").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+            summary: |a| match a
+                .get("program")
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty())
+            {
                 Some(p) => format!("Look at the {p} crash"),
                 None => "Look at the latest crash".into(),
             },
             read_only: true,
-            run: |a| crate::crashes::details(a.get("program").and_then(Value::as_str).unwrap_or("")),
+            run: |a| {
+                crate::crashes::details(a.get("program").and_then(Value::as_str).unwrap_or(""))
+            },
         },
         ToolSpec {
             name: "unit_status",
@@ -791,9 +797,7 @@ fn connection_events() -> String {
         return "Connection drops in the last 2 hours: none\n".into();
     }
     let skip = events.len().saturating_sub(8);
-    let mut out = format!(
-        "Connection drops in the last 2 hours: {drops} (latest events below)\n"
-    );
+    let mut out = format!("Connection drops in the last 2 hours: {drops} (latest events below)\n");
     for l in &events[skip..] {
         out.push_str(&format!("  {}\n", truncate(l, 220).trim_end()));
     }

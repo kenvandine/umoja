@@ -129,21 +129,22 @@ pub fn extract_actions(text: &str) -> Vec<AssistantAction> {
     while i < bytes.len() {
         let open = bytes[i];
         if (open == b'{' || open == b'[')
-            && let Some(end) = balanced_end(bytes, i) {
-                let slice = &text[i..=end];
-                if let Ok(a) = serde_json::from_str::<AssistantAction>(slice) {
-                    if a.is_valid() {
-                        out.push(a);
-                    }
-                    i = end + 1;
-                    continue;
+            && let Some(end) = balanced_end(bytes, i)
+        {
+            let slice = &text[i..=end];
+            if let Ok(a) = serde_json::from_str::<AssistantAction>(slice) {
+                if a.is_valid() {
+                    out.push(a);
                 }
-                if let Ok(list) = serde_json::from_str::<Vec<AssistantAction>>(slice) {
-                    out.extend(list.into_iter().filter(AssistantAction::is_valid));
-                    i = end + 1;
-                    continue;
-                }
+                i = end + 1;
+                continue;
             }
+            if let Ok(list) = serde_json::from_str::<Vec<AssistantAction>>(slice) {
+                out.extend(list.into_iter().filter(AssistantAction::is_valid));
+                i = end + 1;
+                continue;
+            }
+        }
         i += 1;
     }
     out
@@ -157,17 +158,18 @@ pub fn strip_actions(text: &str) -> String {
     let mut last = 0;
     while i < bytes.len() {
         if (bytes[i] == b'{' || bytes[i] == b'[')
-            && let Some(end) = balanced_end(bytes, i) {
-                let slice = &text[i..=end];
-                if serde_json::from_str::<AssistantAction>(slice).is_ok()
-                    || serde_json::from_str::<Vec<AssistantAction>>(slice).is_ok()
-                {
-                    out.push_str(&text[last..i]);
-                    last = end + 1;
-                    i = end + 1;
-                    continue;
-                }
+            && let Some(end) = balanced_end(bytes, i)
+        {
+            let slice = &text[i..=end];
+            if serde_json::from_str::<AssistantAction>(slice).is_ok()
+                || serde_json::from_str::<Vec<AssistantAction>>(slice).is_ok()
+            {
+                out.push_str(&text[last..i]);
+                last = end + 1;
+                i = end + 1;
+                continue;
             }
+        }
         i += 1;
     }
     out.push_str(&text[last..]);
