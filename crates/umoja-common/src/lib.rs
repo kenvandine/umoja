@@ -1,8 +1,9 @@
 //! Shared building blocks for every Umoja process.
 //!
 //! Nothing in here depends on GTK so that the compositor, portal and other
-//! headless daemons can use it without pulling in a toolkit. The one
-//! exception, [`blur`], is behind the `blur` feature.
+//! headless daemons can use it without pulling in a toolkit. The
+//! exceptions, [`blur`] and [`monitors`], are behind the `blur` and
+//! `monitors` features.
 
 pub mod agents;
 pub mod apps;
@@ -16,6 +17,8 @@ pub mod gsettings;
 pub mod hidpi;
 pub mod i18n;
 pub mod lemonade;
+#[cfg(feature = "monitors")]
+pub mod monitors;
 pub mod screen;
 pub mod terminal;
 pub mod types;

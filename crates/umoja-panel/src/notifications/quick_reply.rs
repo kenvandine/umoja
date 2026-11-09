@@ -60,6 +60,7 @@ impl QuickReply {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-quick-reply");
+        crate::place_on_primary(&window);
         umoja_common::blur::blur_behind(&window);
         window.set_anchor(Edge::Top, true);
         window.set_margin(Edge::Top, crate::PANEL_HEIGHT + 12);

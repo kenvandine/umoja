@@ -173,6 +173,33 @@ fn parse_monitors_xml(xml: &str) -> Option<Vec<Vec<MonitorConfig>>> {
     Some(layouts)
 }
 
+/// The primary monitor GNOME stored in `~/.config/monitors.xml` for this
+/// set of connected outputs (Mir names), as mutter picks it on hotplug.
+pub(crate) fn stored_primary(connected: &[String]) -> Option<String> {
+    let xml = std::fs::read_to_string(config_dir().join("monitors.xml")).ok()?;
+    primary_in_layouts(&parse_monitors_xml(&xml)?, connected)
+}
+
+fn primary_in_layouts(layouts: &[Vec<MonitorConfig>], connected: &[String]) -> Option<String> {
+    let mut want: Vec<&str> = connected.iter().map(String::as_str).collect();
+    want.sort_unstable();
+    layouts.iter().find_map(|layout| {
+        let mut have: Vec<&str> = layout
+            .iter()
+            .filter(|o| o.enabled)
+            .map(|o| o.connector.as_str())
+            .collect();
+        have.sort_unstable();
+        if have != want {
+            return None;
+        }
+        layout
+            .iter()
+            .find(|o| o.enabled && o.primary)
+            .map(|o| o.connector.clone())
+    })
+}
+
 fn layout_name(outputs: &[MonitorConfig]) -> String {
     let mut names: Vec<_> = outputs.iter().map(|o| o.connector.as_str()).collect();
     names.sort_unstable();
@@ -355,6 +382,32 @@ mod tests {
     <disabled><monitorspec><connector>DP-2</connector><vendor>a</vendor><product>b</product><serial>c</serial></monitorspec></disabled>
   </configuration>
 </monitors>"#;
+
+    #[test]
+    fn stored_primary_matches_the_connected_set() {
+        let xml = r#"<monitors version="2">
+  <configuration>
+    <logicalmonitor><x>0</x><y>0</y><scale>1</scale><primary>yes</primary>
+      <monitor><monitorspec><connector>eDP-1</connector><vendor>a</vendor><product>b</product><serial>c</serial></monitorspec>
+        <mode><width>1920</width><height>1200</height><rate>60</rate></mode></monitor></logicalmonitor>
+  </configuration>
+  <configuration>
+    <logicalmonitor><x>0</x><y>0</y><scale>1</scale>
+      <monitor><monitorspec><connector>eDP-1</connector><vendor>a</vendor><product>b</product><serial>c</serial></monitorspec>
+        <mode><width>1920</width><height>1200</height><rate>60</rate></mode></monitor></logicalmonitor>
+    <logicalmonitor><x>1920</x><y>0</y><scale>1</scale><primary>yes</primary>
+      <monitor><monitorspec><connector>HDMI-1</connector><vendor>a</vendor><product>b</product><serial>c</serial></monitorspec>
+        <mode><width>2560</width><height>1440</height><rate>60</rate></mode></monitor></logicalmonitor>
+  </configuration>
+</monitors>"#;
+        let layouts = parse_monitors_xml(xml).unwrap();
+        let both = ["HDMI-A-1".to_string(), "eDP-1".to_string()];
+        assert_eq!(primary_in_layouts(&layouts, &both).as_deref(), Some("HDMI-A-1"));
+        let laptop = ["eDP-1".to_string()];
+        assert_eq!(primary_in_layouts(&layouts, &laptop).as_deref(), Some("eDP-1"));
+        let other = ["DP-2".to_string()];
+        assert_eq!(primary_in_layouts(&layouts, &other), None);
+    }
 
     #[test]
     fn parses_gnome_layout() {

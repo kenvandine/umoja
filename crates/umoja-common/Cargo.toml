@@ -23,3 +23,5 @@ wayland-protocols = { workspace = true, optional = true }
 [features]
 # Compositor blur behind GTK windows and popovers (ext-background-effect-v1).
 blur = ["dep:gtk4", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols"]
+# Primary monitor and hotplug for shell surfaces (org.gnome.Mutter.DisplayConfig).
+monitors = ["dep:gtk4"]

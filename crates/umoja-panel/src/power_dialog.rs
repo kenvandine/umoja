@@ -42,6 +42,7 @@ pub fn open() {
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_namespace("umoja-end-session");
+    crate::place_on_primary(&window);
     for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
         window.set_anchor(edge, true);
     }

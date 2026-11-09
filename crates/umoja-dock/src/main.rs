@@ -8,6 +8,7 @@ mod autohide;
 mod keynav;
 mod launcher;
 mod launcher_entry;
+mod placement;
 mod previews;
 mod tracker;
 
@@ -21,7 +22,7 @@ use libadwaita::prelude::AnimationExt;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
-use tracker::{Command, Event, WindowId, WindowInfo};
+use tracker::{Command, WindowId, WindowInfo};
 use umoja_common::gsettings as gs;
 use umoja_common::types::DockPosition;
 use umoja_common::{dbus, i18n};
@@ -72,7 +73,8 @@ struct Dock {
     window: gtk::ApplicationWindow,
     list: gtk::Box,
     config: RefCell<Config>,
-    windows: RefCell<BTreeMap<WindowId, WindowInfo>>,
+    /// Every window the tracker knows, shared by the docks on each monitor.
+    windows: Rc<RefCell<BTreeMap<WindowId, WindowInfo>>>,
     commands: Option<async_channel::Sender<Command>>,
     /// A menu or window list is open. Rebuilding would destroy the button it
     /// hangs off (and close it), so rebuilds wait until it closes.
@@ -84,7 +86,6 @@ struct Dock {
     /// update (a download's progress ticks often) needs no rebuild.
     badges: RefCell<HashMap<String, Badge>>,
     hide: autohide::Hide,
-    _settings: Vec<gio::Settings>,
 }
 
 struct Badge {
@@ -111,6 +112,20 @@ fn main() -> glib::ExitCode {
 }
 
 fn build(app: &adw::Application) {
+    // Learn the primary monitor before the first dock maps.
+    umoja_common::monitors::start();
+    placement::Docks::start(app);
+}
+
+/// The state every dock shares, whichever monitor it is on.
+struct Shared {
+    windows: Rc<RefCell<BTreeMap<WindowId, WindowInfo>>>,
+    commands: Option<async_channel::Sender<Command>>,
+    entries: Rc<launcher_entry::Entries>,
+}
+
+/// A dock window on `monitor`.
+fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor) -> Rc<Dock> {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .css_classes(["umoja-dock"])
@@ -118,6 +133,7 @@ fn build(app: &adw::Application) {
     window.init_layer_shell();
     window.set_layer(Layer::Top);
     window.set_namespace("umoja-dock");
+    window.set_monitor(monitor);
     umoja_common::blur::blur_behind(&window);
     window.set_keyboard_mode(KeyboardMode::None);
 
@@ -125,79 +141,28 @@ fn build(app: &adw::Application) {
     list.add_css_class("dock-list");
     window.set_child(Some(&list));
 
-    let tracker = tracker::start();
-    let mut settings = Vec::new();
-    for schema in [gs::DASH_TO_DOCK, gs::SHELL] {
-        if let Some(s) = gs::settings(schema) {
-            settings.push(s);
-        }
-    }
-
     let dock = Rc::new(Dock {
         window: window.clone(),
         list,
         config: RefCell::new(Config::load()),
-        windows: RefCell::default(),
-        commands: tracker.as_ref().map(|t| t.commands.clone()),
+        windows: shared.windows.clone(),
+        commands: shared.commands.clone(),
         menu_open: Cell::new(false),
         rebuild_pending: Cell::new(false),
         entries: OnceCell::new(),
         badges: RefCell::default(),
         hide: autohide::Hide::new(),
-        _settings: settings.clone(),
     });
-    let weak = Rc::downgrade(&dock);
-    let _ = dock.entries.set(launcher_entry::start(move |key| {
-        if let Some(d) = weak.upgrade() {
-            d.update_badge(key);
-        }
-    }));
-
-    for s in &settings {
-        let weak = Rc::downgrade(&dock);
-        s.connect_changed(None, move |_, _| {
-            if let Some(d) = weak.upgrade() {
-                *d.config.borrow_mut() = Config::load();
-                d.apply_layout();
-                d.rebuild();
-                d.refresh_autohide();
-            }
-        });
-    }
-
-    if let Some(t) = tracker {
-        let weak = Rc::downgrade(&dock);
-        glib::spawn_future_local(async move {
-            while let Ok(ev) = t.events.recv().await {
-                let Some(d) = weak.upgrade() else { break };
-                match ev {
-                    Event::Changed(info) => {
-                        d.windows.borrow_mut().insert(info.id, info);
-                    }
-                    Event::Closed(id) => {
-                        d.windows.borrow_mut().remove(&id);
-                    }
-                }
-                d.rebuild();
-            }
-        });
-    }
-
-    // Every handler above holds only a weak reference, so the window owns
-    // the dock state. Without this the Dock was freed as soon as build()
-    // returned, the tracker's channel closed, and running apps never showed.
-    let keep = RefCell::new(Some(dock.clone()));
-    window.connect_destroy(move |_| {
-        keep.borrow_mut().take();
-    });
+    let _ = dock.entries.set(shared.entries.clone());
 
     dock.install_autohide();
-    keynav::start(&dock);
+    keynav::attach(&dock);
     dock.apply_layout();
     dock.rebuild();
     dock.refresh_autohide();
     fade_in_on_map(&window);
     window.present();
+    dock
 }
 
 /// Fade the dock up from transparent the first time it maps, in step with

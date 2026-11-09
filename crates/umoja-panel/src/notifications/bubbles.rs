@@ -52,6 +52,8 @@ impl Bubbles {
         window.set_namespace("umoja-notifications");
         umoja_common::blur::blur_behind(&window);
         window.set_keyboard_mode(KeyboardMode::None);
+        // Banners show on the primary monitor, under its top bar, as in GNOME.
+        crate::keep_on_primary(&window);
         // A fixed-size surface at the top center, under the clock and the
         // notification list, as GNOME places its banners. Anchored to the
         // top edge only, so the compositor centers it horizontally. Mir

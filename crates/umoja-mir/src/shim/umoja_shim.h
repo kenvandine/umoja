@@ -175,6 +175,7 @@ bool umoja_workspace_resolve(uint32_t code, size_t current, size_t count, uint32
 size_t umoja_workspace_layout(bool const* occupied, size_t n, size_t current, size_t* out_remove, size_t max_remove,
                               size_t* out_n_remove);
 bool umoja_workspaces_only_on_primary(void);
+int32_t umoja_primary_output_id(void);
 bool umoja_center_new_windows(void);
 int32_t umoja_neighbor_output(uint32_t action, UmojaRect from, UmojaRect const* rects, size_t n);
 UmojaRect umoja_translate_rect(UmojaRect window, UmojaRect from, UmojaRect to);

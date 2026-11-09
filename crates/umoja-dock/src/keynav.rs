@@ -53,7 +53,8 @@ pub fn focused() -> bool {
     FOCUSED.with(Cell::get)
 }
 
-pub fn start(dock: &Rc<Dock>) {
+/// Escape and Enter handling for one dock window.
+pub fn attach(dock: &Rc<Dock>) {
     let keys = gtk::EventControllerKey::new();
     let weak = Rc::downgrade(dock);
     keys.connect_key_pressed(move |_, key, _, _| {
@@ -83,18 +84,22 @@ pub fn start(dock: &Rc<Dock>) {
         glib::Propagation::Proceed
     });
     dock.window.add_controller(keys);
+}
 
-    let weak = Rc::downgrade(dock);
+/// Serve org.umoja.Dock; Focus goes to the dock `target` names (the one on
+/// the primary monitor when there are several).
+pub fn serve(target: impl Fn() -> Option<Rc<Dock>> + 'static) {
+    let target = Rc::new(target);
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(XML).expect("valid XML");
         let iface = info
             .lookup_interface(dbus::DOCK_INTERFACE)
             .expect("interface");
-        let weak = weak.clone();
+        let target = target.clone();
         let res = conn
             .register_object(dbus::DOCK_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, _, invocation| {
-                let Some(d) = weak.upgrade() else {
+                let Some(d) = target() else {
                     invocation.return_value(None);
                     return;
                 };

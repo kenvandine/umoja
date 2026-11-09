@@ -37,7 +37,7 @@ use gtk::glib;
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
-use umoja_common::{dbus, i18n};
+use umoja_common::{dbus, i18n, monitors};
 
 const APP_ID: &str = "org.umoja.Panel";
 const PANEL_HEIGHT: i32 = 32;
@@ -83,6 +83,8 @@ thread_local! {
 }
 
 fn build(app: &adw::Application) {
+    // Learn the primary monitor before the first surface maps.
+    monitors::start();
     WALLPAPER.with(|w| {
         w.get_or_init(|| wallpaper::Wallpaper::start(app));
     });
@@ -104,6 +106,8 @@ fn build(app: &adw::Application) {
     }
     window.auto_exclusive_zone_enable();
     umoja_common::blur::blur_behind(&window);
+    // GNOME's top bar is on the primary monitor only.
+    keep_on_primary(window.upcast_ref());
 
     let bar = gtk::CenterBox::new();
     bar.set_start_widget(Some(&activities_button()));
@@ -133,6 +137,45 @@ fn build(app: &adw::Application) {
     osd::init(app);
     media_keys::own_name();
     brightness::Brightness::get();
+}
+
+/// Open a new layer surface (a dialog, a popup) on the primary monitor,
+/// as gnome-shell does. Call before presenting it.
+pub fn place_on_primary(window: &gtk::Window) {
+    if let Some(m) = monitors::primary() {
+        window.set_monitor(&m);
+    }
+}
+
+/// Put a long-lived layer surface on the primary monitor and move it when
+/// the primary changes or its monitor is unplugged.
+pub fn keep_on_primary(window: &gtk::Window) {
+    place_on_primary(window);
+    let weak = window.downgrade();
+    monitors::connect_changed(move || {
+        let Some(w) = weak.upgrade() else { return };
+        if monitors::primary().is_none_or(|m| w.monitor().as_ref() == Some(&m)) {
+            return;
+        }
+        let Some(app) = gio::Application::default() else {
+            return;
+        };
+        // Moving remaps the surface: never while the screen is off.
+        let weak = w.downgrade();
+        umoja_common::screen::when_on(&app, move || {
+            let (Some(w), Some(m)) = (weak.upgrade(), monitors::primary()) else {
+                return;
+            };
+            if w.monitor().as_ref() != Some(&m) {
+                tracing::info!(
+                    surface = %w.namespace().unwrap_or_default(),
+                    monitor = m.connector().as_deref().unwrap_or("?"),
+                    "moving to the primary monitor"
+                );
+                w.set_monitor(&m);
+            }
+        });
+    });
 }
 
 /// GNOME 45+'s Activities button: one dot per workspace, the active one a

@@ -594,9 +594,11 @@ private:
     std::map<int, geom::Rectangle> outputs;
     std::map<int, geom::Rectangle> zones;
 
-    // Mir has no primary-monitor concept; use the one at the origin, which is
-    // where GNOME's monitors.xml import puts the primary.
+    // Mir has no primary-monitor concept; umoja-mir tracks it as mutter does
+    // (Settings › Displays, monitors.xml, built-in panel). Fall back to the
+    // monitor at the origin.
     geom::Rectangle primary_output() const {
+        if (auto const it = outputs.find(umoja_primary_output_id()); it != outputs.end()) return it->second;
         for (auto const& [id, r] : outputs)
             if (r.contains(geom::Point{0, 0})) return r;
         return outputs.empty() ? geom::Rectangle{} : outputs.begin()->second;

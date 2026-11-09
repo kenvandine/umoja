@@ -313,6 +313,12 @@ pub extern "C" fn umoja_output_update(
     })
 }
 
+/// Output id of the primary monitor (Settings › Displays / monitors.xml), or -1.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_primary_output_id() -> i32 {
+    guard("primary_output_id", -1, crate::display_config::primary_output_id)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_output_remove(id: i32) {
     guard("output_remove", (), || {

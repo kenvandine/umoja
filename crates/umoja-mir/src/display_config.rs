@@ -12,7 +12,7 @@
 use crate::outputs::{self, MonitorConfig};
 use crate::tiling::Rect;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex};
 use tokio::sync::Notify;
 use umoja_common::hidpi;
@@ -51,6 +51,11 @@ impl OutputState {
 static OUTPUTS: LazyLock<Mutex<BTreeMap<i32, OutputState>>> = LazyLock::new(Default::default);
 static SERIAL: AtomicU32 = AtomicU32::new(1);
 static CHANGED: LazyLock<Notify> = LazyLock::new(Notify::new);
+/// The primary picked in Settings › Displays this session, with the set of
+/// outputs it was picked for (a hotplug falls back to monitors.xml).
+static CHOSEN_PRIMARY: Mutex<Option<(Vec<String>, String)>> = Mutex::new(None);
+/// Output id of the primary monitor, or -1; read by the window manager.
+static PRIMARY_ID: AtomicI32 = AtomicI32::new(-1);
 
 pub fn output_updated(id: i32, state: OutputState) {
     let mut map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -73,6 +78,19 @@ pub fn output_removed(id: i32) {
 }
 
 fn changed() {
+    let map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let chosen = CHOSEN_PRIMARY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let stored = |names: &[String]| outputs::stored_primary(names);
+    let id = primary_id(&map, chosen.as_ref(), stored).unwrap_or(-1);
+    if PRIMARY_ID.swap(id, Ordering::SeqCst) != id {
+        tracing::info!(
+            primary = map.get(&id).map(|o| o.name.as_str()).unwrap_or("none"),
+            "primary monitor"
+        );
+    }
     SERIAL.fetch_add(1, Ordering::SeqCst);
     CHANGED.notify_one();
 }
@@ -143,16 +161,53 @@ fn kernel_modes(connector: &str) -> Vec<(u32, u32)> {
     modes
 }
 
-fn primary_id(map: &BTreeMap<i32, OutputState>) -> Option<i32> {
-    map.iter()
-        .find(|(_, o)| o.rect.x <= 0 && o.rect.y <= 0 && o.rect.right() > 0 && o.rect.bottom() > 0)
-        .or_else(|| map.iter().next())
-        .map(|(id, _)| *id)
+/// The primary monitor's output id, or -1 with no outputs.
+pub fn primary_output_id() -> i32 {
+    PRIMARY_ID.load(Ordering::SeqCst)
+}
+
+fn connected_names(map: &BTreeMap<i32, OutputState>) -> Vec<String> {
+    let mut names: Vec<String> = map.values().map(|o| o.name.clone()).collect();
+    names.sort_unstable();
+    names
+}
+
+/// Pick the primary as mutter does: the one chosen in Settings for these
+/// outputs, else the one stored in monitors.xml for them, else the built-in
+/// panel, else the monitor at the origin.
+fn primary_id(
+    map: &BTreeMap<i32, OutputState>,
+    chosen: Option<&(Vec<String>, String)>,
+    stored: impl FnOnce(&[String]) -> Option<String>,
+) -> Option<i32> {
+    let names = connected_names(map);
+    let by_name = |name: &str| {
+        map.iter()
+            .find(|(_, o)| o.name == name)
+            .map(|(id, _)| *id)
+    };
+    chosen
+        .filter(|(set, _)| *set == names)
+        .and_then(|(_, name)| by_name(name))
+        .or_else(|| stored(&names).and_then(|n| by_name(&n)))
+        .or_else(|| {
+            map.iter()
+                .find(|(_, o)| hidpi::is_builtin_connector(&o.name))
+                .map(|(id, _)| *id)
+        })
+        .or_else(|| {
+            map.iter()
+                .find(|(_, o)| {
+                    o.rect.x <= 0 && o.rect.y <= 0 && o.rect.right() > 0 && o.rect.bottom() > 0
+                })
+                .map(|(id, _)| *id)
+        })
+        .or_else(|| map.keys().next().copied())
 }
 
 fn current_state() -> (u32, Vec<Monitor>, Vec<LogicalMonitor>, Props) {
     let map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let primary = primary_id(&map);
+    let primary = Some(primary_output_id()).filter(|id| map.contains_key(id));
     let mut monitors = Vec::new();
     let mut logical = Vec::new();
     for (id, o) in &map {
@@ -319,6 +374,17 @@ impl DisplayConfig {
             outputs = configs.len(),
             "applied monitor configuration"
         );
+        if let Some(p) = configs.iter().find(|c| c.enabled && c.primary) {
+            let mut set: Vec<String> = configs
+                .iter()
+                .filter(|c| c.enabled)
+                .map(|c| c.connector.clone())
+                .collect();
+            set.sort_unstable();
+            *CHOSEN_PRIMARY.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((set, p.connector.clone()));
+            changed();
+        }
         Ok(())
     }
 
@@ -374,6 +440,44 @@ pub fn start(display_file: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primary_follows_choice_then_monitors_xml_then_builtin() {
+        let out = |name: &str, x: i32| OutputState {
+            name: name.into(),
+            rect: Rect::new(x, 0, 1920, 1080),
+            scale: 1.0,
+            refresh: 60.0,
+            width_mm: 0,
+            height_mm: 0,
+            orientation: 0,
+        };
+        let mut map = BTreeMap::new();
+        map.insert(1, out("HDMI-A-1", 0));
+        map.insert(2, out("eDP-1", 1920));
+        let none = |_: &[String]| None;
+        // No config: the laptop panel, even though HDMI is at the origin.
+        assert_eq!(primary_id(&map, None, none), Some(2));
+        // monitors.xml says HDMI.
+        assert_eq!(
+            primary_id(&map, None, |_: &[String]| Some("HDMI-A-1".into())),
+            Some(1)
+        );
+        // A Settings choice for this exact set wins over monitors.xml...
+        let chosen = (vec!["HDMI-A-1".into(), "eDP-1".into()], "eDP-1".to_string());
+        assert_eq!(
+            primary_id(&map, Some(&chosen), |_: &[String]| Some("HDMI-A-1".into())),
+            Some(2)
+        );
+        // ...but not once the set of monitors changed.
+        let stale = (vec!["DP-1".into(), "eDP-1".into()], "DP-1".to_string());
+        assert_eq!(primary_id(&map, Some(&stale), none), Some(2));
+        // No built-in panel: the one at the origin.
+        map.remove(&2);
+        map.insert(3, out("DP-1", 1920));
+        assert_eq!(primary_id(&map, None, none), Some(1));
+        assert_eq!(primary_id(&BTreeMap::new(), None, none), None);
+    }
 
     #[test]
     fn mode_ids_round_trip() {
