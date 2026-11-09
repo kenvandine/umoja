@@ -59,6 +59,7 @@ override_dh_auto_install:
 	# Desktop session & GSettings
 	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
 	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
+	install -D -m 0644 data/90_umoja.gschema.override $(DESKTOP)/usr/share/glib-2.0/schemas/90_umoja.gschema.override
 
 	# systemd user units, D-Bus activation and portal registration
 	install -d $(DESKTOP)/usr/lib/systemd/user

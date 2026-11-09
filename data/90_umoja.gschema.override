@@ -1,0 +1,9 @@
+# Defaults for the Umoja session only: the ":Umoja" qualifier matches the
+# first entry of XDG_CURRENT_DESKTOP (Umoja:ubuntu:GNOME), so a stock GNOME
+# or Ubuntu session on the same machine keeps its own defaults. A value the
+# user sets (GNOME Tweaks, gsettings) still wins over these.
+
+# Middle-click pastes the primary selection (the last text selected), as
+# GNOME did before it changed the default to false.
+[org.gnome.desktop.interface:Umoja]
+gtk-enable-primary-paste=true
