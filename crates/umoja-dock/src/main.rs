@@ -6,6 +6,7 @@
 
 mod keynav;
 mod launcher;
+mod launcher_entry;
 mod previews;
 mod tracker;
 
@@ -16,8 +17,8 @@ use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
 use libadwaita::prelude::AnimationExt;
-use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use tracker::{Command, Event, WindowId, WindowInfo};
 use umoja_common::gsettings as gs;
@@ -74,7 +75,18 @@ struct Dock {
     /// hangs off (and close it), so rebuilds wait until it closes.
     menu_open: Cell<bool>,
     rebuild_pending: Cell<bool>,
+    /// Unity LauncherEntry counts, progress and urgency, by dock key.
+    entries: OnceCell<Rc<launcher_entry::Entries>>,
+    /// The badge widgets of the icons now in the dock, by dock key, so an
+    /// update (a download's progress ticks often) needs no rebuild.
+    badges: RefCell<HashMap<String, Badge>>,
     _settings: Vec<gio::Settings>,
+}
+
+struct Badge {
+    button: gtk::Button,
+    count: gtk::Label,
+    progress: gtk::ProgressBar,
 }
 
 fn main() -> glib::ExitCode {
@@ -120,8 +132,16 @@ fn build(app: &adw::Application) {
         commands: tracker.as_ref().map(|t| t.commands.clone()),
         menu_open: Cell::new(false),
         rebuild_pending: Cell::new(false),
+        entries: OnceCell::new(),
+        badges: RefCell::default(),
         _settings: settings.clone(),
     });
+    let weak = Rc::downgrade(&dock);
+    let _ = dock.entries.set(launcher_entry::start(move |key| {
+        if let Some(d) = weak.upgrade() {
+            d.update_badge(key);
+        }
+    }));
 
     for s in &settings {
         let weak = Rc::downgrade(&dock);
@@ -272,6 +292,7 @@ impl Dock {
             return;
         }
         self.rebuild_pending.set(false);
+        self.badges.borrow_mut().clear();
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -372,6 +393,7 @@ impl Dock {
             }
             overlay.add_overlay(&dots);
         }
+        self.add_badges(&launcher::key_for(app), &overlay, &button);
 
         let commands = self.commands.clone();
         let app_c = app.clone();
@@ -405,6 +427,67 @@ impl Dock {
         });
         button.add_controller(menu_click);
         overlay.upcast()
+    }
+
+    /// Unread count (top corner) and progress bar (across the bottom of
+    /// the icon) from the app's LauncherEntry, like Ubuntu Dock's.
+    fn add_badges(&self, key: &str, overlay: &gtk::Overlay, button: &gtk::Button) {
+        let count = gtk::Label::builder()
+            .css_classes(["dock-badge"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .can_target(false)
+            .visible(false)
+            .build();
+        let progress = gtk::ProgressBar::builder()
+            .css_classes(["dock-progress"])
+            .valign(gtk::Align::End)
+            .margin_start(10)
+            .margin_end(10)
+            .margin_bottom(8)
+            .can_target(false)
+            .visible(false)
+            .build();
+        overlay.add_overlay(&progress);
+        overlay.add_overlay(&count);
+        self.badges.borrow_mut().insert(
+            key.to_string(),
+            Badge {
+                button: button.clone(),
+                count,
+                progress,
+            },
+        );
+        self.update_badge(key);
+    }
+
+    fn update_badge(&self, key: &str) {
+        let badges = self.badges.borrow();
+        let Some(badge) = badges.get(key) else { return };
+        let entry = self
+            .entries
+            .get()
+            .and_then(|e| e.get(key))
+            .unwrap_or_default();
+        match entry.badge() {
+            Some(text) => {
+                badge.count.set_label(&text);
+                badge.count.set_visible(true);
+            }
+            None => badge.count.set_visible(false),
+        }
+        match entry.progress() {
+            Some(f) => {
+                badge.progress.set_fraction(f);
+                badge.progress.set_visible(true);
+            }
+            None => badge.progress.set_visible(false),
+        }
+        if entry.urgent {
+            badge.button.add_css_class("urgent");
+        } else {
+            badge.button.remove_css_class("urgent");
+        }
     }
 
     /// Ubuntu Dock's app menu, in its order: the app name, its windows

@@ -34,6 +34,19 @@ window.umoja-panel menubutton > button:checked {
 window.umoja-panel .tray-item {
   padding: 0 6px;
 }
+/* AppIndicator OverlayIcon emblem (e.g. unread mail) and the dot shown for
+   NeedsAttention when the item has no attention icon of its own. */
+window.umoja-panel .tray-emblem {
+  margin: 0 -3px -2px 0;
+}
+window.umoja-panel .tray-attention {
+  min-width: 6px;
+  min-height: 6px;
+  margin: -1px -2px 0 0;
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+  box-shadow: 0 0 0 1.5px rgb(22, 22, 24);
+}
 
 /* ---- Menus: floating dark cards, no arrow ---- */
 popover > contents {

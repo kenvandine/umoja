@@ -90,3 +90,37 @@ popover button:active {
 .dock-menu-submenu > title:hover {
   background-color: @shell_fill_hover;
 }
+
+/* Unity LauncherEntry badges, as on Ubuntu Dock: the unread count in the
+   top corner, a progress bar over the bottom of the icon, and a pulse for
+   urgent apps. Flat accent color, white text. */
+.dock-badge {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+  font-size: 0.75em;
+  font-weight: bold;
+  min-width: 12px;
+  min-height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 2px solid rgb(22, 22, 24);
+}
+progressbar.dock-progress > trough {
+  min-height: 5px;
+  border-radius: 999px;
+  background-color: alpha(#000000, 0.55);
+  border: 1px solid alpha(#ffffff, 0.25);
+}
+progressbar.dock-progress > trough > progress {
+  min-height: 5px;
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+}
+@keyframes dock-urgent {
+  from { background-color: alpha(@accent_bg_color, 0.10); }
+  to   { background-color: alpha(@accent_bg_color, 0.55); }
+}
+.dock-item.urgent {
+  background-color: alpha(@accent_bg_color, 0.30);
+  animation: dock-urgent 0.8s ease-in-out 6 alternate;
+}

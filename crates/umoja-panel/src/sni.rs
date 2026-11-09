@@ -31,6 +31,9 @@ const WATCHER_XML: &str = r#"
 const ITEM_IFACE: &str = "org.kde.StatusNotifierItem";
 /// Panel icons are 16 logical pixels, like gnome-shell's.
 const ICON_SIZE: i32 = 16;
+/// OverlayIcon emblems sit in the icon's bottom corner, as in Ubuntu's
+/// AppIndicator extension.
+const EMBLEM_SIZE: i32 = 10;
 
 struct Item {
     button: gtk::Button,
@@ -44,6 +47,11 @@ struct ItemState {
     bus: String,
     proxy: gio::DBusProxy,
     image: gtk::Image,
+    /// `OverlayIconName`/`OverlayIconPixmap`, e.g. an unread-mail emblem.
+    emblem: gtk::Image,
+    /// Shown for `NeedsAttention` when the item has no attention or
+    /// overlay icon of its own to say so.
+    attention_dot: gtk::Box,
     button: glib::WeakRef<gtk::Button>,
     menu_path: RefCell<Option<String>>,
     menu: RefCell<Option<Rc<dbusmenu::Menu>>>,
@@ -176,8 +184,26 @@ impl Tray {
         );
         let Ok(proxy) = proxy else { return };
         let image = gtk::Image::builder().pixel_size(ICON_SIZE).build();
+        let emblem = gtk::Image::builder()
+            .pixel_size(EMBLEM_SIZE)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .css_classes(["tray-emblem"])
+            .can_target(false)
+            .visible(false)
+            .build();
+        let attention_dot = gtk::Box::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .css_classes(["tray-attention"])
+            .can_target(false)
+            .visible(false)
+            .build();
+        let stack = gtk::Overlay::builder().child(&image).build();
+        stack.add_overlay(&emblem);
+        stack.add_overlay(&attention_dot);
         let button = gtk::Button::builder()
-            .child(&image)
+            .child(&stack)
             .css_classes(["flat", "tray-item"])
             .visible(false)
             .build();
@@ -186,6 +212,8 @@ impl Tray {
             bus: bus.clone(),
             proxy: proxy.clone(),
             image,
+            emblem,
+            attention_dot,
             button: button.downgrade(),
             menu_path: RefCell::default(),
             menu: RefCell::default(),
@@ -420,51 +448,101 @@ impl ItemState {
             && let Some(display) = gtk::gdk::Display::default()
         {
             let theme = gtk::IconTheme::for_display(&display);
-            if !theme
-                .search_path()
-                .iter()
-                .any(|p| p.as_os_str() == dir)
-            {
+            if !theme.search_path().iter().any(|p| p.as_os_str() == dir) {
                 theme.add_search_path(&dir);
             }
         }
 
         let attention = status == "NeedsAttention";
-        let (name_key, pixmap_key) = if attention {
+        let has = |name: &str, pixmap: &str| {
+            text(name).is_some() || props.get(pixmap).is_some_and(|v| v.n_children() > 0)
+        };
+        let own_attention_icon = has("AttentionIconName", "AttentionIconPixmap");
+        let (name_key, pixmap_key) = if attention && own_attention_icon {
             ("AttentionIconName", "AttentionIconPixmap")
         } else {
             ("IconName", "IconPixmap")
         };
-        let name = text(name_key).or_else(|| text("IconName"));
         let scale = button.scale_factor();
-        let pixmap = props
-            .get(pixmap_key)
-            .or_else(|| props.get("IconPixmap"))
-            .and_then(|v| best_pixmap(v, ICON_SIZE * scale));
-        let file = name.as_deref().and_then(local_file);
-        match (name, pixmap) {
-            (Some(n), _) if n.starts_with('/') => self.image.set_from_file(Some(&n)),
-            (Some(_), _) if file.is_some() => self.image.set_from_file(file.as_ref()),
-            (Some(n), Some(p)) => {
-                let theme = gtk::gdk::Display::default().map(|d| gtk::IconTheme::for_display(&d));
-                if theme.is_some_and(|t| t.has_icon(&n)) {
-                    self.image.set_icon_name(Some(&n));
-                } else {
-                    self.image.set_paintable(Some(&p));
-                }
-            }
-            (Some(n), None) => self.image.set_icon_name(Some(&n)),
-            (None, Some(p)) => self.image.set_paintable(Some(&p)),
-            (None, None) => self
-                .image
-                .set_icon_name(Some("application-x-executable-symbolic")),
+        let main = resolve_icon(
+            props,
+            &[name_key, "IconName"],
+            &[pixmap_key, "IconPixmap"],
+            ICON_SIZE * scale,
+            &local_file,
+        );
+        set_icon(
+            &self.image,
+            main.unwrap_or(Icon::Name("application-x-executable-symbolic".into())),
+        );
+
+        let emblem = resolve_icon(
+            props,
+            &["OverlayIconName"],
+            &["OverlayIconPixmap"],
+            EMBLEM_SIZE * scale,
+            &local_file,
+        );
+        self.emblem.set_visible(emblem.is_some());
+        if let Some(icon) = emblem {
+            set_icon(&self.emblem, icon);
         }
+        self.attention_dot
+            .set_visible(attention && !own_attention_icon && !self.emblem.is_visible());
 
         let tooltip = props
             .get("ToolTip")
             .and_then(tooltip_text)
             .or_else(|| text("Title"));
         button.set_tooltip_markup(tooltip.as_deref());
+    }
+}
+
+enum Icon {
+    Name(String),
+    File(std::path::PathBuf),
+    Texture(gtk::gdk::MemoryTexture),
+}
+
+/// The first of `names` that is set (an absolute path, a file in the
+/// item's IconThemePath, or a theme icon), else the first of `pixmaps`.
+/// A theme icon wins over a pixmap only when the theme has it.
+fn resolve_icon(
+    props: &crate::bus::Props,
+    names: &[&str],
+    pixmaps: &[&str],
+    size: i32,
+    local_file: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> Option<Icon> {
+    let name = names
+        .iter()
+        .find_map(|k| props.str(k).filter(|s| !s.is_empty()));
+    let pixmap = pixmaps
+        .iter()
+        .find_map(|k| props.get(k).and_then(|v| best_pixmap(v, size)));
+    let file = name.as_deref().and_then(local_file);
+    match (name, pixmap) {
+        (Some(n), _) if n.starts_with('/') => Some(Icon::File(n.into())),
+        (Some(_), _) if file.is_some() => file.map(Icon::File),
+        (Some(n), Some(p)) => {
+            let theme = gtk::gdk::Display::default().map(|d| gtk::IconTheme::for_display(&d));
+            if theme.is_some_and(|t| t.has_icon(&n)) {
+                Some(Icon::Name(n))
+            } else {
+                Some(Icon::Texture(p))
+            }
+        }
+        (Some(n), None) => Some(Icon::Name(n)),
+        (None, Some(p)) => Some(Icon::Texture(p)),
+        (None, None) => None,
+    }
+}
+
+fn set_icon(image: &gtk::Image, icon: Icon) {
+    match icon {
+        Icon::Name(n) => image.set_icon_name(Some(&n)),
+        Icon::File(f) => image.set_from_file(Some(&f)),
+        Icon::Texture(t) => image.set_paintable(Some(&t)),
     }
 }
 
