@@ -285,10 +285,7 @@ public:
         auto const time = mir_input_event_get_event_time(mir_touch_event_input_event(event));
         UmojaTouchResult res{};
         bool const consume = umoja_touch(pts, n, static_cast<uint64_t>(time), screen, &res);
-        if (res.swipe & UMOJA_SWIPE_BEGIN) workspace_swipe_begin();
-        if (res.swipe & UMOJA_SWIPE_UPDATE) workspace_swipe_update(res.progress);
-        // No switcher popup: as in GNOME the workspaces moving is the feedback.
-        if (res.swipe & UMOJA_SWIPE_END) workspace_swipe_end(res.dir);
+        apply_swipe(res.swipe, res.progress, res.dir);
         if (consume) return true;
         return MinimalWindowManager::handle_touch_event(event);
     }
@@ -928,6 +925,14 @@ private:
     }
 
 public:
+    // `flags`: UMOJA_SWIPE_* bits, applied begin, update, end. No switcher
+    // popup: as in GNOME the workspaces moving is the feedback.
+    void apply_swipe(uint32_t flags, double progress, int32_t dir) {
+        if (flags & UMOJA_SWIPE_BEGIN) workspace_swipe_begin();
+        if (flags & UMOJA_SWIPE_UPDATE) workspace_swipe_update(progress);
+        if (flags & UMOJA_SWIPE_END) workspace_swipe_end(dir);
+    }
+
     void workspace_swipe_begin() {
         if (swipe) return;
         finish_slide();
@@ -1332,6 +1337,12 @@ extern "C" void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count) 
 
 extern "C" void umoja_wm_switch_workspace(uint32_t index) {
     with_wm("switch workspace", [&] { g_wm->switch_workspace(index); });
+}
+
+// A touchpad swipe step, from Mir's input thread (see umoja_touchpad_gesture).
+extern "C" void umoja_wm_workspace_swipe(uint32_t flags, double progress, int32_t dir) {
+    if (flags == 0) return;
+    with_wm("touchpad swipe", [&] { g_wm->apply_swipe(flags, progress, dir); });
 }
 
 extern "C" void umoja_wm_move_to_workspace(uint64_t id, uint32_t index) {

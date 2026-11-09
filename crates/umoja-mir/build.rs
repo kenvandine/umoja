@@ -51,6 +51,10 @@ fn main() {
     }
     build.compile("umoja_shim");
 
+    // Our Mir patch (packaging/mir) finds the touchpad gesture hook with
+    // dlsym(RTLD_DEFAULT), so it must be in the dynamic symbol table.
+    println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_touchpad_gesture_hook");
+
     for path in miral
         .link_paths
         .iter()

@@ -507,6 +507,70 @@ pub const SWIPE_BEGIN: u32 = 1;
 pub const SWIPE_UPDATE: u32 = 2;
 pub const SWIPE_END: u32 = 4;
 
+unsafe extern "C" {
+    fn umoja_wm_workspace_swipe(flags: u32, progress: f64, dir: i32);
+}
+
+static TOUCHPAD: LazyLock<Mutex<gestures::Touchpad>> = LazyLock::new(Default::default);
+
+/// Touchpad gestures from libinput. Mir drops them; our Mir patch (see
+/// packaging/mir) looks this function up in the executable and calls it on
+/// its input thread. `kind`: 0 swipe, 1 pinch, 2 hold; `phase`: 0 begin,
+/// 1 update, 2 end, 3 cancelled. Exported by build.rs's linker flags.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn mir_touchpad_gesture_hook(
+    kind: c_int,
+    phase: c_int,
+    fingers: c_int,
+    dx: f64,
+    dy: f64,
+    _scale: f64,
+    _angle: f64,
+    time_usec: u64,
+) {
+    guard("touchpad_gesture", (), || {
+        let mut outs = Vec::new();
+        TOUCHPAD.lock().unwrap_or_else(|e| e.into_inner()).gesture(
+            kind,
+            phase,
+            fingers,
+            dx,
+            dy,
+            time_usec as f64 / 1e3,
+            &mut outs,
+        );
+        let (mut flags, mut progress, mut dir) = (0, 0.0, 0);
+        for o in outs {
+            apply_out(o, &mut flags, &mut progress, &mut dir);
+        }
+        unsafe { umoja_wm_workspace_swipe(flags, progress, dir) };
+    })
+}
+
+fn apply_out(o: gestures::Out, flags: &mut u32, progress: &mut f64, dir: &mut i32) {
+    match o {
+        gestures::Out::SwipeBegin => *flags |= SWIPE_BEGIN,
+        gestures::Out::SwipeUpdate(p) => {
+            *flags |= SWIPE_UPDATE;
+            *progress = p;
+        }
+        gestures::Out::SwipeEnd(d) => {
+            *flags |= SWIPE_END;
+            *dir = d;
+        }
+        gestures::Out::OverviewUp => session::overlay_call("ShiftOverview", (true,)),
+        gestures::Out::OverviewDown => session::overlay_call("ShiftOverview", (false,)),
+        gestures::Out::OpenMenu(m) => session::panel_call(
+            "OpenMenu",
+            (match m {
+                gestures::Menu::Calendar => "calendar",
+                gestures::Menu::QuickSettings => "quick-settings",
+            },),
+        ),
+    }
+}
+
 static GESTURES: LazyLock<Mutex<gestures::Recognizer>> = LazyLock::new(Default::default);
 
 /// A touch frame for GNOME's touchscreen gestures ([`gestures`]). `screen`
@@ -553,26 +617,7 @@ pub extern "C" fn umoja_touch(
             dir: 0,
         };
         for o in outs {
-            match o {
-                gestures::Out::SwipeBegin => res.swipe |= SWIPE_BEGIN,
-                gestures::Out::SwipeUpdate(p) => {
-                    res.swipe |= SWIPE_UPDATE;
-                    res.progress = p;
-                }
-                gestures::Out::SwipeEnd(d) => {
-                    res.swipe |= SWIPE_END;
-                    res.dir = d;
-                }
-                gestures::Out::OverviewUp => session::overlay_call("ShiftOverview", (true,)),
-                gestures::Out::OverviewDown => session::overlay_call("ShiftOverview", (false,)),
-                gestures::Out::OpenMenu(m) => session::panel_call(
-                    "OpenMenu",
-                    (match m {
-                        gestures::Menu::Calendar => "calendar",
-                        gestures::Menu::QuickSettings => "quick-settings",
-                    },),
-                ),
-            }
+            apply_out(o, &mut res.swipe, &mut res.progress, &mut res.dir);
         }
         consume
     })

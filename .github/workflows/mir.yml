@@ -1,0 +1,127 @@
+# Build Mir with Umoja's patches (packaging/mir) and publish it to
+# ppa:ken-vandine/umoja. Same signing secrets as packages.yml.
+
+name: Mir
+
+on:
+  push:
+    branches: [main]
+    paths: ["packaging/mir/**", ".github/workflows/mir.yml"]
+  pull_request:
+    paths: ["packaging/mir/**", ".github/workflows/mir.yml"]
+  workflow_dispatch:
+    inputs:
+      series:
+        description: Ubuntu series to target
+        default: stonking
+      image:
+        description: Docker image for that series
+        default: ubuntu:26.10
+      upload:
+        description: Upload the source package to the PPA
+        type: boolean
+        default: true
+
+env:
+  SERIES: ${{ inputs.series || 'stonking' }}
+  PPA: ppa:ken-vandine/umoja
+  DEBIAN_FRONTEND: noninteractive
+  DEBFULLNAME: Umoja CI
+  DEBEMAIL: noreply@umoja.invalid
+
+concurrency:
+  group: mir-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  binary:
+    name: Build patched Mir (amd64)
+    runs-on: ubuntu-24.04
+    container: ${{ inputs.image || 'ubuntu:26.10' }}
+    timeout-minutes: 240
+    steps:
+      - name: Install tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl devscripts equivs build-essential quilt
+
+      - uses: actions/checkout@v4
+
+      - name: Fetch and patch the source
+        run: echo "SRC=$(packaging/mir/build-source.sh "$RUNNER_TEMP/mir" "$SERIES" | tail -n1)" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        working-directory: ${{ env.SRC }}
+        run: mk-build-deps --install --remove --tool 'apt-get -y --no-install-recommends' debian/control
+
+      - name: Build
+        working-directory: ${{ env.SRC }}
+        env:
+          DEB_BUILD_OPTIONS: nocheck parallel=4
+        run: dpkg-buildpackage -b -us -uc
+
+      - name: Check the hook is there
+        run: |
+          mkdir -p dist
+          mv "$RUNNER_TEMP"/mir/*.deb dist/
+          dpkg-deb -x dist/mir-platform-input-evdev*_amd64.deb "$RUNNER_TEMP/evdev"
+          find "$RUNNER_TEMP/evdev" -name 'input-evdev.so*' -type f -exec grep -c mir_touchpad_gesture_hook {} +
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mir-debs-amd64
+          path: dist/
+          if-no-files-found: error
+
+  ppa:
+    name: Upload to PPA
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.upload)
+    runs-on: ubuntu-24.04
+    container: ${{ inputs.image || 'ubuntu:26.10' }}
+    steps:
+      - name: Install tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl devscripts dput gnupg quilt debhelper
+
+      - uses: actions/checkout@v4
+
+      - name: Import signing key
+        id: gpg
+        env:
+          KEY: ${{ secrets.PPA_GPG_PRIVATE_KEY }}
+          PASSPHRASE: ${{ secrets.PPA_GPG_PASSPHRASE }}
+        run: |
+          test -n "$KEY" || { echo "::error::PPA_GPG_PRIVATE_KEY secret is not set"; exit 1; }
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+          printf '%s' "$PASSPHRASE" > "$RUNNER_TEMP/passphrase"
+          printf '%s\n' "$KEY" | gpg --batch --import
+          keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          echo "keyid=$keyid" >> "$GITHUB_OUTPUT"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+
+      - name: Fetch and patch the source
+        env:
+          DEBFULLNAME: ${{ secrets.PPA_SIGNER_NAME }}
+          DEBEMAIL: ${{ secrets.PPA_SIGNER_EMAIL }}
+        run: echo "SRC=$(packaging/mir/build-source.sh "$RUNNER_TEMP/mir" "$SERIES" | tail -n1)" >> "$GITHUB_ENV"
+
+      - name: Build source package
+        working-directory: ${{ env.SRC }}
+        # The orig tarball is already in the Ubuntu archive.
+        run: dpkg-buildpackage -S -sd -d -us -uc
+
+      - name: Sign and upload
+        run: |
+          changes=$(ls "$RUNNER_TEMP"/mir/mir_*_source.changes)
+          debsign -k"${{ steps.gpg.outputs.keyid }}" \
+            -p"gpg --batch --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/passphrase" "$changes"
+          dput "$PPA" "$changes"
+
+      - name: Clean up key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/passphrase"

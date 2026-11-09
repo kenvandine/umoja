@@ -218,6 +218,7 @@ typedef struct {
     int32_t dir;
 } UmojaTouchResult;
 
+void umoja_wm_workspace_swipe(uint32_t flags, double progress, int32_t dir);
 bool umoja_touch(UmojaTouchPoint const* points, size_t n, uint64_t time_ns, UmojaRect screen, UmojaTouchResult* out);
 
 #ifdef __cplusplus

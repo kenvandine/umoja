@@ -119,6 +119,7 @@ pub struct Recognizer {
 }
 
 impl Recognizer {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -353,6 +354,153 @@ impl Recognizer {
     }
 }
 
+/// Touchpad swipes from libinput (via our Mir patch's gesture hook), as
+/// gnome-shell's TouchpadSwipeGesture: three or more fingers sideways
+/// switch workspace following the fingers, up and down shift the overview.
+/// Deltas are libinput's unaccelerated ones (1000 dpi units).
+#[derive(Debug, Default)]
+pub struct Touchpad {
+    state: Pad,
+}
+
+#[derive(Debug, Default)]
+enum Pad {
+    #[default]
+    Idle,
+    Undecided {
+        acc: Pos,
+    },
+    Horizontal {
+        acc: f64,
+        progress: f64,
+        samples: Vec<(f64, f64)>,
+    },
+    Vertical {
+        acc: f64,
+        fired: bool,
+    },
+}
+
+/// swipeTracker.js's TOUCHPAD_BASE_WIDTH: finger travel for one workspace.
+pub const TOUCHPAD_WIDTH: f64 = 400.0;
+/// Vertical travel that opens or closes a level of the overview (a fifth
+/// of gnome-shell's TOUCHPAD_BASE_HEIGHT, where its progressive animation
+/// would commit on release).
+pub const TOUCHPAD_VERTICAL_TRIGGER: f64 = 60.0;
+
+pub const GESTURE_SWIPE: i32 = 0;
+pub const PHASE_BEGIN: i32 = 0;
+#[allow(dead_code)] // what the hook sends between begin and end
+pub const PHASE_UPDATE: i32 = 1;
+pub const PHASE_END: i32 = 2;
+pub const PHASE_CANCEL: i32 = 3;
+
+impl Touchpad {
+    #[allow(clippy::too_many_arguments)]
+    pub fn gesture(
+        &mut self,
+        kind: i32,
+        phase: i32,
+        fingers: i32,
+        dx: f64,
+        dy: f64,
+        t_ms: f64,
+        out: &mut Vec<Out>,
+    ) {
+        if kind != GESTURE_SWIPE {
+            return;
+        }
+        if phase == PHASE_BEGIN {
+            self.state = if fingers >= 3 {
+                Pad::Undecided { acc: (0.0, 0.0) }
+            } else {
+                Pad::Idle
+            };
+            return;
+        }
+        let ending = phase == PHASE_END || phase == PHASE_CANCEL;
+        match std::mem::take(&mut self.state) {
+            Pad::Idle => {}
+            Pad::Undecided { acc } => {
+                if ending {
+                    return;
+                }
+                let acc = (acc.0 + dx, acc.1 + dy);
+                if acc.0.abs() >= DIRECTION_THRESHOLD && acc.0.abs() >= acc.1.abs() {
+                    out.push(Out::SwipeBegin);
+                    let progress = -acc.0 / TOUCHPAD_WIDTH;
+                    out.push(Out::SwipeUpdate(progress));
+                    self.state = Pad::Horizontal {
+                        acc: acc.0,
+                        progress,
+                        samples: vec![(t_ms, progress)],
+                    };
+                } else if acc.1.abs() >= DIRECTION_THRESHOLD {
+                    self.state = Pad::Vertical {
+                        acc: acc.1,
+                        fired: false,
+                    };
+                    self.vertical_check(out);
+                } else {
+                    self.state = Pad::Undecided { acc };
+                }
+            }
+            Pad::Horizontal {
+                acc,
+                progress,
+                mut samples,
+            } => {
+                if ending {
+                    let dir = if phase == PHASE_CANCEL {
+                        0
+                    } else {
+                        Recognizer::decide(progress, &samples)
+                    };
+                    out.push(Out::SwipeEnd(dir));
+                    return;
+                }
+                // Fingers moving left bring in the workspace on the right.
+                let acc = acc + dx;
+                let progress = -acc / TOUCHPAD_WIDTH;
+                out.push(Out::SwipeUpdate(progress));
+                samples.push((t_ms, progress));
+                samples.retain(|&(st, _)| t_ms - st <= 100.0);
+                self.state = Pad::Horizontal {
+                    acc,
+                    progress,
+                    samples,
+                };
+            }
+            Pad::Vertical { acc, fired } => {
+                if ending {
+                    return;
+                }
+                self.state = Pad::Vertical {
+                    acc: acc + dy,
+                    fired,
+                };
+                self.vertical_check(out);
+            }
+        }
+    }
+
+    fn vertical_check(&mut self, out: &mut Vec<Out>) {
+        if let Pad::Vertical {
+            acc,
+            fired: fired @ false,
+        } = &mut self.state
+        {
+            if *acc <= -TOUCHPAD_VERTICAL_TRIGGER {
+                out.push(Out::OverviewUp);
+                *fired = true;
+            } else if *acc >= TOUCHPAD_VERTICAL_TRIGGER {
+                out.push(Out::OverviewDown);
+                *fired = true;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,5 +705,58 @@ mod tests {
         assert!(!c);
         assert!(!mv(&mut r, 100.0, 300.0, 950.0, &mut out));
         assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn touchpad_three_finger_swipe() {
+        let mut t = Touchpad::default();
+        let mut out = vec![];
+        t.gesture(0, PHASE_BEGIN, 3, 0.0, 0.0, 0.0, &mut out);
+        t.gesture(0, PHASE_UPDATE, 3, -10.0, 1.0, 10.0, &mut out);
+        assert!(out.is_empty());
+        t.gesture(0, PHASE_UPDATE, 3, -10.0, 1.0, 20.0, &mut out);
+        assert_eq!(out, vec![Out::SwipeBegin, Out::SwipeUpdate(0.05)]);
+        out.clear();
+        let mut ts = 20.0;
+        for _ in 0..20 {
+            ts += 100.0;
+            t.gesture(0, PHASE_UPDATE, 3, -10.0, 0.0, ts, &mut out);
+        }
+        out.clear();
+        t.gesture(0, PHASE_END, 3, 0.0, 0.0, ts + 200.0, &mut out);
+        assert_eq!(out, vec![Out::SwipeEnd(1)], "past half way");
+    }
+
+    #[test]
+    fn touchpad_cancel_and_two_fingers() {
+        let mut t = Touchpad::default();
+        let mut out = vec![];
+        t.gesture(0, PHASE_BEGIN, 4, 0.0, 0.0, 0.0, &mut out);
+        t.gesture(0, PHASE_UPDATE, 4, 300.0, 0.0, 10.0, &mut out);
+        out.clear();
+        t.gesture(0, PHASE_CANCEL, 4, 0.0, 0.0, 20.0, &mut out);
+        assert_eq!(out, vec![Out::SwipeEnd(0)]);
+        out.clear();
+        t.gesture(0, PHASE_BEGIN, 2, 0.0, 0.0, 0.0, &mut out);
+        t.gesture(0, PHASE_UPDATE, 2, 300.0, 0.0, 10.0, &mut out);
+        t.gesture(1, PHASE_BEGIN, 3, 0.0, 0.0, 0.0, &mut out);
+        t.gesture(1, PHASE_UPDATE, 3, 300.0, 0.0, 10.0, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn touchpad_vertical_shifts_overview_once() {
+        let mut t = Touchpad::default();
+        let mut out = vec![];
+        t.gesture(0, PHASE_BEGIN, 3, 0.0, 0.0, 0.0, &mut out);
+        for i in 0..10 {
+            t.gesture(0, PHASE_UPDATE, 3, 1.0, -20.0, i as f64, &mut out);
+        }
+        t.gesture(0, PHASE_END, 3, 0.0, 0.0, 20.0, &mut out);
+        assert_eq!(out, vec![Out::OverviewUp]);
+        out.clear();
+        t.gesture(0, PHASE_BEGIN, 3, 0.0, 0.0, 0.0, &mut out);
+        t.gesture(0, PHASE_UPDATE, 3, 0.0, 90.0, 1.0, &mut out);
+        assert_eq!(out, vec![Out::OverviewDown]);
     }
 }

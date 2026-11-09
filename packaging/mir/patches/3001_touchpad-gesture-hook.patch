@@ -1,0 +1,94 @@
+Description: Pass libinput touchpad gestures to a server-defined hook
+ Mir has no gesture input event type and drops libinput's swipe, pinch and
+ hold events. If the server executable exports a C function named
+ mir_touchpad_gesture_hook, the evdev input platform now calls it for each
+ touchpad gesture event; without it gestures are dropped as before.
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/platforms/evdev/libinput_device.cpp
++++ b/src/platforms/evdev/libinput_device.cpp
+@@ -36,10 +36,12 @@
+ #include <linux/input.h>  // only used to get constants for input reports
+ 
+ #include <boost/exception/diagnostic_information.hpp>
++#include <cstdint>
+ #include <cstring>
+ #include <chrono>
+ #include <sstream>
+ #include <algorithm>
++#include <dlfcn.h>
+ 
+ namespace md = mir::dispatch;
+ namespace mi = mir::input;
+@@ -104,6 +106,53 @@
+     default:                                        return mir_pointer_axis_source_none;
+     }
+ }
++
++// Touchpad gestures (swipe, pinch, hold) for the shell. Mir has no gesture
++// event type, so a server that wants them defines this C function and
++// exports it from its executable; without it gestures are dropped as before.
++//   kind: 0 swipe, 1 pinch, 2 hold
++//   phase: 0 begin, 1 update, 2 end, 3 cancelled
++extern "C" typedef void (*MirTouchpadGestureHook)(int kind, int phase, int fingers, double dx, double dy,
++                                                 double scale, double angle, uint64_t time_usec);
++
++MirTouchpadGestureHook touchpad_gesture_hook()
++{
++    static auto const hook =
++        reinterpret_cast<MirTouchpadGestureHook>(dlsym(RTLD_DEFAULT, "mir_touchpad_gesture_hook"));
++    return hook;
++}
++
++void forward_gesture(libinput_event* event)
++{
++    auto const hook = touchpad_gesture_hook();
++    if (!hook) return;
++    auto const type = libinput_event_get_type(event);
++    auto* const gesture = libinput_event_get_gesture_event(event);
++    int kind = 0, phase = 0;
++    switch (type)
++    {
++    case LIBINPUT_EVENT_GESTURE_SWIPE_BEGIN:  kind = 0; phase = 0; break;
++    case LIBINPUT_EVENT_GESTURE_SWIPE_UPDATE: kind = 0; phase = 1; break;
++    case LIBINPUT_EVENT_GESTURE_SWIPE_END:    kind = 0; phase = 2; break;
++    case LIBINPUT_EVENT_GESTURE_PINCH_BEGIN:  kind = 1; phase = 0; break;
++    case LIBINPUT_EVENT_GESTURE_PINCH_UPDATE: kind = 1; phase = 1; break;
++    case LIBINPUT_EVENT_GESTURE_PINCH_END:    kind = 1; phase = 2; break;
++    case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:   kind = 2; phase = 0; break;
++    case LIBINPUT_EVENT_GESTURE_HOLD_END:     kind = 2; phase = 2; break;
++    default: return;
++    }
++    double dx = 0, dy = 0, scale = 1, angle = 0;
++    if (phase == 1)
++    {
++        dx = libinput_event_gesture_get_dx_unaccelerated(gesture);
++        dy = libinput_event_gesture_get_dy_unaccelerated(gesture);
++    }
++    if (kind == 1 && phase != 0) scale = libinput_event_gesture_get_scale(gesture);
++    if (kind == 1 && phase == 1) angle = libinput_event_gesture_get_angle_delta(gesture);
++    if (phase == 2 && libinput_event_gesture_get_cancelled(gesture)) phase = 3;
++    hook(kind, phase, libinput_event_gesture_get_finger_count(gesture), dx, dy, scale, angle,
++         libinput_event_gesture_get_time_usec(gesture));
++}
+ }
+ 
+ void mie::LibInputDevice::leds_set(KeyboardLeds leds)
+@@ -187,6 +236,16 @@
+                 }
+             }
+             break;
++        case LIBINPUT_EVENT_GESTURE_SWIPE_BEGIN:
++        case LIBINPUT_EVENT_GESTURE_SWIPE_UPDATE:
++        case LIBINPUT_EVENT_GESTURE_SWIPE_END:
++        case LIBINPUT_EVENT_GESTURE_PINCH_BEGIN:
++        case LIBINPUT_EVENT_GESTURE_PINCH_UPDATE:
++        case LIBINPUT_EVENT_GESTURE_PINCH_END:
++        case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:
++        case LIBINPUT_EVENT_GESTURE_HOLD_END:
++            forward_gesture(event);
++            break;
+         default:
+             break;
+         }
