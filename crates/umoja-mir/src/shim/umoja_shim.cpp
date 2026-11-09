@@ -1381,6 +1381,9 @@ namespace {
 std::mutex g_runner_mutex;
 MirRunner* g_runner = nullptr;
 std::atomic<int> g_exit_code{-1};
+// Mir is already shutting down (e.g. LightDM's SIGTERM): the greeter then
+// dies with its connection, and that is not a failure worth reporting.
+std::atomic<bool> g_stopping{false};
 }
 
 // Greeter mode: the greeter exited, so the compositor does too. Called from
@@ -1388,6 +1391,7 @@ std::atomic<int> g_exit_code{-1};
 // signalled us and the greeter died with the connection): never let an
 // exception unwind into Rust.
 extern "C" void umoja_mir_stop(int code) {
+    if (g_stopping) return;
     int expected = -1;
     g_exit_code.compare_exchange_strong(expected, code);
     std::lock_guard lock{g_runner_mutex};
@@ -1438,6 +1442,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     DisplayConfiguration display_config{runner};
     PrependEventFilter natural_scroll{umoja_apply_natural_scroll};
 
+    runner.add_stop_callback([] { g_stopping = true; });
     runner.add_start_callback([&runner] {
         auto display = runner.wayland_display();
         umoja_session_started(display.is_set() ? display.value().c_str() : "");
