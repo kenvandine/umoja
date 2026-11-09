@@ -2,8 +2,8 @@
    flat, dark, slightly see-through surface (the notification bubble's),
    whatever Settings > Appearance says (main.rs forces the dark scheme).
    Coloured bits follow the GNOME accent color via @accent_bg_color. */
-@define-color shell_bg rgba(22, 22, 24, 0.86);
-@define-color shell_bar_bg rgba(22, 22, 24, 0.80);
+@define-color shell_bg rgba(22, 22, 24, 0.66);
+@define-color shell_bar_bg rgba(22, 22, 24, 0.60);
 @define-color shell_hairline alpha(#ffffff, 0.08);
 @define-color shell_fill alpha(#ffffff, 0.08);
 @define-color shell_fill_hover alpha(#ffffff, 0.14);
@@ -12,6 +12,7 @@
 
 window.umoja-panel {
   background-color: @shell_bar_bg;
+  backdrop-filter: blur(12px);
   color: #ffffff;
   min-height: 32px;
 }
@@ -37,6 +38,7 @@ window.umoja-panel .tray-item {
 /* ---- Menus: floating dark cards, no arrow ---- */
 popover > contents {
   background-color: @shell_bg;
+  backdrop-filter: blur(12px);
   color: #ffffff;
   border-radius: 22px;
   border: 1px solid @shell_hairline;
@@ -300,6 +302,7 @@ window.umoja-notifications {
 }
 .osd-bubble {
   background-color: @shell_bg;
+  backdrop-filter: blur(12px);
   color: #ffffff;
   border-radius: 18px;
   padding: 14px 16px;
@@ -454,6 +457,7 @@ window.umoja-quick-reply {
   padding: 14px 16px;
   border-radius: 18px;
   background-color: @shell_bg;
+  backdrop-filter: blur(12px);
   color: #ffffff;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), inset 0 0 0 1px @shell_hairline;
 }
@@ -592,6 +596,7 @@ window.umoja-osd {
 .osd-window {
   color: #ffffff;
   background-color: @shell_bg;
+  backdrop-filter: blur(12px);
   border: 1px solid @shell_hairline;
   border-radius: 999px;
   padding: 12px 18px;

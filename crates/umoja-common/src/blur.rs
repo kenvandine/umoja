@@ -9,6 +9,12 @@
 //! whole surface" and rounded corners and drop shadows still come out right.
 //!
 //! On a compositor without the protocol this does nothing.
+//!
+//! GTK 4.24 and newer speak the protocol themselves: they make an effect
+//! object for every surface and set its region from CSS `backdrop-filter`
+//! (see panel.css and dock.css). A second object on the same surface is a
+//! protocol error that gets the client disconnected, so there we leave it
+//! to GTK and do nothing.
 
 use gdk4_wayland::prelude::*;
 use gtk4 as gtk;
@@ -30,6 +36,9 @@ const WHOLE_SURFACE: i32 = 1 << 20;
 /// Blur the background behind `native` (a window or popover) whenever it is
 /// on screen. Call once, before or after it is first shown.
 pub fn blur_behind(native: &(impl IsA<gtk::Native> + IsA<gtk::Widget>)) {
+    if gtk_does_blur() {
+        return;
+    }
     let widget = native.upcast_ref::<gtk::Widget>();
     let applied: Rc<RefCell<Option<Applied>>> = Rc::default();
     {
@@ -48,6 +57,11 @@ pub fn blur_behind(native: &(impl IsA<gtk::Native> + IsA<gtk::Widget>)) {
     if widget.is_mapped() {
         apply(widget, &applied);
     }
+}
+
+/// Whether this GTK manages ext-background-effect-v1 itself.
+fn gtk_does_blur() -> bool {
+    (gtk::major_version(), gtk::minor_version()) >= (4, 24)
 }
 
 /// The effect object for the surface it was made for. GTK may give a native
