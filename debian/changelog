@@ -1,3 +1,23 @@
+umoja-desktop (2026.46.4) stonking; urgency=medium
+
+  * Games and X11 apps: Xwayland now runs in the Umoja session (Steam,
+    Wine/Proton games from the Epic Games launcher and other X11 apps
+    failed with no display). Fullscreen windows cover the top bar and
+    dock, open at the monitor's size and ignore resize requests while
+    fullscreen, like mutter; on hybrid laptops a fullscreen game on an
+    NVIDIA-wired monitor no longer shows a white screen (needs Mir
+    2.28.0-4umoja10). Also: hybrid Intel+NVIDIA support (screens on the
+    NVIDIA GPU, greeter fixes), dock on every monitor with
+    isolate-monitors and edge-pressure reveal, GNOME modifier clicks
+    (Super+drag), VPN and keyboard backlight tiles, keyboard shortcuts
+    guide (Super+/), Copy Text (OCR), dock and tray badges, apps launched
+    in their own scopes, crash diagnosis on the local assistant,
+    assistant follow-up questions, the Umoja screensaver, GNOME cursor
+    theme and size, and the session now brings up
+    graphical-session.target (fixes Firefox downloads).
+
+ -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 23:28:03 +0000
+
 umoja-desktop (2026.46.3) stonking; urgency=medium
 
   * Fix the panel and dock crashing in a loop (black screen) on GTK 4.24,
