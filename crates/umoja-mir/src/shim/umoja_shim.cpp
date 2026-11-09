@@ -169,6 +169,7 @@ public:
         }
         if (key_grab && key_grab->window == w) key_grab.reset();
         above.erase(w);
+        fullscreen_lifted.erase(w);
         pinned.erase(w);
         hidden_at.erase(w);
         untile(w);
@@ -188,6 +189,7 @@ public:
         if (!all_windows.count(w)) return;
         erase(mru, w);
         mru.insert(mru.begin(), w);
+        update_fullscreen_layer(w, info.state(), true);
         // Tiling Assistant's enable-raise-tile-group: a tiled window comes
         // up together with the windows tiled next to it.
         if (raising_group || applying || !tiled.count(window_id(w)) || !umoja_raise_tile_group()) return;
@@ -198,6 +200,42 @@ public:
             tools.raise_tree(w);
         });
         raising_group = false;
+    }
+
+    void advise_focus_lost(WindowInfo const& info) override {
+        MinimalWindowManager::advise_focus_lost(info);
+        update_fullscreen_layer(info.window(), info.state(), false);
+    }
+
+    void advise_state_change(WindowInfo const& info, MirWindowState state) override {
+        MinimalWindowManager::advise_state_change(info, state);
+        update_fullscreen_layer(info.window(), state, info.window() == tools.active_window());
+    }
+
+    // A focused fullscreen window covers the dock and top bar, as in GNOME.
+    // Those are layer-shell "top" surfaces, which Mir puts in the layer
+    // above applications, so the window goes up to that layer while it is
+    // fullscreen and focused, and back down once it is neither. Leaves its
+    // layer to the window menu's Always on Top otherwise.
+    std::set<Window> fullscreen_lifted;
+
+    void update_fullscreen_layer(Window const& w, MirWindowState state, bool focused) {
+        if (!all_windows.count(w)) return;
+        bool const want = focused && state == mir_window_state_fullscreen;
+        if (want == bool(fullscreen_lifted.count(w))) return;
+        if (want) fullscreen_lifted.insert(w);
+        else fullscreen_lifted.erase(w);
+        if (w == moving && elevated) return;  // end_move() puts it back
+        WindowSpecification spec;
+        spec.depth_layer() = layer_for(w);
+        guarded("fullscreen layer", [&] {
+            tools.modify_window(tools.info_for(w), spec);
+            if (want) tools.raise_tree(w);
+        });
+    }
+
+    MirDepthLayer layer_for(Window const& w) const {
+        return above.count(w) || fullscreen_lifted.count(w) ? mir_depth_layer_above : mir_depth_layer_application;
     }
 
     void advise_raise(std::vector<Window> const& windows) override {
@@ -917,7 +955,7 @@ private:
         if (elevated) {
             elevated = false;
             WindowSpecification drop;
-            drop.depth_layer() = above.count(w) ? mir_depth_layer_above : mir_depth_layer_application;
+            drop.depth_layer() = layer_for(w);
             guarded("drop dragged window", [&] {
                 tools.modify_window(tools.info_for(w), drop);
                 tools.raise_tree(w);
@@ -1682,7 +1720,7 @@ private:
         if (on) above.insert(w);
         else above.erase(w);
         WindowSpecification spec;
-        spec.depth_layer() = on ? mir_depth_layer_above : mir_depth_layer_application;
+        spec.depth_layer() = layer_for(w);
         guarded("always on top", [&] {
             tools.modify_window(tools.info_for(w), spec);
             tools.raise_tree(w);
