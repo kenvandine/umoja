@@ -33,6 +33,7 @@
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <map>
@@ -1913,6 +1914,15 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
 
     runner.add_stop_callback([] { g_stopping = true; });
     runner.add_start_callback([&runner] {
+        // Mir has made the X11 sockets by now (Xwayland itself starts on the
+        // first connection). Put DISPLAY in our environment so session.rs
+        // exports it to systemd and D-Bus activation, as mutter does: apps
+        // started from the dock, terminals and snaps all read it from there.
+        if (auto const x11 = runner.x11_display(); x11.is_set()) {
+            setenv("DISPLAY", x11.value().c_str(), 1);
+        } else {
+            unsetenv("DISPLAY");
+        }
         auto display = runner.wayland_display();
         umoja_session_started(display.is_set() ? display.value().c_str() : "");
     });
@@ -1941,7 +1951,10 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
             cursor_theme,
             cursor_size,
             extensions,
-            X11Support{},
+            // On its own X11Support only adds an --enable-x11 option, off by
+            // default: without this no Xwayland ran, and every X11 app
+            // (Steam, Wine/Proton games...) failed to open a display.
+            X11Support{}.default_to_enabled(),
             set_window_management_policy<UmojaWindowManager>(),
         }));
     }
