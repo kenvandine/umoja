@@ -443,10 +443,10 @@ fn keyboard_tile() -> (gtk::Box, gtk::Revealer) {
         move |level, max| {
             updating.set(true);
             toggle.set_active(level > 0);
-            if let Some(s) = &slider {
-                if s.value().round() as i32 != level {
-                    s.set_value(level as f64);
-                }
+            if let Some(s) = &slider
+                && s.value().round() as i32 != level
+            {
+                s.set_value(level as f64);
             }
             updating.set(false);
             for (l, _, check) in &levels {
