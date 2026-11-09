@@ -23,7 +23,6 @@ use gtk::{cairo, gdk, gio, glib};
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::cell::Cell;
-use std::f64::consts::TAU;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use umoja_common::dbus;
@@ -50,6 +49,7 @@ fn usage() {
          click or mouse move. --activate starts it the way idling does, so the\n\
          screen also blanks after screensaver-duration seconds and the session\n\
          locks on the way out if Screen Lock is on.\n\n\
+         (--managed is how umoja-mir runs it: input doesn't quit it.)\n\n\
          Effects: {}",
         art::EFFECTS.join(", ")
     );
@@ -282,44 +282,111 @@ fn quit_on_input(app: &gtk::Application, window: &gtk::ApplicationWindow, start:
     window.add_controller(motion);
 }
 
-fn canvas(word: Rc<art::Word>, start: Instant, effect: Option<usize>) -> gtk::DrawingArea {
-    let area = gtk::DrawingArea::new();
+/// The drawing surface: GSK nodes (rounded clips filled with a colour), so
+/// the GPU draws the dots. Cairo redrawing a 2880x1800 panel every frame
+/// kept a CPU core busy.
+mod canvas {
+    use super::art;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+    use gtk::{gdk, glib, graphene, gsk};
+    use gtk4 as gtk;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Instant;
+
+    pub struct Show {
+        pub word: Rc<art::Word>,
+        pub start: Instant,
+        pub effect: Option<usize>,
+    }
+
+    #[derive(Default)]
+    pub struct CanvasImp {
+        pub show: RefCell<Option<Show>>,
+        pub last_frame: Cell<Option<Instant>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for CanvasImp {
+        const NAME: &'static str = "UmojaScreensaverCanvas";
+        type Type = Canvas;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for CanvasImp {}
+
+    impl WidgetImpl for CanvasImp {
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let widget = self.obj();
+            let (w, h) = (widget.width() as f32, widget.height() as f32);
+            snapshot.append_color(
+                &gdk::RGBA::new(0.0, 0.0, 0.0, 1.0),
+                &graphene::Rect::new(0.0, 0.0, w, h),
+            );
+            let show = self.show.borrow();
+            let Some(show) = show.as_ref() else {
+                return;
+            };
+            let frame = art::frame(
+                &show.word,
+                w as f64,
+                h as f64,
+                show.start.elapsed().as_secs_f64(),
+                show.effect,
+            );
+            for m in &frame.marks {
+                if m.rgba.3 <= 0.005 || m.radius <= 0.1 {
+                    continue;
+                }
+                let r = m.radius as f32;
+                let rect = graphene::Rect::new(m.x as f32 - r, m.y as f32 - r, 2.0 * r, 2.0 * r);
+                snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, r));
+                snapshot.append_color(
+                    &gdk::RGBA::new(
+                        m.rgba.0 as f32,
+                        m.rgba.1 as f32,
+                        m.rgba.2 as f32,
+                        m.rgba.3 as f32,
+                    ),
+                    &rect,
+                );
+                snapshot.pop();
+            }
+        }
+    }
+
+    glib::wrapper! {
+        pub struct Canvas(ObjectSubclass<CanvasImp>) @extends gtk::Widget;
+    }
+}
+
+/// Frames are drawn at most this often (30 fps): smooth enough for
+/// drifting dots, and half the work of the panel's refresh rate.
+const FRAME: Duration = Duration::from_millis(33);
+
+fn canvas(word: Rc<art::Word>, start: Instant, effect: Option<usize>) -> canvas::Canvas {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    let area: canvas::Canvas = glib::Object::new();
     area.set_hexpand(true);
     area.set_vexpand(true);
-    area.set_draw_func(move |_, cr, w, h| {
-        paint(
-            cr,
-            &word,
-            w as f64,
-            h as f64,
-            start.elapsed().as_secs_f64(),
-            effect,
-        );
+    *area.imp().show.borrow_mut() = Some(canvas::Show {
+        word,
+        start,
+        effect,
     });
     area.add_tick_callback(|area, _| {
-        area.queue_draw();
+        let imp = area.imp();
+        let now = Instant::now();
+        if imp
+            .last_frame
+            .get()
+            .is_none_or(|t| now.duration_since(t) >= FRAME)
+        {
+            imp.last_frame.set(Some(now));
+            area.queue_draw();
+        }
         glib::ControlFlow::Continue
     });
     area
-}
-
-fn paint(
-    cr: &cairo::Context,
-    word: &art::Word,
-    w: f64,
-    h: f64,
-    elapsed: f64,
-    effect: Option<usize>,
-) {
-    cr.set_source_rgb(0.0, 0.0, 0.0);
-    let _ = cr.paint();
-    let frame = art::frame(word, w, h, elapsed, effect);
-    for m in &frame.marks {
-        if m.rgba.3 <= 0.005 || m.radius <= 0.1 {
-            continue;
-        }
-        cr.set_source_rgba(m.rgba.0, m.rgba.1, m.rgba.2, m.rgba.3);
-        cr.arc(m.x, m.y, m.radius, 0.0, TAU);
-        let _ = cr.fill();
-    }
 }

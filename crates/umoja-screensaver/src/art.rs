@@ -128,7 +128,9 @@ pub fn cycle_at(elapsed: f64, forced: Option<usize>) -> Cycle {
     Cycle {
         effect,
         t: elapsed - index as f64 * CYCLE,
-        place: (rng.next(), rng.next()),
+        // Wander, but stay near the middle: at the edges the composition
+        // looked lopsided.
+        place: (0.25 + 0.5 * rng.next(), 0.25 + 0.5 * rng.next()),
     }
 }
 
