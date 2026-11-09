@@ -6,9 +6,10 @@
 //! `Session.SetBrightness`, which needs no root for the active session.
 //! Keyboard: UPower's KbdBacklight. When the firmware changes the keyboard
 //! backlight itself (ThinkPads' Fn+Space), UPower says so and the OSD shows
-//! it, as in GNOME.
+//! it, as in GNOME. Quick Settings' Keyboard tile reads and sets the same
+//! level.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -86,12 +87,17 @@ impl Backlight {
     }
 }
 
+/// Called with (level, max).
+type KbdListener = Box<dyn Fn(i32, i32)>;
+
 pub struct Brightness {
     screen: Option<Backlight>,
     target: Cell<Option<(i64, Instant)>>,
     kbd_max: Cell<i32>,
     /// The level before the keyboard backlight toggle turned it off.
     kbd_before_off: Cell<i32>,
+    kbd_level: Cell<i32>,
+    kbd_listeners: RefCell<Vec<KbdListener>>,
 }
 
 thread_local! {
@@ -111,7 +117,12 @@ impl Brightness {
             target: Cell::default(),
             kbd_max: Cell::new(0),
             kbd_before_off: Cell::new(-1),
+            kbd_level: Cell::new(0),
+            kbd_listeners: RefCell::default(),
         });
+        if this.kbd_max() > 0 {
+            this.kbd_level.set(this.kbd_get().unwrap_or(0));
+        }
         this.watch_keyboard();
         this
     }
@@ -180,8 +191,8 @@ impl Brightness {
         );
     }
 
-    /// Keyboard backlight keys. `up`: Some(true/false) steps, None toggles.
-    pub fn keyboard(&self, up: Option<bool>) {
+    /// The keyboard backlight's top level; 0 when there is none.
+    pub fn kbd_max(&self) -> i32 {
         if self.kbd_max.get() <= 0 {
             let max = self
                 .kbd_call("GetMaxBrightness", None)
@@ -190,7 +201,64 @@ impl Brightness {
                 .unwrap_or(0);
             self.kbd_max.set(max);
         }
-        let max = self.kbd_max.get();
+        self.kbd_max.get()
+    }
+
+    /// Calls `f(level, max)` now and whenever the keyboard backlight
+    /// changes, from any source.
+    pub fn subscribe_keyboard(&self, f: impl Fn(i32, i32) + 'static) {
+        f(self.kbd_level.get(), self.kbd_max());
+        self.kbd_listeners.borrow_mut().push(Box::new(f));
+    }
+
+    fn kbd_changed(&self, v: i32) {
+        self.kbd_level.set(v);
+        let max = self.kbd_max();
+        for l in self.kbd_listeners.borrow().iter() {
+            l(v, max);
+        }
+    }
+
+    /// Set a level from Quick Settings (no OSD, as in gnome-shell).
+    pub fn set_keyboard(&self, v: i32) {
+        let max = self.kbd_max();
+        if max <= 0 {
+            return;
+        }
+        let v = v.clamp(0, max);
+        self.kbd_before_off.set(-1);
+        if v != self.kbd_level.get() {
+            self.kbd_set(v);
+            self.kbd_changed(v);
+        }
+    }
+
+    /// The Keyboard tile: off, or back to the level before.
+    pub fn toggle_keyboard(&self) {
+        let max = self.kbd_max();
+        if max <= 0 {
+            return;
+        }
+        let now = self.kbd_get().unwrap_or(self.kbd_level.get());
+        let new = self.toggled(now, max);
+        self.kbd_set(new);
+        self.kbd_changed(new);
+    }
+
+    fn toggled(&self, now: i32, max: i32) -> i32 {
+        let before = self.kbd_before_off.get();
+        if now > 0 {
+            self.kbd_before_off.set(now);
+            0
+        } else {
+            self.kbd_before_off.set(-1);
+            if before > 0 { before } else { max }
+        }
+    }
+
+    /// Keyboard backlight keys. `up`: Some(true/false) steps, None toggles.
+    pub fn keyboard(&self, up: Option<bool>) {
+        let max = self.kbd_max();
         if max <= 0 {
             return;
         }
@@ -201,20 +269,12 @@ impl Brightness {
                 self.kbd_before_off.set(-1);
                 if up { (now + step).min(max) } else { (now - step).max(0) }
             }
-            None => {
-                let before = self.kbd_before_off.get();
-                if now > 0 {
-                    self.kbd_before_off.set(now);
-                    0
-                } else {
-                    self.kbd_before_off.set(-1);
-                    if before > 0 { before } else { max }
-                }
-            }
+            None => self.toggled(now, max),
         };
         if new != now {
             self.kbd_set(new);
         }
+        self.kbd_changed(new);
         self.kbd_osd(new);
     }
 
@@ -235,18 +295,30 @@ impl Brightness {
                 if source != "internal" {
                     return;
                 }
-                if this.kbd_max.get() <= 0 {
-                    let max = this
-                        .kbd_call("GetMaxBrightness", None)
-                        .and_then(|v| v.get::<(i32,)>())
-                        .map(|(v,)| v)
-                        .unwrap_or(0);
-                    this.kbd_max.set(max);
-                }
+                this.kbd_max();
                 this.kbd_osd(value);
             },
         );
         // Lives as long as the panel.
+        std::mem::forget(id);
+        // Every change, ours included, keeps the Keyboard tile in step.
+        let weak = Rc::downgrade(self);
+        let id = conn.signal_subscribe(
+            Some(UPOWER),
+            Some(KBD_IFACE),
+            Some("BrightnessChanged"),
+            Some(KBD_PATH),
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |_, _, _, _, _, params| {
+                let Some(this) = weak.upgrade() else { return };
+                if let Some((value,)) = params.get::<(i32,)>()
+                    && value != this.kbd_level.get()
+                {
+                    this.kbd_changed(value);
+                }
+            },
+        );
         std::mem::forget(id);
     }
 }

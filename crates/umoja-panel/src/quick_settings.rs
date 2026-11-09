@@ -4,7 +4,7 @@
 //! GNOME, so flipping Dark Style here or in gnome-control-center is the same
 //! operation and both stay in sync.
 
-use crate::{battery, bluetooth, network, volume};
+use crate::{battery, bluetooth, brightness, network, volume};
 use gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
@@ -67,13 +67,17 @@ fn menu() -> gtk::Box {
     let (wifi, networks) = network::wifi_tile(tile);
     let (power, profiles) = power_profile_tile();
     let (bt, bt_devices) = bluetooth::tile(tile);
+    let (vpn, vpns) = network::vpn_tile(tile);
+    let (kbd, kbd_levels) = keyboard_tile();
     let tiles: Vec<gtk::Widget> = vec![
         network::wired_tile(tile).upcast(),
         wifi.upcast(),
+        vpn.upcast(),
         bt.upcast(),
         power.upcast(),
         dark_style_tile().upcast(),
         night_light_tile().upcast(),
+        kbd.upcast(),
     ];
     for t in tiles {
         flow.append(&t);
@@ -88,8 +92,10 @@ fn menu() -> gtk::Box {
     }
     root.append(&flow);
     root.append(&networks);
+    root.append(&vpns);
     root.append(&bt_devices);
     root.append(&profiles);
+    root.append(&kbd_levels);
     root
 }
 
@@ -362,6 +368,111 @@ fn power_profile_tile() -> (gtk::Box, gtk::Revealer) {
     arrow.connect_toggled({
         let revealer = revealer.clone();
         move |b| revealer.set_reveal_child(b.is_active())
+    });
+    (split, revealer)
+}
+
+/// gnome-shell's Keyboard backlight tile, only on machines that have one:
+/// the tile turns it off and back on, the arrow offers Off/Low/High for
+/// keyboards with three levels or fewer and a slider for the rest.
+fn keyboard_tile() -> (gtk::Box, gtk::Revealer) {
+    let toggle = tile("keyboard-brightness-symbolic", &i18n::shell("Keyboard"));
+    let (split, arrow) = network::split_tile(&toggle);
+    let (list, revealer) = network::tile_menu(&arrow);
+    let kbd = brightness::Brightness::get();
+    let max = kbd.kbd_max();
+    if max <= 0 {
+        split.set_visible(false);
+        return (split, revealer);
+    }
+    list.append(&network::menu_header(&i18n::shell("Keyboard Backlight")));
+
+    // (level, button, check) for the discrete levels.
+    let mut levels: Vec<(i32, gtk::Button, gtk::Image)> = Vec::new();
+    let mut slider = None;
+    if max <= 2 {
+        let names: &[(&str, &str)] = if max == 1 {
+            &[
+                ("Off", "keyboard-brightness-off-symbolic"),
+                ("On", "keyboard-brightness-high-symbolic"),
+            ]
+        } else {
+            &[
+                ("Off", "keyboard-brightness-off-symbolic"),
+                ("Low", "keyboard-brightness-medium-symbolic"),
+                ("High", "keyboard-brightness-high-symbolic"),
+            ]
+        };
+        for (level, (label, icon)) in names.iter().enumerate() {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let image = gtk::Image::new();
+            image.set_from_gicon(&gio::ThemedIcon::from_names(&[
+                icon,
+                "keyboard-brightness-symbolic",
+            ]));
+            row.append(&image);
+            row.append(
+                &gtk::Label::builder()
+                    .label(i18n::shell(label))
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .build(),
+            );
+            let check = gtk::Image::from_icon_name("object-select-symbolic");
+            row.append(&check);
+            let button = gtk::Button::builder()
+                .child(&row)
+                .css_classes(["flat", "network-row"])
+                .build();
+            let level = level as i32;
+            button.connect_clicked(move |_| brightness::Brightness::get().set_keyboard(level));
+            list.append(&button);
+            levels.push((level, button, check));
+        }
+    } else {
+        let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, max as f64, 1.0);
+        scale.set_hexpand(true);
+        scale.set_round_digits(0);
+        list.append(&scale);
+        slider = Some(scale);
+    }
+
+    let updating = Rc::new(Cell::new(false));
+    kbd.subscribe_keyboard({
+        let (toggle, slider, updating) = (toggle.clone(), slider.clone(), updating.clone());
+        move |level, max| {
+            updating.set(true);
+            toggle.set_active(level > 0);
+            if let Some(s) = &slider {
+                if s.value().round() as i32 != level {
+                    s.set_value(level as f64);
+                }
+            }
+            updating.set(false);
+            for (l, _, check) in &levels {
+                check.set_opacity(if *l == level { 1.0 } else { 0.0 });
+            }
+            let subtitle = match level {
+                0 => i18n::shell("Off"),
+                _ if max <= 2 && level == max => i18n::shell(if max == 1 { "On" } else { "High" }),
+                _ if max <= 2 => i18n::shell("Low"),
+                _ => format!("{}%", brightness::to_percent(0, max as i64, level as i64)),
+            };
+            network::set_tile_subtitle(&toggle, &subtitle);
+        }
+    });
+    if let Some(scale) = &slider {
+        let updating = updating.clone();
+        scale.connect_value_changed(move |s| {
+            if !updating.get() {
+                brightness::Brightness::get().set_keyboard(s.value().round() as i32);
+            }
+        });
+    }
+    toggle.connect_toggled(move |_| {
+        if !updating.get() {
+            brightness::Brightness::get().toggle_keyboard();
+        }
     });
     (split, revealer)
 }

@@ -1,7 +1,7 @@
 //! Network status from NetworkManager, the way gnome-shell's network
 //! indicator shows it: one icon for the primary connection (Wi-Fi signal
-//! strength, wired, mobile...), a separate VPN icon, plus the Wi-Fi and
-//! Wired tiles and the network list in Quick Settings.
+//! strength, wired, mobile...), a separate VPN icon, plus the Wired, Wi-Fi
+//! and VPN tiles and their lists in Quick Settings.
 
 use crate::bus::{self, Props};
 use gio::prelude::*;
@@ -16,6 +16,7 @@ use umoja_common::i18n;
 pub const NM: &str = "org.freedesktop.NetworkManager";
 const NM_PATH: &str = "/org/freedesktop/NetworkManager";
 const NM_SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
+const SETTINGS: &str = "org.freedesktop.NetworkManager.Settings";
 const DEVICE: &str = "org.freedesktop.NetworkManager.Device";
 const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
 const ACCESS_POINT: &str = "org.freedesktop.NetworkManager.AccessPoint";
@@ -69,6 +70,18 @@ pub struct WiredDevice {
     pub name: Option<String>,
 }
 
+/// A saved VPN (or WireGuard) profile, as gnome-shell's VPN toggle lists
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnConn {
+    /// The Settings.Connection object.
+    pub path: String,
+    pub id: String,
+    /// The Connection.Active object while it is up or coming up.
+    pub active: Option<String>,
+    pub activating: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ActiveConn {
     pub kind: Kind,
@@ -87,6 +100,8 @@ pub struct NetState {
     pub wired: Option<WiredDevice>,
     pub primary: Option<ActiveConn>,
     pub vpn: Option<String>,
+    /// Every saved VPN profile, by name.
+    pub vpns: Vec<VpnConn>,
 }
 
 impl NetState {
@@ -167,6 +182,16 @@ impl NetState {
         None
     }
 
+    /// The VPN tile's subtitle: the names of the VPNs that are up.
+    pub fn vpn_subtitle(&self) -> String {
+        self.vpns
+            .iter()
+            .filter(|v| v.active.is_some())
+            .map(|v| v.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn tooltip(&self) -> Option<String> {
         match &self.primary {
             Some(p) => Some(p.id.clone()),
@@ -202,6 +227,9 @@ type Listener = Box<dyn Fn(&NetState)>;
 pub struct Network {
     conn: Option<gio::DBusConnection>,
     state: RefCell<NetState>,
+    /// Settings.Connection path -> its name when it is a VPN, so a refresh
+    /// does not re-read every profile.
+    profiles: RefCell<HashMap<String, Option<String>>>,
     listeners: RefCell<Vec<Listener>>,
     pending: Cell<bool>,
 }
@@ -219,6 +247,7 @@ impl Network {
         let net = Rc::new(Self {
             conn: bus::system_bus(),
             state: RefCell::default(),
+            profiles: RefCell::default(),
             listeners: RefCell::default(),
             pending: Cell::new(false),
         });
@@ -253,6 +282,38 @@ impl Network {
             gio::DBusSignalFlags::NONE,
             move |_, _, _, _, _, _| {
                 if let Some(n) = weak.upgrade() {
+                    n.schedule_refresh();
+                }
+            },
+        );
+        // Profiles added, removed or renamed (the VPN list).
+        let weak = Rc::downgrade(&net);
+        #[allow(deprecated)]
+        conn.signal_subscribe(
+            Some(NM),
+            Some(SETTINGS),
+            None,
+            Some(NM_SETTINGS_PATH),
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |_, _, _, _, _, _| {
+                if let Some(n) = weak.upgrade() {
+                    n.schedule_refresh();
+                }
+            },
+        );
+        let weak = Rc::downgrade(&net);
+        #[allow(deprecated)]
+        conn.signal_subscribe(
+            Some(NM),
+            Some(SETTINGS_CONN),
+            Some("Updated"),
+            None,
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |_, _, _, path, _, _| {
+                if let Some(n) = weak.upgrade() {
+                    n.profiles.borrow_mut().remove(path);
                     n.schedule_refresh();
                 }
             },
@@ -303,7 +364,11 @@ impl Network {
     }
 
     fn refresh(&self) {
-        let state = self.conn.as_ref().map(read_state).unwrap_or_default();
+        let state = self
+            .conn
+            .as_ref()
+            .map(|c| read_state(c, &mut self.profiles.borrow_mut()))
+            .unwrap_or_default();
         *self.state.borrow_mut() = state;
         let state = self.state.borrow();
         for l in self.listeners.borrow().iter() {
@@ -424,9 +489,84 @@ impl Network {
             bus::call(c, NM, NM_PATH, NM, "ActivateConnection", Some(args));
         }
     }
+
+    /// Bring one VPN up or down.
+    pub fn set_vpn(&self, vpn: &VpnConn, on: bool) {
+        let Some(c) = &self.conn else { return };
+        if on {
+            let args = (
+                bus::object_path(&vpn.path),
+                bus::object_path("/"),
+                bus::object_path("/"),
+            )
+                .to_variant();
+            bus::call(c, NM, NM_PATH, NM, "ActivateConnection", Some(args));
+        } else if let Some(active) = &vpn.active {
+            let args = (bus::object_path(active),).to_variant();
+            bus::call(c, NM, NM_PATH, NM, "DeactivateConnection", Some(args));
+        }
+    }
+
+    /// The VPN tile, as gnome-shell's: off takes every VPN down, on brings
+    /// up the one used most recently.
+    pub fn toggle_vpns(&self, on: bool) {
+        let Some(c) = &self.conn else { return };
+        let vpns = self.state.borrow().vpns.clone();
+        if !on {
+            for v in vpns.iter().filter(|v| v.active.is_some()) {
+                self.set_vpn(v, false);
+            }
+            return;
+        }
+        let last_used = vpns
+            .iter()
+            .max_by_key(|v| {
+                connection_section(c, &v.path)
+                    .and_then(|s| s.lookup_value("timestamp", None))
+                    .and_then(|t| t.get::<u64>())
+                    .unwrap_or(0)
+            })
+            .cloned();
+        if let Some(v) = last_used {
+            self.set_vpn(&v, true);
+        }
+    }
 }
 
-fn read_state(c: &gio::DBusConnection) -> NetState {
+/// `type` and `id` from a profile's "connection" section.
+fn connection_section(c: &gio::DBusConnection, path: &str) -> Option<glib::VariantDict> {
+    let reply = c
+        .call_sync(
+            Some(NM),
+            path,
+            SETTINGS_CONN,
+            "GetSettings",
+            None,
+            None,
+            gio::DBusCallFlags::NONE,
+            1000,
+            gio::Cancellable::NONE,
+        )
+        .ok()?;
+    // a{sa{sv}}: walk it by hand, VariantDict only takes an a{sv}.
+    let section = reply
+        .child_value(0)
+        .iter()
+        .find_map(|e| (e.child_value(0).str() == Some("connection")).then(|| e.child_value(1)))?;
+    Some(glib::VariantDict::new(Some(&section)))
+}
+
+/// The profile's name when it is a VPN or WireGuard connection.
+fn vpn_profile(c: &gio::DBusConnection, path: &str) -> Option<String> {
+    let section = connection_section(c, path)?;
+    let kind = section.lookup_value("type", None)?.str()?.to_string();
+    if Kind::from_nm(&kind) != Kind::Vpn {
+        return None;
+    }
+    section.lookup_value("id", None)?.str().map(String::from)
+}
+
+fn read_state(c: &gio::DBusConnection, profiles: &mut HashMap<String, Option<String>>) -> NetState {
     let Some(root) = bus::get_all(c, NM, NM_PATH, NM) else {
         return NetState::default();
     };
@@ -445,14 +585,46 @@ fn read_state(c: &gio::DBusConnection) -> NetState {
     if let Some(p) = primary_path.as_deref().and_then(active) {
         s.primary = Some(active_conn(&p));
     }
+    // Settings path -> (active path, activating) for VPNs that are up.
+    let mut vpn_up: HashMap<String, (String, bool)> = HashMap::new();
     for path in root.objs("ActiveConnections") {
         if let Some(p) = active(&path) {
             let a = active_conn(&p);
-            if a.kind == Kind::Vpn && !a.activating {
+            if a.kind != Kind::Vpn {
+                continue;
+            }
+            // NMActiveConnectionState: 3 deactivating, 4 deactivated.
+            if p.u32("State").is_some_and(|st| st >= 3) {
+                continue;
+            }
+            if let Some(profile) = p.obj("Connection") {
+                vpn_up.insert(profile, (path.clone(), a.activating));
+            }
+            if !a.activating {
                 s.vpn = Some(a.id);
             }
         }
     }
+    let saved = bus::get_all(c, NM, NM_SETTINGS_PATH, SETTINGS)
+        .map(|p| p.objs("Connections"))
+        .unwrap_or_default();
+    profiles.retain(|p, _| saved.contains(p));
+    for path in saved {
+        let name = profiles
+            .entry(path.clone())
+            .or_insert_with(|| vpn_profile(c, &path))
+            .clone();
+        if let Some(id) = name {
+            let up = vpn_up.get(&path);
+            s.vpns.push(VpnConn {
+                active: up.map(|(a, _)| a.clone()),
+                activating: up.is_some_and(|(_, a)| *a),
+                path,
+                id,
+            });
+        }
+    }
+    s.vpns.sort_by_key(|v| v.id.to_lowercase());
 
     for path in root.objs("Devices") {
         let Some(d) = bus::get_all(c, NM, &path, DEVICE) else {
@@ -767,6 +939,137 @@ pub fn wired_tile(tile: impl Fn(&str, &str) -> gtk::ToggleButton) -> gtk::Toggle
     t
 }
 
+/// A tile with an arrow beside it, like gnome-shell's QuickMenuToggle.
+pub fn split_tile(toggle: &gtk::ToggleButton) -> (gtk::Box, gtk::ToggleButton) {
+    toggle.set_hexpand(true);
+    let arrow = gtk::ToggleButton::builder()
+        .icon_name("go-next-symbolic")
+        .css_classes(["tile", "tile-arrow"])
+        .build();
+    let split = gtk::Box::builder()
+        .css_classes(["linked", "split-tile"])
+        .build();
+    split.append(toggle);
+    split.append(&arrow);
+    (split, arrow)
+}
+
+/// The section a tile's arrow reveals below the tiles.
+pub fn tile_menu(arrow: &gtk::ToggleButton) -> (gtk::Box, gtk::Revealer) {
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    list.add_css_class("network-list");
+    let revealer = gtk::Revealer::builder()
+        .child(&list)
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .build();
+    arrow.connect_toggled({
+        let revealer = revealer.clone();
+        move |b| revealer.set_reveal_child(b.is_active())
+    });
+    (list, revealer)
+}
+
+pub fn menu_header(text: &str) -> gtk::Label {
+    gtk::Label::builder()
+        .label(text)
+        .xalign(0.0)
+        .css_classes(["heading", "network-list-header"])
+        .build()
+}
+
+/// VPN tile, shown once a VPN profile exists. The tile turns VPNs on and
+/// off; its arrow lists each one with a switch, as in gnome-shell.
+pub fn vpn_tile(tile: impl Fn(&str, &str) -> gtk::ToggleButton) -> (gtk::Box, gtk::Revealer) {
+    let toggle = tile("network-vpn-symbolic", &i18n::shell("VPN"));
+    let (split, arrow) = split_tile(&toggle);
+    let (list, revealer) = tile_menu(&arrow);
+    let updating = Rc::new(Cell::new(false));
+    Network::get().subscribe({
+        let (toggle, arrow, split, updating) = (
+            toggle.clone(),
+            arrow.clone(),
+            split.clone(),
+            updating.clone(),
+        );
+        move |s| {
+            if s.vpns.is_empty() {
+                split.set_visible(false);
+                arrow.set_active(false);
+                return;
+            }
+            split.set_visible(true);
+            let up = s.vpns.iter().any(|v| v.active.is_some());
+            updating.set(true);
+            toggle.set_active(up);
+            updating.set(false);
+            set_tile_subtitle(&toggle, &s.vpn_subtitle());
+            set_tile_icon(
+                &toggle,
+                if s.vpns.iter().any(|v| v.activating) {
+                    "network-vpn-acquiring-symbolic"
+                } else {
+                    "network-vpn-symbolic"
+                },
+            );
+            fill_vpns(&list, s);
+        }
+    });
+    toggle.connect_toggled(move |b| {
+        if !updating.get() {
+            Network::get().toggle_vpns(b.is_active());
+        }
+    });
+    (split, revealer)
+}
+
+fn fill_vpns(list: &gtk::Box, s: &NetState) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    list.append(&menu_header(&i18n::shell("VPN")));
+    for vpn in &s.vpns {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.append(&gtk::Image::from_icon_name("network-vpn-symbolic"));
+        row.append(
+            &gtk::Label::builder()
+                .label(&vpn.id)
+                .xalign(0.0)
+                .hexpand(true)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build(),
+        );
+        // The row is the click target; the switch only shows the state.
+        let switch = gtk::Switch::builder()
+            .active(vpn.active.is_some())
+            .can_target(false)
+            .can_focus(false)
+            .valign(gtk::Align::Center)
+            .build();
+        row.append(&switch);
+        let button = gtk::Button::builder()
+            .child(&row)
+            .css_classes(["flat", "network-row", "vpn-row"])
+            .build();
+        let vpn = vpn.clone();
+        button.connect_clicked(move |_| {
+            Network::get().set_vpn(&vpn, vpn.active.is_none());
+        });
+        list.append(&button);
+    }
+    let settings = gtk::Button::builder()
+        .label(i18n::shell("VPN Settings"))
+        .css_classes(["flat", "network-row"])
+        .build();
+    if let Some(l) = settings.child().and_downcast::<gtk::Label>() {
+        l.set_xalign(0.0);
+    }
+    settings.connect_clicked(|b| {
+        crate::quick_settings::close_menu(b);
+        crate::quick_settings::open_settings("network");
+    });
+    list.append(&settings);
+}
+
 fn tile_content(t: &gtk::ToggleButton) -> Option<gtk::Box> {
     t.child().and_downcast()
 }
@@ -879,6 +1182,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.icon().unwrap(), "network-wired-symbolic");
+    }
+
+    fn vpn(id: &str, active: bool) -> VpnConn {
+        VpnConn {
+            path: format!("/s/{id}"),
+            id: id.into(),
+            active: active.then(|| format!("/a/{id}")),
+            activating: false,
+        }
+    }
+
+    #[test]
+    fn vpn_subtitle_names_the_connected_one() {
+        let mut s = NetState {
+            running: true,
+            vpns: vec![vpn("home", false), vpn("work", true)],
+            ..Default::default()
+        };
+        assert_eq!(s.vpn_subtitle(), "work");
+        s.vpns[0].active = Some("/a/home".into());
+        assert_eq!(s.vpn_subtitle(), "home, work");
+        s.vpns.iter_mut().for_each(|v| v.active = None);
+        assert_eq!(s.vpn_subtitle(), "");
     }
 
     #[test]
