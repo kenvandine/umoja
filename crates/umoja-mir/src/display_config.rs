@@ -331,6 +331,104 @@ pub fn configs_from_request(logical: &[LogicalMonitorConfig]) -> fdo::Result<Vec
     Ok(out)
 }
 
+/// Connectors the `default` layout of a `.display` file configures, and
+/// whether each is switched on. Only reads the shape umoja-mir writes
+/// (outputs at six spaces under a card, their keys at eight).
+fn default_layout_outputs(yaml: &str) -> Option<Vec<(String, bool)>> {
+    let mut lines = yaml.lines().skip_while(|l| l.trim_end() != "  default:");
+    lines.next()?;
+    let mut names: Vec<(String, bool)> = Vec::new();
+    for l in lines {
+        if l.starts_with("  ") && !l.starts_with("   ") {
+            break; // next layout
+        }
+        if let Some(rest) = l.strip_prefix("      ")
+            && !rest.starts_with(' ')
+            && let Some(name) = rest.trim_end().strip_suffix(':')
+        {
+            names.push((name.to_string(), true));
+        } else if l.trim() == "state: disabled"
+            && let Some(last) = names.last_mut()
+        {
+            last.1 = false;
+        }
+    }
+    Some(names)
+}
+
+/// When a monitor the saved layout doesn't know about is connected (a new
+/// monitor, or one on a second GPU), Mir leaves it at 0,0 on top of the
+/// others, which looks like mirroring. Like mutter, put new monitors to the
+/// right of the known ones and keep everything else where it is.
+fn place_new_outputs(
+    map: &BTreeMap<i32, OutputState>,
+    listed: &[(String, bool)],
+) -> Option<Vec<MonitorConfig>> {
+    let is_listed = |name: &str| listed.iter().any(|(n, _)| n == name);
+    let (known, new): (Vec<&OutputState>, Vec<&OutputState>) =
+        map.values().partition(|o| is_listed(&o.name));
+    if new.is_empty() {
+        return None;
+    }
+    let config = |o: &OutputState, x: i32, y: i32| {
+        let (width, height) = o.pixel_size();
+        MonitorConfig {
+            connector: o.name.clone(),
+            x,
+            y,
+            scale: o.scale,
+            width,
+            height,
+            rate: o.refresh,
+            rotation: rotation_of(transform_of(o.orientation)),
+            primary: false,
+            enabled: true,
+        }
+    };
+    let mut out: Vec<MonitorConfig> = known.iter().map(|o| config(o, o.rect.x, o.rect.y)).collect();
+    let mut right = known.iter().map(|o| o.rect.x + o.rect.w).max().unwrap_or(0);
+    let top = known.iter().map(|o| o.rect.y).min().unwrap_or(0);
+    for o in new {
+        out.push(config(o, right, top));
+        right += o.rect.w;
+    }
+    // Keep monitors the file switched off switched off.
+    for (name, enabled) in listed {
+        if !enabled && !out.iter().any(|c| &c.connector == name) {
+            out.push(MonitorConfig {
+                connector: name.clone(),
+                enabled: false,
+                ..Default::default()
+            });
+        }
+    }
+    Some(out)
+}
+
+/// Rewrite the `.display` file if a connected monitor is missing from it.
+/// Mir reloads the file and moves the monitor. No file means Mir's own
+/// side-by-side default is already in charge.
+fn ensure_new_outputs_placed(display_file: &str) {
+    let path = outputs::config_dir().join(display_file);
+    let Ok(yaml) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Some(listed) = default_layout_outputs(&yaml) else {
+        return;
+    };
+    let map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some(configs) = place_new_outputs(&map, &listed) else {
+        return;
+    };
+    match std::fs::write(&path, outputs::render_display_yaml(std::slice::from_ref(&configs))) {
+        Ok(()) => tracing::info!(
+            outputs = ?configs.iter().map(|c| (&c.connector, c.x, c.y)).collect::<Vec<_>>(),
+            "placed new monitors to the right of the saved layout"
+        ),
+        Err(e) => tracing::warn!(error = %e, "could not update display config"),
+    }
+}
+
 pub struct DisplayConfig {
     display_file: &'static str,
 }
@@ -430,6 +528,7 @@ pub fn start(display_file: &'static str) {
             CHANGED.notified().await;
             // Coalesce bursts (hotplug sends several updates).
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            ensure_new_outputs_placed(display_file);
             if let Ok(emitter) = SignalEmitter::new(&conn, OBJECT_PATH) {
                 let _ = DisplayConfig::monitors_changed(&emitter).await;
             }
@@ -477,6 +576,72 @@ mod tests {
         map.insert(3, out("DP-1", 1920));
         assert_eq!(primary_id(&map, None, none), Some(1));
         assert_eq!(primary_id(&BTreeMap::new(), None, none), None);
+    }
+
+    #[test]
+    fn new_monitor_goes_to_the_right() {
+        let yaml = outputs::render_display_yaml(&[vec![MonitorConfig {
+            connector: "eDP-1".into(),
+            scale: 1.0,
+            width: 1920,
+            height: 1200,
+            rate: 60.0,
+            rotation: "normal",
+            enabled: true,
+            ..Default::default()
+        }]]);
+        let listed = default_layout_outputs(&yaml).unwrap();
+        assert_eq!(listed, vec![("eDP-1".to_string(), true)]);
+        let out = |name: &str, w: i32, h: i32| OutputState {
+            name: name.into(),
+            rect: Rect::new(0, 0, w, h),
+            scale: 1.0,
+            refresh: 60.0,
+            width_mm: 0,
+            height_mm: 0,
+            orientation: 0,
+        };
+        let mut map = BTreeMap::new();
+        map.insert(1, out("eDP-1", 1920, 1200));
+        assert_eq!(place_new_outputs(&map, &listed), None);
+        map.insert(2, out("DP-5", 2560, 1440));
+        let cfg = place_new_outputs(&map, &listed).unwrap();
+        let dp = cfg.iter().find(|c| c.connector == "DP-5").unwrap();
+        assert_eq!((dp.x, dp.y, dp.width, dp.height), (1920, 0, 2560, 1440));
+        let edp = cfg.iter().find(|c| c.connector == "eDP-1").unwrap();
+        assert_eq!((edp.x, edp.y), (0, 0));
+        // Written back, both are known: nothing more to do.
+        let again = outputs::render_display_yaml(&[cfg]);
+        let listed = default_layout_outputs(&again).unwrap();
+        assert_eq!(place_new_outputs(&map, &listed), None);
+
+        // A monitor switched off in Settings stays off and isn't "new".
+        let off = outputs::render_display_yaml(&[vec![
+            MonitorConfig {
+                connector: "eDP-1".into(),
+                scale: 1.0,
+                rotation: "normal",
+                enabled: true,
+                ..Default::default()
+            },
+            MonitorConfig {
+                connector: "DP-5".into(),
+                enabled: false,
+                ..Default::default()
+            },
+        ]]);
+        let listed = default_layout_outputs(&off).unwrap();
+        assert_eq!(
+            listed,
+            vec![("eDP-1".to_string(), true), ("DP-5".to_string(), false)]
+        );
+        map.remove(&2);
+        assert_eq!(place_new_outputs(&map, &listed), None);
+        map.insert(3, out("HDMI-A-1", 1920, 1080));
+        let cfg = place_new_outputs(&map, &listed).unwrap();
+        assert!(cfg.iter().any(|c| c.connector == "DP-5" && !c.enabled));
+        let hdmi = cfg.iter().find(|c| c.connector == "HDMI-A-1").unwrap();
+        assert_eq!(hdmi.x, 1920);
     }
 
     #[test]
