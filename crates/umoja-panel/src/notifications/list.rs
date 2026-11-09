@@ -86,7 +86,16 @@ impl MessageList {
         placeholder.add_css_class("message-list-empty");
         placeholder.set_valign(gtk::Align::Center);
         placeholder.set_vexpand(true);
-        let ph_icon = gtk::Image::from_icon_name("no-notifications-symbolic");
+        // GNOME's own "no-notifications-symbolic" ships inside gnome-shell,
+        // not in an icon theme, so asking for it alone drew the missing-icon
+        // image. Try theme bells in turn; the first one present wins.
+        let ph_icon = gtk::Image::from_gicon(&gtk::gio::ThemedIcon::from_names(&[
+            "no-notifications-symbolic",
+            "notifications-disabled-symbolic",
+            "preferences-system-notifications-symbolic",
+            "notification-symbolic",
+            "notifications-symbolic",
+        ]));
         ph_icon.set_pixel_size(64);
         placeholder.append(&ph_icon);
         placeholder.append(&gtk::Label::new(Some(&i18n::shell("No Notifications"))));
