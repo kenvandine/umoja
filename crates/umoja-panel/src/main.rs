@@ -17,6 +17,7 @@ mod lock;
 mod login;
 mod media_keys;
 mod menu_api;
+mod menu_gap;
 mod mpris;
 mod myna;
 mod network;

@@ -146,6 +146,7 @@ impl Menu {
         popover.add_css_class("tray-menu");
         popover.set_has_arrow(false);
         popover.set_parent(anchor);
+        crate::menu_gap::below_bar(&popover);
         let menu = Rc::new(Self { proxy, popover });
 
         // Apps rebuild their menus while open (e.g. a "Connecting..." label);

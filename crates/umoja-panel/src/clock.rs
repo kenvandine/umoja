@@ -82,6 +82,7 @@ impl ClockButton {
             .child(&menu)
             .has_arrow(false)
             .build();
+        crate::menu_gap::below_bar(&popover);
         {
             let dot = dot.clone();
             let list = list.clone();
