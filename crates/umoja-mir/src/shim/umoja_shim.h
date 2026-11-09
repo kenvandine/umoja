@@ -261,10 +261,34 @@ typedef struct {
 void umoja_wm_workspace_swipe(uint32_t flags, double progress, int32_t dir);
 bool umoja_touch(UmojaTouchPoint const* points, size_t n, uint64_t time_ns, UmojaRect screen, UmojaTouchResult* out);
 
+// Touchpad and mouse settings (peripherals.rs, input_config.cpp), from
+// org.gnome.desktop.peripherals.{touchpad,mouse}. Keep in sync with
+// `InputSettings` in peripherals.rs.
+enum { UMOJA_CLICK_DEFAULT = 0, UMOJA_CLICK_NONE = 1, UMOJA_CLICK_AREAS = 2, UMOJA_CLICK_FINGERS = 3 };
+enum { UMOJA_SCROLL_METHOD_NONE = 0, UMOJA_SCROLL_METHOD_TWO_FINGER = 1, UMOJA_SCROLL_METHOD_EDGE = 2 };
+enum { UMOJA_ACCEL_DEFAULT = 0, UMOJA_ACCEL_FLAT = 1, UMOJA_ACCEL_ADAPTIVE = 2 };
+typedef struct {
+    bool tap_to_click;
+    bool disable_while_typing;
+    bool disable_with_external_mouse;
+    bool middle_click_emulation;
+    int32_t click_method;   // UMOJA_CLICK_*
+    int32_t scroll_method;  // UMOJA_SCROLL_METHOD_*
+    double touchpad_speed;  // [-1, 1]
+    int32_t touchpad_accel_profile;  // UMOJA_ACCEL_*
+    double mouse_speed;     // [-1, 1]
+    int32_t mouse_accel_profile;
+    bool left_handed;
+} UmojaInputSettings;
+// Safe from any thread; applies once the server is up.
+void umoja_input_apply(UmojaInputSettings const* settings);
+
 #ifdef __cplusplus
 }
 
 namespace mir { class Server; }
 // Hooks Mir's idle handler up (idle.cpp).
 void umoja_idle_setup(mir::Server& server);
+// Hooks MirAL's input device configuration up (input_config.cpp).
+void umoja_input_setup(mir::Server& server);
 #endif
