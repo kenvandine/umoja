@@ -1,3 +1,17 @@
+umoja-desktop (2026.46.2) stonking; urgency=medium
+
+  * New look: the panel, its menus, the OSD, notification bubbles, the
+    dock and its menus share one flat, dark, see-through style, always
+    dark, with the GNOME accent color for highlights. Quick Settings
+    tiles show a second line (network, device, power mode). Menus open a
+    few pixels clear of the bar and dock. The dock floats by default.
+    Real background blur behind the panel, dock, menus and notifications
+    (needs Mir 2.28.0-4umoja4). App indicator menus open on left click,
+    and apps that share an icon name keep their own icon. The
+    drag-to-tile hint and layout picker match the new style.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 05:36:56 +0000
+
 umoja-desktop (2026.46.1) stonking; urgency=medium
 
   * Switch to vYYYY.WW.REVISION versions (ISO year and week, then a

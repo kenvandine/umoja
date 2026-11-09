@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-common"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "gdk4-wayland",
  "gettext-rs",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-dock"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "async-channel",
  "gio",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-files"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "anyhow",
  "ignore",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-greeter"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "gio",
  "glib",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-mcp"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "async-channel",
  "gio",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-mir"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "cc",
  "futures-util",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-overlay"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "async-channel",
  "futures-util",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-panel"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "async-channel",
  "futures-util",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "umoja-portal"
-version = "2026.46.1"
+version = "2026.46.2"
 dependencies = [
  "anyhow",
  "gio",
