@@ -103,10 +103,19 @@ impl Overlay {
         let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         search_row.set_halign(gtk::Align::Center);
         // "Add context" menu and the clipboard history toggle.
-        let pick_selection = menu_item("edit-select-all-symbolic", &i18n::umoja("Selected Text")).0;
-        let pick_window = menu_item("focus-windows-symbolic", &i18n::umoja("Current Window"));
-        let pick_area = menu_item("screenshot-recorded-symbolic", &i18n::umoja("Screen Area…")).0;
-        let pick_clipboard = menu_item("edit-paste-symbolic", &i18n::umoja("Last Copied Text")).0;
+        let pick_selection =
+            menu_item(&["edit-select-all-symbolic"], &i18n::umoja("Selected Text")).0;
+        let pick_window = menu_item(
+            &["focus-windows-symbolic", "window-new-symbolic"],
+            &i18n::umoja("Current Window"),
+        );
+        let pick_area = menu_item(
+            &["screenshot-recorded-symbolic", "camera-photo-symbolic"],
+            &i18n::umoja("Screen Area…"),
+        )
+        .0;
+        let pick_clipboard =
+            menu_item(&["edit-paste-symbolic"], &i18n::umoja("Last Copied Text")).0;
         let picks = gtk::Box::new(gtk::Orientation::Vertical, 2);
         picks.set_margin_top(6);
         picks.set_margin_bottom(6);
@@ -1458,7 +1467,8 @@ impl agent::Ui for OverlayUi {
 }
 
 /// A flat popover menu entry with an icon.
-fn menu_item(icon: &str, label: &str) -> (gtk::Button, gtk::Label) {
+/// `icons` are tried in order; the first one the icon theme has is drawn.
+fn menu_item(icons: &[&str], label: &str) -> (gtk::Button, gtk::Label) {
     let text = gtk::Label::builder()
         .label(label)
         .xalign(0.0)
@@ -1466,7 +1476,9 @@ fn menu_item(icon: &str, label: &str) -> (gtk::Button, gtk::Label) {
         .max_width_chars(40)
         .build();
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    content.append(&gtk::Image::from_icon_name(icon));
+    content.append(&gtk::Image::from_gicon(&gtk::gio::ThemedIcon::from_names(
+        icons,
+    )));
     content.append(&text);
     let button = gtk::Button::builder()
         .child(&content)

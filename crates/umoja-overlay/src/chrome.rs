@@ -634,8 +634,14 @@ impl Switcher {
         for (i, (app_id, title, windows)) in data.iter().enumerate() {
             // Mode 3 is Ctrl+Alt+Tab: an icon name and a gnome-shell msgid.
             let (icon, name) = if self.mode.get() == 3 {
+                // focus-top-bar-symbolic ships inside gnome-shell, not in
+                // icon themes, so give it a themed fallback.
+                let mut names = vec![app_id.as_str()];
+                if app_id == "focus-top-bar-symbolic" {
+                    names.extend(["go-top-symbolic", "go-up-symbolic"]);
+                }
                 (
-                    gio::ThemedIcon::new(app_id).upcast(),
+                    gio::ThemedIcon::from_names(&names).upcast(),
                     umoja_common::i18n::shell(title),
                 )
             } else {

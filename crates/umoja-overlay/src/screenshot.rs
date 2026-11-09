@@ -189,18 +189,20 @@ impl ScreenshotUi {
         let modes = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         modes.add_css_class("mode-group");
         let selection = mode_button(
-            "screenshot-ui-area-symbolic",
-            "edit-select-all-symbolic",
+            &["screenshot-ui-area-symbolic", "edit-select-all-symbolic"],
             &i18n::shell("Selection"),
         );
         let screen = mode_button(
-            "screenshot-ui-display-symbolic",
-            "video-display-symbolic",
+            &["screenshot-ui-display-symbolic", "video-display-symbolic"],
             &i18n::shell("Screen"),
         );
         let window_btn = mode_button(
-            "screenshot-ui-window-symbolic",
-            "focus-windows-symbolic",
+            &[
+                "screenshot-ui-window-symbolic",
+                "focus-windows-symbolic",
+                "window-new-symbolic",
+                "preferences-system-windows-symbolic",
+            ],
             &i18n::shell("Window"),
         );
         screen.set_group(Some(&selection));
@@ -248,8 +250,16 @@ impl ScreenshotUi {
         kinds.append(&shot);
         kinds.append(&cast);
 
+        // The screenshot-ui-* icons ship inside gnome-shell, not in icon
+        // themes, so fall back to a themed pointer.
         let pointer = gtk::ToggleButton::builder()
-            .icon_name("screenshot-ui-show-pointer-symbolic")
+            .child(&gtk::Image::from_gicon(&gtk::gio::ThemedIcon::from_names(
+                &[
+                    "screenshot-ui-show-pointer-symbolic",
+                    "input-mouse-symbolic",
+                    "pointer-primary-click-symbolic",
+                ],
+            )))
             .tooltip_text(i18n::shell("Show Pointer"))
             .css_classes(["circular", "pointer-toggle"])
             .build();
@@ -485,15 +495,15 @@ impl ScreenshotUi {
     }
 }
 
-fn mode_button(icon: &str, fallback: &str, label: &str) -> gtk::ToggleButton {
-    let theme = gdk::Display::default().map(|d| gtk::IconTheme::for_display(&d));
-    let name = if theme.is_some_and(|t| t.has_icon(icon)) {
-        icon
-    } else {
-        fallback
-    };
+/// `icons` are tried in order; the first one the icon theme has is drawn.
+fn mode_button(icons: &[&str], label: &str) -> gtk::ToggleButton {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    content.append(&gtk::Image::builder().icon_name(name).pixel_size(24).build());
+    content.append(
+        &gtk::Image::builder()
+            .gicon(&gtk::gio::ThemedIcon::from_names(icons))
+            .pixel_size(24)
+            .build(),
+    );
     content.append(&gtk::Label::new(Some(label)));
     gtk::ToggleButton::builder()
         .child(&content)
