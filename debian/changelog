@@ -1,3 +1,19 @@
+umoja-desktop (0.2.0) stonking; urgency=medium
+
+  * GNOME-style window management: Alt+Tab, overview with workspace
+    thumbnails, snap previews, workspace switcher, touchscreen gestures.
+  * Notifications that behave like GNOME and look like notify-osd, media
+    keys with GNOME OSDs, PolicyKit agent, idle screen blank and lock.
+  * Assistant: model download and picker, tool calling through umoja-mcp,
+    read-only troubleshooting, optional OpenAI-compatible cloud model.
+  * umoja-files: find files by meaning from the overlay.
+  * Dock shows running apps and has Ubuntu Dock's right-click menu.
+  * Screenshot UI selection can be resized from corners and edges.
+  * Greeter runs on Wayland under umoja-mir, with an X11 fallback.
+  * Session survives compositor crashes; Lemonade GPU memory is capped.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 01:30:00 +0000
+
 umoja-desktop (0.1.0) stonking; urgency=medium
 
   * Initial release: workspace scaffold for umoja-mir, umoja-panel,
