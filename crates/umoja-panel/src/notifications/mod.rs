@@ -8,10 +8,10 @@
 //! dismissed, and the `transient`/`resident` hints.
 //!
 //! Banners are drawn like Ubuntu's notify-osd: dark translucent bubbles in
-//! the top-right corner, a large icon beside a bold title, and a gauge for
-//! the `value` hint (with `x-canonical-private-synchronous` replacing the
-//! previous bubble of the same kind, as notify-osd's volume and brightness
-//! bubbles did).
+//! the top center under the clock (where GNOME puts banners), a large icon
+//! beside a bold title, and a gauge for the `value` hint (with
+//! `x-canonical-private-synchronous` replacing the previous bubble of the
+//! same kind, as notify-osd's volume and brightness bubbles did).
 //!
 //! The on-device assistant adds two things (see `assistant`): a digest of
 //! notifications that arrived since you last opened the message list, and

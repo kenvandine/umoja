@@ -1,5 +1,5 @@
 //! notify-osd style banners: dark, translucent, rounded bubbles stacked in
-//! the top-right corner under the panel, fading in and out.
+//! the top center under the clock, as GNOME places banners, fading in and out.
 //!
 //! Behaviour follows GNOME: clicking a bubble runs its default action (or
 //! raises the app), action buttons are shown, hovering keeps it up, and a
@@ -51,13 +51,15 @@ impl Bubbles {
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-notifications");
         window.set_keyboard_mode(KeyboardMode::None);
-        // A fixed-size surface in the top-right corner. Mir places a
-        // Top|Right layer surface from its size when it maps, but doesn't
+        // A fixed-size surface at the top center, under the clock and the
+        // notification list, as GNOME places its banners. Anchored to the
+        // top edge only, so the compositor centers it horizontally. Mir
+        // places a layer surface from its size when it maps, but doesn't
         // move it when it grows afterwards, so a surface that grew with each
-        // new bubble ran off the right edge. The empty part lets clicks
-        // through: the input region is just the bubbles (see below).
+        // new bubble drifted off center (or off the edge). The empty part
+        // lets clicks through: the input region is just the bubbles (see
+        // below).
         window.set_anchor(Edge::Top, true);
-        window.set_anchor(Edge::Right, true);
         window.set_size_request(SURFACE_WIDTH, SURFACE_HEIGHT);
         // Stay out of the exclusive-zone layout: with the default zone of 0,
         // Mir re-lays out the panel around this surface whenever it maps,
@@ -67,8 +69,7 @@ impl Bubbles {
 
         let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
         column.set_valign(gtk::Align::Start);
-        column.set_halign(gtk::Align::End);
-        column.set_margin_end(8);
+        column.set_halign(gtk::Align::Center);
         window.set_child(Some(&column));
 
         // Keep the input region to the bubbles themselves, so the rest of
@@ -96,8 +97,8 @@ impl Bubbles {
                 });
             });
         }
-        // Mapped once and never hidden: Mir places a re-mapped surface off
-        // the right edge, and with no bubbles the input region is empty so
+        // Mapped once and never hidden: Mir places a re-mapped surface in the
+        // wrong place, and with no bubbles the input region is empty so
         // the transparent surface doesn't get in the way.
         window.present();
         Self {
