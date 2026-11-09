@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+# The Settings portal backend is a long-lived user service that keeps the
+# GSettings schemas it loaded at start-up. With lingering, it even survives
+# logout, so after an upgrade apps would keep getting the old defaults (for
+# example gtk-enable-primary-paste, i.e. middle-click paste) until it was
+# restarted by hand. Restart it in every running user manager; try-restart
+# leaves users who don't have it running alone.
+if [ "$1" = "configure" ] && command -v deb-systemd-invoke >/dev/null 2>&1; then
+    deb-systemd-invoke --user try-restart xdg-desktop-portal-umoja.service >/dev/null 2>&1 || true
+fi
+
+#DEBHELPER#
+
+exit 0
