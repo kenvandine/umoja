@@ -291,7 +291,15 @@ pub fn report_about(question: &str) -> String {
         }
         return s;
     }
-    let mut out = String::from("Crashes in the last 7 days, newest first:\n");
+    let today = glib::DateTime::now_local()
+        .ok()
+        .and_then(|t| t.format("%A %e %B %Y").ok())
+        .map(|s| s.to_string().replace("  ", " "))
+        .unwrap_or_default();
+    let mut out = format!("Today is {today}. Crashes in the last 7 days, newest first:\n");
+    if !crashes.iter().any(|c| when(c.time).starts_with("today")) {
+        out.push_str("(None of them happened today.)\n");
+    }
     for c in crashes.iter().take(8) {
         out.push_str(&format!("- {}\n", c.line()));
     }
@@ -407,6 +415,23 @@ pub fn details_of(c: &Crash) -> String {
     }
     if let Some(u) = updates_before(c.time) {
         out.push_str(&u);
+        // Say plainly whether the program itself was among them, so an
+        // unrelated update isn't taken for the cause.
+        if let Some(pkg) = c
+            .package
+            .as_deref()
+            .and_then(|p| p.split_whitespace().next())
+            && !u.starts_with("Package updates in the 3 days before: none")
+        {
+            let pkg_updated = u
+                .split([':', ','])
+                .any(|e| e.trim().starts_with(&format!("{pkg} ")));
+            out.push_str(&if pkg_updated {
+                format!("{pkg} itself was updated just before the crash.\n")
+            } else {
+                format!("{pkg} itself was not among those updates, so they are unlikely to be the cause unless one is a library in its stack.\n")
+            });
+        }
     }
     crate::diagnostics::truncate(&out, MAX_TEXT)
 }
@@ -533,8 +558,8 @@ pub fn when(time: u64) -> String {
     match days {
         0 => format!("today at {clock}"),
         1 => format!("yesterday at {clock}"),
-        _ => format!(
-            "{} at {clock}",
+        n => format!(
+            "{} at {clock} ({n} days ago)",
             t.format("%a %e %b")
                 .map(|s| s.to_string().replace("  ", " "))
                 .unwrap_or_default()
