@@ -120,7 +120,7 @@ case "${UMOJA_GREETER_X11:-}" in
     1|yes|true) x11_fallback ;;
 esac
 if ! mir_can_show; then
-    log "every connected screen is on the NVIDIA GPU and Mir's eglstream backend isn't installed"
+    log "every connected screen is on the NVIDIA GPU and no Mir backend here can drive it"
     x11_fallback
 fi
 for attempt in 1 2; do
