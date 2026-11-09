@@ -2427,6 +2427,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "umoja-screensaver"
+version = "2026.46.3"
+dependencies = [
+ "gtk4",
+ "gtk4-layer-shell",
+ "tracing",
+ "umoja-common",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -34,7 +34,7 @@ override_dh_auto_build:
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# GTK crates need a display to run; test the headless logic only.
-	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp
+	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver
 endif
 
 override_dh_auto_clean:
@@ -48,6 +48,7 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/umoja-overlay $(DESKTOP)/usr/bin/umoja-overlay
 	install -D -m 0755 target/release/umoja-files $(DESKTOP)/usr/bin/umoja-files
 	install -D -m 0755 target/release/umoja-mcp $(DESKTOP)/usr/bin/umoja-mcp
+	install -D -m 0755 target/release/umoja-screensaver $(DESKTOP)/usr/bin/umoja-screensaver
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
 	install -D -m 0755 bin/umoja-agent-setup $(DESKTOP)/usr/bin/umoja-agent-setup
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja

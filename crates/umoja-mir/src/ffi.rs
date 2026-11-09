@@ -713,3 +713,9 @@ pub extern "C" fn umoja_touch(
         consume
     })
 }
+
+/// Input arrived; ends the screensaver if it's up.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_input_activity() {
+    guard("input_activity", (), crate::idle::input_activity)
+}

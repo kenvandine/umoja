@@ -629,6 +629,12 @@ impl Compositor {
         crate::input::shortcuts()
     }
 
+    /// Start the screensaver now, as idling would (`umoja-screensaver
+    /// --activate`). False when the session is locked or it isn't installed.
+    async fn activate_screensaver(&self) -> bool {
+        crate::idle::activate_screensaver()
+    }
+
     /// Emitted when the active workspace or the number of workspaces changes.
     #[zbus(signal)]
     async fn workspaces_changed(

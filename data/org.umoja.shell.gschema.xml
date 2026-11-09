@@ -81,6 +81,24 @@
         text is read with Tesseract OCR and put on the clipboard.
       </description>
     </key>
+    <key name="screensaver-enabled" type="b">
+      <default>true</default>
+      <summary>Show the screensaver before the screen blanks</summary>
+      <description>
+        When the session has been idle for Settings › Power › Screen Blank
+        (org.gnome.desktop.session idle-delay), show the Umoja screensaver
+        instead of turning the screen off straight away. The screen blanks
+        screensaver-duration seconds later. Off: blank at idle-delay, as GNOME
+        does.
+      </description>
+    </key>
+    <key name="screensaver-duration" type="u">
+      <default>300</default>
+      <summary>How long the screensaver runs before the screen blanks</summary>
+      <description>
+        Seconds. 0 keeps the screensaver running until you come back.
+      </description>
+    </key>
     <key name="crash-notifications" type="b">
       <default>true</default>
       <summary>Tell me when an app crashes</summary>

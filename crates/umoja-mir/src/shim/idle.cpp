@@ -17,6 +17,7 @@
 #include <mir/server.h>
 #include <mir/scene/session_lock.h>
 #include <mir/shell/idle_handler.h>
+#include <mir_toolkit/events/event.h>
 
 #include <chrono>
 #include <cstdio>
@@ -86,4 +87,11 @@ extern "C" void umoja_idle_set_timeouts(int32_t off_seconds, int32_t locked_off_
             std::fprintf(stderr, "umoja-mir: setting idle timeouts failed: %s\n", e.what());
         }
     }
+}
+
+// Every input event, before anything else sees it: tells idle.rs the user
+// is back while the screensaver is up. Never consumes the event.
+bool umoja_idle_input_filter(MirEvent const* event) {
+    if (mir_event_get_type(event) == mir_event_type_input) umoja_input_activity();
+    return false;
 }

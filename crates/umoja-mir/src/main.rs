@@ -17,6 +17,7 @@ mod media_keys;
 mod outputs;
 mod peripherals;
 mod protocols;
+mod screensaver;
 mod session;
 mod shell;
 mod snap;

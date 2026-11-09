@@ -179,6 +179,8 @@ shot 04-screenshot-ui
 blanks() { grep -c 'screen off' "$OUT/umoja-mir.log"; }
 before=$(blanks)
 gsettings set org.gnome.desktop.screensaver lock-enabled false
+# Plain blanking first; the screensaver is checked further down.
+gsettings set org.umoja.shell screensaver-enabled false
 gsettings set org.gnome.desktop.session idle-delay 3
 sleep 6
 [ "$(blanks)" -gt "$before" ] && pass "screen blanks after idle-delay" || fail "screen did not blank after idle-delay 3"
@@ -214,7 +216,7 @@ gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/Se
     --method org.gnome.SessionManager.Inhibit test 0 testing 8 >>"$LOG" 2>&1 \
     && pass "org.gnome.SessionManager Inhibit" || fail "SessionManager Inhibit failed"
 gsettings reset org.gnome.desktop.session idle-delay
-gsettings reset org.gnome.desktop.screensaver lock-enabled
+gsettings reset org.umoja.shell screensaver-enabled
 wtype -k Shift_L 2>>"$LOG"
 
 # Only this test's processes: everything it started, directly or through
@@ -237,6 +239,37 @@ running() {
     done
     return 1
 }
+# The screensaver: "umoja-screensaver --activate" starts it as idling
+# would, any input dismisses it, and at idle-delay it starts by itself and
+# gives way to the blank screensaver-duration seconds later. (Lock is off,
+# so dismissing doesn't lock.) /proc/PID/comm stops at 15 characters.
+saver() { running umoja-screensav; }
+gsettings set org.umoja.shell screensaver-duration 6
+umoja-screensaver --list-effects >>"$LOG" 2>&1 && pass "umoja-screensaver lists its effects" \
+    || fail "umoja-screensaver --list-effects failed"
+umoja-screensaver --activate >>"$LOG" 2>&1 && pass "umoja-screensaver --activate" \
+    || fail "umoja-screensaver --activate failed"
+sleep 3
+saver && pass "screensaver running after --activate" || fail "screensaver not running after --activate"
+shot 06-screensaver
+wtype -k Shift_L 2>>"$LOG"
+sleep 2
+saver && fail "screensaver still up after a key press" || pass "a key press dismisses the screensaver"
+grep -q 'screensaver dismissed' "$OUT/umoja-mir.log" || fail "umoja-mir didn't log the dismissal"
+before=$(blanks)
+gsettings set org.gnome.desktop.session idle-delay 10
+sleep 13
+saver && pass "screensaver starts at idle-delay" || fail "screensaver did not start at idle-delay 10"
+sleep 7
+[ "$(blanks)" -gt "$before" ] && pass "screen blanks after screensaver-duration" \
+    || fail "screen did not blank after the screensaver"
+saver && fail "screensaver still running with the screen off" || pass "screensaver stops when the screen blanks"
+wtype -k Shift_L 2>>"$LOG"
+gsettings reset org.gnome.desktop.session idle-delay
+gsettings reset org.umoja.shell screensaver-duration
+gsettings reset org.gnome.desktop.screensaver lock-enabled
+sleep 1
+
 for p in mir panel dock overlay; do
     running "umoja-$p" && pass "umoja-$p still running" || fail "umoja-$p exited (see umoja-$p.log)"
 done

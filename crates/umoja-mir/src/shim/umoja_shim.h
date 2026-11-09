@@ -251,6 +251,8 @@ enum {
 };
 // Mir's idle or session-lock state changed (called on a Mir thread).
 void umoja_idle_state(uint32_t state);
+// Any input event (Mir's input thread); cheap unless the screensaver is up.
+void umoja_input_activity(void);
 
 // Touch gestures (gestures.rs). `action`: 0 up, 1 down, 2 moved.
 typedef struct {
@@ -299,6 +301,8 @@ void umoja_input_apply(UmojaInputSettings const* settings);
 namespace mir { class Server; }
 // Hooks Mir's idle handler up (idle.cpp).
 void umoja_idle_setup(mir::Server& server);
+struct MirEvent;
+bool umoja_idle_input_filter(MirEvent const* event);
 // Hooks MirAL's input device configuration up (input_config.cpp).
 void umoja_input_setup(mir::Server& server);
 #endif

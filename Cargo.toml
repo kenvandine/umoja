@@ -9,6 +9,7 @@ members = [
     "crates/umoja-common",
     "crates/umoja-files",
     "crates/umoja-mcp",
+    "crates/umoja-screensaver",
 ]
 resolver = "2"
 

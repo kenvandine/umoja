@@ -1,0 +1,13 @@
+[package]
+name = "umoja-screensaver"
+description = "Umoja screensaver: the word umoja in circles, shown before the screen blanks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+umoja-common.workspace = true
+gtk4.workspace = true
+gtk4-layer-shell.workspace = true
+tracing.workspace = true

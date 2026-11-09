@@ -1976,6 +1976,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     // GNOME's monitors.xml by the Rust side; Mir reloads it when it changes.
     DisplayConfiguration display_config{runner};
     PrependEventFilter natural_scroll{umoja_apply_natural_scroll};
+    PrependEventFilter idle_activity{umoja_idle_input_filter};
 
     // The pointer drawn by Mir itself (desktop, server-side cursor shapes):
     // the GNOME cursor theme and size that umoja-session exports, like
@@ -2029,6 +2030,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
             display_config,
             display_config.layout_option(),
             natural_scroll,
+            idle_activity,
             cursor_theme,
             cursor_size,
             extensions,
@@ -2045,6 +2047,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         display_config,
         display_config.layout_option(),
         natural_scroll,
+        idle_activity,
         cursor_theme,
         cursor_size,
         extensions,
