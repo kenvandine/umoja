@@ -29,7 +29,10 @@ sentences, and do not describe what you checked or did.";
 /// evidence, the way a careful developer would, rather than a plausible
 /// story.
 const CRASH_RULES: &str = "For a crash: first rule out the boring causes the report shows (the \
-system was out of memory, or the crash started right after a package update named there). \
+system was out of memory). Several programs crashing in the same minute usually means the \
+display or session went away (the desktop restarting, a logout), not a separate bug in each; \
+say so. Blame a package update only when the crashing program or the library in its stack \
+was updated just before; otherwise don't call it the cause. \
 Say whether it is a one-off or keeps happening. Use the signal in plain words (a segmentation \
 fault is a bug in the program; an abort usually means it hit an error it checks for). Quote \
 the top stack frame only if the report has one, and never guess at a cause the report doesn't \

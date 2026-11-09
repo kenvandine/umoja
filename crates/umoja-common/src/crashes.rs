@@ -14,6 +14,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Cap on a crash report, the same as the other diagnostics sections.
+const MAX_TEXT: usize = 2400;
+
 /// Where Apport writes its reports.
 pub const APPORT_DIR: &str = "/var/crash";
 
@@ -292,6 +295,13 @@ pub fn report_about(question: &str) -> String {
     for c in crashes.iter().take(8) {
         out.push_str(&format!("- {}\n", c.line()));
     }
+    for group in same_minute(&crashes) {
+        out.push_str(&format!(
+            "Note: {} crashed within the same minute ({}), which points to a shared cause such as the display or session going away.\n",
+            group.join(", "),
+            when(crashes.iter().find(|c| c.program() == group[0]).map(|c| c.time).unwrap_or_default()),
+        ));
+    }
     // One crash in detail, so a "why did it crash" question can be
     // answered without another tool call.
     let q = question.to_lowercase();
@@ -301,7 +311,31 @@ pub fn report_about(question: &str) -> String {
     });
     out.push('\n');
     out.push_str(&details_of(named.unwrap_or(&crashes[0])));
-    crate::diagnostics::truncate(&out, 3500)
+    crate::diagnostics::truncate(&out, MAX_TEXT)
+}
+
+/// Programs that crashed within a minute of each other (2 or more).
+fn same_minute(crashes: &[Crash]) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut i = 0;
+    while i < crashes.len() {
+        let mut j = i + 1;
+        while j < crashes.len() && crashes[i].time.abs_diff(crashes[j].time) <= 60 {
+            j += 1;
+        }
+        if j - i >= 2 {
+            let mut names: Vec<String> = crashes[i..j]
+                .iter()
+                .map(|c| c.program().to_string())
+                .collect();
+            names.dedup();
+            if names.len() >= 2 {
+                groups.push(names);
+            }
+        }
+        i = j;
+    }
+    groups
 }
 
 /// Details of the newest crash of `program` (a name like "nautilus" or a
@@ -350,10 +384,7 @@ pub fn details_of(c: &Crash) -> String {
         out.push_str("Package: unknown (may not come from an Ubuntu package)\n");
     }
     if let Some(cmd) = &c.cmdline {
-        out.push_str(&format!(
-            "Command line: {}\n",
-            crate::diagnostics::truncate(cmd, 300).trim_end()
-        ));
+        out.push_str(&format!("Command line: {}\n", clip(cmd, 300)));
     }
     let stack = c.stack.clone().or_else(|| match &c.source {
         Source::Coredump(pid) => coredump_stack(*pid),
@@ -377,7 +408,7 @@ pub fn details_of(c: &Crash) -> String {
     if let Some(u) = updates_before(c.time) {
         out.push_str(&u);
     }
-    crate::diagnostics::truncate(&out, 3000)
+    crate::diagnostics::truncate(&out, MAX_TEXT)
 }
 
 /// The stack of the crashing thread from `coredumpctl info`.
@@ -431,10 +462,7 @@ fn around(time: u64) -> String {
             let skip = lines.len().saturating_sub(10);
             out.push_str("Log warnings around the crash:\n");
             for l in &lines[skip..] {
-                out.push_str(&format!(
-                    "  {}\n",
-                    crate::diagnostics::truncate(l, 200).trim_end()
-                ));
+                out.push_str(&format!("  {}\n", clip(l, 200)));
             }
         }
     }
@@ -459,7 +487,9 @@ fn updates_before(time: u64) -> Option<String> {
             })?
         })
         .collect();
-    pkgs.dedup();
+    // Reinstalling the same version logs it again.
+    let mut seen = std::collections::HashSet::new();
+    pkgs.retain(|p| seen.insert(p.clone()));
     if pkgs.is_empty() {
         return Some("Package updates in the 3 days before: none\n".into());
     }
@@ -510,6 +540,19 @@ pub fn when(time: u64) -> String {
                 .unwrap_or_default()
         ),
     }
+}
+
+/// One line cut to `max` bytes with an ellipsis.
+fn clip(line: &str, max: usize) -> String {
+    let line = line.trim_end();
+    if line.len() <= max {
+        return line.to_string();
+    }
+    let mut end = max;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
 }
 
 fn indent(text: &str, max_lines: usize) -> String {
@@ -616,6 +659,28 @@ Title: never read\n";
         assert_eq!(c.executable, "/usr/bin/nautilus");
         assert!(c.line().contains("aborted itself"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn groups_crashes_in_one_minute() {
+        let c = |exe: &str, time: u64| Crash {
+            executable: exe.into(),
+            time,
+            signal: Some(8),
+            package: None,
+            cmdline: None,
+            stack: None,
+            count: 1,
+            source: Source::Coredump(1),
+        };
+        let list = [
+            c("/a/mir", 5000),
+            c("/a/panel", 1030),
+            c("/a/files", 1010),
+            c("/a/term", 1000),
+        ];
+        assert_eq!(same_minute(&list), vec![vec!["panel", "files", "term"]]);
+        assert_eq!(clip("abcdef", 3), "abc…");
     }
 
     #[test]
