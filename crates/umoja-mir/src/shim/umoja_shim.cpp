@@ -114,7 +114,10 @@ UmojaWindowManager* g_wm = nullptr;
 class UmojaWindowManager : public MinimalWindowManager {
 public:
     explicit UmojaWindowManager(WindowManagerTools const& tools)
-        : MinimalWindowManager{tools, mir_input_event_modifier_meta} {
+        // Modified clicks (Super+drag) are ours, following GNOME's
+        // mouse-button-modifier; caps_lock is outside the modifiers Mir
+        // compares, so its own Super+drag never starts.
+        : MinimalWindowManager{tools, mir_input_event_modifier_caps_lock} {
         workspaces.push_back(this->tools.create_workspace());
         g_wm = this;
     }
@@ -161,7 +164,6 @@ public:
             moving = Window{};
             elevated = false;
         }
-        if (w == press_window) press_window = Window{};
         if (key_grab && key_grab->window == w) key_grab.reset();
         above.erase(w);
         pinned.erase(w);
@@ -282,24 +284,27 @@ public:
             }
             if (action == mir_pointer_action_button_up) return true;
         }
-        if (action == mir_pointer_action_button_down) umoja_pointer_pressed();
+        uint32_t const buttons = mir_pointer_event_buttons(event);
+        uint32_t const pressed = buttons & ~held_buttons;
+        held_buttons = buttons;
+
+        if (action == mir_pointer_action_button_down) {
+            umoja_pointer_pressed();
+            // Super+click is not a tap of Super: no overview on release.
+            overlay_key_armed = false;
+        }
+
+        if (mod_grab) return mod_grab_event(action, buttons, px, py);
+        if (action == mir_pointer_action_button_down && pressed && !moving &&
+            begin_mod_grab(event, pressed, px, py))
+            return true;
 
         bool const consumed = MinimalWindowManager::handle_pointer_event(event);
 
-        if (action == mir_pointer_action_button_down) {
-            press_window = tools.active_window();
-            press_origin = press_window ? press_window.top_left() : geom::Point{};
-            press_restore = press_window && was_tiled_or_maximized(press_window);
-        } else if (action == mir_pointer_action_motion) {
-            if (!moving && press_window && mir_pointer_event_buttons(event) != 0 &&
-                press_window.top_left() != press_origin && all_windows.count(press_window)) {
-                // Super+drag: MinimalWindowManager moves it without a request.
-                begin_move(press_window, px, py, press_restore);
-            }
+        if (action == mir_pointer_action_motion) {
             if (moving) on_move(px, py);
         } else if (action == mir_pointer_action_button_up) {
             if (moving && mir_pointer_event_buttons(event) == 0) end_move();
-            press_window = Window{};
         }
         return consumed;
     }
@@ -575,9 +580,7 @@ private:
     std::map<Window, geom::Rectangle> untiled;
 
     // Pointer press / window move tracking.
-    Window press_window;
-    geom::Point press_origin;
-    bool press_restore = false;
+    uint32_t held_buttons = 0;
     Window moving;
     bool elevated = false;
     uint32_t drag_target = UMOJA_ACTION_NONE;
@@ -687,6 +690,165 @@ private:
         default:
             break;
         }
+    }
+
+    // ---- modifier + click (mutter's window button grabs) --------------------
+
+    // Holding mouse-button-modifier (<Super> in GNOME and Ubuntu) anywhere
+    // on a window: left drag moves it, middle drag resizes it from the
+    // nearest edge or corner, right click opens the window menu; with
+    // resize-with-right-button, right resizes and middle opens the menu.
+    // As in mutter (meta_window_handle_ungrabbed_event), the press focuses
+    // the window and never reaches the client, and once a drag has started
+    // letting go of the modifier does not end it.
+    enum class ModGrabKind { menu, pending_move, moving, resizing };
+    struct ModGrab {
+        Window window;
+        ModGrabKind kind;
+        uint32_t button;
+        geom::Point start;     // pointer at the press
+        geom::Point last;      // pointer at the previous motion
+        geom::Rectangle rect;  // window at the start of a resize
+        bool resized = false;
+        bool west = false, east = false, north = false, south = false;
+    };
+    std::optional<ModGrab> mod_grab;
+
+    // mutter's "shake" threshold before a maximized or tiled window comes
+    // loose; a restored window follows the pointer straight away.
+    static constexpr int unmaximize_threshold = 8;
+
+    bool begin_mod_grab(MirPointerEvent const* event, uint32_t pressed, int32_t px, int32_t py) {
+        uint32_t const want = umoja_mouse_button_modifier();
+        if (!want) return false;
+        uint32_t const held = to_umoja_mods(mir_pointer_event_modifiers(event));
+        if ((held & want) != want) return false;
+
+        geom::Point const p{px, py};
+        Window const w = tools.window_at(p);
+        if (!w || !all_windows.count(w)) return false;
+        auto& info = tools.info_for(w);
+
+        bool const right_resizes = umoja_resize_with_right_button();
+        uint32_t const resize_button = right_resizes ? mir_pointer_button_secondary : mir_pointer_button_tertiary;
+        uint32_t const menu_button = right_resizes ? mir_pointer_button_tertiary : mir_pointer_button_secondary;
+        auto const state = info.state();
+        bool const fullscreen = state == mir_window_state_fullscreen;
+
+        if (pressed & menu_button) {
+            guarded("modifier click menu", [&] {
+                activate(w);
+                show_window_menu(w, p);
+            });
+            // Swallow the release too.
+            mod_grab = ModGrab{Window{}, ModGrabKind::menu, menu_button, p, p, {}};
+            return true;
+        }
+
+        if (pressed & resize_button) {
+            if (fullscreen || !resizable(info) || state != mir_window_state_restored) return false;
+            geom::Rectangle const r{w.top_left(), w.size()};
+            int const x = r.top_left.x.as_int(), y = r.top_left.y.as_int();
+            int const ww = r.size.width.as_int(), wh = r.size.height.as_int();
+            ModGrab g{w, ModGrabKind::resizing, resize_button, p, p, r};
+            g.west = px < x + ww / 3;
+            g.east = px > x + 2 * ww / 3;
+            g.north = py < y + wh / 3;
+            g.south = py > y + 2 * wh / 3;
+            // The middle third does nothing in mutter either: the click
+            // goes to the window.
+            if (!(g.west || g.east || g.north || g.south)) return false;
+            guarded("modifier resize", [&] {
+                activate(w);
+                tools.raise_tree(w);
+            });
+            mod_grab = g;
+            return true;
+        }
+
+        if (pressed & mir_pointer_button_primary) {
+            if (fullscreen) return false;
+            guarded("modifier move", [&] {
+                activate(w);
+                tools.raise_tree(w);
+            });
+            mod_grab = ModGrab{w, ModGrabKind::pending_move, mir_pointer_button_primary, p, p, {}};
+            return true;
+        }
+        return false;
+    }
+
+    bool mod_grab_event(MirPointerAction action, uint32_t buttons, int32_t px, int32_t py) {
+        auto& g = *mod_grab;
+        geom::Point const p{px, py};
+        bool const gone = g.window && !all_windows.count(g.window);
+
+        if (gone || !(buttons & g.button)) {
+            if (g.kind == ModGrabKind::moving && moving) end_move();
+            mod_grab.reset();
+            return true; // the client never saw the press
+        }
+        if (action != mir_pointer_action_motion || !g.window) return true;
+
+        switch (g.kind) {
+        case ModGrabKind::pending_move: {
+            bool const stuck = was_tiled_or_maximized(g.window);
+            auto const d = p - g.start;
+            if (stuck && std::abs(d.dx.as_int()) < unmaximize_threshold &&
+                std::abs(d.dy.as_int()) < unmaximize_threshold)
+                return true;
+            g.kind = ModGrabKind::moving;
+            Window const w = g.window;
+            guarded("begin modifier move", [&] { begin_move(w, px, py, stuck); });
+            if (!stuck) guarded("modifier move", [&] { tools.drag_window(w, p - g.last); });
+            g.last = p;
+            if (moving) on_move(px, py);
+            return true;
+        }
+        case ModGrabKind::menu:
+            return true;
+        case ModGrabKind::moving:
+            if (moving == g.window) {
+                Window const w = g.window;
+                guarded("modifier move", [&] { tools.drag_window(w, p - g.last); });
+                on_move(px, py);
+            }
+            g.last = p;
+            return true;
+        case ModGrabKind::resizing:
+            if (!g.resized) {
+                // A resized tile leaves its tile, as with the frame's edges.
+                g.resized = true;
+                untile(g.window);
+                untiled.erase(g.window);
+                tile_action.erase(g.window);
+            }
+            guarded("modifier resize", [&] { apply_mod_resize(g, p); });
+            g.last = p;
+            return true;
+        }
+        return true;
+    }
+
+    void apply_mod_resize(ModGrab const& g, geom::Point p) {
+        auto& info = tools.info_for(g.window);
+        int const dx = (p - g.start).dx.as_int(), dy = (p - g.start).dy.as_int();
+        int x = g.rect.top_left.x.as_int(), y = g.rect.top_left.y.as_int();
+        int const w0 = g.rect.size.width.as_int(), h0 = g.rect.size.height.as_int();
+        int w = w0, h = h0;
+        if (g.east) w += dx;
+        if (g.west) w -= dx;
+        if (g.south) h += dy;
+        if (g.north) h -= dy;
+        w = std::clamp(w, std::max(1, info.min_width().as_int()), std::max(1, info.max_width().as_int()));
+        h = std::clamp(h, std::max(1, info.min_height().as_int()), std::max(1, info.max_height().as_int()));
+        // The opposite edge stays put.
+        if (g.west) x += w0 - w;
+        if (g.north) y += h0 - h;
+        WindowSpecification spec;
+        spec.top_left() = geom::Point{x, y};
+        spec.size() = geom::Size{w, h};
+        tools.modify_window(info, spec);
     }
 
     // ---- drag to snap -----------------------------------------------------
@@ -1476,7 +1638,9 @@ private:
 
     // ---- window menu (Alt+Space) -----------------------------------------------
 
-    void show_window_menu(Window w) {
+    void show_window_menu(Window w) { show_window_menu(w, w.top_left()); }
+
+    void show_window_menu(Window w, geom::Point at) {
         auto const& info = tools.info_for(w);
         uint32_t flags = 0;
         auto const state = info.state();
@@ -1503,8 +1667,9 @@ private:
                 if (umoja_neighbor_output(dirs[i], to_rect(from), rects.data(), rects.size()) >= 0)
                     neighbours |= 1u << i;
         }
-        // Like mutter for the keyboard: at the window's top-left corner.
-        umoja_window_menu(window_id(w), w.top_left().x.as_int(), w.top_left().y.as_int(), flags,
+        // Like mutter: at the window's top-left corner for the keyboard, at
+        // the pointer for a modifier click.
+        umoja_window_menu(window_id(w), at.x.as_int(), at.y.as_int(), flags,
                           ws < 0 ? static_cast<uint32_t>(current) : static_cast<uint32_t>(ws),
                           static_cast<uint32_t>(workspaces.size()), neighbours);
     }

@@ -181,11 +181,7 @@ fn primary_id(
     stored: impl FnOnce(&[String]) -> Option<String>,
 ) -> Option<i32> {
     let names = connected_names(map);
-    let by_name = |name: &str| {
-        map.iter()
-            .find(|(_, o)| o.name == name)
-            .map(|(id, _)| *id)
-    };
+    let by_name = |name: &str| map.iter().find(|(_, o)| o.name == name).map(|(id, _)| *id);
     chosen
         .filter(|(set, _)| *set == names)
         .and_then(|(_, name)| by_name(name))

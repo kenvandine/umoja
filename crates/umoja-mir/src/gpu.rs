@@ -116,9 +116,18 @@ mod tests {
 
     #[test]
     fn intel_plus_nvidia_skips_nvidia() {
-        assert_eq!(quirks_for(&v(&["i915", "nvidia"])), v(&["skip:driver:nvidia"]));
-        assert_eq!(quirks_for(&v(&["nvidia", "xe"])), v(&["skip:driver:nvidia"]));
-        assert_eq!(quirks_for(&v(&["amdgpu", "nouveau"])), v(&["skip:driver:nouveau"]));
+        assert_eq!(
+            quirks_for(&v(&["i915", "nvidia"])),
+            v(&["skip:driver:nvidia"])
+        );
+        assert_eq!(
+            quirks_for(&v(&["nvidia", "xe"])),
+            v(&["skip:driver:nvidia"])
+        );
+        assert_eq!(
+            quirks_for(&v(&["amdgpu", "nouveau"])),
+            v(&["skip:driver:nouveau"])
+        );
     }
 
     #[test]
@@ -136,8 +145,11 @@ mod tests {
         for (card, driver) in [("card1", "i915"), ("card2", "nvidia")] {
             let dev = dir.join(card).join("device");
             std::fs::create_dir_all(&dev).unwrap();
-            std::os::unix::fs::symlink(format!("../../../bus/pci/drivers/{driver}"), dev.join("driver"))
-                .unwrap();
+            std::os::unix::fs::symlink(
+                format!("../../../bus/pci/drivers/{driver}"),
+                dev.join("driver"),
+            )
+            .unwrap();
         }
         std::fs::create_dir_all(dir.join("card1-eDP-1")).unwrap();
         std::fs::create_dir_all(dir.join("renderD128")).unwrap();
