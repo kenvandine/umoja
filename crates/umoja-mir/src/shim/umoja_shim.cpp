@@ -272,6 +272,10 @@ public:
         int32_t const px = static_cast<int32_t>(mir_pointer_event_axis_value(event, mir_pointer_axis_x));
         int32_t const py = static_cast<int32_t>(mir_pointer_event_axis_value(event, mir_pointer_axis_y));
 
+        uint32_t const buttons = mir_pointer_event_buttons(event);
+        uint32_t const pressed = buttons & ~held_buttons;
+        held_buttons = buttons;
+
         // Moving with Alt+F7: the pointer moves the window too, a click drops it.
         if (key_grab) {
             if (action == mir_pointer_action_button_down) {
@@ -284,10 +288,6 @@ public:
             }
             if (action == mir_pointer_action_button_up) return true;
         }
-        uint32_t const buttons = mir_pointer_event_buttons(event);
-        uint32_t const pressed = buttons & ~held_buttons;
-        held_buttons = buttons;
-
         if (action == mir_pointer_action_button_down) {
             umoja_pointer_pressed();
             // Super+click is not a tap of Super: no overview on release.
