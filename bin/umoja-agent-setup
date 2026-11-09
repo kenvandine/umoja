@@ -88,6 +88,8 @@ link_skill() {
 unlink_skill() {
   local dir=$1/umoja
   [[ -L $dir && $(readlink "$dir") == "$SKILL_SRC" ]] && rm -f "$dir"
+  # Don't leave behind a skills folder that only ever held our link.
+  rmdir "$1" 2>/dev/null
   return 0
 }
 
@@ -169,13 +171,16 @@ mcp() {
         remove)
           [[ -f $toml ]] || return 0
           python3 - "$toml" "$MCP_CMD" <<'EOF'
-import re, sys
+import os, re, sys
 path, cmd = sys.argv[1:3]
 text = open(path).read()
 block = re.compile(r'\n?# Added by umoja-agent-setup\n\[mcp_servers\.umoja\]\ncommand = "' + re.escape(cmd) + r'"\n')
 new = block.sub("", text)
 if new != text:
-    open(path, "w").write(new)
+    if new.strip():
+        open(path, "w").write(new)
+    else:
+        os.remove(path)      # we created it
 EOF
           ;;
       esac ;;

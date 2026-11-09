@@ -650,7 +650,7 @@ impl ScreenshotUi {
                 gdk::Key::w | gdk::Key::W => ui.set_mode(Mode::Window),
                 gdk::Key::v | gdk::Key::V => ui.select_kind(match ui.kind.get() {
                     Kind::Screenshot => Kind::Screencast,
-                    Kind::Screencast => Kind::Screenshot,
+                    Kind::Screencast | Kind::Text => Kind::Screenshot,
                 }),
                 gdk::Key::p | gdk::Key::P => {
                     if let Some(b) = ui.pointer_button.borrow().as_ref() {
