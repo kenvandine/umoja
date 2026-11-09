@@ -159,6 +159,17 @@ shot 03-overlay
 overlay Hide
 sleep 2
 
+# The keyboard shortcuts guide lists what the compositor really binds, and
+# its own shortcut (Super+/) opens it.
+gdbus call --session --dest org.umoja.Compositor --object-path /org/umoja/Compositor \
+    --method org.umoja.Compositor.GetShortcuts 2>>"$LOG" | grep -q "'shortcuts-guide-hotkey', '<Super>slash'" \
+    && pass "compositor lists its shortcuts" || fail "GetShortcuts misses the guide's own shortcut"
+wtype -M logo -k slash -m logo 2>>"$LOG"
+sleep 5
+shot 10-shortcuts
+wtype -k Escape 2>>"$LOG"
+sleep 1
+
 overlay ShowScreenshotUI && pass "screenshot UI opens" || fail "screenshot UI failed"
 sleep 5
 shot 04-screenshot-ui
