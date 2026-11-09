@@ -14,6 +14,13 @@
 //! another usable GPU, umoja-mir passes Mir
 //! `--driver-quirks skip:driver:nvidia` (and `nouveau`).
 //!
+//! Mir's atomic-kms backend *can* drive screens on the NVIDIA GPU (with the
+//! 580 driver's own GBM), which is how a monitor on a dGPU-wired port works
+//! in Hybrid mode, as on GNOME. So the skip only applies when no screen is
+//! connected to the discrete GPU when the session starts: then nothing
+//! keeps the dGPU awake. A monitor plugged into a dGPU port later needs a
+//! new login (or `UMOJA_ALL_GPUS=1` to always use every GPU).
+//!
 //! Left alone when:
 //! * the user already passes `--driver-quirks` or sets
 //!   `MIR_SERVER_DRIVER_QUIRKS`,
@@ -40,6 +47,11 @@ const NOT_A_GPU: &[&str] = &[
 
 /// The kernel driver of every `/sys/class/drm/cardN` under `sysfs_drm`.
 pub fn card_drivers(sysfs_drm: &Path) -> Vec<String> {
+    cards(sysfs_drm).into_iter().map(|(_, d)| d).collect()
+}
+
+/// (cardN, driver) for every card under `sysfs_drm`, sorted by name.
+fn cards(sysfs_drm: &Path) -> Vec<(String, String)> {
     let Ok(entries) = std::fs::read_dir(sysfs_drm) else {
         return Vec::new();
     };
@@ -58,7 +70,28 @@ pub fn card_drivers(sysfs_drm: &Path) -> Vec<String> {
         })
         .collect();
     cards.sort();
-    cards.into_iter().map(|(_, d)| d).collect()
+    cards
+}
+
+/// Whether any connector of a card driven by a discrete GPU driver has a
+/// screen attached (`/sys/class/drm/cardN-<connector>/status`).
+pub fn discrete_has_screens(sysfs_drm: &Path) -> bool {
+    let cards = cards(sysfs_drm);
+    let Ok(entries) = std::fs::read_dir(sysfs_drm) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some((card, _connector)) = name.split_once('-') else {
+            return false;
+        };
+        let discrete = cards
+            .iter()
+            .any(|(n, d)| n == card && DISCRETE.contains(&d.as_str()));
+        discrete
+            && std::fs::read_to_string(e.path().join("status"))
+                .is_ok_and(|s| s.trim() == "connected")
+    })
 }
 
 /// The `--driver-quirks` values to hand Mir for these card drivers.
@@ -93,6 +126,10 @@ pub fn add_quirks(args: &mut Vec<std::ffi::OsString>) {
     }
     let quirks = quirks_for(&drivers);
     if quirks.is_empty() {
+        return;
+    }
+    if discrete_has_screens(Path::new("/sys/class/drm")) {
+        tracing::info!("hybrid graphics: a screen is on the discrete GPU, using every GPU");
         return;
     }
     tracing::info!(
@@ -140,6 +177,12 @@ mod tests {
                 .unwrap();
         }
         std::fs::create_dir_all(dir.join("card1-eDP-1")).unwrap();
+        std::fs::create_dir_all(dir.join("card2-DP-5")).unwrap();
+        std::fs::write(dir.join("card1-eDP-1/status"), "connected\n").unwrap();
+        std::fs::write(dir.join("card2-DP-5/status"), "disconnected\n").unwrap();
+        assert!(!discrete_has_screens(&dir));
+        std::fs::write(dir.join("card2-DP-5/status"), "connected\n").unwrap();
+        assert!(discrete_has_screens(&dir));
         std::fs::create_dir_all(dir.join("renderD128")).unwrap();
         assert_eq!(card_drivers(&dir), v(&["i915", "nvidia"]));
         let _ = std::fs::remove_dir_all(&dir);

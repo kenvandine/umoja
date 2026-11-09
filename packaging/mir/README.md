@@ -43,6 +43,13 @@ Umoja PPA:
   session and never resumed after switching back. It now uses
   `XDG_SESSION_ID` (falling back to the active session). Upstream report
   draft: `upstream-bugs/logind-active-session-not-own.md`.
+- `patches/3007_dmabuf-implicit-sync.patch`: a client without
+  linux-drm-syncobj may commit a dmabuf its GPU is still drawing into. On
+  hybrid laptops NVIDIA composites a monitor on its own ports, sampling
+  windows Mesa drew on the Intel iGPU without waiting for that implicit
+  fence, so windows tore. Like mutter, a commit now waits (on the existing
+  acquire-point path) until the dmabuf is readable; a buffer whose commit
+  is superseded before then is released back to the client.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

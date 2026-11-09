@@ -1,0 +1,161 @@
+Description: Wait for client dmabufs' implicit fences before using them
+ A client that doesn't use linux-drm-syncobj may commit a dmabuf its GPU
+ is still rendering into. Same-GPU sampling waits for the implicit fence,
+ but another GPU's driver may not: on hybrid laptops NVIDIA composites a
+ monitor on its port with windows Mesa rendered on the Intel iGPU, and
+ half-drawn frames showed up as tearing inside windows. As mutter does,
+ hold such a commit (on the existing acquire-point wait path) until the
+ dmabuf is readable, releasing the buffer if a later commit replaces it.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-09
+---
+--- a/src/server/frontend_wayland/wl_surface.cpp
++++ b/src/server/frontend_wayland/wl_surface.cpp
+@@ -43,6 +43,7 @@
+ #include <mir/scene/surface.h>
+ #include <mir/shell/surface_specification.h>
+ #include <mir/log.h>
++#include <mir/graphics/dmabuf_buffer.h>
+ #include "wp_viewporter.h"
+ 
+ #include <chrono>
+@@ -54,6 +55,8 @@
+ #include <optional>
+ #include <wayland-server-core.h>
+ #include <wayland-server-protocol.h>
++#include <poll.h>
++#include <unistd.h>
+ 
+ namespace mf = mir::frontend;
+ namespace geom = mir::geometry;
+@@ -64,9 +67,61 @@ struct mf::WlSurface::PendingBufferState
+ {
+     WlSurface* surf;
+     Fd eventfd;
+-    mf::SyncPoint release;
++    /// Unset when waiting on a dmabuf's implicit fence rather than an explicit acquire point
++    std::optional<mf::SyncPoint> release;
++    /// The buffer waited on (implicit sync only), released if the commit is dropped
++    std::optional<mw::Weak<mf::ResourceLifetimeTracker>> buffer;
++
++    /// The commit won't happen: hand the buffer back to the client.
++    void drop(wl_resource* replacement = nullptr)
++    {
++        if (release)
++        {
++            release->signal();
++        }
++        else if (buffer && *buffer)
++        {
++            wl_resource* const res = buffer->value();
++            if (res != replacement)
++                wl_resource_post_event(res, mw::Buffer::Opcode::release);
++        }
++    }
+ };
+ 
++namespace
++{
++/* Implicit sync for client dmabufs.
++ *
++ * A client without linux-drm-syncobj may commit a dmabuf its GPU is still
++ * rendering into; the kernel tracks that work as an implicit fence on the
++ * dmabuf. Drivers that sample on the same GPU wait for it, but a different
++ * GPU's driver may not (NVIDIA compositing a window that Mesa rendered on the
++ * Intel iGPU, on hybrid laptops), so half-drawn frames reach the screen as
++ * tearing inside windows. As mutter does, hold such a commit until the
++ * dmabuf is readable (poll() on a dmabuf fd waits for its pending writes).
++ *
++ * Returns a dup of a still-busy plane's dmabuf fd to wait on, or an invalid
++ * Fd if the buffer isn't a dmabuf or is already idle.
++ */
++auto busy_dmabuf_fd(wl_resource* buffer) -> mir::Fd
++{
++    if (!buffer)
++        return mir::Fd{};
++    auto const* const dmabuf = dynamic_cast<mir::graphics::DMABufBuffer const*>(mir::wayland::Buffer::from(buffer));
++    if (!dmabuf)
++        return mir::Fd{};
++    for (auto const& plane : dmabuf->planes())
++    {
++        pollfd pfd{plane.dma_buf, POLLIN, 0};
++        if (poll(&pfd, 1, 0) == 1 && (pfd.revents & POLLIN))
++            continue;
++        if (int const fd = dup(plane.dma_buf); fd >= 0)
++            return mir::Fd{fd};
++    }
++    return mir::Fd{};
++}
++}
++
+ mf::WlSurfaceState::Callback::Callback(wl_resource* new_resource)
+     : mw::Callback{new_resource, Version<1>()}
+ {
+@@ -145,7 +200,7 @@ mf::WlSurface::~WlSurface()
+         buffer_ready_source = nullptr;
+         if (pending_context)
+         {
+-            pending_context->release.signal();
++            pending_context->drop();
+             pending_context.reset();
+         }
+     }
+@@ -686,13 +741,20 @@ void mf::WlSurface::commit()
+     {
+         // We don't need to handle the buffer becoming ready anymore...
+         wl_event_source_remove(buffer_ready_source);
+-        // ...and the client is now free to reuse it
+-        pending_context->release.signal();
++        // ...and the client is now free to reuse it (unless it attached it again)
++        wl_resource* replacement = nullptr;
++        if (pending.buffer && *pending.buffer)
++            replacement = pending.buffer->value();
++        pending_context->drop(replacement);
+         // Now clean up our context handling.
+         pending_context.reset();
+         buffer_ready_source = nullptr;
+     }
+ 
++    Fd wait_fd;
++    std::optional<SyncPoint> release;
++    std::optional<mw::Weak<ResourceLifetimeTracker>> waited_buffer;
++
+     if (acquire_syncpoint && release_syncpoint)
+     {
+         /* If we have an acquire syncpoint then we need to wait for the buffer to be ready
+@@ -710,10 +772,22 @@ void mf::WlSurface::commit()
+                 "Timeline acquire sync point set, but no buffer committed"};
+         }
+ 
++        wait_fd = acquire_syncpoint->to_eventfd();
++        release = *release_syncpoint;
++    }
++    else if (pending.buffer && *pending.buffer)
++    {
++        wait_fd = busy_dmabuf_fd(pending.buffer->value());
++        waited_buffer = pending.buffer;
++    }
++
++    if (wait_fd != Fd::invalid)
++    {
+         pending_context = std::make_unique<PendingBufferState>(PendingBufferState{
+             this,
+-            acquire_syncpoint->to_eventfd(),
+-            *release_syncpoint});
++            std::move(wait_fd),
++            release,
++            waited_buffer});
+ 
+         wl_event_loop_fd_func_t handle_buffer_ready =
+             [](int /*fd*/, uint32_t /*mask*/, void* data)
+@@ -724,7 +798,8 @@ void mf::WlSurface::commit()
+                  */
+                 auto& state = *static_cast<PendingBufferState*>(data);
+ 
+-                state.surf->pending.release_fence = state.release;
++                if (state.release)
++                    state.surf->pending.release_fence = state.release;
+ 
+                 try
+                 {

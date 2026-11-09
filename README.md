@@ -90,10 +90,15 @@ screen. To use the X11 greeter permanently, put
 `/etc/lightdm/lightdm.conf.d/`.
 
 On hybrid laptops (an integrated GPU plus NVIDIA), `umoja-mir` keeps the
-compositor on the integrated GPU by passing Mir
-`--driver-quirks skip:driver:nvidia` (or `nouveau`); apps can still be
-offloaded to the NVIDIA GPU with `prime-run`. Set `UMOJA_ALL_GPUS=1`, or
-your own `MIR_SERVER_DRIVER_QUIRKS`, to turn that off.
+NVIDIA GPU out of the compositor (`--driver-quirks skip:driver:nvidia`, or
+`nouveau`) unless a screen is connected to it when the session starts, so
+the dGPU can sleep. Screens on NVIDIA-wired ports (in Hybrid mode, often
+the HDMI and rear USB-C ports) are driven by Mir's atomic-kms backend with
+the NVIDIA driver's own GBM, as on GNOME; a monitor plugged into one later
+needs a new login. Set `UMOJA_ALL_GPUS=1`, or your own
+`MIR_SERVER_DRIVER_QUIRKS`, to always use every GPU. Don't install
+`mir-platform-graphics-eglstream-kms` alongside: it hangs on display
+configuration changes.
 
 ## Publishing
 

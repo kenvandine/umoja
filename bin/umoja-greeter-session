@@ -83,15 +83,17 @@ x11_fallback() {
     exit $gstatus
 }
 
-# Mir's gbm/atomic backends can't drive screens on the proprietary NVIDIA
-# driver; only the eglstream backend can. On a laptop whose screens are all
-# wired to the NVIDIA GPU (BIOS "Discrete"/"Dynamic" graphics, or a dock on
-# the dGPU's ports) umoja-mir would start fine and draw the login screen
-# where nobody can see it. Use the X11 greeter instead in that case.
+# Mir's gbm-kms backend can't drive screens on the proprietary NVIDIA
+# driver; atomic-kms (with the driver's own GBM) and eglstream can. On a
+# laptop whose screens are all wired to the NVIDIA GPU (BIOS "Discrete"
+# graphics, or a dock on the dGPU's ports) without either, umoja-mir would
+# start fine and draw the login screen where nobody can see it. Use the X11
+# greeter instead in that case.
 mir_can_show() {
-    eglstream=no
-    for m in /usr/lib/*/mir/server-platform/graphics-eglstream-kms.so*; do
-        [ -e "$m" ] && eglstream=yes
+    nvidia_backend=no
+    for m in /usr/lib/*/mir/server-platform/graphics-eglstream-kms.so* \
+             /usr/lib/*/mir/server-platform/graphics-atomic-kms.so*; do
+        [ -e "$m" ] && nvidia_backend=yes
     done
     any=no
     for c in /sys/class/drm/card[0-9]*-*; do
@@ -100,7 +102,7 @@ mir_can_show() {
         card=${c##*/}; card=${card%%-*}
         driver=$(basename "$(readlink "/sys/class/drm/$card/device/driver")")
         [ "$driver" != nvidia ] && return 0
-        [ $eglstream = yes ] && return 0
+        [ $nvidia_backend = yes ] && return 0
     done
     # No connector information at all (unusual drivers): let Mir try.
     [ $any = no ] && return 0
