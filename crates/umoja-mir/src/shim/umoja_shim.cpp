@@ -409,21 +409,25 @@ public:
     // the bottom of the screen until the game resized itself much later.
     void handle_modify_window(WindowInfo& info, WindowSpecification const& modifications) override {
         WindowSpecification spec = modifications;
-        auto const target = spec.state().is_set() ? spec.state().value() : info.state();
-        if (target == mir_window_state_fullscreen && (spec.size().is_set() || spec.top_left().is_set())) {
+        // Only while the window already is, and stays, fullscreen on the same
+        // monitor: for a change *to* fullscreen Mir has already put the
+        // monitor's rectangle in the request, and dropping it left a window
+        // that went fullscreen a second time at its restored size.
+        bool const stays_fullscreen =
+            info.state() == mir_window_state_fullscreen &&
+            (!spec.state().is_set() || spec.state().value() == mir_window_state_fullscreen) &&
+            (!spec.output_id().is_set() || (info.has_output_id() && spec.output_id().value() == info.output_id()));
+        if (stays_fullscreen && (spec.size().is_set() || spec.top_left().is_set())) {
             // consume() on an unset optional is a Mir fatal error, and X11
             // ConfigureRequests often carry only one of the two.
             if (spec.size().is_set()) spec.size().consume();
             if (spec.top_left().is_set()) spec.top_left().consume();
-            if (info.state() == mir_window_state_fullscreen && !spec.state().is_set()) {
-                // Already fullscreen: snap back to its monitor in case an
-                // earlier request got through.
-                auto const w = info.window();
-                auto const out = output_at(centre_of(w));
-                if (out.size != geom::Size{} && out != geom::Rectangle{w.top_left(), w.size()}) {
-                    spec.top_left() = out.top_left;
-                    spec.size() = out.size;
-                }
+            // Snap back to its monitor in case an earlier request got through.
+            auto const w = info.window();
+            auto const out = output_at(centre_of(w));
+            if (out.size != geom::Size{} && out != geom::Rectangle{w.top_left(), w.size()}) {
+                spec.top_left() = out.top_left;
+                spec.size() = out.size;
             }
         }
         auto it = hidden_states.find(info.window());
