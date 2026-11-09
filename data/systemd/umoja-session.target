@@ -3,5 +3,5 @@ Description=Umoja desktop session
 Documentation=https://github.com/kenvandine/umoja
 # Started by umoja-mir once Wayland is accepting clients.
 Requires=basic.target
-Wants=umoja-panel.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service
+Wants=umoja-panel.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service
 StopWhenUnneeded=no

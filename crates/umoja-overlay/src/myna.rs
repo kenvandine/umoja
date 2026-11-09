@@ -51,7 +51,13 @@ impl Myna {
             };
             send(&proxy);
             let s = send.clone();
-            proxy.connect_g_properties_changed(move |p, _, _| s(p));
+            // gio-rs doesn't bind this signal; connect it by name.
+            proxy.connect_local("g-properties-changed", false, move |args| {
+                if let Some(Ok(p)) = args.first().map(|v| v.get::<gio::DBusProxy>()) {
+                    s(&p);
+                }
+                None
+            });
             proxy.connect_notify_local(Some("g-name-owner"), move |p, _| send(p));
             *keep.borrow_mut() = Some(proxy);
         });

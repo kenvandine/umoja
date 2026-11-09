@@ -21,8 +21,8 @@
 //! bar while Myna records, as GNOME Shell's privacy indicator does while the
 //! snap captures audio; clicking it stops dictation.
 
-use gio::prelude::*;
 use gtk::glib;
+use gtk::prelude::*;
 use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -184,10 +184,12 @@ impl Myna {
                 }
             };
             let w = Rc::downgrade(&this);
-            proxy.connect_g_properties_changed(move |_, _, _| {
+            // gio-rs doesn't bind this signal; connect it by name.
+            proxy.connect_local("g-properties-changed", false, move |_| {
                 if let Some(m) = w.upgrade() {
                     m.update();
                 }
+                None
             });
             let w = Rc::downgrade(&this);
             proxy.connect_notify_local(Some("g-name-owner"), move |_, _| {

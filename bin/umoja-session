@@ -7,10 +7,18 @@ export XDG_SESSION_DESKTOP="Umoja"
 export XDG_SESSION_TYPE="wayland"
 export QT_QPA_PLATFORM="wayland;xcb"
 export MOZ_ENABLE_WAYLAND=1
+# Input methods go through IBus, as in Ubuntu's GNOME session (where
+# mutter bridges Wayland text-input to it); here apps talk to IBus
+# directly. Myna's dictation types through it too. umoja-ibus.service
+# starts the daemon.
+if command -v ibus-daemon >/dev/null 2>&1; then
+    export GTK_IM_MODULE=ibus QT_IM_MODULE=ibus XMODIFIERS=@im=ibus
+fi
 # GTK picks Wayland by itself; forcing GDK_BACKEND leaks into later sessions.
 unset GDK_BACKEND
 
 SESSION_VARS="XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND"
+[ -n "${GTK_IM_MODULE:-}" ] && SESSION_VARS="$SESSION_VARS GTK_IM_MODULE QT_IM_MODULE XMODIFIERS"
 
 log() { echo "umoja-session: $*" >&2; }
 
