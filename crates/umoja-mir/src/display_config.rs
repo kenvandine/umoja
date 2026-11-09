@@ -429,6 +429,79 @@ fn ensure_new_outputs_placed(display_file: &str) {
     }
 }
 
+/// The login screen's arrangement: every screen side by side, top-aligned,
+/// built-in panel first, at the scales Mir already uses. `None` when they
+/// already are (or there is only one).
+fn greeter_layout(map: &BTreeMap<i32, OutputState>) -> Option<Vec<MonitorConfig>> {
+    if map.len() < 2 {
+        return None;
+    }
+    let mut outs: Vec<&OutputState> = map.values().collect();
+    outs.sort_by(|a, b| {
+        hidpi::is_builtin_connector(&b.name)
+            .cmp(&hidpi::is_builtin_connector(&a.name))
+            .then(a.name.cmp(&b.name))
+    });
+    let mut x = 0;
+    let mut in_place = true;
+    let mut configs = Vec::new();
+    for o in outs {
+        in_place &= o.rect.x == x && o.rect.y == 0;
+        let (width, height) = o.pixel_size();
+        configs.push(MonitorConfig {
+            connector: o.name.clone(),
+            x,
+            y: 0,
+            scale: o.scale,
+            width,
+            height,
+            rate: o.refresh,
+            rotation: rotation_of(transform_of(o.orientation)),
+            primary: false,
+            enabled: true,
+        });
+        x += o.rect.w;
+    }
+    (!in_place).then_some(configs)
+}
+
+/// Whether two screens cover the same area (Mir's default clones them all
+/// at 0,0 until the greeter's layout is applied).
+pub fn outputs_overlap() -> bool {
+    let map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner());
+    let rects: Vec<&Rect> = map.values().map(|o| &o.rect).collect();
+    rects.iter().enumerate().any(|(i, a)| {
+        rects[i + 1..].iter().any(|b| {
+            a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+        })
+    })
+}
+
+/// On the login screen, put the screens side by side, as GDM does (Mir's
+/// own default mirrors them, so a wide monitor showed the laptop-sized
+/// login screen in its corner). Uses the names Mir reports, which only it
+/// knows (ports are numbered per card: "DisplayPort-1-1").
+pub fn start_greeter(display_file: &'static str) {
+    crate::session::RUNTIME.spawn(async move {
+        loop {
+            CHANGED.notified().await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let Some(configs) = greeter_layout(&map) else {
+                continue;
+            };
+            let path = outputs::config_dir().join(display_file);
+            match std::fs::write(&path, outputs::render_display_yaml(std::slice::from_ref(&configs))) {
+                Ok(()) => tracing::info!(
+                    outputs = ?configs.iter().map(|c| (&c.connector, c.x)).collect::<Vec<_>>(),
+                    "greeter: screens side by side"
+                ),
+                Err(e) => tracing::warn!(error = %e, "greeter: could not write display layout"),
+            }
+        }
+    });
+}
+
 pub struct DisplayConfig {
     display_file: &'static str,
 }
@@ -539,6 +612,33 @@ pub fn start(display_file: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn greeter_puts_screens_side_by_side() {
+        let out = |name: &str, x: i32, w: i32, h: i32| OutputState {
+            name: name.into(),
+            rect: Rect::new(x, 0, w, h),
+            scale: 1.0,
+            refresh: 60.0,
+            width_mm: 0,
+            height_mm: 0,
+            orientation: 0,
+        };
+        // Mir's default: both at 0,0 (cloned).
+        let mut map = BTreeMap::new();
+        map.insert(1, out("DisplayPort-1-1", 0, 3440, 1440));
+        map.insert(2, out("eDP-1", 0, 1920, 1200));
+        let l = greeter_layout(&map).unwrap();
+        assert_eq!((l[0].connector.as_str(), l[0].x), ("eDP-1", 0));
+        assert_eq!((l[1].connector.as_str(), l[1].x), ("DisplayPort-1-1", 1920));
+        assert_eq!((l[1].width, l[1].height), (3440, 1440));
+        // Already arranged: nothing to write.
+        map.insert(1, out("DisplayPort-1-1", 1920, 3440, 1440));
+        assert!(greeter_layout(&map).is_none());
+        // One screen: nothing to do.
+        map.remove(&1);
+        assert!(greeter_layout(&map).is_none());
+    }
 
     #[test]
     fn primary_follows_choice_then_monitors_xml_then_builtin() {

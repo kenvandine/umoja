@@ -65,12 +65,12 @@ pub fn prepare(display_file_name: &str) {
         .join("umoja-greeter");
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join(display_file_name);
-    match crate::outputs::greeter_layout() {
+    match crate::outputs::default_hidpi_layout() {
         Some(yaml) => {
             if let Err(e) = std::fs::write(&file, yaml) {
                 tracing::warn!(error = %e, "could not write greeter display scales");
             } else {
-                tracing::info!(path = %file.display(), "seeded greeter display layout");
+                tracing::info!(path = %file.display(), "seeded greeter display scales");
             }
         }
         None => {
@@ -120,6 +120,14 @@ pub fn launch(wayland_display: &str) {
     std::thread::Builder::new()
         .name("umoja-greeter-client".into())
         .spawn(move || {
+            // Let the screens move apart first (display_config::start_greeter),
+            // so the greeter's windows open on their final monitors.
+            for _ in 0..20 {
+                if !crate::display_config::outputs_overlap() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
             let code = match cmd.spawn() {
                 Ok(mut child) => {
                     tracing::info!(program, pid = child.id(), "greeter started");

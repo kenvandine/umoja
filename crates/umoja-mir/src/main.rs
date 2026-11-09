@@ -43,6 +43,7 @@ fn main() {
     peripherals::start_watching();
     if greeter {
         greeter::start_idle();
+        display_config::start_greeter(DISPLAY_CONFIG_FILE);
     } else {
         outputs::import_gnome_monitors(DISPLAY_CONFIG_FILE);
         display_config::start(DISPLAY_CONFIG_FILE);
