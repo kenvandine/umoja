@@ -121,9 +121,11 @@ pub fn launch(wayland_display: &str) {
         .name("umoja-greeter-client".into())
         .spawn(move || {
             // Let the screens move apart first (display_config::start_greeter),
-            // so the greeter's windows open on their final monitors.
-            for _ in 0..20 {
-                if !crate::display_config::outputs_overlap() {
+            // so the greeter's windows open on their final monitors: a
+            // fullscreen window stays where it was when its screen moves.
+            let expected = umoja_common::hidpi::connected_panels().len();
+            for _ in 0..30 {
+                if crate::display_config::greeter_layout_settled(expected) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));

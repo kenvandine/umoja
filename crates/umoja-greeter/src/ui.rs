@@ -214,6 +214,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
                 w.set_content(Some(&bg));
                 w.set_decorated(false);
                 w.fullscreen_on_monitor(&mon);
+                follow_monitor(w.upcast_ref(), &mon);
                 // A click there shouldn't take the keyboard from the card.
                 let main = window.downgrade();
                 w.connect_is_active_notify(move |w| {
@@ -226,6 +227,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
                 w.present();
             }
             window.fullscreen_on_monitor(&login);
+            follow_monitor(window.upcast_ref(), &login);
         }
         _ => window.fullscreen(),
     }
@@ -241,6 +243,17 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         });
     });
     window.present();
+}
+
+/// Keep a fullscreen window on its monitor when the screens are rearranged
+/// (the compositor lays them out side by side just as the greeter starts).
+fn follow_monitor(window: &gtk::Window, monitor: &gtk::gdk::Monitor) {
+    let window = window.downgrade();
+    monitor.connect_geometry_notify(move |mon| {
+        if let Some(w) = window.upgrade() {
+            w.fullscreen_on_monitor(mon);
+        }
+    });
 }
 
 /// The monitor for the login card (the built-in panel if there is one,

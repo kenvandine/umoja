@@ -465,16 +465,11 @@ fn greeter_layout(map: &BTreeMap<i32, OutputState>) -> Option<Vec<MonitorConfig>
     (!in_place).then_some(configs)
 }
 
-/// Whether two screens cover the same area (Mir's default clones them all
-/// at 0,0 until the greeter's layout is applied).
-pub fn outputs_overlap() -> bool {
+/// Whether the greeter's arrangement is in place: Mir has reported at least
+/// `expected` screens and they already sit side by side.
+pub fn greeter_layout_settled(expected: usize) -> bool {
     let map = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner());
-    let rects: Vec<&Rect> = map.values().map(|o| &o.rect).collect();
-    rects.iter().enumerate().any(|(i, a)| {
-        rects[i + 1..].iter().any(|b| {
-            a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-        })
-    })
+    !map.is_empty() && map.len() >= expected && greeter_layout(&map).is_none()
 }
 
 /// On the login screen, put the screens side by side, as GDM does (Mir's
