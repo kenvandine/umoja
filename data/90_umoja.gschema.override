@@ -13,3 +13,6 @@ gtk-enable-primary-paste=true
 # turns it back on.
 [org.gnome.shell.extensions.dash-to-dock:Umoja]
 extend-height=false
+# A dock on every monitor; Settings > Ubuntu Desktop > Dock > "Show on"
+# still picks a single one.
+multi-monitor=true

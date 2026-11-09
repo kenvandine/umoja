@@ -2,7 +2,7 @@
 //!
 //! `org.gnome.shell.extensions.dash-to-dock`:
 //!
-//! * `multi-monitor`: a dock on every monitor.
+//! * `multi-monitor`: a dock on every monitor (Umoja defaults it on).
 //! * `preferred-monitor-by-connector`: the monitor for the one dock, by
 //!   connector ("eDP-1", "HDMI-1"), or "primary". Settings › Ubuntu Desktop
 //!   › Dock › "Show on" writes it. A connector that isn't plugged in falls
@@ -197,7 +197,7 @@ fn wanted_indexes(all: &[gdk::Monitor]) -> Vec<usize> {
         .map(|m| m.connector().map(|c| c.to_string()).unwrap_or_default())
         .collect();
     pick(
-        gs::get_bool(d, "multi-monitor", false),
+        gs::get_bool(d, "multi-monitor", true),
         &gs::get_string(d, "preferred-monitor-by-connector", "primary"),
         gs::get_int(d, "preferred-monitor", -2),
         &connectors,
