@@ -127,6 +127,7 @@ Ask in plain words and the assistant does it, instead of telling you how.
 | Desktop settings | "make text bigger", "stop the screen dimming so fast", "show battery percentage", "turn on night light", "put the dock at the bottom" |
 | Reset a setting | "put the touchpad speed back to default" |
 | Close a window | "close the calculator" |
+| Log out, lock, suspend, restart, power off | "log me out", "lock the screen", "restart the computer" |
 | Find or remove apps | "how is Firefox installed?", "remove Discord" |
 | Explain a setting | "what does the hot corner setting do?" |
 | Run a command | "how much space is left in my home folder? run df for me" |
@@ -155,6 +156,7 @@ unless you click **Allow**.
 | Open apps, Settings pages, files and folders; change settings by name; Dark Style, Power Mode, Wi-Fi, Bluetooth; arrange, focus and move windows; switch workspaces | No |
 | Reading things: window list, settings, notifications, selection, clipboard, current window, diagnostics, file search | No |
 | Close a window (unsaved work could be lost) | Yes |
+| Log out, suspend, restart, power off (locking doesn't ask) | Yes |
 | Run a command | Always |
 | Change any other `org.gnome.*` setting by its raw key | Yes |
 | Send a reply to a notification | Yes |
@@ -446,7 +448,7 @@ From a terminal:
 The tools: apps (`find_app`, `list_apps`, `launch_app`, `remove_app`),
 settings (`list_settings`, `describe_setting`, `change_setting`,
 `reset_setting`, `set_gsetting`, `open_settings`), `set_dark_style`,
-`set_power_mode`, `set_wifi`, `set_bluetooth` and `desktop_status`,
+`set_power_mode`, `set_wifi`, `set_bluetooth`, `desktop_status`, `session`,
 windows and workspaces, notifications, file search, `run_command`, and the
 read-only troubleshooting reports. The overlay adds three of its own:
 reading the selection, the clipboard history and the current window.

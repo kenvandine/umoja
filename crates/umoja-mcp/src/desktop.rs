@@ -121,6 +121,30 @@ pub fn tools() -> Vec<Tool> {
         .confirm()
         .with_summary(|a| format!("Close {}", window_name(a))),
         Tool::new(
+            "session",
+            "Log out, lock the screen, suspend, restart or power off. Use this (never run_command) for any of these.",
+            json!({"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["log_out", "lock", "suspend", "restart", "power_off"]}
+            }, "required": ["action"]}),
+            |a| Box::pin(async move { Outcome::text(session_action(a).await).hide_if_ok() }),
+        )
+        .with_risk(|a| match arg_str(a, "action") {
+            Some("lock") => Risk::Low,
+            Some("suspend") => Risk::Medium,
+            _ => Risk::High,
+        })
+        .with_summary(|a| {
+            match arg_str(a, "action").unwrap_or("") {
+                "log_out" => "Log out",
+                "lock" => "Lock the screen",
+                "suspend" => "Suspend",
+                "restart" => "Restart the computer",
+                "power_off" => "Power off the computer",
+                _ => "End the session",
+            }
+            .into()
+        }),
+        Tool::new(
             "run_command",
             "Run a shell command as the user and get its output. Only when no other tool fits. The user is always asked first; commands using sudo or package managers open in a terminal.",
             json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}),
@@ -737,6 +761,119 @@ async fn move_to_workspace(a: Value) -> String {
     }
 }
 
+// ---- session ---------------------------------------------------------------------------
+
+const LOGIN1: &str = "org.freedesktop.login1";
+const LOGIN1_PATH: &str = "/org/freedesktop/login1";
+
+/// The user's graphical session. umoja-mcp runs under the overlay's user
+/// service, outside the session scope and usually without XDG_SESSION_ID.
+async fn login_session(c: &gio::DBusConnection) -> Result<String, String> {
+    if let Ok(id) = std::env::var("XDG_SESSION_ID")
+        && !id.is_empty()
+        && let Ok(r) = c
+            .call_future(
+                Some(LOGIN1),
+                LOGIN1_PATH,
+                "org.freedesktop.login1.Manager",
+                "GetSession",
+                Some(&(id.as_str(),).to_variant()),
+                None,
+                gio::DBusCallFlags::NONE,
+                2000,
+            )
+            .await
+        && let Some(p) = r.child_value(0).str()
+    {
+        return Ok(p.to_string());
+    }
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata("/proc/self").map_err(|e| e.to_string())?.uid();
+    let user = format!("{LOGIN1_PATH}/user/_{uid}");
+    let display = get_prop(c, LOGIN1, &user, "org.freedesktop.login1.User", "Display").await?;
+    let path = display
+        .try_child_value(1)
+        .and_then(|v| v.str().map(String::from))
+        .unwrap_or_default();
+    if path.is_empty() || path == "/" {
+        return Err("no graphical login session found".into());
+    }
+    Ok(path)
+}
+
+async fn session_action(a: Value) -> String {
+    let action = arg_str(&a, "action").unwrap_or("");
+    if action == "log_out" {
+        // Ask the panel first: it fades to black, like its Log Out button.
+        if let Ok(c) = session_bus().await
+            && c.call_future(
+                Some(dbus::PANEL_BUS_NAME),
+                dbus::PANEL_OBJECT_PATH,
+                dbus::PANEL_INTERFACE,
+                "LogOut",
+                None,
+                None,
+                gio::DBusCallFlags::NONE,
+                2000,
+            )
+            .await
+            .is_ok()
+        {
+            return "Logging out".into();
+        }
+    }
+    let c = match system_bus().await {
+        Ok(c) => c,
+        Err(e) => return err(e),
+    };
+    let (path, iface, method, args, done) = match action {
+        "log_out" | "lock" => {
+            let s = match login_session(&c).await {
+                Ok(s) => s,
+                Err(e) => return err(e),
+            };
+            let (m, d) = if action == "lock" {
+                ("Lock", "Locked the screen")
+            } else {
+                ("Terminate", "Logging out")
+            };
+            (s, "org.freedesktop.login1.Session", m, None, d)
+        }
+        "suspend" | "restart" | "power_off" => {
+            let (m, d) = match action {
+                "suspend" => ("Suspend", "Suspending"),
+                "restart" => ("Reboot", "Restarting"),
+                _ => ("PowerOff", "Powering off"),
+            };
+            // interactive=true: polkit may ask for a password.
+            (
+                LOGIN1_PATH.to_string(),
+                "org.freedesktop.login1.Manager",
+                m,
+                Some((true,).to_variant()),
+                d,
+            )
+        }
+        _ => return err("action must be log_out, lock, suspend, restart or power_off"),
+    };
+    match c
+        .call_future(
+            Some(LOGIN1),
+            &path,
+            iface,
+            method,
+            args.as_ref(),
+            None,
+            gio::DBusCallFlags::ALLOW_INTERACTIVE_AUTHORIZATION,
+            30_000,
+        )
+        .await
+    {
+        Ok(_) => done.into(),
+        Err(e) => err(e),
+    }
+}
+
 // ---- commands -------------------------------------------------------------------------
 
 const OUTPUT_LIMIT: usize = 3000;
@@ -753,16 +890,18 @@ async fn run_command(a: Value) -> String {
             Err(e) => err(e),
         };
     }
-    // Isolated in a transient scope that can't gain privileges, and time-limited.
+    // Isolated in a transient scope, time-limited, and unable to gain
+    // privileges. NoNewPrivileges= is an exec setting that scopes reject
+    // ("Unknown assignment"), so setpriv sets the flag inside the scope.
     let argv = [
         "systemd-run",
         "--user",
         "--scope",
         "--collect",
         "--quiet",
-        "-p",
-        "NoNewPrivileges=yes",
         "--",
+        "setpriv",
+        "--no-new-privs",
         "timeout",
         "20",
         "sh",

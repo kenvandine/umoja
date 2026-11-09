@@ -1315,9 +1315,10 @@ impl Overlay {
                     "--scope",
                     "--collect",
                     "--quiet",
-                    "-p",
-                    "NoNewPrivileges=yes",
                     "--",
+                    // NoNewPrivileges= isn't valid for scopes.
+                    "setpriv",
+                    "--no-new-privs",
                     "sh",
                     "-c",
                     cmd,

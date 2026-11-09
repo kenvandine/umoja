@@ -7,6 +7,8 @@
 //! Focus()              give the top bar the keyboard (Ctrl+Alt+Tab):
 //!                      Tab/arrows move between its buttons, Escape leaves
 //! Unfocus()            hand the keyboard back (a click elsewhere)
+//! LogOut()             Log Out as the Quick Settings button does
+//!                      (the assistant's session tool)
 //! ```
 
 use std::cell::Cell;
@@ -22,6 +24,7 @@ const XML: &str = r#"<node>
     <method name="ToggleMenu"><arg type="s" name="menu" direction="in"/></method>
     <method name="Focus"/>
     <method name="Unfocus"/>
+    <method name="LogOut"/>
   </interface>
 </node>"#;
 
@@ -122,6 +125,12 @@ pub fn own_name(
                             }
                         }
                         invocation.return_value(None);
+                        return;
+                    }
+                    "LogOut" => {
+                        invocation.return_value(None);
+                        // After the reply, so the caller isn't left waiting.
+                        gtk::glib::idle_add_local_once(crate::fade::log_out);
                         return;
                     }
                     "OpenMenu" | "ToggleMenu" => {}
