@@ -2330,6 +2330,7 @@ dependencies = [
  "gio",
  "glib",
  "gtk4",
+ "gtk4-layer-shell",
  "libadwaita",
  "libc",
  "pkg-config",
