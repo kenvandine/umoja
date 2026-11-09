@@ -24,6 +24,8 @@ use umoja_common::gsettings as gs;
 use umoja_common::i18n;
 use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
 
+/// Most apps shown for a search. With no search the grid lists every app
+/// and scrolls, like GNOME's app grid.
 const MAX_RESULTS: usize = 48;
 /// How long the overlay hides before a capture so it isn't in the shot.
 const STEP_ASIDE: Duration = Duration::from_millis(250);
@@ -553,7 +555,12 @@ impl Overlay {
         }
         let q = self.entry.text().to_string();
         let found = self.matches(&q);
-        for app in found.iter().take(MAX_RESULTS) {
+        let limit = if q.trim().is_empty() {
+            usize::MAX
+        } else {
+            MAX_RESULTS
+        };
+        for app in found.iter().take(limit) {
             self.grid.append(&self.app_tile(app));
         }
         let attached = !self.attachments.borrow().is_empty();
