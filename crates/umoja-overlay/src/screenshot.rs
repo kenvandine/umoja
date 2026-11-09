@@ -16,9 +16,13 @@
 //! [`crate::screencast::Recorder`]; Ctrl+Shift+Alt+R opens the UI in
 //! screencast mode, or stops a running recording.
 //!
+//! As in gnome-shell, the UI covers every monitor (one layer surface each)
+//! with the panel on the primary one. Screen mode captures or records one
+//! monitor, the primary to start with; click another to pick it. A
+//! selection or window may span monitors.
+//!
 //! TODO: GNOME's spread-out window picker once Mir offers toplevel capture
-//! (ext-image-capture-source's foreign-toplevel source), and one surface per
-//! monitor for multi-monitor selection.
+//! (ext-image-capture-source's foreign-toplevel source).
 
 use crate::context;
 use crate::screencast::Recorder;
@@ -36,7 +40,7 @@ use std::process::Command;
 use std::rc::Rc;
 use umoja_common::i18n;
 
-/// Selection rectangle in widget (logical) coordinates.
+/// A rectangle in layout (logical, global) coordinates.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Sel {
     pub x: f64,
@@ -130,7 +134,7 @@ const FLAG_FOCUSED: u32 = 1 << 0;
 const FLAG_MINIMIZED: u32 = 1 << 1;
 const FLAG_CURRENT_WORKSPACE: u32 = 1 << 2;
 
-/// A window the Window mode can pick, in UI (logical, monitor-local) space.
+/// A window the Window mode can pick, in layout space.
 #[derive(Debug, Clone)]
 struct Pick {
     id: u64,
@@ -139,9 +143,9 @@ struct Pick {
     covered: bool,
 }
 
-/// The current workspace's visible windows, bottom to top, clipped to the
-/// monitor at `origin` of size `size`.
-fn picks(windows: &[Win], origin: (f64, f64), size: (f64, f64)) -> (Vec<Pick>, Option<usize>) {
+/// The current workspace's visible windows, bottom to top, clipped to
+/// `bounds` (all monitors).
+fn picks(windows: &[Win], bounds: Sel) -> (Vec<Pick>, Option<usize>) {
     let shown: Vec<&Win> = windows
         .iter()
         .filter(|w| w.flags & FLAG_MINIMIZED == 0 && w.flags & FLAG_CURRENT_WORKSPACE != 0)
@@ -150,10 +154,10 @@ fn picks(windows: &[Win], origin: (f64, f64), size: (f64, f64)) -> (Vec<Pick>, O
     let mut out = Vec::new();
     let mut focused = None;
     for (i, w) in shown.iter().enumerate() {
-        let x0 = (w.x as f64 - origin.0).max(0.0);
-        let y0 = (w.y as f64 - origin.1).max(0.0);
-        let x1 = ((w.x + w.w) as f64 - origin.0).min(size.0);
-        let y1 = ((w.y + w.h) as f64 - origin.1).min(size.1);
+        let x0 = (w.x as f64).max(bounds.x);
+        let y0 = (w.y as f64).max(bounds.y);
+        let x1 = ((w.x + w.w) as f64).min(bounds.x + bounds.w);
+        let y1 = ((w.y + w.h) as f64).min(bounds.y + bounds.h);
         if x1 <= x0 || y1 <= y0 {
             continue;
         }
@@ -184,13 +188,28 @@ fn pick_at(picks: &[Pick], p: (f64, f64)) -> Option<usize> {
     picks.iter().rposition(|w| w.rect.contains(p))
 }
 
-pub struct ScreenshotUi {
+/// The UI's layer surface on one monitor.
+struct Surface {
     window: gtk::ApplicationWindow,
-    app: adw::Application,
-    picture: gtk::Picture,
+    overlay: gtk::Overlay,
     area: gtk::DrawingArea,
-    /// Frozen frames: (without pointer, with pointer), in physical pixels.
+    /// The monitor, in layout pixels.
+    rect: Sel,
+}
+
+pub struct ScreenshotUi {
+    app: adw::Application,
+    /// One per monitor while the UI is open.
+    surfaces: RefCell<Vec<Surface>>,
+    /// The floating panel, on the primary monitor's surface.
+    panel: RefCell<Option<gtk::Box>>,
+    /// Frozen frames of every monitor: (without pointer, with pointer), in
+    /// physical pixels, covering `bounds`.
     frame: RefCell<Option<(Pixbuf, Pixbuf)>>,
+    /// The box around all monitors, in layout pixels.
+    bounds: Cell<Sel>,
+    /// Screen mode: the monitor (index into `surfaces`) to capture.
+    screen: Cell<usize>,
     sel: Cell<Sel>,
     mode: Cell<Mode>,
     kind: Cell<Kind>,
@@ -273,36 +292,14 @@ fn grim(path: &Path, region: Option<(i32, i32, i32, i32)>, cursor: bool) -> bool
 
 impl ScreenshotUi {
     pub fn new(app: &adw::Application) -> Rc<Self> {
-        let window = gtk::ApplicationWindow::builder()
-            .application(app)
-            .css_classes(["umoja-screenshot"])
-            .build();
-        window.init_layer_shell();
-        window.set_layer(Layer::Overlay);
-        window.set_namespace("umoja-screenshot");
-        for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            window.set_anchor(e, true);
-        }
-        window.set_exclusive_zone(-1);
-        window.set_keyboard_mode(KeyboardMode::Exclusive);
-
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Fill)
-            .build();
-        let area = gtk::DrawingArea::builder()
-            .hexpand(true)
-            .vexpand(true)
-            .build();
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&picture));
-        overlay.add_overlay(&area);
-
+        umoja_common::monitors::start();
         let ui = Rc::new(Self {
-            window: window.clone(),
             app: app.clone(),
-            picture,
-            area: area.clone(),
+            surfaces: RefCell::default(),
+            panel: RefCell::default(),
             frame: RefCell::default(),
+            bounds: Cell::new(Sel::default()),
+            screen: Cell::new(0),
             sel: Cell::new(Sel::default()),
             mode: Cell::new(Mode::Selection),
             kind: Cell::new(Kind::Screenshot),
@@ -319,12 +316,95 @@ impl ScreenshotUi {
             drag: Cell::new(None),
             ask: RefCell::new(None),
         });
-
-        overlay.add_overlay(&ui.panel());
-        window.set_child(Some(&overlay));
-        ui.connect_drawing();
-        ui.connect_keys();
+        *ui.panel.borrow_mut() = Some(ui.panel());
         ui
+    }
+
+    /// A surface covering `monitor` (the `index`th), showing its part of
+    /// the frozen `frame`.
+    fn surface(self: &Rc<Self>, index: usize, monitor: &gdk::Monitor, frame: &Pixbuf) -> Surface {
+        let window = gtk::ApplicationWindow::builder()
+            .application(&self.app)
+            .css_classes(["umoja-screenshot"])
+            .build();
+        window.init_layer_shell();
+        window.set_layer(Layer::Overlay);
+        window.set_namespace("umoja-screenshot");
+        window.set_monitor(monitor);
+        for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            window.set_anchor(e, true);
+        }
+        window.set_exclusive_zone(-1);
+        // One surface takes the keyboard; the others get it when clicked.
+        window.set_keyboard_mode(if index == self.screen.get() {
+            KeyboardMode::Exclusive
+        } else {
+            KeyboardMode::OnDemand
+        });
+
+        let g = monitor.geometry();
+        let rect = Sel {
+            x: g.x() as f64,
+            y: g.y() as f64,
+            w: g.width() as f64,
+            h: g.height() as f64,
+        };
+        let picture = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Fill)
+            .build();
+        let (x, y, w, h) = self.frame_pixels(rect, frame);
+        picture.set_paintable(Some(&gdk::Texture::for_pixbuf(
+            &frame.new_subpixbuf(x, y, w, h),
+        )));
+        let area = gtk::DrawingArea::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&picture));
+        overlay.add_overlay(&area);
+        window.set_child(Some(&overlay));
+        let surface = Surface {
+            window,
+            overlay,
+            area,
+            rect,
+        };
+        self.connect_drawing(&surface, index);
+        self.connect_keys(&surface.window);
+        surface
+    }
+
+    /// `rect` (layout pixels) in the frozen frame's pixels.
+    fn frame_pixels(&self, rect: Sel, frame: &Pixbuf) -> (i32, i32, i32, i32) {
+        let b = self.bounds.get();
+        // grim renders every output at the highest scale.
+        let scale = frame.width() as f64 / b.w.max(1.0);
+        Sel {
+            x: rect.x - b.x,
+            y: rect.y - b.y,
+            ..rect
+        }
+        .to_pixels(scale, frame.width(), frame.height())
+    }
+
+    fn redraw(&self) {
+        for s in self.surfaces.borrow().iter() {
+            s.area.queue_draw();
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        !self.surfaces.borrow().is_empty()
+    }
+
+    /// The monitor Screen mode captures.
+    fn screen_rect(&self) -> Sel {
+        self.surfaces
+            .borrow()
+            .get(self.screen.get())
+            .map(|s| s.rect)
+            .unwrap_or_else(|| self.bounds.get())
     }
 
     /// The floating bottom panel, laid out like gnome-shell's.
@@ -382,7 +462,7 @@ impl ScreenshotUi {
             b.connect_toggled(move |b| {
                 if let (true, Some(ui)) = (b.is_active(), weak.upgrade()) {
                     ui.mode.set(m);
-                    ui.area.queue_draw();
+                    ui.redraw();
                 }
             });
             self.mode_buttons.borrow_mut().push((m, b.clone()));
@@ -475,27 +555,32 @@ impl ScreenshotUi {
         panel
     }
 
-    fn connect_drawing(self: &Rc<Self>) {
+    /// Draw `surface`'s part of the UI and handle the pointer on it. All
+    /// state is in layout coordinates; `surface.rect` maps it to the widget.
+    fn connect_drawing(self: &Rc<Self>, surface: &Surface, index: usize) {
+        let rect = surface.rect;
         let weak = Rc::downgrade(self);
-        self.area.set_draw_func(move |_, cr, w, h| {
+        surface.area.set_draw_func(move |_, cr, _, _| {
             let Some(ui) = weak.upgrade() else { return };
-            let (w, h) = (w as f64, h as f64);
+            cr.translate(-rect.x, -rect.y);
             let sel = match ui.mode.get() {
-                Mode::Screen => Sel {
-                    x: 0.0,
-                    y: 0.0,
-                    w,
-                    h,
-                },
+                Mode::Screen => ui.screen_rect(),
                 Mode::Selection => ui.sel.get(),
                 Mode::Window => ui.picked_rect().unwrap_or_default(),
             };
             // Dim everything outside the selection.
             cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
             cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
-            cr.rectangle(0.0, 0.0, w, h);
+            cr.rectangle(rect.x, rect.y, rect.w, rect.h);
             cr.rectangle(sel.x, sel.y, sel.w, sel.h);
             let _ = cr.fill();
+            // gnome-shell frames the picked monitor when there is a choice.
+            if ui.mode.get() == Mode::Screen && sel == rect && ui.surfaces.borrow().len() > 1 {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.95);
+                cr.set_line_width(4.0);
+                cr.rectangle(sel.x + 2.0, sel.y + 2.0, sel.w - 4.0, sel.h - 4.0);
+                let _ = cr.stroke();
+            }
             if ui.mode.get() == Mode::Selection && sel.w > 0.0 {
                 cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
                 cr.set_line_width(1.0);
@@ -537,32 +622,39 @@ impl ScreenshotUi {
             }
         });
 
+        // Widget to layout coordinates.
+        let global = move |x: f64, y: f64| (x + rect.x, y + rect.y);
         let drag = gtk::GestureDrag::new();
         let weak = Rc::downgrade(self);
         drag.connect_drag_begin(move |_, x, y| {
             let Some(ui) = weak.upgrade() else { return };
-            if ui.mode.get() == Mode::Window {
-                let hit = pick_at(&ui.windows.borrow(), (x, y));
-                if hit.is_some() {
-                    ui.picked.set(hit);
-                    ui.area.queue_draw();
+            let (x, y) = global(x, y);
+            match ui.mode.get() {
+                Mode::Window => {
+                    let hit = pick_at(&ui.windows.borrow(), (x, y));
+                    if hit.is_some() {
+                        ui.picked.set(hit);
+                        ui.redraw();
+                    }
                 }
-                return;
-            }
-            if ui.mode.get() != Mode::Selection {
-                return;
-            }
-            let sel = ui.sel.get();
-            ui.drag.set(Some(if let Some(edges) = sel.edges_at((x, y)) {
-                DragKind::Resize { edges, start: sel }
-            } else if sel.w > 0.0 && sel.contains((x, y)) {
-                DragKind::Move {
-                    grab: (x, y),
-                    start: sel,
+                Mode::Screen => {
+                    ui.screen.set(index);
+                    ui.redraw();
                 }
-            } else {
-                DragKind::New((x, y))
-            }));
+                Mode::Selection => {
+                    let sel = ui.sel.get();
+                    ui.drag.set(Some(if let Some(edges) = sel.edges_at((x, y)) {
+                        DragKind::Resize { edges, start: sel }
+                    } else if sel.w > 0.0 && sel.contains((x, y)) {
+                        DragKind::Move {
+                            grab: (x, y),
+                            start: sel,
+                        }
+                    } else {
+                        DragKind::New((x, y))
+                    }));
+                }
+            }
         });
         let weak = Rc::downgrade(self);
         drag.connect_drag_update(move |g, dx, dy| {
@@ -570,15 +662,19 @@ impl ScreenshotUi {
             let Some((sx, sy)) = g.start_point() else {
                 return;
             };
-            let (w, h) = (ui.area.width() as f64, ui.area.height() as f64);
+            // The pointer stays with this surface for the whole drag, so a
+            // selection can be dragged across onto other monitors.
+            let (px, py) = global(sx + dx, sy + dy);
+            let b = ui.bounds.get();
+            let (x0, y0, x1, y1) = (b.x, b.y, b.x + b.w, b.y + b.h);
             match ui.drag.get() {
                 Some(DragKind::New(origin)) => {
-                    let end = ((sx + dx).clamp(0.0, w), (sy + dy).clamp(0.0, h));
+                    let end = (px.clamp(x0, x1), py.clamp(y0, y1));
                     ui.sel.set(Sel::from_points(origin, end));
                 }
                 Some(DragKind::Move { grab, start }) => {
-                    let nx = (start.x + (sx + dx - grab.0)).clamp(0.0, w - start.w);
-                    let ny = (start.y + (sy + dy - grab.1)).clamp(0.0, h - start.h);
+                    let nx = (start.x + (px - grab.0)).clamp(x0, x1 - start.w);
+                    let ny = (start.y + (py - grab.1)).clamp(y0, y1 - start.h);
                     ui.sel.set(Sel {
                         x: nx,
                         y: ny,
@@ -586,12 +682,12 @@ impl ScreenshotUi {
                     });
                 }
                 Some(DragKind::Resize { edges, start }) => {
-                    let p = ((sx + dx).clamp(0.0, w), (sy + dy).clamp(0.0, h));
+                    let p = (px.clamp(x0, x1), py.clamp(y0, y1));
                     ui.sel.set(Sel::resized(start, edges, p));
                 }
                 None => {}
             }
-            ui.area.queue_draw();
+            ui.redraw();
         });
         let weak = Rc::downgrade(self);
         drag.connect_drag_end(move |_, _, _| {
@@ -599,41 +695,44 @@ impl ScreenshotUi {
                 ui.drag.set(None);
             }
         });
-        self.area.add_controller(drag);
+        surface.area.add_controller(drag);
 
         // Resize/move cursors on hover, like gnome-shell.
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(self);
+        let area = surface.area.downgrade();
         motion.connect_motion(move |_, x, y| {
-            let Some(ui) = weak.upgrade() else { return };
+            let (Some(ui), Some(area)) = (weak.upgrade(), area.upgrade()) else {
+                return;
+            };
             if ui.drag.get().is_some() {
                 return;
             }
+            let (x, y) = global(x, y);
             let sel = ui.sel.get();
             if ui.mode.get() == Mode::Window {
                 let hit = pick_at(&ui.windows.borrow(), (x, y));
                 if hit != ui.hovered.get() {
                     ui.hovered.set(hit);
-                    ui.area.queue_draw();
+                    ui.redraw();
                 }
             }
-            let name = if ui.mode.get() == Mode::Window {
-                "pointer"
-            } else if ui.mode.get() != Mode::Selection {
-                "default"
-            } else if let Some(e) = sel.edges_at((x, y)) {
-                e.cursor()
-            } else if sel.w > 0.0 && sel.contains((x, y)) {
-                "move"
-            } else {
-                "crosshair"
+            let name = match ui.mode.get() {
+                Mode::Window => "pointer",
+                Mode::Screen if ui.screen.get() != index => "pointer",
+                Mode::Screen => "default",
+                Mode::Selection => match sel.edges_at((x, y)) {
+                    Some(e) => e.cursor(),
+                    None if sel.w > 0.0 && sel.contains((x, y)) => "move",
+                    None => "crosshair",
+                },
             };
-            ui.area.set_cursor_from_name(Some(name));
+            area.set_cursor_from_name(Some(name));
         });
-        self.area.add_controller(motion);
+        surface.area.add_controller(motion);
     }
 
-    fn connect_keys(self: &Rc<Self>) {
+    fn connect_keys(self: &Rc<Self>, window: &gtk::ApplicationWindow) {
         let keys = gtk::EventControllerKey::new();
         let weak = Rc::downgrade(self);
         keys.connect_key_pressed(move |_, key, _, _| {
@@ -659,10 +758,10 @@ impl ScreenshotUi {
                 }
                 _ => return glib::Propagation::Proceed,
             }
-            ui.area.queue_draw();
+            ui.redraw();
             glib::Propagation::Stop
         });
-        self.window.add_controller(keys);
+        window.add_controller(keys);
     }
 
     /// Freeze the screen and open the UI (Print).
@@ -682,7 +781,7 @@ impl ScreenshotUi {
     /// Super+Ctrl+Print: the UI in Copy Text mode, starting on Selection.
     pub fn open_copy_text(self: &Rc<Self>) {
         self.open_as(Kind::Text);
-        if self.window.is_visible() {
+        if self.is_open() {
             self.set_mode(Mode::Selection);
         }
     }
@@ -692,7 +791,7 @@ impl ScreenshotUi {
     }
 
     fn open_as(self: &Rc<Self>, kind: Kind) {
-        if self.window.is_visible() {
+        if self.is_open() {
             self.select_kind(kind);
             return;
         }
@@ -714,16 +813,50 @@ impl ScreenshotUi {
             tracing::warn!("grim failed; is it installed?");
             return;
         };
-        self.picture
-            .set_paintable(Some(&gdk::Texture::for_pixbuf(&plain)));
+        // gnome-shell covers every monitor, with the panel, the default
+        // selection and Screen mode's pick on the primary one.
+        let monitors = umoja_common::monitors::all();
+        if monitors.is_empty() {
+            tracing::warn!("no monitors to show the screenshot UI on");
+            return;
+        }
+        let primary = umoja_common::monitors::primary()
+            .and_then(|p| monitors.iter().position(|m| *m == p))
+            .unwrap_or(0);
+        self.bounds.set(
+            monitors
+                .iter()
+                .map(|m| {
+                    let g = m.geometry();
+                    (g.x(), g.y(), g.x() + g.width(), g.y() + g.height())
+                })
+                .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
+                .map(|(x0, y0, x1, y1)| Sel {
+                    x: x0 as f64,
+                    y: y0 as f64,
+                    w: (x1 - x0) as f64,
+                    h: (y1 - y0) as f64,
+                })
+                .unwrap_or_default(),
+        );
+        self.screen.set(primary);
+        let surfaces: Vec<Surface> = monitors
+            .iter()
+            .enumerate()
+            .map(|(i, m)| self.surface(i, m, &plain))
+            .collect();
+        let main = surfaces[primary].rect;
+        if let Some(panel) = self.panel.borrow().as_ref() {
+            surfaces[primary].overlay.add_overlay(panel);
+        }
+        *self.surfaces.borrow_mut() = surfaces;
         *self.frame.borrow_mut() = Some((plain, cursor));
         // gnome-shell starts with a centred default selection.
-        let (w, h) = self.monitor_size();
         self.sel.set(Sel {
-            x: w * 0.25,
-            y: h * 0.25,
-            w: w * 0.5,
-            h: h * 0.5,
+            x: main.x + main.w * 0.25,
+            y: main.y + main.h * 0.25,
+            w: main.w * 0.5,
+            h: main.h * 0.5,
         });
         self.load_windows();
         // The assistant wants a picture, and only one recording runs at a time.
@@ -742,8 +875,16 @@ impl ScreenshotUi {
             k => k,
         };
         self.select_kind(kind);
-        self.window.present();
-        self.area.queue_draw();
+        // The primary's surface, which takes the keyboard, goes up last.
+        let surfaces = self.surfaces.borrow();
+        let order = (0..surfaces.len())
+            .filter(|i| *i != primary)
+            .chain([primary]);
+        for i in order {
+            surfaces[i].window.present();
+        }
+        drop(surfaces);
+        self.redraw();
     }
 
     /// Fetch the windows for Window mode; the UI opens without waiting.
@@ -760,11 +901,10 @@ impl ScreenshotUi {
             if ui.generation.get() != generation {
                 return;
             }
-            let (origin, size) = ui.monitor_geometry();
-            let (list, picked) = picks(&windows, origin, size);
+            let (list, picked) = picks(&windows, ui.bounds.get());
             *ui.windows.borrow_mut() = list;
             ui.picked.set(picked);
-            ui.area.queue_draw();
+            ui.redraw();
         });
     }
 
@@ -814,34 +954,11 @@ impl ScreenshotUi {
         self.windows.borrow().get(i).map(|p| p.rect)
     }
 
-    fn monitor(&self) -> Option<gdk::Monitor> {
-        gdk::Display::default()
-            .and_then(|d| d.monitors().item(0))
-            .and_downcast::<gdk::Monitor>()
-    }
-
-    fn monitor_size(&self) -> (f64, f64) {
-        self.monitor_geometry().1
-    }
-
-    /// Origin and size of the monitor the UI covers, in layout pixels.
-    fn monitor_geometry(&self) -> ((f64, f64), (f64, f64)) {
-        self.monitor()
-            .map(|m| {
-                let g = m.geometry();
-                (
-                    (g.x() as f64, g.y() as f64),
-                    (g.width() as f64, g.height() as f64),
-                )
-            })
-            .unwrap_or(((0.0, 0.0), (1280.0, 800.0)))
-    }
-
     /// Open the same UI to pick an area for the assistant to read.
     pub fn open_for_ask(self: &Rc<Self>, done: AskCallback) {
         *self.ask.borrow_mut() = Some(done);
         self.open();
-        if !self.window.is_visible() {
+        if !self.is_open() {
             // grim failed
             if let Some(done) = self.ask.borrow_mut().take() {
                 done(None);
@@ -850,8 +967,16 @@ impl ScreenshotUi {
     }
 
     fn close(&self) {
-        self.window.set_visible(false);
-        self.picture.set_paintable(None::<&gdk::Paintable>);
+        // Keep the panel for next time; the surfaces go.
+        let surfaces = std::mem::take(&mut *self.surfaces.borrow_mut());
+        for s in surfaces {
+            if let Some(panel) = self.panel.borrow().as_ref() {
+                if panel.parent().as_ref() == Some(s.overlay.upcast_ref()) {
+                    s.overlay.remove_overlay(panel);
+                }
+            }
+            s.window.destroy();
+        }
         self.frame.borrow_mut().take();
         self.windows.borrow_mut().clear();
         self.generation.set(self.generation.get().wrapping_add(1));
@@ -861,16 +986,10 @@ impl ScreenshotUi {
         }
     }
 
-    /// The area to capture, in UI (logical, monitor-local) pixels.
+    /// The area to capture, in layout pixels.
     fn target(&self) -> Option<Sel> {
-        let (w, h) = (self.area.width() as f64, self.area.height() as f64);
         let sel = match self.mode.get() {
-            Mode::Screen => Sel {
-                x: 0.0,
-                y: 0.0,
-                w,
-                h,
-            },
+            Mode::Screen => self.screen_rect(),
             Mode::Selection => self.sel.get(),
             Mode::Window => self.picked_rect()?,
         };
@@ -902,14 +1021,9 @@ impl ScreenshotUi {
             }
         });
         let Some(full) = frame else { return };
-        let pixbuf = if self.mode.get() == Mode::Screen {
-            full
-        } else {
-            // Frozen frame is in physical pixels; the UI is logical.
-            let scale = full.width() as f64 / self.area.width().max(1) as f64;
-            let (x, y, w, h) = sel.to_pixels(scale, full.width(), full.height());
-            full.new_subpixbuf(x, y, w, h)
-        };
+        // The frozen frame is in physical pixels; the UI is logical.
+        let (x, y, w, h) = self.frame_pixels(sel, &full);
+        let pixbuf = full.new_subpixbuf(x, y, w, h);
         let ask = self.ask.borrow_mut().take();
         let kind = self.kind.get();
         self.close();
@@ -922,12 +1036,11 @@ impl ScreenshotUi {
         }
     }
 
-    /// `sel` in layout pixels for grim and wf-recorder.
+    /// `sel` rounded for grim and wf-recorder.
     fn layout_region(&self, sel: Sel) -> (i32, i32, i32, i32) {
-        let ((ox, oy), _) = self.monitor_geometry();
         (
-            (sel.x + ox).round() as i32,
-            (sel.y + oy).round() as i32,
+            sel.x.round() as i32,
+            sel.y.round() as i32,
             sel.w.round() as i32,
             sel.h.round() as i32,
         )
@@ -991,7 +1104,7 @@ impl ScreenshotUi {
     /// `done` gets the picked pixels, or `None` if the user cancelled.
     pub fn pick_area(self: &Rc<Self>, done: AskCallback) {
         self.open_for_ask(done);
-        if self.window.is_visible() {
+        if self.is_open() {
             self.set_mode(Mode::Selection);
         }
     }
@@ -1011,10 +1124,15 @@ impl ScreenshotUi {
         }
     }
 
-    /// The first monitor's area in layout pixels, for a full-screen recording.
+    /// The primary monitor's area in layout pixels, for a full-screen
+    /// recording.
     pub fn screen_region(&self) -> (i32, i32, i32, i32) {
-        let ((x, y), (w, h)) = self.monitor_geometry();
-        (x as i32, y as i32, w as i32, h as i32)
+        umoja_common::monitors::primary()
+            .map(|m| {
+                let g = m.geometry();
+                (g.x(), g.y(), g.width(), g.height())
+            })
+            .unwrap_or((0, 0, 1280, 800))
     }
 }
 
@@ -1220,7 +1338,13 @@ mod tests {
             win(4, 0, 0, 100, 100, 0), // other workspace
             win(5, 1500, 100, 200, 200, cur),
         ];
-        let (p, sel) = picks(&windows, (0.0, 0.0), (1600.0, 900.0));
+        let all = Sel {
+            x: 0.0,
+            y: 0.0,
+            w: 1600.0,
+            h: 900.0,
+        };
+        let (p, sel) = picks(&windows, all);
         assert_eq!(p.iter().map(|p| p.id).collect::<Vec<_>>(), [1, 2, 5]);
         assert_eq!(sel, Some(1)); // focused
         assert!(p[0].covered && !p[1].covered && !p[2].covered);
@@ -1240,8 +1364,21 @@ mod tests {
         assert_eq!(pick_at(&p, (100.0, 100.0)), Some(0));
         assert_eq!(pick_at(&p, (1400.0, 50.0)), None);
         // No focused window: the topmost.
-        let (_, sel) = picks(&windows[..1], (0.0, 0.0), (1600.0, 900.0));
+        let (_, sel) = picks(&windows[..1], all);
         assert_eq!(sel, Some(0));
+        // A second monitor to the left: coordinates stay global.
+        let both = Sel {
+            x: -1280.0,
+            w: 2880.0,
+            ..all
+        };
+        let (p, _) = picks(&[win(6, -1000, 100, 300, 200, cur)], both);
+        assert_eq!(p[0].rect.x, -1000.0);
+        assert!(
+            picks(&[win(7, -1000, 100, 300, 200, cur)], all)
+                .0
+                .is_empty()
+        );
     }
 
     #[test]
