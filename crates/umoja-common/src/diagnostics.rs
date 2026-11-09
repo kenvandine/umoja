@@ -76,6 +76,15 @@ fn journal_params() -> Value {
     })
 }
 
+fn crash_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "program": {"type": "string", "description": "Program name, e.g. nautilus or umoja-panel; empty for the newest crash"}
+        }
+    })
+}
+
 fn unit_params() -> Value {
     json!({
         "type": "object",
@@ -157,6 +166,29 @@ pub fn tools() -> Vec<ToolSpec> {
             run: |_| failed_units(),
         },
         ToolSpec {
+            name: "recent_crashes",
+            description: "Programs that crashed in the last 7 days (Apport reports in /var/crash \
+                and systemd-coredump), with the newest crash in detail. Use when an app closed \
+                unexpectedly, keeps crashing or disappeared.",
+            parameters: no_params,
+            summary: |_| "Look for crashes".into(),
+            read_only: true,
+            run: |_| crate::crashes::report(),
+        },
+        ToolSpec {
+            name: "crash_details",
+            description: "Everything known about the newest crash of one program: signal, package \
+                version, stack trace when recorded, out-of-memory messages and log warnings \
+                around it, and package updates in the days before.",
+            parameters: crash_params,
+            summary: |a| match a.get("program").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+                Some(p) => format!("Look at the {p} crash"),
+                None => "Look at the latest crash".into(),
+            },
+            read_only: true,
+            run: |a| crate::crashes::details(a.get("program").and_then(Value::as_str).unwrap_or("")),
+        },
+        ToolSpec {
             name: "unit_status",
             description: "systemctl status of one unit, with its latest log lines.",
             parameters: unit_params,
@@ -204,6 +236,7 @@ pub enum Topic {
     Audio,
     Disk,
     Services,
+    Crashes,
 }
 
 impl Topic {
@@ -217,6 +250,7 @@ impl Topic {
             Topic::Audio => ("Audio", audio()),
             Topic::Disk => ("Disks", disks()),
             Topic::Services => ("Failed services and recent errors", services()),
+            Topic::Crashes => ("Crashes", crate::crashes::report()),
         }
     }
 }
@@ -248,6 +282,10 @@ const TROUBLE_WORDS: &[&str] = &[
     "lag",
     "freez",
     "crash",
+    "segfault",
+    "disappear",
+    "vanish",
+    "unexpectedly",
     "drop",
     "disconnect",
     "troubleshoot",
@@ -342,6 +380,21 @@ pub fn topics_for(query: &str) -> Vec<Topic> {
     );
     add(Topic::Disk, &["disk", "storage", "space", "full", "drive"]);
     add(
+        Topic::Crashes,
+        &[
+            "crash",
+            "segfault",
+            "core dump",
+            "coredump",
+            "closed unexpectedly",
+            "quit unexpectedly",
+            "keeps closing",
+            "keeps quitting",
+            "disappear",
+            "vanish",
+        ],
+    );
+    add(
         Topic::Services,
         &[
             "service", "crash", "fail", "error", "boot", "startup", "systemd", "journal", "log",
@@ -386,7 +439,10 @@ pub fn report_for(query: &str) -> Option<String> {
     }
     let mut out = String::new();
     for t in topics {
-        let (title, body) = t.collect();
+        let (title, body) = match t {
+            Topic::Crashes => ("Crashes", crate::crashes::report_about(query)),
+            _ => t.collect(),
+        };
         out.push_str(&format!("## {title}\n{}\n\n", body.trim_end()));
     }
     Some(truncate(&out, MAX_REPORT))
@@ -1343,6 +1399,12 @@ pub fn truncate(s: &str, max: usize) -> String {
     format!("{}\n[…truncated]\n", &s[..end])
 }
 
+/// Run a read-only command with the collectors' timeout and output cap,
+/// returning stdout whatever the exit status (for [`crate::crashes`]).
+pub(crate) fn run_cmd(cmd: &str, args: &[&str]) -> Option<String> {
+    run_any(cmd, args)
+}
+
 /// Run a command, returning stdout only on success.
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     run_inner(cmd, args).and_then(|(ok, out)| ok.then_some(out))
@@ -1392,6 +1454,14 @@ fn run_inner(cmd: &str, args: &[&str]) -> Option<(bool, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crash_questions() {
+        assert!(topics_for("Why did nautilus crash?").contains(&Topic::Crashes));
+        assert!(topics_for("did anything crash?").contains(&Topic::Crashes));
+        assert!(topics_for("Firefox keeps closing unexpectedly").contains(&Topic::Crashes));
+        assert!(!topics_for("open the files app").contains(&Topic::Crashes));
+    }
 
     #[test]
     fn topics_from_questions() {

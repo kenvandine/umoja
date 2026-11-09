@@ -52,6 +52,8 @@ pub struct Overlay {
     myna: Myna,
     /// Bumped on every new question so stale streams are dropped.
     generation: Cell<u64>,
+    /// The next question goes to the local model (crash diagnosis).
+    local_once: Cell<bool>,
     // Context attached to the next question (window, area, selection...).
     context_button: gtk::MenuButton,
     pick_selection: gtk::Button,
@@ -309,6 +311,7 @@ impl Overlay {
             app_monitor: gio::AppInfoMonitor::get(),
             myna: Myna::start(),
             generation: Cell::new(0),
+            local_once: Cell::new(false),
             context_button,
             pick_selection,
             pick_window,
@@ -468,6 +471,15 @@ impl Overlay {
         self.show();
         self.entry.set_text(text);
         self.entry.set_position(-1);
+    }
+
+    /// Open the overlay with `question` typed and asked on the local model,
+    /// whatever backend is selected: the panel's crash notification uses
+    /// it for "Ask Why", and crash reports stay on this computer.
+    pub fn ask_now(self: &Rc<Self>, question: &str) {
+        self.show_with_text(question);
+        self.local_once.set(true);
+        self.ask(question);
     }
 
     pub fn hide(&self) {
@@ -717,7 +729,11 @@ impl Overlay {
             rows: RefCell::new(HashMap::new()),
         });
         // Fresh per request: picks up model and backend changes.
-        let client = LemonadeClient::new();
+        let client = if self.local_once.replace(false) {
+            LemonadeClient::for_endpoint(umoja_common::assistant_backend::Endpoint::local(), None)
+        } else {
+            LemonadeClient::new()
+        };
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let text = agent::run(client, question, ui).await;

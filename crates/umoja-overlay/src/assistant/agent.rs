@@ -535,6 +535,10 @@ mod tests {
             "search the web for gtk4 layer shell",
             "open my downloads folder",
             "firefox is frozen, kill it",
+            "did anything crash today?",
+            "why did nautilus crash?",
+            "send the nautilus crash to ubuntu",
+            "free up the memory the AI model is using",
         ];
         for p in prompts {
             let rec = Rc::new(Rec(RefCell::new(Vec::new()), RefCell::new(String::new())));

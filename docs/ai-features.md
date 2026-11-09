@@ -29,6 +29,7 @@ screen, as in Ubuntu. The overlay's search box also has a microphone button.
 - [Clipboard history](#clipboard-history)
 - [Notifications: digest and quick replies](#notifications-digest-and-quick-replies)
 - [Troubleshooting your computer](#troubleshooting-your-computer)
+- [When an app crashes](#when-an-app-crashes)
 - [Finding files](#finding-files)
 - [Privacy](#privacy)
 - [Keyboard shortcuts](#keyboard-shortcuts)
@@ -80,6 +81,15 @@ before your first question:
   shows *Downloading the assistant's model…* until it's done.
 - If the download fails you get a notification saying so. It is tried again
   at your next login, or when you pick a different model.
+
+The model that suits this computer best is marked **Best for this
+computer** and listed first: the largest recommended model that fits in a
+quarter of your memory, so your apps keep the rest.
+
+**Free Memory**, under the list, unloads the model when you need its memory
+for something else (a game, a big build, a virtual machine). It loads again
+by itself with your next question, which then takes a few seconds longer.
+You can also ask the assistant to "free up the AI model's memory".
 
 Models are stored in `~/.cache/umoja/lemonade`.
 
@@ -384,6 +394,39 @@ All of these checks only read. Nothing is restarted, changed or rescanned,
 and none of them needs `sudo`. If the fix needs a command, the assistant
 suggests one, and running it goes through the usual **Allow** dialog.
 
+## When an app crashes
+
+When a program crashes, a notification says so, for example *Files quit
+unexpectedly*, with two buttons:
+
+- **Ask Why** (or click the notification) opens the overlay and asks the
+  assistant why it crashed. It reads the crash report and explains it in
+  plain words: whether the computer was out of memory, whether the crash
+  started right after a software update, whether it keeps happening, and
+  the top of the stack trace when the report has one. If it can't tell the
+  exact cause, it says so rather than guessing.
+- **Don't Show for This App** stops these notifications for that program.
+
+This always runs on the local model, even when the assistant is set to a
+cloud model, so crash reports never leave your computer. You can also ask
+at any time: "did anything crash today?", "why does Files keep crashing?".
+If the crash is in an Ubuntu package, the assistant can open Ubuntu's crash
+reporter ("send the Files crash to Ubuntu"), which shows what would be
+sent and only sends it if you choose to.
+
+Crashes come from Ubuntu's own records: Apport's reports in `/var/crash`,
+and `systemd-coredump` (installed with Umoja as a recommended package),
+which also records repeat crashes and a stack trace. One notification is
+shown per program per minute, so a program stuck in a crash loop doesn't
+flood you. To turn them off:
+
+```sh
+gsettings set org.umoja.shell crash-notifications false
+```
+
+To bring back a program you muted, remove it from
+`gsettings get org.umoja.shell crash-notifications-muted`.
+
 ## Finding files
 
 Umoja keeps a search index of your home folder so you can find files by
@@ -439,8 +482,9 @@ From a terminal, `umoja-files --search "lease pdf"` searches the index.
   the tools it calls (for example your window titles, notification text or
   file names when you ask about them). Read your provider's privacy policy.
   Requests identify themselves as "Umoja Desktop".
-- **Always local:** the notification digest, quick replies and the file
-  search index never use the cloud model.
+- **Always local:** the notification digest, quick replies, crash
+  diagnosis from a crash notification and the file search index never use
+  the cloud model.
 - **Your screen is only read when you ask**, with Super+Shift+A, an
   attachment, or a question about "this window". Captures are turned into
   text and not kept.
@@ -482,6 +526,8 @@ All in the `org.umoja.shell` schema, for example
 | `ask-about-screen-hotkey` | `['<Super><Shift>a']` | Ask about the screen |
 | `clipboard-history-hotkey` | `['<Super><Shift>v']` | Clipboard history |
 | `copy-text-hotkey` | `['<Super><Control>Print']` | Copy the text in a screen area |
+| `crash-notifications` | `true` | Notify when an app crashes, with **Ask Why** |
+| `crash-notifications-muted` | `[]` | Programs whose crashes don't notify |
 | `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |
 
 The embedded Lemonade server's port and memory limits are covered in

@@ -10,6 +10,7 @@ mod bluetooth;
 mod brightness;
 mod bus;
 mod clock;
+mod crash_watch;
 mod dbusmenu;
 mod fade;
 mod launch;
@@ -82,6 +83,7 @@ fn build(app: &adw::Application) {
     });
     let center =
         NOTIFICATIONS.with(|n| n.get_or_init(|| notifications::Center::start(app)).clone());
+    crash_watch::start(center.clone());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)

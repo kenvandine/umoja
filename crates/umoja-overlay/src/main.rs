@@ -40,6 +40,9 @@ const IFACE_XML: &str = r#"
     <method name="Hide"/>
     <method name="ToggleDictation"/>
     <method name="AskAboutScreen"/>
+    <method name="Ask">
+      <arg name="question" type="s" direction="in"/>
+    </method>
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
@@ -306,6 +309,17 @@ fn export(
                     "AskAboutScreen" => {
                         spread.hide();
                         methods.ask_about_screen()
+                    }
+                    "Ask" => {
+                        let Some((question,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (s)",
+                            );
+                            return;
+                        };
+                        spread.hide();
+                        methods.ask_now(&question)
                     }
                     "ShowClipboard" => {
                         spread.hide();

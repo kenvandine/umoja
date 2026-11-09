@@ -121,6 +121,7 @@ pub const CATALOG: &[Entry] = &[
     e!("ask_about_screen_shortcut", UMOJA, "ask-about-screen-hotkey", "Keyboard shortcut to ask the assistant about the screen"),
     e!("clipboard_history_shortcut", UMOJA, "clipboard-history-hotkey", "Keyboard shortcut to show the clipboard history"),
     e!("copy_text_shortcut", UMOJA, "copy-text-hotkey", "Keyboard shortcut to copy the text in a screen area (OCR)"),
+    e!("crash_notifications", UMOJA, "crash-notifications", "Show a notification when an app crashes, with a button to ask the assistant why"),
 ];
 
 const UMOJA: &str = "org.umoja.shell";

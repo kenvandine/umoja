@@ -60,6 +60,57 @@ pub fn pull_url() -> String {
     format!("{}/api/v1/pull", base_url())
 }
 
+/// Unload endpoint (`POST`): drops loaded models from memory; the next
+/// request loads its model again.
+pub fn unload_url() -> String {
+    format!("{}/api/v1/unload", base_url())
+}
+
+/// Free the memory the local models use, by asking the server to unload
+/// them. Blocking (a plain HTTP request to the local server, so headless
+/// processes need no HTTP client). `Ok(false)` when the server isn't
+/// running, which leaves nothing loaded either.
+pub fn unload() -> Result<bool, String> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let url = unload_url();
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("unsupported server URL {url}"))?;
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(a, p)| (a, format!("/{p}")))
+        .unwrap_or((rest, "/".into()));
+    use std::net::ToSocketAddrs;
+    let addr = authority
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or("no address for the server")?;
+    let mut stream = match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return Ok(false),
+        Err(e) => return Err(e.to_string()),
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+    let body = "{}";
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .map_err(|e| e.to_string())?;
+    let mut head = [0u8; 64];
+    let n = stream.read(&mut head).map_err(|e| e.to_string())?;
+    let status = String::from_utf8_lossy(&head[..n]);
+    let code = status.split_whitespace().nth(1).unwrap_or("");
+    if code.starts_with('2') {
+        Ok(true)
+    } else {
+        Err(format!("the AI server answered {code}"))
+    }
+}
+
 /// Health endpoint, used to check the service is up before querying.
 pub fn health_url() -> String {
     format!("{}/api/v1/health", base_url())

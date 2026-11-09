@@ -25,15 +25,30 @@ systemctl, powerprofilesctl, wpctl, bluetoothctl, df, top); diagnosis never need
 the unit_status or journal tools if you need more detail. Reply in at most three short \
 sentences, and do not describe what you checked or did.";
 
+/// Extra rules when the question is about a crash: work from the
+/// evidence, the way a careful developer would, rather than a plausible
+/// story.
+const CRASH_RULES: &str = "For a crash: first rule out the boring causes the report shows (the \
+system was out of memory, or the crash started right after a package update named there). \
+Say whether it is a one-off or keeps happening. Use the signal in plain words (a segmentation \
+fault is a bug in the program; an abort usually means it hit an error it checks for). Quote \
+the top stack frame only if the report has one, and never guess at a cause the report doesn't \
+show: if there is no stack trace, say the exact cause can't be told from here. If it is from \
+an Ubuntu package, offer to open Ubuntu's crash reporter (the report_crash tool) so it can be \
+sent to the developers; otherwise suggest reporting it to the program's developers. Restarting \
+the app is usually all the user needs to do now.";
+
 /// Progress-line id for the up-front check; the agent numbers tool calls
 /// from 1.
 const STEP_ID: usize = 0;
 
 /// Add a system report to `question` when it is about a problem.
 pub async fn ground(mut question: Question, ui: &dyn Ui) -> Question {
-    if diagnostics::topics_for(&question.text).is_empty() {
+    let topics = diagnostics::topics_for(&question.text);
+    if topics.is_empty() {
         return question;
     }
+    let crash = topics.contains(&diagnostics::Topic::Crashes);
     let label = i18n::umoja("Check this computer");
     ui.step(STEP_ID, &label, StepState::Running);
     let text = question.text.clone();
@@ -47,7 +62,12 @@ pub async fn ground(mut question: Question, ui: &dyn Ui) -> Question {
         return question;
     };
     ui.step(STEP_ID, &label, StepState::Done);
-    let grounded = format!("{PREAMBLE}\n\n<system-report>\n{report}</system-report>");
+    let rules = if crash {
+        format!("{PREAMBLE} {CRASH_RULES}")
+    } else {
+        PREAMBLE.to_string()
+    };
+    let grounded = format!("{rules}\n\n<system-report>\n{report}</system-report>");
     question.context = Some(match question.context.take() {
         Some(ctx) if !ctx.trim().is_empty() => format!("{ctx}\n\n{grounded}"),
         _ => grounded,

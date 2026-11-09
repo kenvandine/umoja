@@ -84,6 +84,15 @@ fn pick(entries: Vec<(String, CatalogEntry)>, mem_gb: f64) -> Vec<ModelInfo> {
     out
 }
 
+/// The model to suggest for this computer: the largest one that is good
+/// at tools and fits in a quarter of the memory, so apps keep the rest.
+pub fn best_fit(models: &[ModelInfo], mem_gb: f64) -> Option<&ModelInfo> {
+    models
+        .iter()
+        .filter(|m| m.recommended() && m.size_gb <= mem_gb * 0.25)
+        .max_by(|a, b| a.size_gb.total_cmp(&b.size_gb))
+}
+
 fn mem_total_gb() -> f64 {
     std::fs::read_to_string("/proc/meminfo")
         .ok()
@@ -148,9 +157,47 @@ pub fn button() -> gtk::MenuButton {
         .max_width_chars(44)
         .css_classes(["dim-label", "caption"])
         .build();
+    let free = gtk::Button::builder()
+        .label(i18n::umoja("Free Memory"))
+        .tooltip_text(i18n::umoja(
+            "Unload the model until the next question, to give its memory to other apps",
+        ))
+        .halign(gtk::Align::Start)
+        .css_classes(["flat"])
+        .build();
+    let free_status = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(44)
+        .hexpand(true)
+        .css_classes(["dim-label", "caption"])
+        .build();
+    {
+        let status = free_status.clone();
+        free.connect_clicked(move |b| {
+            b.set_sensitive(false);
+            let (b, status) = (b.clone(), status.clone());
+            glib::spawn_future_local(async move {
+                let r = gtk::gio::spawn_blocking(lemonade::unload)
+                    .await
+                    .unwrap_or_else(|_| Err("crashed".into()));
+                status.set_text(&match r {
+                    Ok(_) => {
+                        i18n::umoja("Memory freed. The model loads again with your next question.")
+                    }
+                    Err(e) => format!("{} ({e})", i18n::umoja("Couldn't free the memory")),
+                });
+                b.set_sensitive(true);
+            });
+        });
+    }
+    let free_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    free_row.append(&free);
+    free_row.append(&free_status);
     let local_page = gtk::Box::new(gtk::Orientation::Vertical, 6);
     local_page.append(&note);
     local_page.append(&scroller);
+    local_page.append(&free_row);
 
     let popover = gtk::Popover::new();
     let cloud = CloudForm::new(&popover);
@@ -219,7 +266,7 @@ pub fn button() -> gtk::MenuButton {
                     .unwrap_or_default();
                 (models, HashSet::new())
             });
-            fill(&list, &models, &downloaded, &popover);
+            fill(&list, &models, &downloaded, &popover, mem);
         });
     });
     button
@@ -230,7 +277,14 @@ fn fill(
     models: &[ModelInfo],
     downloaded: &HashSet<String>,
     popover: &gtk::Popover,
+    mem_gb: f64,
 ) {
+    // The best fit for this computer goes first.
+    let best = best_fit(models, mem_gb).map(|m| m.id.clone());
+    let mut models: Vec<&ModelInfo> = models.iter().collect();
+    if let Some(b) = &best {
+        models.sort_by_key(|m| &m.id != b);
+    }
     while let Some(row) = list.first_child() {
         list.remove(&row);
     }
@@ -260,7 +314,9 @@ fn fill(
             .build();
         text.append(&name);
         let mut details = vec![format!("{:.1} GB", m.size_gb)];
-        if m.recommended() {
+        if best.as_ref() == Some(&m.id) {
+            details.push(i18n::umoja("Best for this computer"));
+        } else if m.recommended() {
             details.push(i18n::umoja("Recommended"));
         }
         if m.labels.iter().any(|l| l == "vision") {
@@ -318,6 +374,29 @@ mod tests {
         // (The server's listing has the same fields plus id/downloaded.)
         let ids: Vec<String> = catalog(json, 32.0).into_iter().map(|m| m.id).collect();
         assert_eq!(ids, ["Tool-GGUF", "Small-GGUF"]);
+    }
+
+    #[test]
+    fn best_fit_scales_with_memory() {
+        let m = |id: &str, size: f64, tools: bool| ModelInfo {
+            id: id.into(),
+            size_gb: size,
+            labels: if tools {
+                vec!["chat".into(), "tool-calling".into()]
+            } else {
+                vec!["chat".into()]
+            },
+        };
+        let models = [
+            m("4B", 2.5, true),
+            m("8B", 5.0, true),
+            m("14B", 9.0, true),
+            m("Plain", 3.0, false),
+        ];
+        assert_eq!(best_fit(&models, 16.0).map(|m| m.id.as_str()), Some("4B"));
+        assert_eq!(best_fit(&models, 32.0).map(|m| m.id.as_str()), Some("8B"));
+        assert_eq!(best_fit(&models, 64.0).map(|m| m.id.as_str()), Some("14B"));
+        assert_eq!(best_fit(&models, 8.0).map(|m| m.id.as_str()), None);
     }
 
     #[test]

@@ -81,6 +81,23 @@
         text is read with Tesseract OCR and put on the clipboard.
       </description>
     </key>
+    <key name="crash-notifications" type="b">
+      <default>true</default>
+      <summary>Tell me when an app crashes</summary>
+      <description>
+        Show a notification when a program crashes (from Apport's reports in
+        /var/crash, or systemd-coredump), with a button to ask the assistant
+        why. The diagnosis runs on the local model.
+      </description>
+    </key>
+    <key name="crash-notifications-muted" type="as">
+      <default>[]</default>
+      <summary>Programs whose crashes don't show a notification</summary>
+      <description>
+        Program names (for example 'nautilus'), as added by the notification's
+        "Don't Show for This App" button.
+      </description>
+    </key>
     <key name="clipboard-history-hotkey" type="as">
       <default>['&lt;Super&gt;&lt;Shift&gt;v']</default>
       <summary>Show the clipboard history</summary>

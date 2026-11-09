@@ -176,6 +176,9 @@ pub const INLINE_REPLY: &str = "inline-reply";
 
 type Listener = Box<dyn Fn()>;
 type ReplyListener = Box<dyn Fn(u32)>;
+/// What the shell does when one of its own notifications' actions is
+/// picked (there is no D-Bus sender to tell).
+type ActionHandler = Rc<dyn Fn(&str)>;
 
 /// Shared state between the D-Bus server, the banners and the message list.
 pub struct Center {
@@ -191,6 +194,7 @@ pub struct Center {
     /// digest summarizes.
     unseen: RefCell<HashSet<u32>>,
     reply_listeners: RefCell<Vec<ReplyListener>>,
+    handlers: RefCell<HashMap<u32, ActionHandler>>,
 }
 
 impl Center {
@@ -205,6 +209,7 @@ impl Center {
             settings: gs::settings(NOTIFICATIONS),
             unseen: RefCell::default(),
             reply_listeners: RefCell::default(),
+            handlers: RefCell::default(),
         });
         if let Some(s) = &center.settings {
             let weak = Rc::downgrade(&center);
@@ -287,6 +292,46 @@ impl Center {
             reply_placeholder: None,
         };
         self.notify(note, 0);
+    }
+
+    /// A notification from the shell itself with action buttons, kept in
+    /// the message list like an app's. `actions` are (key, label) pairs; a
+    /// `"default"` key is what clicking the notification does.
+    pub fn notify_with_actions(
+        self: &Rc<Self>,
+        summary: &str,
+        body: &str,
+        icon: &str,
+        actions: &[(&str, &str)],
+        on_action: impl Fn(&str) + 'static,
+    ) -> u32 {
+        let Ok(time) = glib::DateTime::now_local() else {
+            return 0;
+        };
+        let note = Note {
+            id: 0,
+            app_name: "Umoja".into(),
+            app_id: None,
+            summary: summary.into(),
+            body: glib::markup_escape_text(body).to_string(),
+            icon: Some(Icon::Name(icon.into())),
+            actions: actions
+                .iter()
+                .map(|(k, l)| (k.to_string(), l.to_string()))
+                .collect(),
+            urgency: Urgency::Normal,
+            value: None,
+            sync_tag: None,
+            transient: false,
+            resident: false,
+            expire_timeout: -1,
+            time,
+            category: None,
+            reply_placeholder: None,
+        };
+        let id = self.notify(note, 0);
+        self.handlers.borrow_mut().insert(id, Rc::new(on_action));
+        id
     }
 
     pub fn note(&self, id: u32) -> Option<Note> {
@@ -447,6 +492,7 @@ impl Center {
             before != notes.len()
         };
         self.unseen.borrow_mut().remove(&id);
+        self.handlers.borrow_mut().remove(&id);
         let in_bubble = self.bubbles.remove(id);
         if let Some(src) = self.expiry.borrow_mut().remove(&id) {
             src.remove();
@@ -490,7 +536,11 @@ impl Center {
     /// The user picked an action button.
     pub fn invoke(&self, id: u32, action: &str) {
         let Some(note) = self.find(id) else { return };
-        self.emit("ActionInvoked", &(id, action).to_variant());
+        let handler = self.handlers.borrow().get(&id).cloned();
+        match handler {
+            Some(h) => h(action),
+            None => self.emit("ActionInvoked", &(id, action).to_variant()),
+        }
         if !note.resident {
             self.close(id, CloseReason::Dismissed);
         } else {

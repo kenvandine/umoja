@@ -243,7 +243,77 @@ pub fn tools() -> Vec<Tool> {
             obj(json!({}), &[]),
             |_| Box::pin(async { Outcome::from(blocking(system_info).await) }),
         ),
+        Tool::new(
+            "free_ai_memory",
+            "Unload the assistant's local AI model from memory, to free RAM and graphics memory for a game, a build or a VM. It loads again by itself with the next question (which then takes a few seconds longer).",
+            obj(json!({}), &[]),
+            |_| Box::pin(async {
+                Outcome::from(blocking(|| match umoja_common::lemonade::unload() {
+                    Ok(true) => Ok("Unloaded the local AI model; its memory is free until the next question.".to_string()),
+                    Ok(false) => Ok("The local AI server isn't running, so it isn't using any memory.".to_string()),
+                    Err(e) => Err(format!("Couldn't unload the model: {e}")),
+                }).await.and_then(|r| r))
+            }),
+        )
+        .with_summary(|_| "Free the AI model's memory".into()),
+        Tool::new(
+            "report_crash",
+            "Open Ubuntu's crash reporter for the newest crash of a program, so the user can send it to Ubuntu's developers. Nothing is sent unless the user chooses to in that window.",
+            obj(json!({"program": {"type": "string", "description": "Program name, e.g. nautilus; empty for the newest crash"}}), &[]),
+            |a| Box::pin(async move { Outcome::from(blocking(move || report_crash(&a)).await.and_then(|r| r)) }),
+        )
+        .with_summary(|a| match arg_str(a, "program").filter(|p| !p.is_empty()) {
+            Some(p) => format!("Open the crash report for {p}"),
+            None => "Open the crash report".into(),
+        }),
     ]
+}
+
+/// Hand the Apport report for a crash to `ubuntu-bug`, which shows what
+/// will be sent and asks before sending anything.
+fn report_crash(a: &Value) -> Result<String, String> {
+    use umoja_common::crashes::{self, Source};
+    let want = arg_str(a, "program").unwrap_or("").trim().to_lowercase();
+    let crashes = crashes::recent(30);
+    let crash = crashes
+        .iter()
+        .find(|c| want.is_empty() || c.program().to_lowercase().contains(&want))
+        .ok_or_else(|| {
+            if want.is_empty() {
+                "There are no crash reports from the last 30 days.".to_string()
+            } else {
+                format!("There is no recent crash report for {want}.")
+            }
+        })?;
+    let Source::Apport(path) = &crash.source else {
+        return Err(format!(
+            "{} has no Apport report, only a core dump (coredumpctl), so it can't be sent with Ubuntu's reporter. Report it to the program's developers instead.",
+            crash.program()
+        ));
+    };
+    if crash.package.is_none() {
+        return Err(format!(
+            "{} isn't from an Ubuntu package, so Ubuntu's reporter won't take it. Report it to the program's developers instead.",
+            crash.program()
+        ));
+    }
+    if !have("ubuntu-bug") {
+        return Err("Ubuntu's crash reporter isn't installed (the apport package).".into());
+    }
+    let mut child = std::process::Command::new("ubuntu-bug")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't start ubuntu-bug: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(format!(
+        "Opened Ubuntu's crash reporter for {}. It shows what would be sent and only sends it if the user chooses to.",
+        crash.program()
+    ))
 }
 
 fn on_off(what: &str, a: &Value) -> String {
