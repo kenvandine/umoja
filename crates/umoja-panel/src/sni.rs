@@ -404,8 +404,9 @@ impl ItemState {
         }
 
         let theme_dir = text("IconThemePath");
-        // Electron/Chromium write each tray icon as <IconThemePath>/<IconName>.png
-        // and several apps reuse the same name (e.g. "chrome_status_icon_1"),
+        // Apps that write their tray icon to a file (Tauri/libappindicator,
+        // Electron) send it as <IconThemePath>/<IconName>.png, and several
+        // reuse the same name (e.g. "status_icon_0"),
         // so look in the item's own directory first; the shared icon theme
         // would hand every such app the first one it found.
         let local_file = |name: &str| -> Option<std::path::PathBuf> {
