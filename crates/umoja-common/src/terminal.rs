@@ -40,7 +40,11 @@ pub fn spawn_in_terminal(cmd: &str) -> std::io::Result<()> {
             .current_dir(glib::home_dir())
             .spawn()
         {
-            Ok(_) => return Ok(()),
+            Ok(child) => {
+                // Its own app scope, not the launching shell part's cgroup.
+                crate::app_scope::move_to_scope(bin, child.id());
+                return Ok(());
+            }
             Err(e) => last = e,
         }
     }
@@ -68,7 +72,11 @@ pub fn spawn_program_in_terminal(argv: &[String], dir: &std::path::Path) -> std:
             .current_dir(dir)
             .spawn()
         {
-            Ok(_) => return Ok(()),
+            Ok(child) => {
+                // Its own app scope, not the launching shell part's cgroup.
+                crate::app_scope::move_to_scope(bin, child.id());
+                return Ok(());
+            }
             Err(e) => last = e,
         }
     }
