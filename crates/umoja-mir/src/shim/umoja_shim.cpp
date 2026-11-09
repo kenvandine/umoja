@@ -33,7 +33,6 @@
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
-#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <map>
@@ -99,6 +98,47 @@ bool is_app_window(WindowInfo const& info) {
     return info.depth_layer() == mir_depth_layer_application && !info.parent();
 }
 
+// Window-management tracing, for debugging how apps (Wine games, ...) ask
+// to be placed. On while $XDG_RUNTIME_DIR/umoja-debug-windows exists, so it
+// can be switched on and off without restarting the session. Goes to the
+// journal (journalctl -t umoja-mir).
+bool debug_windows() {
+    static auto last = std::chrono::steady_clock::time_point{};
+    static bool on = false;
+    auto const now = std::chrono::steady_clock::now();
+    if (now - last > std::chrono::seconds(1)) {
+        last = now;
+        char const* dir = std::getenv("XDG_RUNTIME_DIR");
+        on = dir && access((std::string{dir} + "/umoja-debug-windows").c_str(), F_OK) == 0;
+    }
+    return on;
+}
+
+std::string describe(WindowSpecification const& s) {
+    std::string out;
+    char buf[96];
+    if (s.state().is_set()) out += " state=" + std::to_string(int(s.state().value()));
+    if (s.top_left().is_set()) {
+        std::snprintf(buf, sizeof buf, " pos=%d,%d", s.top_left().value().x.as_int(), s.top_left().value().y.as_int());
+        out += buf;
+    }
+    if (s.size().is_set()) {
+        std::snprintf(buf, sizeof buf, " size=%dx%d", s.size().value().width.as_int(), s.size().value().height.as_int());
+        out += buf;
+    }
+    if (s.output_id().is_set()) out += " output=" + std::to_string(s.output_id().value());
+    if (s.depth_layer().is_set()) out += " layer=" + std::to_string(int(s.depth_layer().value()));
+    return out.empty() ? " (nothing)" : out;
+}
+
+std::string describe(WindowInfo const& info) {
+    auto const w = info.window();
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "'%.40s' state=%d at %d,%d %dx%d", info.name().c_str(), int(info.state()),
+                  w.top_left().x.as_int(), w.top_left().y.as_int(), w.size().width.as_int(), w.size().height.as_int());
+    return buf;
+}
+
 // Run a callback, never letting an exception escape into Mir's loop.
 template <typename F>
 void guarded(char const* what, F&& f) {
@@ -134,6 +174,10 @@ public:
     auto place_new_window(ApplicationInfo const& app, WindowSpecification const& requested)
         -> WindowSpecification override {
         auto spec = MinimalWindowManager::place_new_window(app, requested);
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: new window '%s' asked%s, Mir placed%s\n",
+                         requested.name().is_set() ? requested.name().value().c_str() : "",
+                         describe(requested).c_str(), describe(spec).c_str());
         // org.gnome.mutter center-new-windows
         bool const toplevel = !requested.parent().is_set() || !requested.parent().value().lock();
         // Not a window that maps fullscreen or maximized: Mir has already put
@@ -214,6 +258,8 @@ public:
 
     void advise_state_change(WindowInfo const& info, MirWindowState state) override {
         MinimalWindowManager::advise_state_change(info, state);
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: state of %s -> %d\n", describe(info).c_str(), int(state));
         update_fullscreen_layer(info.window(), state, info.window() == tools.active_window());
     }
 
@@ -415,6 +461,7 @@ public:
     // the bottom of the screen until the game resized itself much later.
     void handle_modify_window(WindowInfo& info, WindowSpecification const& modifications) override {
         WindowSpecification spec = modifications;
+        bool const trace = debug_windows();
         // Only while the window already is, and stays, fullscreen on the same
         // monitor: for a change *to* fullscreen Mir has already put the
         // monitor's rectangle in the request, and dropping it left a window
@@ -441,6 +488,9 @@ public:
             auto const requested = spec.state().consume();
             if (requested != mir_window_state_hidden) it->second = requested;
         }
+        if (trace)
+            std::fprintf(stderr, "umoja-mir: wm: request for %s:%s -> applying%s\n", describe(info).c_str(),
+                         describe(modifications).c_str(), describe(spec).c_str());
         MinimalWindowManager::handle_modify_window(info, spec);
     }
 
@@ -484,6 +534,9 @@ public:
 
     void advise_resize(WindowInfo const& info, geom::Size const& size) override {
         MinimalWindowManager::advise_resize(info, size);
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: resize of %s -> %dx%d\n", describe(info).c_str(),
+                         size.width.as_int(), size.height.as_int());
         if (applying) return;
         auto const id = window_id(info.window());
         if (!tiled.count(id)) return;
@@ -506,6 +559,9 @@ public:
 
     void advise_move_to(WindowInfo const& info, geom::Point top_left) override {
         MinimalWindowManager::advise_move_to(info, top_left);
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: move of %s -> %d,%d\n", describe(info).c_str(),
+                         top_left.x.as_int(), top_left.y.as_int());
         // Windows sliding during a workspace switch are not being moved by
         // the user, and must not turn sticky as they leave the monitor.
         if (animating) return;
