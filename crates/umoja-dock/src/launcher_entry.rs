@@ -86,7 +86,7 @@ pub fn format_count(n: i64) -> String {
 /// `application://foo.desktop` → `foo`, the dock's key for an app.
 pub fn key_for_uri(uri: &str) -> String {
     let id = uri.strip_prefix("application://").unwrap_or(uri);
-    id.trim_end_matches(".desktop").to_string()
+    id.strip_suffix(".desktop").unwrap_or(id).to_string()
 }
 
 #[derive(Default)]
