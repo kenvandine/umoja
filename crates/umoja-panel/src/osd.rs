@@ -80,24 +80,11 @@ impl Request {
     pub fn from_dict(dict: &glib::VariantDict) -> Option<Self> {
         let icon: String = dict.lookup("icon").ok().flatten()?;
         let mut r = Self::icon(&icon);
-        r.label = dict
-            .lookup::<String>("label")
-            .ok()
-            .flatten()
-            .filter(|l| !l.is_empty());
+        r.label = dict.lookup::<String>("label").ok().flatten().filter(|l| !l.is_empty());
         r.connector = dict.lookup::<String>("connector").ok().flatten();
-        let max = dict
-            .lookup::<f64>("max_level")
-            .ok()
-            .flatten()
-            .unwrap_or(1.0);
+        let max = dict.lookup::<f64>("max_level").ok().flatten().unwrap_or(1.0);
         // gnome-settings-daemon sends -1 for "no level".
-        if let Some(level) = dict
-            .lookup::<f64>("level")
-            .ok()
-            .flatten()
-            .filter(|l| *l >= 0.0)
-        {
+        if let Some(level) = dict.lookup::<f64>("level").ok().flatten().filter(|l| *l >= 0.0) {
             r = r.level(level, max);
         }
         Some(r)
@@ -338,14 +325,7 @@ impl Window {
 }
 
 /// gnome-shell's BarLevel without a handle (LTR; RTL mirrors it).
-fn draw_bar(
-    area: &gtk::DrawingArea,
-    cr: &gtk::cairo::Context,
-    width: f64,
-    height: f64,
-    value: f64,
-    max: f64,
-) {
+fn draw_bar(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: f64, height: f64, value: f64, max: f64) {
     use std::f64::consts::TAU;
     let rtl = area.direction() == gtk::TextDirection::Rtl;
     if rtl {
@@ -356,38 +336,18 @@ fn draw_bar(
     let fg = area.color();
     let style = adw::StyleManager::default();
     let dark = style.is_dark();
-    let track = gdk::RGBA::new(
-        fg.red(),
-        fg.green(),
-        fg.blue(),
-        if dark { 0.16 } else { 0.3 },
-    );
+    let track = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), if dark { 0.16 } else { 0.3 });
     // The level follows the GNOME accent color, like the Quick Settings
     // sliders; the overdrive separator stays in the foreground color.
     let fill = style.accent_color_rgba();
     // $destructive_color: $red_4 (dark) / $red_3 (light).
     let overdrive = if dark {
-        gdk::RGBA::new(
-            0xc0 as f32 / 255.0,
-            0x1c as f32 / 255.0,
-            0x28 as f32 / 255.0,
-            1.0,
-        )
+        gdk::RGBA::new(0xc0 as f32 / 255.0, 0x1c as f32 / 255.0, 0x28 as f32 / 255.0, 1.0)
     } else {
-        gdk::RGBA::new(
-            0xe0 as f32 / 255.0,
-            0x1b as f32 / 255.0,
-            0x24 as f32 / 255.0,
-            1.0,
-        )
+        gdk::RGBA::new(0xe0 as f32 / 255.0, 0x1b as f32 / 255.0, 0x24 as f32 / 255.0, 1.0)
     };
     let set = |c: &gdk::RGBA| {
-        cr.set_source_rgba(
-            c.red() as f64,
-            c.green() as f64,
-            c.blue() as f64,
-            c.alpha() as f64,
-        )
+        cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, c.alpha() as f64)
     };
 
     let radius = width.min(BAR_HEIGHT) / 2.0;
@@ -395,18 +355,10 @@ fn draw_bar(
     let bottom = (height + BAR_HEIGHT) / 2.0;
     let mid = height / 2.0;
     let span = width - 2.0 * radius;
-    let end_x = if max > 0.0 {
-        radius + span * (value / max)
-    } else {
-        0.0
-    };
+    let end_x = if max > 0.0 { radius + span * (value / max) } else { 0.0 };
     let sep_x = radius + span * (OVERDRIVE_START / max);
     let overdrive_active = max > OVERDRIVE_START;
-    let sep_w = if overdrive_active {
-        SEPARATOR_WIDTH
-    } else {
-        0.0
-    };
+    let sep_w = if overdrive_active { SEPARATOR_WIDTH } else { 0.0 };
 
     // Background, from the end of the fill to the right end cap.
     cr.arc(width - radius, mid, radius, TAU * 0.75, TAU * 0.25);
@@ -435,11 +387,7 @@ fn draw_bar(
 
     // Rounded end of the fill.
     if value > 0.0 {
-        set(if value <= OVERDRIVE_START {
-            &fill
-        } else {
-            &overdrive
-        });
+        set(if value <= OVERDRIVE_START { &fill } else { &overdrive });
         cr.arc(end_x, mid, radius, TAU * 0.75, TAU * 0.25);
         cr.line_to(end_x.floor(), bottom);
         cr.line_to(end_x.floor(), top);
@@ -449,11 +397,7 @@ fn draw_bar(
 
     if overdrive_active {
         cr.rectangle(sep_x - sep_w / 2.0, top, sep_w, BAR_HEIGHT);
-        set(if value <= OVERDRIVE_START {
-            &fg
-        } else {
-            &track
-        });
+        set(if value <= OVERDRIVE_START { &fg } else { &track });
         let _ = cr.fill();
     }
 }
@@ -495,9 +439,7 @@ pub fn show(r: Request) {
 
 impl Osd {
     fn sync_monitors(&self) {
-        let Some(display) = gdk::Display::default() else {
-            return;
-        };
+        let Some(display) = gdk::Display::default() else { return };
         let monitors: Vec<gdk::Monitor> = display
             .monitors()
             .iter::<gdk::Monitor>()
@@ -595,27 +537,12 @@ mod tests {
         assert_eq!(volume_icon(false, true, 0.5), "audio-volume-muted-symbolic");
         assert_eq!(volume_icon(false, false, 0.0), "audio-volume-low-symbolic");
         assert_eq!(volume_icon(false, false, 0.2), "audio-volume-low-symbolic");
-        assert_eq!(
-            volume_icon(false, false, 1.0 / 3.0),
-            "audio-volume-low-symbolic"
-        );
-        assert_eq!(
-            volume_icon(false, false, 0.5),
-            "audio-volume-medium-symbolic"
-        );
+        assert_eq!(volume_icon(false, false, 1.0 / 3.0), "audio-volume-low-symbolic");
+        assert_eq!(volume_icon(false, false, 0.5), "audio-volume-medium-symbolic");
         assert_eq!(volume_icon(false, false, 1.0), "audio-volume-high-symbolic");
-        assert_eq!(
-            volume_icon(false, false, 1.2),
-            "audio-volume-overamplified-symbolic"
-        );
-        assert_eq!(
-            volume_icon(true, false, 1.2),
-            "microphone-sensitivity-high-symbolic"
-        );
-        assert_eq!(
-            volume_icon(true, true, 1.0),
-            "microphone-sensitivity-muted-symbolic"
-        );
+        assert_eq!(volume_icon(false, false, 1.2), "audio-volume-overamplified-symbolic");
+        assert_eq!(volume_icon(true, false, 1.2), "microphone-sensitivity-high-symbolic");
+        assert_eq!(volume_icon(true, true, 1.0), "microphone-sensitivity-muted-symbolic");
     }
 
     #[test]
