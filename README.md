@@ -83,9 +83,17 @@ The greeter runs on Wayland: LightDM starts
 `/usr/libexec/umoja-greeter-session`, which runs `umoja-mir` in greeter
 mode (no session services, keybindings or Xwayland) with `umoja-greeter`
 as its only client, so the login screen and the desktop share one
-compositor. If it ever fails to come up, switch to the X11 greeter by
-putting `greeter-session=lightdm-umoja-greeter-x11` under `[Seat:*]` in a
-file in `/etc/lightdm/lightdm.conf.d/`.
+compositor. If `umoja-mir` can't start, the script falls back to the same
+greeter on an X server it starts itself, so the machine still gets a login
+screen. To use the X11 greeter permanently, put
+`greeter-session=lightdm-umoja-greeter-x11` under `[Seat:*]` in a file in
+`/etc/lightdm/lightdm.conf.d/`.
+
+On hybrid laptops (an integrated GPU plus NVIDIA), `umoja-mir` keeps the
+compositor on the integrated GPU by passing Mir
+`--driver-quirks skip:driver:nvidia` (or `nouveau`); apps can still be
+offloaded to the NVIDIA GPU with `prime-run`. Set `UMOJA_ALL_GPUS=1`, or
+your own `MIR_SERVER_DRIVER_QUIRKS`, to turn that off.
 
 ## Publishing
 

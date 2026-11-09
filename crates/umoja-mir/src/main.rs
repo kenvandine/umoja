@@ -9,6 +9,7 @@
 mod display_config;
 mod ffi;
 mod gestures;
+mod gpu;
 mod greeter;
 mod idle;
 mod input;
@@ -49,7 +50,11 @@ fn main() {
         idle::start();
     }
 
-    let args: Vec<CString> = std::env::args_os()
+    let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // Hybrid laptops: keep the compositor on the integrated GPU (gpu.rs).
+    gpu::add_quirks(&mut args);
+    let args: Vec<CString> = args
+        .into_iter()
         .map(|a| CString::new(a.into_encoded_bytes()).expect("argv has no NUL"))
         .collect();
     let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr()).collect();

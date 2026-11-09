@@ -25,8 +25,74 @@ wait_active() {
     log "session $XDG_SESSION_ID still not active after 10s; starting anyway"
 }
 
+# The real GPU driver can still be loading when LightDM starts us (NVIDIA's
+# module in particular is slow), leaving only the firmware framebuffer
+# (simpledrm), which Mir rejects. Wait up to 10s for a real DRM driver.
+wait_gpu() {
+    i=0
+    while [ $i -lt 100 ]; do
+        for d in /sys/class/drm/card[0-9]*/device/driver; do
+            [ -e "$d" ] || continue
+            case "$(basename "$(readlink "$d")")" in
+                simple-framebuffer|simpledrm|efi-framebuffer|vesa-framebuffer|vgem|vkms|evdi|udl) ;;
+                *) return 0 ;;
+            esac
+        done
+        sleep 0.1
+        i=$((i + 1))
+    done
+    log "no GPU driver after 10s; starting anyway"
+}
+
+# Last resort when umoja-mir can't start on this hardware: run the same
+# greeter on an X server we start ourselves (rootless, on our VT), so the
+# machine still gets a login screen instead of LightDM failing the seat.
+# LightDM's greeter pipes are inherited, so the greeter talks to it as usual.
+x11_fallback() {
+    command -v Xorg >/dev/null 2>&1 || { log "no Xorg for the X11 fallback"; return 1; }
+    n=0
+    while [ -e "/tmp/.X$n-lock" ] || [ -e "/tmp/.X11-unix/X$n" ]; do
+        n=$((n + 1))
+    done
+    dir="${XDG_RUNTIME_DIR:-/tmp}/umoja-greeter"
+    mkdir -p "$dir"
+    export XAUTHORITY="$dir/Xauthority"
+    : > "$XAUTHORITY"
+    command -v xauth >/dev/null 2>&1 || { log "no xauth for the X11 fallback"; return 1; }
+    cookie=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    xauth -q -f "$XAUTHORITY" add ":$n" . "$cookie" || return 1
+    vt=""
+    [ -n "${XDG_VTNR:-}" ] && vt="vt$XDG_VTNR"
+    log "umoja-mir could not start; falling back to the X11 greeter on :$n $vt"
+    # shellcheck disable=SC2086
+    Xorg ":$n" $vt -keeptty -novtswitch -nolisten tcp -auth "$XAUTHORITY" \
+        -background none -logfile "$dir/Xorg.log" &
+    xpid=$!
+    i=0
+    while [ ! -e "/tmp/.X11-unix/X$n" ]; do
+        kill -0 $xpid 2>/dev/null || { log "Xorg failed to start (see $dir/Xorg.log)"; return 1; }
+        [ $i -ge 100 ] && { log "Xorg did not come up in 10s"; kill $xpid; return 1; }
+        sleep 0.1
+        i=$((i + 1))
+    done
+    unset WAYLAND_DISPLAY UMOJA_GREETER UMOJA_NO_SESSION_TARGET
+    DISPLAY=":$n" XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 /usr/sbin/umoja-greeter
+    gstatus=$?
+    kill $xpid 2>/dev/null
+    wait $xpid 2>/dev/null
+    exit $gstatus
+}
+
 # One retry if the compositor dies straight away (the GPU race above, or
 # the previous session's compositor still letting go of it at logout).
+# If it still won't start, fall back to X11 rather than leave no login
+# screen at all. UMOJA_GREETER_X11=1 (e.g. in /etc/environment) goes
+# straight to the X11 greeter.
+wait_active
+wait_gpu
+case "${UMOJA_GREETER_X11:-}" in
+    1|yes|true) x11_fallback ;;
+esac
 for attempt in 1 2; do
     wait_active
     started=$(date +%s)
@@ -36,4 +102,5 @@ for attempt in 1 2; do
     [ $(( $(date +%s) - started )) -lt 3 ] || exit $status
     [ $attempt -eq 1 ] && { log "umoja-mir exited with $status during start-up; retrying once"; sleep 1; }
 done
+x11_fallback
 exit $status
