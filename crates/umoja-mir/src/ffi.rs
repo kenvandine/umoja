@@ -499,6 +499,15 @@ pub extern "C" fn umoja_window_menu(
     })
 }
 
+/// Every pointer motion: (dx, dy) is the relative motion, `edges` the
+/// outer screen edges (`UMOJA_EDGE_*`) the pointer now sits on.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_pointer_motion(x: i32, y: i32, dx: f32, dy: f32, edges: u32) {
+    guard("pointer_motion", (), || {
+        crate::edge_pressure::motion(x, y, dx as f64, dy as f64, edges)
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_pointer_pressed() {
     guard("pointer_pressed", (), shell::unfocus_places)

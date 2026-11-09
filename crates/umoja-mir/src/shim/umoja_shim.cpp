@@ -372,6 +372,7 @@ public:
 
         if (action == mir_pointer_action_motion) {
             if (moving) on_move(px, py);
+            else report_motion(event, px, py);
         } else if (action == mir_pointer_action_button_up) {
             if (moving && mir_pointer_event_buttons(event) == 0) end_move();
         }
@@ -704,6 +705,31 @@ private:
 
     bool on_primary(Window const& w) const {
         return outputs.size() < 2 || primary_output().contains(centre_of(w));
+    }
+
+    // GNOME's pressure barrier on the outer screen edges (edge_pressure.rs):
+    // pass the motion and which edges hold the pointer back.
+    void report_motion(MirPointerEvent const* event, int32_t px, int32_t py) {
+        if (outputs.empty()) return;
+        geom::Point const p{px, py};
+        geom::Rectangle const o = output_at(p);
+        if (!o.contains(p)) return;
+        auto const open = [&](int32_t x, int32_t y) {
+            for (auto const& [id, r] : outputs)
+                if (r.contains(geom::Point{x, y})) return false;
+            return true;
+        };
+        int32_t const left = o.top_left.x.as_int();
+        int32_t const top = o.top_left.y.as_int();
+        int32_t const right = left + o.size.width.as_int() - 1;
+        int32_t const bottom = top + o.size.height.as_int() - 1;
+        uint32_t edges = 0;
+        if (px <= left && open(left - 1, py)) edges |= UMOJA_EDGE_LEFT;
+        if (px >= right && open(right + 1, py)) edges |= UMOJA_EDGE_RIGHT;
+        if (py <= top && open(px, top - 1)) edges |= UMOJA_EDGE_TOP;
+        if (py >= bottom && open(px, bottom + 1)) edges |= UMOJA_EDGE_BOTTOM;
+        umoja_pointer_motion(px, py, mir_pointer_event_axis_value(event, mir_pointer_axis_relative_x),
+                             mir_pointer_event_axis_value(event, mir_pointer_axis_relative_y), edges);
     }
 
     geom::Rectangle output_at(geom::Point p) const {

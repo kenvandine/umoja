@@ -7,6 +7,7 @@
 //! session down.
 
 mod display_config;
+mod edge_pressure;
 mod ffi;
 mod gestures;
 mod gpu;

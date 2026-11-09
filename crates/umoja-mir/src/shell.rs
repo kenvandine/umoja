@@ -635,6 +635,17 @@ impl Compositor {
         crate::idle::activate_screensaver()
     }
 
+    /// The pointer pushed against an outer screen `edge` (1 left, 2 right,
+    /// 4 top, 8 bottom) at (x, y), like GNOME's pressure barrier: an
+    /// auto-hidden dock on that edge comes back.
+    #[zbus(signal)]
+    async fn edge_pressure(
+        emitter: &zbus::object_server::SignalEmitter<'_>,
+        edge: u32,
+        x: i32,
+        y: i32,
+    ) -> zbus::Result<()>;
+
     /// Emitted when the active workspace or the number of workspaces changes.
     #[zbus(signal)]
     async fn workspaces_changed(
@@ -679,6 +690,24 @@ fn emit_workspaces(conn: zbus::Connection) {
     });
 }
 
+static CONNECTION: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
+
+/// Emit EdgePressure (from the input thread; sent on the runtime).
+pub fn edge_pressure(edge: u32, x: i32, y: i32) {
+    let Some(conn) = CONNECTION.get().cloned() else {
+        return;
+    };
+    crate::session::RUNTIME.spawn(async move {
+        let sent = match zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+            Ok(e) => Compositor::edge_pressure(&e, edge, x, y).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = sent {
+            tracing::debug!(error = %e, "EdgePressure not sent");
+        }
+    });
+}
+
 pub fn start() {
     crate::session::RUNTIME.spawn(async move {
         let built = match zbus::connection::Builder::session()
@@ -693,6 +722,7 @@ pub fn start() {
             Ok(conn) => {
                 crate::session::keep_name(conn.clone(), BUS_NAME);
                 emit_workspaces(conn.clone());
+                let _ = CONNECTION.set(conn.clone());
                 std::mem::forget(conn);
             }
             Err(e) => tracing::warn!(error = %e, "org.umoja.Compositor unavailable"),

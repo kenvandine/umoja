@@ -6,9 +6,15 @@
 //!   overlaps it, then slides away; which windows count follows
 //!   `intellihide-mode` (all windows, the focused app's windows, maximized
 //!   windows only);
-//! * with `autohide` comes back while the pointer rests on the screen edge
-//!   (after `show-delay`) and leaves again `hide-delay` after the pointer
-//!   does;
+//! * with `autohide` comes back when the pointer pushes against the screen
+//!   edge under it (GNOME's pressure barrier: `pressure-threshold` pixels of
+//!   motion into the edge within a second, sensed by umoja-mir and sent as
+//!   `EdgePressure`), and leaves again `hide-delay` after the pointer does.
+//!   Only reaching the edge is not enough, so a fullscreen app's controls at
+//!   the bottom of the screen stay clickable. With `require-pressure-to-show`
+//!   off, resting on the edge for `show-delay` brings it back instead;
+//! * doesn't come back over a focused fullscreen window unless
+//!   `autohide-in-fullscreen` is on;
 //! * stays up while one of its menus is open or it has the keyboard
 //!   (Ctrl+Alt+Tab).
 //!
@@ -39,6 +45,8 @@ const HIDDEN_SIZE: i32 = 2;
 const SLIDE_SLOWER: f64 = 1.75;
 /// How often intellihide looks at window positions.
 const POLL: Duration = Duration::from_millis(250);
+/// How long a push keeps the dock up if the pointer never enters it.
+const PUSH_GRACE: Duration = Duration::from_millis(1500);
 
 // org.umoja.Compositor window flags (UMOJA_WINDOW_* in the shim header).
 const FLAG_FOCUSED: u32 = 1;
@@ -62,6 +70,8 @@ pub struct HideConfig {
     pub show_delay: Duration,
     pub hide_delay: Duration,
     pub animation: Duration,
+    pub require_pressure: bool,
+    pub in_fullscreen: bool,
 }
 
 fn seconds(schema: &str, key: &str, default: f64) -> Duration {
@@ -91,6 +101,8 @@ impl HideConfig {
             show_delay: seconds(d, "show-delay", 0.25),
             hide_delay: seconds(d, "hide-delay", 0.20),
             animation: seconds(d, "animation-time", 0.20),
+            require_pressure: gs::get_bool(d, "require-pressure-to-show", true),
+            in_fullscreen: gs::get_bool(d, "autohide-in-fullscreen", false),
         }
     }
 }
@@ -101,6 +113,10 @@ pub struct Hide {
     /// The dock is (being) shown.
     shown: Cell<bool>,
     hovered: Cell<bool>,
+    /// The pointer pushed against the edge: show until it enters and leaves
+    /// the dock (or never arrives).
+    pushed: Cell<bool>,
+    push_timer: RefCell<Option<glib::SourceId>>,
     /// Intellihide: a window covers the dock.
     overlapped: Cell<bool>,
     timer: RefCell<Option<glib::SourceId>>,
@@ -133,8 +149,15 @@ impl Dock {
             return true;
         }
         let h = &cfg.hide;
-        if h.autohide && self.hide.hovered.get() {
-            return true;
+        if h.autohide {
+            if self.hide.pushed.get() {
+                return true;
+            }
+            // Under the pressure barrier, hovering only keeps a shown dock
+            // up; it never brings a hidden one back.
+            if self.hide.hovered.get() && (self.hide.shown.get() || !h.require_pressure) {
+                return true;
+            }
         }
         if h.intellihide {
             return !self.hide.overlapped.get();
@@ -167,6 +190,8 @@ impl Dock {
         let cfg = self.config.borrow().hide;
         let delay = if !want {
             cfg.hide_delay
+        } else if self.hide.pushed.get() {
+            Duration::ZERO
         } else if self.hide.hovered.get() {
             cfg.show_delay
         } else {
@@ -199,6 +224,7 @@ impl Dock {
         let ms = (base * SLIDE_SLOWER).round().max(1.0) as u32;
         let from = self.hide.progress.get();
         if show {
+            self.set_input(true);
             self.list.set_visible(true);
             self.update_reserved_space();
         }
@@ -249,6 +275,10 @@ impl Dock {
     /// Shrink to the thin strip along the edge that brings the dock back.
     pub fn collapse(&self) {
         self.list.set_visible(false);
+        // Behind the pressure barrier the strip only needs to exist: clicks
+        // and hovers on the screen edge go to the window underneath.
+        let cfg = *self.config.borrow();
+        self.set_input(!(cfg.hide.autohide && cfg.hide.require_pressure));
         let (_, along) = self.hide.extent.get();
         let along = along.max(HIDDEN_SIZE);
         if self.config.borrow().position.is_vertical() {
@@ -256,6 +286,98 @@ impl Dock {
         } else {
             self.window.set_default_size(along, HIDDEN_SIZE);
         }
+    }
+
+    /// Let the dock take pointer input, or let it all through.
+    fn set_input(&self, on: bool) {
+        let Some(surface) = self.window.surface() else {
+            return;
+        };
+        let rect = if on {
+            gtk::cairo::RectangleInt::new(0, 0, i32::MAX / 2, i32::MAX / 2)
+        } else {
+            gtk::cairo::RectangleInt::new(0, 0, 0, 0)
+        };
+        surface.set_input_region(&gtk::cairo::Region::create_rectangle(&rect));
+    }
+
+    /// umoja-mir's EdgePressure: the pointer pushed against `edge` at (x, y).
+    fn on_edge_pressure(self: &Rc<Self>, edge: u32, x: i32, y: i32) {
+        let cfg = *self.config.borrow();
+        let ours = match cfg.position {
+            DockPosition::Left => 1,
+            DockPosition::Right => 2,
+            DockPosition::Top => 4,
+            DockPosition::Bottom => 8,
+        };
+        if cfg.fixed || !cfg.hide.autohide || edge != ours || self.hide.shown.get() {
+            return;
+        }
+        // Like the barrier, only along the dock itself, on its monitor.
+        let Some(dock) = self.dock_rect() else { return };
+        let along = if cfg.position.is_vertical() {
+            (dock.y..dock.y + dock.h).contains(&y)
+        } else {
+            (dock.x..dock.x + dock.w).contains(&x)
+        };
+        let Some(monitor) = self.monitor_rect() else {
+            return;
+        };
+        if !along || !monitor.contains(x, y) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let windows = if cfg.hide.in_fullscreen {
+                None
+            } else {
+                fetch_windows().await
+            };
+            let Some(d) = weak.upgrade() else { return };
+            if windows.is_some_and(|w| fullscreen_on(&w, &monitor)) {
+                tracing::debug!("edge pressure over a fullscreen window: dock stays hidden");
+                return;
+            }
+            d.push();
+        });
+    }
+
+    fn push(self: &Rc<Self>) {
+        self.hide.pushed.set(true);
+        if let Some(id) = self.hide.push_timer.borrow_mut().take() {
+            id.remove();
+        }
+        // Normally the pointer enters the dock as it slides in, and leaving
+        // it ends the push; give up if it never does.
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(PUSH_GRACE, move || {
+            if let Some(d) = weak.upgrade() {
+                d.hide.push_timer.borrow_mut().take();
+                if d.hide.pushed.replace(false) {
+                    d.update_visibility();
+                }
+            }
+        });
+        *self.hide.push_timer.borrow_mut() = Some(id);
+        self.update_visibility();
+    }
+
+    fn end_push(&self) {
+        self.hide.pushed.set(false);
+        if let Some(id) = self.hide.push_timer.borrow_mut().take() {
+            id.remove();
+        }
+    }
+
+    fn monitor_rect(&self) -> Option<Rect> {
+        let surface = self.window.surface()?;
+        let g = surface.display().monitor_at_surface(&surface)?.geometry();
+        Some(Rect {
+            x: g.x(),
+            y: g.y(),
+            w: g.width(),
+            h: g.height(),
+        })
     }
 
     /// Remember the shown dock's size (call when its contents change).
@@ -278,6 +400,8 @@ impl Dock {
         motion.connect_enter(move |_, _, _| {
             if let Some(d) = enter.upgrade() {
                 d.hide.hovered.set(true);
+                // In the dock now: hovering keeps it up from here.
+                d.end_push();
                 d.update_visibility();
             }
         });
@@ -289,6 +413,42 @@ impl Dock {
             }
         });
         self.window.add_controller(motion);
+        // A dock that starts out hidden collapsed before it had a surface.
+        let mapped = Rc::downgrade(self);
+        self.window.connect_map(move |_| {
+            if let Some(d) = mapped.upgrade()
+                && !d.hide.shown.get()
+            {
+                d.collapse();
+            }
+        });
+        self.subscribe_edge_pressure();
+    }
+
+    fn subscribe_edge_pressure(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+                return;
+            };
+            #[allow(deprecated)]
+            let id = conn.signal_subscribe(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                Some(dbus::COMPOSITOR_INTERFACE),
+                Some("EdgePressure"),
+                Some(dbus::COMPOSITOR_OBJECT_PATH),
+                None,
+                gio::DBusSignalFlags::NONE,
+                move |_, _, _, _, _, params| {
+                    let Some(d) = weak.upgrade() else { return };
+                    if let Some((edge, x, y)) = params.get::<(u32, i32, i32)>() {
+                        d.on_edge_pressure(edge, x, y);
+                    }
+                },
+            );
+            // Lives as long as the dock (the process).
+            std::mem::forget(id);
+        });
     }
 
     fn start_polling(self: &Rc<Self>) {
@@ -402,7 +562,23 @@ struct Rect {
     h: i32,
 }
 
+/// A focused fullscreen window on `monitor` (GNOME keeps the dock away
+/// from it unless autohide-in-fullscreen is set).
+fn fullscreen_on(windows: &[Row], monitor: &Rect) -> bool {
+    windows.iter().any(|w| {
+        w.flags & FLAG_FULLSCREEN != 0
+            && w.flags & FLAG_FOCUSED != 0
+            && w.flags & FLAG_CURRENT_WORKSPACE != 0
+            && w.flags & FLAG_MINIMIZED == 0
+            && monitor.intersects(&w.rect)
+    })
+}
+
 impl Rect {
+    fn contains(&self, x: i32, y: i32) -> bool {
+        (self.x..self.x + self.w).contains(&x) && (self.y..self.y + self.h).contains(&y)
+    }
+
     fn intersects(&self, o: &Rect) -> bool {
         self.x < o.x + o.w && o.x < self.x + self.w && self.y < o.y + o.h && o.y < self.y + self.h
     }

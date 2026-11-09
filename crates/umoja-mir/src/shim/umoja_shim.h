@@ -210,6 +210,15 @@ uint64_t umoja_switcher_preview(void);
 // "Move to" entries apply.
 void umoja_window_menu(uint64_t id, int32_t x, int32_t y, uint32_t flags, uint32_t workspace, uint32_t n_workspaces,
                        uint32_t neighbours);
+// Outer screen edges the pointer sits on (no monitor beyond them).
+enum {
+    UMOJA_EDGE_LEFT = 1 << 0,
+    UMOJA_EDGE_RIGHT = 1 << 1,
+    UMOJA_EDGE_TOP = 1 << 2,
+    UMOJA_EDGE_BOTTOM = 1 << 3,
+};
+// Every pointer motion, for the dock's pressure barrier (edge_pressure.rs).
+void umoja_pointer_motion(int32_t x, int32_t y, float dx, float dy, uint32_t edges);
 // A pointer button went down: hand keyboard focus back from the top bar or
 // dock (Ctrl+Alt+Tab).
 void umoja_pointer_pressed(void);
