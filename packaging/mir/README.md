@@ -56,6 +56,11 @@ Umoja PPA:
   on the Intel iGPU tore on NVIDIA-driven monitors. The GL renderer now
   calls `glFinish()` after each frame on NVIDIA (`MIR_GL_FINISH_AFTER_RENDER`
   overrides).
+- `patches/3009_cross-gpu-cpu-copy.patch`: GL/Vulkan windows still showed
+  stripes of wrong content on NVIDIA-driven monitors (wl_shm windows were
+  fine). A client dma-buf drawn on a GPU other than the one that imported it
+  is now read back once per commit through the importing GPU and uploaded
+  like a wl_shm buffer (`MIR_CROSS_GPU_CPU_COPY=0` turns this off).
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

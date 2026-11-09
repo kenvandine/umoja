@@ -1,0 +1,157 @@
+Description: Draw windows from another GPU through a CPU copy
+ On Intel+NVIDIA hybrid laptops, NVIDIA composites a monitor wired to its
+ own ports. Windows drawn by GL/Vulkan clients (on either GPU) showed
+ stripes of wrong content there, all the time, while wl_shm windows were
+ fine. When a client dma-buf has to be drawn on a GPU other than the one
+ that imported it, read it back once through the importing GPU and upload
+ it like a wl_shm buffer. MIR_CROSS_GPU_CPU_COPY=0 restores direct import.
+Author: Umoja
+Forwarded: no
+
+diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dmabuf.cpp
+index 2468dbe..c5211c0 100644
+--- a/src/platform/graphics/linux_dmabuf.cpp
++++ b/src/platform/graphics/linux_dmabuf.cpp
+@@ -35,6 +35,11 @@
+ #include <mir/graphics/dmabuf_buffer.h>
+ #include <mir/graphics/egl_context_executor.h>
+ #include <mir/renderer/sw/pixel_source.h>
++#include <mir/graphics/shm_buffer.h>
++
++#include <cstdlib>
++#include <future>
++#include <mutex>
+ 
+ #include <EGL/egl.h>
+ #include <cstdint>
+@@ -1190,7 +1195,86 @@ public:
+     {
+         return provider_;
+     }
++
++    /* The buffer's pixels, read back through the GPU that imported it.
++     *
++     * Used to draw the buffer on a different GPU: NVIDIA renders garbage
++     * stripes from buffers that Intel clients (and Intel blits) hand it on
++     * hybrid laptops, while plain memory uploads (as for wl_shm) are fine.
++     * Read once per committed buffer; a committed buffer doesn't change.
++     */
++    auto cpu_copy() -> std::shared_ptr<mgc::MemoryBackedShmBuffer>
++    {
++        std::lock_guard lock{cpu_copy_mutex};
++        if (cpu_copy_ || cpu_copy_failed)
++        {
++            return cpu_copy_;
++        }
++
++        auto copy = std::make_shared<mgc::MemoryBackedShmBuffer>(size_, mir_pixel_format_argb_8888);
++        auto mapping = copy->map_writeable();
++        auto* const dest = mapping->data();
++        GLsizei const width = size_.width.as_int();
++        GLsizei const height = size_.height.as_int();
++        GLuint const src = tex.tex_id();
++
++        std::promise<bool> done;
++        auto result = done.get_future();
++        egl_executor->spawn(
++            [&done, dest, width, height, src]()
++            {
++                bool ok = false;
++                GLuint fbo{0};
++                glGenFramebuffers(1, &fbo);
++                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src, 0);
++                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
++                {
++                    glPixelStorei(GL_PACK_ALIGNMENT, 4);
++                    while (glGetError() != GL_NO_ERROR) {}
++                    // ARGB8888 is B,G,R,A in memory: GL_BGRA_EXT gives it directly.
++                    glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, dest);
++                    if (glGetError() == GL_NO_ERROR)
++                    {
++                        ok = true;
++                    }
++                    else
++                    {
++                        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, dest);
++                        if (glGetError() == GL_NO_ERROR)
++                        {
++                            auto* px = reinterpret_cast<unsigned char*>(dest);
++                            for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i)
++                            {
++                                std::swap(px[i * 4], px[i * 4 + 2]);
++                            }
++                            ok = true;
++                        }
++                    }
++                }
++                glBindFramebuffer(GL_FRAMEBUFFER, 0);
++                glDeleteFramebuffers(1, &fbo);
++                done.set_value(ok);
++            });
++        bool const ok = result.get();
++        mapping.reset();
++
++        if (ok)
++        {
++            cpu_copy_ = std::move(copy);
++        }
++        else
++        {
++            cpu_copy_failed = true;
++            mir::log_warning("Cross-GPU buffer: CPU copy failed, falling back to direct import");
++        }
++        return cpu_copy_;
++    }
+ private:
++    std::mutex cpu_copy_mutex;
++    std::shared_ptr<mgc::MemoryBackedShmBuffer> cpu_copy_;
++    bool cpu_copy_failed{false};
++
+     friend class DmaBufMapping;
+     class DmaBufMapping : public mrs::Mapping<std::byte const>
+     {
+@@ -1538,6 +1622,20 @@ void mg::DMABufEGLProvider::validate_import(DMABufBuffer const& dma_buf)
+     }
+ }
+ 
++namespace
++{
++/* Draw buffers from another GPU via a CPU copy (MIR_CROSS_GPU_CPU_COPY=0 turns it off). */
++auto cross_gpu_cpu_copy() -> bool
++{
++    static bool const enabled = []
++        {
++            auto const env = getenv("MIR_CROSS_GPU_CPU_COPY");
++            return !env || strcmp(env, "0") != 0;
++        }();
++    return enabled;
++}
++}
++
+ auto mg::DMABufEGLProvider::as_texture(std::shared_ptr<NativeBufferBase> buffer)
+     -> std::shared_ptr<gl::Texture>
+ {
+@@ -1548,7 +1646,21 @@ auto mg::DMABufEGLProvider::as_texture(std::shared_ptr<NativeBufferBase> buffer)
+             auto tex = dmabuf_tex->as_texture();
+             return std::shared_ptr<gl::Texture>(std::move(dmabuf_tex), tex);
+         }
+-        else if (auto descriptor = descriptor_for_format_and_modifiers(
++        else if (cross_gpu_cpu_copy())
++        {
++            if (auto copy = dmabuf_tex->cpu_copy())
++            {
++                dmabuf_tex->on_consumed();
++                // Key the uploaded texture by this provider (only used as a map key).
++                auto texture = copy->texture_for_provider(
++                    egl_delegate, reinterpret_cast<mg::RenderingProvider*>(this));
++                // Keep the client buffer (and so its copy) alive as long as the texture.
++                return std::shared_ptr<gl::Texture>(
++                    texture.get(),
++                    [texture, copy, dmabuf_tex](gl::Texture*) {});
++            }
++        }
++        if (auto descriptor = descriptor_for_format_and_modifiers(
+                     dmabuf_tex->format(),
+                     dmabuf_tex->modifier().value_or(DRM_FORMAT_MOD_INVALID),
+                     *this))
