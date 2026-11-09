@@ -1,6 +1,6 @@
 //! The overlay window: search entry, app grid and assistant answers.
 
-use crate::assistant::agent::{self, Question, StepState};
+use crate::assistant::agent::{self, Question, Reply, StepState};
 use crate::assistant::tools::Risk;
 use crate::clipboard::{self, RowAction};
 use crate::context::{self, Attachment, FocusedWindow, Kind, OcrError, Transform};
@@ -27,6 +27,10 @@ use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
 /// Most apps shown for a search. With no search the grid lists every app
 /// and scrolls, like GNOME's app grid.
 const MAX_RESULTS: usize = 48;
+/// Earlier messages sent with a follow-up (three exchanges).
+const MAX_HISTORY: usize = 6;
+/// How much of an earlier message (with its attached context) is kept.
+const MAX_HISTORY_CHARS: usize = 6000;
 /// How long the overlay hides before a capture so it isn't in the shot.
 const STEP_ASIDE: Duration = Duration::from_millis(250);
 
@@ -77,6 +81,16 @@ pub struct Overlay {
     clip_empty: gtk::Label,
     copy_button: gtk::Button,
     answer_text: RefCell<String>,
+    /// The conversation shown in the assistant card: earlier user and
+    /// assistant messages, sent along with follow-ups. Cleared when the
+    /// card goes away.
+    conversation: RefCell<Vec<serde_json::Value>>,
+    /// The last answer asked the user something: the search entry is a
+    /// reply box until it's answered.
+    awaiting_reply: Cell<bool>,
+    /// This conversation started on the local model (crash diagnosis), so
+    /// its follow-ups stay local too.
+    local_chat: Cell<bool>,
 }
 
 /// Width of an app grid tile, icon plus label, as in GNOME (about 128px).
@@ -341,6 +355,9 @@ impl Overlay {
             clip_empty,
             copy_button,
             answer_text: RefCell::default(),
+            conversation: RefCell::default(),
+            awaiting_reply: Cell::new(false),
+            local_chat: Cell::new(false),
         });
         let weak = Rc::downgrade(&overlay);
         clip_clear.connect_clicked(move |_| {
@@ -378,6 +395,11 @@ impl Overlay {
         self.entry.connect_activate(move |e| {
             let Some(o) = weak.upgrade() else { return };
             let q = e.text().to_string();
+            // Answering the assistant's question.
+            if o.awaiting_reply.get() && !q.trim().is_empty() {
+                o.ask(&q);
+                return;
+            }
             if crate::files::looks_like_file_search(&q) && o.files.activate_first() {
                 return;
             }
@@ -451,6 +473,7 @@ impl Overlay {
     }
 
     pub fn show(self: &Rc<Self>) {
+        self.end_conversation();
         self.entry.set_text("");
         self.assistant.set_visible(false);
         self.files.clear();
@@ -564,16 +587,26 @@ impl Overlay {
             self.grid.append(&self.app_tile(app));
         }
         let attached = !self.attachments.borrow().is_empty();
+        let replying = self.awaiting_reply.get();
+        self.ask_button.set_label(&if replying {
+            i18n::umoja("Reply")
+        } else {
+            i18n::umoja("Ask the assistant")
+        });
         self.ask_button.set_visible(
             attached
                 || (!q.trim().is_empty()
-                    && (found.is_empty() || lemonade::looks_like_question(&q))),
+                    && (replying || found.is_empty() || lemonade::looks_like_question(&q))),
         );
+        // Emptying the search closes the answer, unless it's waiting for
+        // the user's reply.
         if q.trim().is_empty()
             && !attached
+            && !replying
             && self.stack.visible_child_name().as_deref() != Some("clipboard")
         {
             self.assistant.set_visible(false);
+            self.conversation.borrow_mut().clear();
         }
         self.files.update(&q);
         self.refresh_clipboard();
@@ -718,7 +751,13 @@ impl Overlay {
     /// Answer a question, letting the assistant act through its tools. Any
     /// attached context goes with it.
     fn ask(self: &Rc<Self>, query: &str) {
-        let attachments = self.attachments.borrow().clone();
+        // A reply to the assistant's question: any attached context already
+        // went with the first message.
+        let attachments = if self.awaiting_reply.get() {
+            Vec::new()
+        } else {
+            self.attachments.borrow().clone()
+        };
         let text = match query.trim() {
             "" if !attachments.is_empty() => context::DEFAULT_QUESTION.to_string(),
             q => q.to_string(),
@@ -726,16 +765,65 @@ impl Overlay {
         self.ask_question(Question {
             text,
             context: context::build_context(&attachments),
+            history: Vec::new(),
         });
     }
 
+    /// Forget the conversation: the next question starts afresh.
+    fn end_conversation(&self) {
+        self.conversation.borrow_mut().clear();
+        self.local_chat.set(false);
+        self.set_awaiting_reply(false);
+    }
+
+    fn set_awaiting_reply(&self, on: bool) {
+        self.awaiting_reply.set(on);
+        self.entry.set_placeholder_text(Some(&if on {
+            i18n::umoja("Reply to the assistant…")
+        } else {
+            i18n::umoja("Search apps, or ask anything…")
+        }));
+    }
+
+    /// "Yes" / "No" under an answer that asks a yes-or-no question.
+    fn reply_chip(self: &Rc<Self>, label: &str, suggested: bool) -> gtk::Widget {
+        let button = gtk::Button::builder()
+            .label(label)
+            .css_classes(if suggested {
+                ["pill", "reply-chip", "suggested"]
+            } else {
+                ["pill", "reply-chip", "flat"]
+            })
+            .build();
+        let weak = Rc::downgrade(self);
+        let text = label.to_string();
+        button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.ask(&text);
+            }
+        });
+        button.upcast()
+    }
+
     /// [`Self::ask`] with optional context (selected text, window contents).
-    pub fn ask_question(self: &Rc<Self>, question: Question) {
+    pub fn ask_question(self: &Rc<Self>, mut question: Question) {
         if question.text.trim().is_empty() {
             return;
         }
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
+
+        // While the card is up, a new message continues the conversation:
+        // "yes" answers "Do you want me to open it?".
+        if question.history.is_empty() && self.assistant.is_visible() {
+            question.history = self.conversation.borrow().clone();
+        }
+        if question.history.is_empty() {
+            self.conversation.borrow_mut().clear();
+            self.local_chat.set(false);
+        }
+        self.set_awaiting_reply(false);
+        let asked = context::truncate_chars(&agent::user_content(&question), MAX_HISTORY_CHARS);
 
         self.reset_card();
         self.answer.set_text(&i18n::umoja("Thinking…"));
@@ -750,7 +838,9 @@ impl Overlay {
             rows: RefCell::new(HashMap::new()),
         });
         // Fresh per request: picks up model and backend changes.
-        let client = if self.local_once.replace(false) {
+        let local = self.local_once.replace(false) || self.local_chat.get();
+        self.local_chat.set(local);
+        let client = if local {
             LemonadeClient::for_endpoint(umoja_common::assistant_backend::Endpoint::local(), None)
         } else {
             LemonadeClient::new()
@@ -779,10 +869,32 @@ impl Overlay {
             }
             let shown = strip_actions(&text);
             o.copy_button.set_visible(!shown.trim().is_empty());
-            *o.answer_text.borrow_mut() = shown;
+            *o.answer_text.borrow_mut() = shown.clone();
             // A tool opened an app or moved a window: get out of the way.
             if crate::assistant::take_hide_request() {
                 o.hide();
+                return;
+            }
+            if shown.trim().is_empty() {
+                return;
+            }
+            {
+                let mut conv = o.conversation.borrow_mut();
+                conv.push(serde_json::json!({"role": "user", "content": asked}));
+                conv.push(serde_json::json!({"role": "assistant", "content": shown.trim()}));
+                let extra = conv.len().saturating_sub(MAX_HISTORY);
+                conv.drain(..extra);
+            }
+            // The assistant asked something: the search entry becomes the
+            // reply box, with Yes / No for a yes-or-no question.
+            if let Some(kind) = agent::expects_reply(&shown) {
+                o.set_awaiting_reply(true);
+                o.entry.set_text("");
+                o.entry.grab_focus();
+                if kind == Reply::YesNo {
+                    o.chips.append(&o.reply_chip(&i18n::umoja("Yes"), true));
+                    o.chips.append(&o.reply_chip(&i18n::umoja("No"), false));
+                }
             }
         });
     }
@@ -792,6 +904,7 @@ impl Overlay {
     fn transform(self: &Rc<Self>, text: String, t: Transform) {
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
+        self.end_conversation();
         self.reset_card();
         self.answer.set_text(&i18n::umoja("Thinking…"));
 
@@ -852,6 +965,7 @@ impl Overlay {
 
     fn show_error(&self, text: &str) {
         self.generation.set(self.generation.get() + 1);
+        self.end_conversation();
         self.reset_card();
         self.answer.set_text(text);
     }
@@ -1184,7 +1298,14 @@ impl Overlay {
             crate::screenshot::raise_window(id);
         }
         // Let the compositor drop the overlay (and raise the window).
-        glib::timeout_future(wait + if was_visible || raise.is_some() { STEP_ASIDE } else { Duration::from_millis(16) }).await;
+        glib::timeout_future(
+            wait + if was_visible || raise.is_some() {
+                STEP_ASIDE
+            } else {
+                Duration::from_millis(16)
+            },
+        )
+        .await;
         let result = if target == Target::Area {
             let (tx, rx) = async_channel::bounded(1);
             shots.pick_area(Box::new(move |p| {
@@ -1673,7 +1794,11 @@ impl crate::assistant::capture::Capturer for OverlayCapturer {
 
     fn record(&self, start: bool) -> Pin<Box<dyn Future<Output = Result<String, String>>>> {
         let o = self.0.upgrade();
-        Box::pin(async move { o.ok_or("the overlay is gone")?.assistant_record(start).await })
+        Box::pin(async move {
+            o.ok_or("the overlay is gone")?
+                .assistant_record(start)
+                .await
+        })
     }
 
     fn copy(&self, text: &str) {

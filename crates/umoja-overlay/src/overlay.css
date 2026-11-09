@@ -42,6 +42,17 @@ window.umoja-overlay {
   background-color: alpha(#E95420, 0.9);
   color: #ffffff;
 }
+/* Quick answers to the assistant's yes-or-no question. */
+.reply-chip {
+  min-width: 72px;
+}
+.reply-chip.suggested {
+  background-color: alpha(#E95420, 0.9);
+  color: #ffffff;
+}
+.reply-chip.flat {
+  background-color: alpha(#ffffff, 0.12);
+}
 /* Context attached to a question, and the clipboard history. */
 .attach-pill {
   background-color: alpha(#ffffff, 0.12);

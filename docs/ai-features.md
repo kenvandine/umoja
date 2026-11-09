@@ -55,6 +55,13 @@ apps and talks to the assistant.
 - The answer appears under the entry, with a **Copy** button. Each thing
   the assistant does shows up as a progress line ("Turn on Dark Style",
   "Move Terminal to left") with a mark for done, failed or declined.
+- When the answer ends with a question ("btop is already installed. Do you
+  want me to open it?"), the entry turns into a reply box (*Reply to the
+  assistant…*): type your answer and press **Enter**. Yes-or-no questions
+  also get **Yes** and **No** buttons. While an answer is showing, anything
+  you ask next is a follow-up, so the assistant remembers the last few
+  exchanges ("and vlc too"). Clearing the entry, or closing the overlay,
+  starts a fresh conversation.
 - **Escape** closes the overlay. Closing it, or asking something new,
   cancels the answer in progress.
 

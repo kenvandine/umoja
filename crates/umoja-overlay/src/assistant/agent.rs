@@ -39,7 +39,8 @@ about now and this computer. Those tools ask the user themselves when needed. Fo
 settings, call list_settings to find the right one and its current value, then change_setting \
 in the same answer; don't stop to ask. \"Show X\" or \"turn on X\" means set it to true. For \
 relative changes like \"bigger\" or \"slower to dim\", compute the new value from the current \
-one rather than switching the feature off. For windows, pass the app name as window (e.g. \
+one rather than switching the feature off. When the user replies to a question you asked (yes, \
+no, sure, the other one), do what you offered in the earlier turn. For windows, pass the app name as window (e.g. \
 arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. If you called a tool, \
 reply in one short sentence saying what it did. For questions, answer in at most four short \
 sentences of practical guidance. For coding jobs (writing a script or program, changing code in \
@@ -68,24 +69,29 @@ pub trait Ui {
 }
 
 /// A question plus optional context (selected text, window contents...)
-/// that goes to the model as part of the user's message.
+/// that goes to the model as part of the user's message, and the earlier
+/// turns of the conversation when it's a follow-up.
 #[derive(Debug, Clone, Default)]
 pub struct Question {
     pub text: String,
     pub context: Option<String>,
+    /// Earlier user and assistant messages, oldest first, as chat
+    /// messages (`{"role": "user"|"assistant", "content": ...}`).
+    pub history: Vec<Value>,
 }
 
 impl From<&str> for Question {
     fn from(s: &str) -> Self {
         Self {
             text: s.to_string(),
-            context: None,
+            ..Default::default()
         }
     }
 }
 
-pub fn initial_messages(q: &Question) -> Vec<Value> {
-    let user = match q
+/// The user's message for `q`: its context, then the question.
+pub fn user_content(q: &Question) -> String {
+    match q
         .context
         .as_deref()
         .map(str::trim)
@@ -93,11 +99,72 @@ pub fn initial_messages(q: &Question) -> Vec<Value> {
     {
         Some(ctx) => format!("{ctx}\n\n{}", q.text),
         None => q.text.clone(),
-    };
-    vec![
-        json!({"role": "system", "content": SYSTEM_PROMPT}),
-        json!({"role": "user", "content": user}),
-    ]
+    }
+}
+
+pub fn initial_messages(q: &Question) -> Vec<Value> {
+    let mut m = vec![json!({"role": "system", "content": SYSTEM_PROMPT})];
+    m.extend(q.history.iter().cloned());
+    m.push(json!({"role": "user", "content": user_content(q)}));
+    m
+}
+
+/// How the user can answer an assistant's reply that ends in a question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reply {
+    /// "Do you want me to open it?": offer Yes and No.
+    YesNo,
+    /// "Which one should I remove?": the user types an answer.
+    Open,
+}
+
+/// Whether `answer` ends by asking the user something, and what kind of
+/// question it is.
+pub fn expects_reply(answer: &str) -> Option<Reply> {
+    let t = answer.trim_end();
+    if !t.ends_with('?') {
+        return None;
+    }
+    let body = &t[..t.len() - 1];
+    // The last sentence: after the previous ".", "!", "?" or line break.
+    let last = body
+        .rfind(['.', '!', '?', '\n'])
+        .map_or(body, |i| &body[i + 1..])
+        .trim();
+    let first = last
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+        .to_lowercase();
+    const YES_NO: &[&str] = &[
+        "do",
+        "does",
+        "did",
+        "should",
+        "shall",
+        "would",
+        "will",
+        "can",
+        "could",
+        "may",
+        "is",
+        "are",
+        "want",
+        "ok",
+        "okay",
+        "shouldn't",
+        "don't",
+        "have",
+        "has",
+    ];
+    // "Should I remove the snap or the deb?" offers a choice, not yes/no.
+    let choice = last.contains(" or ") && !last.trim_end().ends_with("or not");
+    if YES_NO.contains(&first.as_str()) && !choice {
+        Some(Reply::YesNo)
+    } else {
+        Some(Reply::Open)
+    }
 }
 
 /// The tools offered to the model: the overlay's own plus umoja-mcp's.
@@ -567,10 +634,52 @@ mod tests {
     }
 
     #[test]
+    fn questions_at_the_end_expect_a_reply() {
+        assert_eq!(
+            expects_reply(
+                "btop is already installed as a snap, so I didn't install it again. Do you want me to open it?"
+            ),
+            Some(Reply::YesNo)
+        );
+        assert_eq!(
+            expects_reply("Want me to turn it off? "),
+            Some(Reply::YesNo)
+        );
+        assert_eq!(
+            expects_reply("I found two. Which one should I remove?"),
+            Some(Reply::Open)
+        );
+        assert_eq!(
+            expects_reply("Should I remove the snap or the deb?"),
+            Some(Reply::Open)
+        );
+        assert_eq!(expects_reply("Turned on Dark Style."), None);
+        assert_eq!(expects_reply("Is it on? It is now."), None);
+    }
+
+    #[test]
+    fn follow_ups_carry_the_earlier_turns() {
+        let m = initial_messages(&Question {
+            text: "yes".into(),
+            context: None,
+            history: vec![
+                json!({"role": "user", "content": "Install btop"}),
+                json!({"role": "assistant", "content": "It's installed. Open it?"}),
+            ],
+        });
+        assert_eq!(m.len(), 4);
+        assert_eq!(m[0]["role"], "system");
+        assert_eq!(m[1]["content"], "Install btop");
+        assert_eq!(m[2]["role"], "assistant");
+        assert_eq!(m[3]["content"], "yes");
+    }
+
+    #[test]
     fn context_goes_before_the_question() {
         let m = initial_messages(&Question {
             text: "explain this".into(),
             context: Some("Selected text: E0382".into()),
+            ..Default::default()
         });
         assert_eq!(m[1]["content"], "Selected text: E0382\n\nexplain this");
     }
