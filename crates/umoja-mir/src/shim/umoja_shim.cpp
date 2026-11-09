@@ -377,15 +377,35 @@ public:
     // configure that hiding sends by re-requesting their own state (e.g.
     // "restored"), which Mir would apply and so un-hide the window on the
     // workspace it just left. Remember the request for when it comes back.
+    //
+    // A fullscreen window fills its monitor whatever size it asks for, as
+    // mutter does. Wine/Proton games map an X11 window with
+    // _NET_WM_STATE_FULLSCREEN and then keep sending ConfigureRequests for
+    // their small pre-map size (314x208 for a Unity game); Mir applied those
+    // on top of the fullscreen state, leaving a tiny "fullscreen" window at
+    // the bottom of the screen until the game resized itself much later.
     void handle_modify_window(WindowInfo& info, WindowSpecification const& modifications) override {
-        auto it = hidden_states.find(info.window());
-        if (it == hidden_states.end() || !modifications.state().is_set()) {
-            MinimalWindowManager::handle_modify_window(info, modifications);
-            return;
-        }
         WindowSpecification spec = modifications;
-        auto const requested = spec.state().consume();
-        if (requested != mir_window_state_hidden) it->second = requested;
+        auto const target = spec.state().is_set() ? spec.state().value() : info.state();
+        if (target == mir_window_state_fullscreen && (spec.size().is_set() || spec.top_left().is_set())) {
+            spec.size().consume();
+            spec.top_left().consume();
+            if (info.state() == mir_window_state_fullscreen && !spec.state().is_set()) {
+                // Already fullscreen: snap back to its monitor in case an
+                // earlier request got through.
+                auto const w = info.window();
+                auto const out = output_at(centre_of(w));
+                if (out.size != geom::Size{} && out != geom::Rectangle{w.top_left(), w.size()}) {
+                    spec.top_left() = out.top_left;
+                    spec.size() = out.size;
+                }
+            }
+        }
+        auto it = hidden_states.find(info.window());
+        if (it != hidden_states.end() && spec.state().is_set()) {
+            auto const requested = spec.state().consume();
+            if (requested != mir_window_state_hidden) it->second = requested;
+        }
         MinimalWindowManager::handle_modify_window(info, spec);
     }
 
