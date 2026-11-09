@@ -90,9 +90,18 @@ file in `/etc/lightdm/lightdm.conf.d/`.
 ## Publishing
 
 `.github/workflows/packages.yml` builds `.deb`s for amd64 and arm64 on
-every PR, and uploads a signed source package to
-[ppa:ken-vandine/umoja](https://launchpad.net/~ken-vandine/+archive/ubuntu/umoja)
-on pushes to `main` (snapshot versions) and `v*` tags (releases). It needs
+every PR and uploads signed source packages to two PPAs:
+
+- [ppa:ken-vandine/umoja](https://launchpad.net/~ken-vandine/+archive/ubuntu/umoja)
+  gets tagged releases only (`v*` tags, or a manual run with `release`).
+- [ppa:ken-vandine/umoja-edge](https://launchpad.net/~ken-vandine/+archive/ubuntu/umoja-edge)
+  gets every other push to `main`, versioned as the latest release plus the
+  commits since it (`2026.46.3+git4.1a2b3c4d~stonking1`), so edge always
+  sorts above the release it builds on. It depends on the umoja PPA, so
+  add both (`sudo add-apt-repository ppa:ken-vandine/umoja`, then the same
+  for `ppa:ken-vandine/umoja-edge`).
+
+It needs
 these repository secrets: `PPA_GPG_PRIVATE_KEY`, `PPA_GPG_PASSPHRASE`,
 `PPA_SIGNER_NAME`, `PPA_SIGNER_EMAIL` (the key must be registered with your
 Launchpad account).

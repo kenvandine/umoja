@@ -1,12 +1,14 @@
-# Build Debian packages and publish them to ppa:ken-vandine/umoja.
+# Build Debian packages and publish them to Launchpad.
 #
 # - Pull requests: build binary .debs in the target Ubuntu release (no upload).
-# - Pushes to main: upload a snapshot. After v2026.46.1 is tagged that is
-#   2026.46.1+git<date>.<sha>~<series>1; while debian/changelog names a
-#   version not tagged yet it is 2026.46.1~git<date>.<sha>~<series>1, so the
-#   release still sorts above it.
-# - Tags v*: upload that release (e.g. v2026.46.1 -> 2026.46.1~<series>1).
+# - Releases go to ppa:ken-vandine/umoja: a pushed v* tag (e.g. v2026.46.1 ->
+#   2026.46.1~<series>1), or a manual run with "release" (below).
 #   Versions are vYYYY.WW.REVISION (ISO week); packaging/bump-version makes one.
+# - Everything else (pushes to main, manual runs without "release") goes to
+#   ppa:ken-vandine/umoja-edge, which depends on ppa:ken-vandine/umoja.
+#   Edge versions are the latest release tag plus the commits since it:
+#   2026.46.3+git<N>.<sha>~<series>1, so they always sort above that
+#   release and below the next one.
 # - Manual runs: pick the series and whether to upload. With "release" the
 #   debian/changelog version is uploaded as a release and tagged v<version>.
 #
@@ -46,7 +48,8 @@ on:
 env:
   SERIES: ${{ inputs.series || 'stonking' }}
   IMAGE: ${{ inputs.image || 'ubuntu:26.10' }}
-  PPA: ppa:ken-vandine/umoja
+  RELEASE_PPA: ppa:ken-vandine/umoja
+  EDGE_PPA: ppa:ken-vandine/umoja-edge
   DEBIAN_FRONTEND: noninteractive
 
 concurrency:
@@ -157,6 +160,7 @@ jobs:
           # The container runs as root, the checkout belongs to the runner.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           base=$(dpkg-parsechangelog -S Version | sed 's/[~+].*//')
+          ppa="$RELEASE_PPA"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             tag="${GITHUB_REF#refs/tags/v}"
             if [[ "$tag" != "$base" ]]; then
@@ -171,15 +175,20 @@ jobs:
             fi
             version="${base}~${SERIES}1"
             echo "tag=v$base" >> "$GITHUB_OUTPUT"
-          elif ! git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
-            stamp=$(git log -1 --format=%cd --date=format:%Y%m%d%H%M)
-            version="${base}~git${stamp}.$(git rev-parse --short=8 HEAD)~${SERIES}1"
           else
-            stamp=$(git log -1 --format=%cd --date=format:%Y%m%d%H%M)
-            version="${base}+git${stamp}.$(git rev-parse --short=8 HEAD)~${SERIES}1"
+            # Edge: latest release tag reachable from HEAD plus commits since.
+            last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)
+            if [[ -z "$last" ]]; then
+              echo "::error::No v* release tag found to base the edge version on"
+              exit 1
+            fi
+            count=$(git rev-list --count "$last..HEAD")
+            version="${last#v}+git${count}.$(git rev-parse --short=8 HEAD)~${SERIES}1"
+            ppa="$EDGE_PPA"
           fi
+          echo "ppa=$ppa" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Packaging $version for $SERIES"
+          echo "Packaging $version for $SERIES -> $ppa"
 
       - name: Import signing key
         id: gpg
@@ -222,7 +231,7 @@ jobs:
             ../umoja-desktop_*_source.changes
 
       - name: Upload to Launchpad
-        run: dput "$PPA" ../umoja-desktop_*_source.changes
+        run: dput "${{ steps.version.outputs.ppa }}" ../umoja-desktop_*_source.changes
 
       - name: Tag the release
         if: steps.version.outputs.tag != ''
