@@ -234,8 +234,10 @@ impl Preview {
             self.window.present();
         }
         // Start from where the preview is now, or from the window itself.
-        self.from.set(self.shown.get().filter(|_| was_visible).unwrap_or(window));
-        self.opacity_from.set(if was_visible { self.opacity.get() } else { 0.0 });
+        self.from
+            .set(self.shown.get().filter(|_| was_visible).unwrap_or(window));
+        self.opacity_from
+            .set(if was_visible { self.opacity.get() } else { 0.0 });
         self.to.set(to);
         self.target_visible.set(true);
         self.animate();
@@ -342,7 +344,11 @@ impl Picker {
             );
             let _ = cr.fill();
         }
-        cr.set_source_rgb(0x2e as f64 / 255.0, 0x2e as f64 / 255.0, 0x32 as f64 / 255.0);
+        cr.set_source_rgb(
+            0x2e as f64 / 255.0,
+            0x2e as f64 / 255.0,
+            0x32 as f64 / 255.0,
+        );
         rounded(cr, boxr, [20.0; 4]);
         let _ = cr.fill();
 
@@ -413,20 +419,92 @@ fn draw_tile_icon(cr: &gtk::cairo::Context, x: f64, y: f64, icon: usize, hovered
     // (rect in icon space, picker tile number)
     let tiles: &[(R, u32)] = match icon {
         0 => &[
-            (R { x: 0.0, y: 0.0, w: 64.0, h: H }, 3),
-            (R { x: 0.0, y: O, w: 64.0, h: H }, 4),
+            (
+                R {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 64.0,
+                    h: H,
+                },
+                3,
+            ),
+            (
+                R {
+                    x: 0.0,
+                    y: O,
+                    w: 64.0,
+                    h: H,
+                },
+                4,
+            ),
         ],
         1 => &[
-            (R { x: 0.0, y: 0.0, w: H, h: 64.0 }, 1),
-            (R { x: O, y: 0.0, w: H, h: 64.0 }, 2),
+            (
+                R {
+                    x: 0.0,
+                    y: 0.0,
+                    w: H,
+                    h: 64.0,
+                },
+                1,
+            ),
+            (
+                R {
+                    x: O,
+                    y: 0.0,
+                    w: H,
+                    h: 64.0,
+                },
+                2,
+            ),
         ],
         2 => &[
-            (R { x: 0.0, y: 0.0, w: H, h: H }, 6),
-            (R { x: O, y: 0.0, w: H, h: H }, 5),
-            (R { x: 0.0, y: O, w: H, h: H }, 7),
-            (R { x: O, y: O, w: H, h: H }, 8),
+            (
+                R {
+                    x: 0.0,
+                    y: 0.0,
+                    w: H,
+                    h: H,
+                },
+                6,
+            ),
+            (
+                R {
+                    x: O,
+                    y: 0.0,
+                    w: H,
+                    h: H,
+                },
+                5,
+            ),
+            (
+                R {
+                    x: 0.0,
+                    y: O,
+                    w: H,
+                    h: H,
+                },
+                7,
+            ),
+            (
+                R {
+                    x: O,
+                    y: O,
+                    w: H,
+                    h: H,
+                },
+                8,
+            ),
         ],
-        _ => &[(R { x: 0.0, y: 0.0, w: 64.0, h: 64.0 }, 9)],
+        _ => &[(
+            R {
+                x: 0.0,
+                y: 0.0,
+                w: 64.0,
+                h: 64.0,
+            },
+            9,
+        )],
     };
     for &(t, number) in tiles {
         let r = R {
@@ -545,7 +623,13 @@ impl Switcher {
         let data = self.data.borrow();
         let n = data.len().max(1);
         // switcherPopup.js shrinks icons when many apps don't fit.
-        let size = if n > 12 { 48 } else if n > 8 { 64 } else { 96 };
+        let size = if n > 12 {
+            48
+        } else if n > 8 {
+            64
+        } else {
+            96
+        };
         let mut buttons = Vec::new();
         for (i, (app_id, title, windows)) in data.iter().enumerate() {
             let (icon, name) = icon_for(app_id);
@@ -635,12 +719,13 @@ impl Switcher {
             return;
         }
         let weak = Rc::downgrade(self);
-        let id = glib::timeout_add_local_once(Duration::from_millis(SWITCHER_DELAY_MS), move || {
-            let Some(s) = weak.upgrade() else { return };
-            s.pending.borrow_mut().take();
-            // No monitor set: the compositor puts it on the active output.
-            s.window.present();
-        });
+        let id =
+            glib::timeout_add_local_once(Duration::from_millis(SWITCHER_DELAY_MS), move || {
+                let Some(s) = weak.upgrade() else { return };
+                s.pending.borrow_mut().take();
+                // No monitor set: the compositor puts it on the active output.
+                s.window.present();
+            });
         *self.pending.borrow_mut() = Some(id);
     }
 
@@ -724,12 +809,13 @@ impl WorkspacePopup {
             id.remove();
         }
         let weak = Rc::downgrade(self);
-        let id = glib::timeout_add_local_once(Duration::from_millis(WORKSPACE_POPUP_MS), move || {
-            if let Some(p) = weak.upgrade() {
-                p.hide_id.borrow_mut().take();
-                p.window.set_visible(false);
-            }
-        });
+        let id =
+            glib::timeout_add_local_once(Duration::from_millis(WORKSPACE_POPUP_MS), move || {
+                if let Some(p) = weak.upgrade() {
+                    p.hide_id.borrow_mut().take();
+                    p.window.set_visible(false);
+                }
+            });
         *self.hide_id.borrow_mut() = Some(id);
     }
 }

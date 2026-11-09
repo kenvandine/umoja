@@ -14,6 +14,7 @@ mod fade;
 mod launch;
 mod lock;
 mod login;
+mod menu_api;
 mod network;
 mod notifications;
 mod polkit;
@@ -75,11 +76,16 @@ fn build(app: &adw::Application) {
 
     let bar = gtk::CenterBox::new();
     bar.set_start_widget(Some(&activities_button()));
-    bar.set_center_widget(Some(&clock::ClockButton::new(&center).widget()));
+    let clock = clock::ClockButton::new(&center).widget();
+    bar.set_center_widget(Some(&clock));
 
     let end = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     end.append(&sni::Tray::start().widget());
-    end.append(&quick_settings::button());
+    let quick = quick_settings::button();
+    end.append(&quick);
+    if let Some(calendar) = clock.downcast_ref::<gtk::MenuButton>() {
+        menu_api::own_name(calendar, &quick);
+    }
     bar.set_end_widget(Some(&end));
 
     window.set_child(Some(&bar));
@@ -98,7 +104,10 @@ fn activities_button() -> gtk::Button {
     dots.set_valign(gtk::Align::Center);
     dots.add_css_class("workspace-dots");
     set_workspace_dots(&dots, 0, 1);
-    let button = gtk::Button::builder().child(&dots).tooltip_text(&label).build();
+    let button = gtk::Button::builder()
+        .child(&dots)
+        .tooltip_text(&label)
+        .build();
     button.update_property(&[gtk::accessible::Property::Label(&label)]);
     button.add_css_class("flat");
     button.add_css_class("activities");
@@ -138,7 +147,9 @@ fn watch_workspaces(dots: &gtk::Box) {
             None,
             gio::DBusSignalFlags::NONE,
             move |_, _, _, _, _, params| {
-                if let (Some(dots), Some((current, count))) = (d.upgrade(), params.get::<(u32, u32)>()) {
+                if let (Some(dots), Some((current, count))) =
+                    (d.upgrade(), params.get::<(u32, u32)>())
+                {
                     set_workspace_dots(&dots, current, count);
                 }
             },
@@ -156,9 +167,10 @@ fn watch_workspaces(dots: &gtk::Box) {
                 2000,
             )
             .await;
-        if let (Some(dots), Some((current, count))) =
-            (dots.upgrade(), reply.ok().and_then(|v| v.get::<(u32, u32)>()))
-        {
+        if let (Some(dots), Some((current, count))) = (
+            dots.upgrade(),
+            reply.ok().and_then(|v| v.get::<(u32, u32)>()),
+        ) {
             set_workspace_dots(&dots, current, count);
         }
         std::mem::forget(conn);

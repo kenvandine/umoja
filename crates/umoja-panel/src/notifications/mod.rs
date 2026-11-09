@@ -94,10 +94,39 @@ pub struct Note {
 /// though they don't send the `inline-reply` action. Matched against the
 /// lower-cased desktop id and app name.
 const MESSAGING_APPS: &[&str] = &[
-    "thunderbird", "evolution", "geary", "mail", "telegram", "signal", "discord", "slack",
-    "element", "fractal", "polari", "whatsapp", "teams", "chat", "messag", "skype", "zulip",
-    "mattermost", "rocketchat", "rocket.chat", "dino", "gajim", "pidgin", "hexchat", "irc",
-    "matrix", "beeper", "ferdium", "franz", "wire", "threema", "viber", "zoom",
+    "thunderbird",
+    "evolution",
+    "geary",
+    "mail",
+    "telegram",
+    "signal",
+    "discord",
+    "slack",
+    "element",
+    "fractal",
+    "polari",
+    "whatsapp",
+    "teams",
+    "chat",
+    "messag",
+    "skype",
+    "zulip",
+    "mattermost",
+    "rocketchat",
+    "rocket.chat",
+    "dino",
+    "gajim",
+    "pidgin",
+    "hexchat",
+    "irc",
+    "matrix",
+    "beeper",
+    "ferdium",
+    "franz",
+    "wire",
+    "threema",
+    "viber",
+    "zoom",
 ];
 
 impl Note {
@@ -236,7 +265,9 @@ impl Center {
 
     /// A short-lived banner from the shell itself ("Reply copied").
     pub fn notify_internal(self: &Rc<Self>, summary: &str, body: &str, icon: &str) {
-        let Ok(time) = glib::DateTime::now_local() else { return };
+        let Ok(time) = glib::DateTime::now_local() else {
+            return;
+        };
         let note = Note {
             id: 0,
             app_name: String::new(),
@@ -283,7 +314,9 @@ impl Center {
     /// the app is raised so it can be pasted. Returns true when the app got
     /// the reply itself.
     pub fn reply(&self, id: u32, text: &str) -> bool {
-        let Some(note) = self.find(id) else { return false };
+        let Some(note) = self.find(id) else {
+            return false;
+        };
         let text = text.trim();
         if text.is_empty() {
             return false;
@@ -370,7 +403,8 @@ impl Center {
         // Progress updates (`value` hint) to a notification whose banner has
         // already gone only refresh the message list, rather than popping a
         // bubble up again for every percent.
-        let quiet_update = existing.is_some() && note.value.is_some() && !self.bubbles.contains(note.id);
+        let quiet_update =
+            existing.is_some() && note.value.is_some() && !self.bubbles.contains(note.id);
         let show_banner =
             !quiet_update && (critical || (self.banners_enabled() && policy.show_banners));
         if show_banner {
@@ -493,10 +527,16 @@ impl Center {
 /// keyboard focus without a click under Mir.
 pub fn want_keyboard(widget: &impl IsA<gtk::Widget>, on: bool) {
     use gtk4_layer_shell::{KeyboardMode, LayerShell};
-    let Some(win) = widget.as_ref().root().and_downcast::<gtk::Window>() else { return };
+    let Some(win) = widget.as_ref().root().and_downcast::<gtk::Window>() else {
+        return;
+    };
     // The clock menu is a popover; its root is the panel window.
     if win.is_layer_window() {
-        win.set_keyboard_mode(if on { KeyboardMode::Exclusive } else { KeyboardMode::None });
+        win.set_keyboard_mode(if on {
+            KeyboardMode::Exclusive
+        } else {
+            KeyboardMode::None
+        });
     }
 }
 
@@ -541,7 +581,9 @@ pub fn settings_key(app_id: &str) -> String {
 /// List the app under Settings › Notifications, as gnome-shell does the
 /// first time an app notifies.
 fn register_app(app_id: &str, key: &str, app_settings: &gio::Settings) {
-    let Some(s) = gs::settings(NOTIFICATIONS) else { return };
+    let Some(s) = gs::settings(NOTIFICATIONS) else {
+        return;
+    };
     let mut children: Vec<String> = s
         .strv("application-children")
         .iter()
@@ -638,7 +680,10 @@ mod tests {
     fn banner_timeouts() {
         assert_eq!(banner_timeout(&note("Hi", "")).unwrap().as_millis(), 4060);
         let long = "x".repeat(1000);
-        assert_eq!(banner_timeout(&note("Hi", &long)).unwrap().as_millis(), 10_000);
+        assert_eq!(
+            banner_timeout(&note("Hi", &long)).unwrap().as_millis(),
+            10_000
+        );
         let mut c = note("Battery critical", "");
         c.urgency = Urgency::Critical;
         assert!(banner_timeout(&c).is_none());

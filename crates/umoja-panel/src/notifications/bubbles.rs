@@ -13,7 +13,7 @@ use gtk::{glib, prelude::*};
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
-use super::{banner_timeout, Center, CloseReason, Icon, Note, Urgency};
+use super::{Center, CloseReason, Icon, Note, Urgency, banner_timeout};
 
 /// notify-osd showed one bubble at a time; GNOME one banner. A short stack
 /// keeps bursts readable without covering the screen.
@@ -158,7 +158,11 @@ impl Bubbles {
             order
                 .iter()
                 .rev()
-                .filter(|i| items.get(i).is_some_and(|b| b.note.urgency != Urgency::Critical))
+                .filter(|i| {
+                    items
+                        .get(i)
+                        .is_some_and(|b| b.note.urgency != Urgency::Critical)
+                })
                 .take(order.len().saturating_sub(MAX_BUBBLES))
                 .copied()
                 .collect()
@@ -198,9 +202,12 @@ impl Bubbles {
         let revealer = b.revealer;
         revealer.set_reveal_child(false);
         let column = self.column.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(FADE_MS as u64), move || {
-            column.remove(&revealer);
-        });
+        glib::timeout_add_local_once(
+            std::time::Duration::from_millis(FADE_MS as u64),
+            move || {
+                column.remove(&revealer);
+            },
+        );
         true
     }
 

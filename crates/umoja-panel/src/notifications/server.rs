@@ -73,10 +73,9 @@ pub fn own_name(center: Rc<Center>) {
         let info = gio::DBusNodeInfo::for_xml(XML).expect("valid XML");
         let iface = info.lookup_interface(INTERFACE).expect("interface");
         let c = center.clone();
-        let res = conn
-            .register_object(OBJECT_PATH, &iface)
-            .method_call(move |_, _, _, _, method, params, invocation| {
-                match method {
+        let res =
+            conn.register_object(OBJECT_PATH, &iface)
+                .method_call(move |_, _, _, _, method, params, invocation| match method {
                     "GetCapabilities" => {
                         let caps: Vec<&str> = CAPABILITIES.to_vec();
                         invocation.return_value(Some(&(caps,).to_variant()));
@@ -102,9 +101,8 @@ pub fn own_name(center: Rc<Center>) {
                     },
                     _ => invocation
                         .return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method),
-                }
-            })
-            .build();
+                })
+                .build();
         match res {
             Ok(_) => *center.conn.borrow_mut() = Some(conn),
             Err(e) => tracing::error!(error = %e, "could not export notifications"),
@@ -221,7 +219,10 @@ fn desktop_id(hint: &str) -> String {
 
 fn icon_from_string(s: String) -> Icon {
     if let Some(path) = s.strip_prefix("file://") {
-        Icon::File(glib::Uri::unescape_string(path, None::<&str>).map_or(path.to_string(), |p| p.to_string()))
+        Icon::File(
+            glib::Uri::unescape_string(path, None::<&str>)
+                .map_or(path.to_string(), |p| p.to_string()),
+        )
     } else if s.starts_with('/') {
         Icon::File(s)
     } else {
@@ -244,7 +245,13 @@ fn image_data(v: &glib::Variant) -> Option<gdk::Texture> {
     } else {
         gdk::MemoryFormat::R8g8b8
     };
-    let tex = gdk::MemoryTexture::new(w, h, format, &glib::Bytes::from_owned(data), stride as usize);
+    let tex = gdk::MemoryTexture::new(
+        w,
+        h,
+        format,
+        &glib::Bytes::from_owned(data),
+        stride as usize,
+    );
     Some(tex.upcast())
 }
 
@@ -278,9 +285,16 @@ mod tests {
 
     #[test]
     fn icon_strings() {
-        assert!(matches!(icon_from_string("dialog-information".into()), Icon::Name(_)));
-        assert!(matches!(icon_from_string("/tmp/a.png".into()), Icon::File(p) if p == "/tmp/a.png"));
-        assert!(matches!(icon_from_string("file:///tmp/a%20b.png".into()), Icon::File(p) if p == "/tmp/a b.png"));
+        assert!(matches!(
+            icon_from_string("dialog-information".into()),
+            Icon::Name(_)
+        ));
+        assert!(
+            matches!(icon_from_string("/tmp/a.png".into()), Icon::File(p) if p == "/tmp/a.png")
+        );
+        assert!(
+            matches!(icon_from_string("file:///tmp/a%20b.png".into()), Icon::File(p) if p == "/tmp/a b.png")
+        );
     }
 
     #[test]
@@ -288,14 +302,22 @@ mod tests {
         let mut hints: HashMap<String, glib::Variant> = HashMap::new();
         hints.insert("urgency".into(), 2u8.to_variant());
         hints.insert("value".into(), 42i32.to_variant());
-        hints.insert("x-canonical-private-synchronous".into(), "volume".to_variant());
+        hints.insert(
+            "x-canonical-private-synchronous".into(),
+            "volume".to_variant(),
+        );
         let args: NotifyArgs = (
             "app".into(),
             7,
             "audio-volume-medium".into(),
             "Volume".into(),
             "".into(),
-            vec!["default".into(), "Open".into(), "mute".into(), "Mute".into()],
+            vec![
+                "default".into(),
+                "Open".into(),
+                "mute".into(),
+                "Mute".into(),
+            ],
             hints,
             -1,
         );

@@ -19,7 +19,7 @@ use gtk::glib;
 use gtk4 as gtk;
 use umoja_common::dbus;
 
-use super::{assistant, Center, Note};
+use super::{Center, Note, assistant};
 
 const XML: &str = r#"
 <node>
@@ -79,7 +79,8 @@ pub fn own_name(center: Rc<Center>) {
             .register_object(dbus::NOTIFICATIONS_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {
                 let Some(c) = weak.upgrade() else {
-                    invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", "shutting down");
+                    invocation
+                        .return_dbus_error("org.freedesktop.DBus.Error.Failed", "shutting down");
                     return;
                 };
                 match method {
@@ -97,25 +98,33 @@ pub fn own_name(center: Rc<Center>) {
                         glib::MainContext::default().spawn_local(async move {
                             match assistant::digest_text(&notes).await {
                                 Ok(text) => invocation.return_value(Some(&(text,).to_variant())),
-                                Err(e) => invocation
-                                    .return_dbus_error("org.umoja.Notifications.Error.Assistant", &e),
+                                Err(e) => invocation.return_dbus_error(
+                                    "org.umoja.Notifications.Error.Assistant",
+                                    &e,
+                                ),
                             }
                         });
                     }
                     "DraftReplies" => {
                         let Some((id,)) = params.get::<(u32,)>() else {
-                            invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "u");
+                            invocation
+                                .return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "u");
                             return;
                         };
                         let Some(note) = c.note(id) else {
-                            invocation.return_dbus_error("org.umoja.Notifications.Error.NoSuchNotification", "no such notification");
+                            invocation.return_dbus_error(
+                                "org.umoja.Notifications.Error.NoSuchNotification",
+                                "no such notification",
+                            );
                             return;
                         };
                         glib::MainContext::default().spawn_local(async move {
                             match assistant::draft_replies(&note).await {
                                 Ok(r) => invocation.return_value(Some(&(r,).to_variant())),
-                                Err(e) => invocation
-                                    .return_dbus_error("org.umoja.Notifications.Error.Assistant", &e),
+                                Err(e) => invocation.return_dbus_error(
+                                    "org.umoja.Notifications.Error.Assistant",
+                                    &e,
+                                ),
                             }
                         });
                     }

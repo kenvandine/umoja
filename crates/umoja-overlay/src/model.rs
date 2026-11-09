@@ -19,9 +19,14 @@ use crate::lemonade::{DEFAULT_MODEL, RUNTIME};
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelEvent {
     /// Overall progress, 0-100, and the total size in bytes if known.
-    Progress { percent: f64, total_bytes: Option<u64> },
+    Progress {
+        percent: f64,
+        total_bytes: Option<u64>,
+    },
     /// The model is ready; `downloaded` says whether we fetched anything.
-    Ready { downloaded: bool },
+    Ready {
+        downloaded: bool,
+    },
     Failed(String),
 }
 
@@ -46,7 +51,11 @@ struct PullData {
 #[derive(Debug, PartialEq)]
 enum PullEvent {
     /// Overall percent across all files, and the total size.
-    Progress { percent: f64, total: u64, fetching: bool },
+    Progress {
+        percent: f64,
+        total: u64,
+        fetching: bool,
+    },
     Complete,
     Error(String),
 }
@@ -80,7 +89,11 @@ impl SseParser {
         let event = std::mem::take(&mut self.event);
         match event.as_str() {
             "complete" => return Some(PullEvent::Complete),
-            "error" => return Some(PullEvent::Error(d.error.unwrap_or_else(|| data.to_string()))),
+            "error" => {
+                return Some(PullEvent::Error(
+                    d.error.unwrap_or_else(|| data.to_string()),
+                ));
+            }
             _ if d.error.is_some() => return Some(PullEvent::Error(d.error.unwrap_or_default())),
             _ => {}
         }
@@ -120,7 +133,8 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
     // umoja-lemonade.service starts alongside us; give it a few minutes.
     let mut up = false;
     for _ in 0..180 {
-        if matches!(client.get(lemonade::health_url()).send().await, Ok(r) if r.status().is_success()) {
+        if matches!(client.get(lemonade::health_url()).send().await, Ok(r) if r.status().is_success())
+        {
             up = true;
             break;
         }
@@ -152,14 +166,22 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
     let mut body = resp.bytes_stream();
     while let Some(chunk) = body.next().await {
         let Ok(chunk) = chunk else {
-            let _ = tx.send(ModelEvent::Failed(i18n::umoja("Connection to the assistant service was lost"))).await;
+            let _ = tx
+                .send(ModelEvent::Failed(i18n::umoja(
+                    "Connection to the assistant service was lost",
+                )))
+                .await;
             return;
         };
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(nl) = buf.find('\n') {
             let line: String = buf.drain(..=nl).collect();
             match parser.line(&line) {
-                Some(PullEvent::Progress { percent, total, fetching }) => {
+                Some(PullEvent::Progress {
+                    percent,
+                    total,
+                    fetching,
+                }) => {
                     // Cached models just report what's on disk; and lemond
                     // sends ~10k events a second, so only pass on whole
                     // percent steps.
@@ -170,7 +192,10 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
                     last_step = step;
                     downloaded = true;
                     let _ = tx
-                        .send(ModelEvent::Progress { percent, total_bytes: Some(total) })
+                        .send(ModelEvent::Progress {
+                            percent,
+                            total_bytes: Some(total),
+                        })
                         .await;
                 }
                 Some(PullEvent::Complete) => {
@@ -244,7 +269,9 @@ impl ModelWatcher {
             gio::DBusSignalFlags::NONE,
             move |_, _, _, _, _, params| {
                 let Some(this) = weak.upgrade() else { return };
-                let Some((id, reason)) = params.get::<(u32, u32)>() else { return };
+                let Some((id, reason)) = params.get::<(u32, u32)>() else {
+                    return;
+                };
                 if id != 0 && id == this.notification_id.get() {
                     this.notification_id.set(0);
                     // 2 = dismissed by the user.
@@ -268,7 +295,10 @@ impl ModelWatcher {
             self.start_pull(model, generation);
             return;
         }
-        tracing::info!(model, "waiting for an unmetered connection to fetch the model");
+        tracing::info!(
+            model,
+            "waiting for an unmetered connection to fetch the model"
+        );
         let weak = Rc::downgrade(self);
         let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::default();
         let h = handler.clone();
@@ -308,7 +338,10 @@ impl ModelWatcher {
     fn handle(&self, model: &str, ev: ModelEvent) {
         let name = pretty_model_name(model);
         match ev {
-            ModelEvent::Progress { percent, total_bytes } => {
+            ModelEvent::Progress {
+                percent,
+                total_bytes,
+            } => {
                 let p = percent.floor() as i32;
                 if p == self.last_percent.get() {
                     return;
@@ -346,8 +379,14 @@ impl ModelWatcher {
             }
             ModelEvent::Failed(e) => {
                 tracing::warn!(model, error = %e, "model download failed");
-                (self.on_status)(Some(i18n::umoja("The assistant's model couldn't be downloaded")));
-                self.notify(&i18n::umoja("Couldn't download AI model"), &format!("{name}: {e}"), None);
+                (self.on_status)(Some(i18n::umoja(
+                    "The assistant's model couldn't be downloaded",
+                )));
+                self.notify(
+                    &i18n::umoja("Couldn't download AI model"),
+                    &format!("{name}: {e}"),
+                    None,
+                );
             }
         }
     }
@@ -424,33 +463,87 @@ mod tests {
         // Recorded from lemond 11.9 pulling Qwen3-0.6B-GGUF (2 files).
         let t = r#""total_download_size":1000,"total_files":2"#;
         assert_eq!(
-            ev(&mut p, "progress", &format!(r#"{{"bytes_downloaded":0,"bytes_previously_downloaded":0,"bytes_total":900,"file_index":1,"percent":0,{t}}}"#)),
-            Some(PullEvent::Progress { percent: 0.0, total: 1000, fetching: false })
+            ev(
+                &mut p,
+                "progress",
+                &format!(
+                    r#"{{"bytes_downloaded":0,"bytes_previously_downloaded":0,"bytes_total":900,"file_index":1,"percent":0,{t}}}"#
+                )
+            ),
+            Some(PullEvent::Progress {
+                percent: 0.0,
+                total: 1000,
+                fetching: false
+            })
         );
         // Bogus 100% against a tiny total is ignored.
         assert_eq!(
-            ev(&mut p, "progress", &format!(r#"{{"bytes_downloaded":10,"bytes_previously_downloaded":0,"bytes_total":10,"file_index":1,"percent":100,{t}}}"#)),
+            ev(
+                &mut p,
+                "progress",
+                &format!(
+                    r#"{{"bytes_downloaded":10,"bytes_previously_downloaded":0,"bytes_total":10,"file_index":1,"percent":100,{t}}}"#
+                )
+            ),
             None
         );
         assert_eq!(
-            ev(&mut p, "progress", &format!(r#"{{"bytes_downloaded":450,"bytes_previously_downloaded":0,"bytes_total":900,"file_index":1,"percent":50,{t}}}"#)),
-            Some(PullEvent::Progress { percent: 45.0, total: 1000, fetching: true })
+            ev(
+                &mut p,
+                "progress",
+                &format!(
+                    r#"{{"bytes_downloaded":450,"bytes_previously_downloaded":0,"bytes_total":900,"file_index":1,"percent":50,{t}}}"#
+                )
+            ),
+            Some(PullEvent::Progress {
+                percent: 45.0,
+                total: 1000,
+                fetching: true
+            })
         );
         assert_eq!(
-            ev(&mut p, "progress", &format!(r#"{{"bytes_downloaded":900,"bytes_previously_downloaded":0,"bytes_total":900,"file_index":1,"percent":100,{t}}}"#)),
-            Some(PullEvent::Progress { percent: 90.0, total: 1000, fetching: true })
+            ev(
+                &mut p,
+                "progress",
+                &format!(
+                    r#"{{"bytes_downloaded":900,"bytes_previously_downloaded":0,"bytes_total":900,"file_index":1,"percent":100,{t}}}"#
+                )
+            ),
+            Some(PullEvent::Progress {
+                percent: 90.0,
+                total: 1000,
+                fetching: true
+            })
         );
         assert_eq!(
-            ev(&mut p, "progress", &format!(r#"{{"bytes_downloaded":100,"bytes_previously_downloaded":0,"bytes_total":100,"file_index":2,"percent":100,{t}}}"#)),
-            Some(PullEvent::Progress { percent: 100.0, total: 1000, fetching: true })
+            ev(
+                &mut p,
+                "progress",
+                &format!(
+                    r#"{{"bytes_downloaded":100,"bytes_previously_downloaded":0,"bytes_total":100,"file_index":2,"percent":100,{t}}}"#
+                )
+            ),
+            Some(PullEvent::Progress {
+                percent: 100.0,
+                total: 1000,
+                fetching: true
+            })
         );
         assert_eq!(
-            ev(&mut p, "complete", r#"{"bytes_downloaded":0,"bytes_total":0,"file":"","file_index":2,"percent":100,"total_download_size":0,"total_files":2}"#),
+            ev(
+                &mut p,
+                "complete",
+                r#"{"bytes_downloaded":0,"bytes_total":0,"file":"","file_index":2,"percent":100,"total_download_size":0,"total_files":2}"#
+            ),
             Some(PullEvent::Complete)
         );
         // Unknown models come back as an error event on HTTP 200.
         assert_eq!(
-            ev(&mut p, "error", r#"{"code":"unknown_model","error":"must include the user namespace"}"#),
+            ev(
+                &mut p,
+                "error",
+                r#"{"code":"unknown_model","error":"must include the user namespace"}"#
+            ),
             Some(PullEvent::Error("must include the user namespace".into()))
         );
     }
@@ -460,11 +553,21 @@ mod tests {
         let mut p = SseParser::default();
         p.line("event: progress");
         let e = p.line(r#"data: {"bytes_downloaded":2497281120,"bytes_previously_downloaded":2497281120,"bytes_total":2497281120,"file_index":1,"percent":100,"total_download_size":2497281120,"total_files":1}"#);
-        assert_eq!(e, Some(PullEvent::Progress { percent: 100.0, total: 2497281120, fetching: false }));
+        assert_eq!(
+            e,
+            Some(PullEvent::Progress {
+                percent: 100.0,
+                total: 2497281120,
+                fetching: false
+            })
+        );
     }
 
     #[test]
     fn model_names() {
-        assert_eq!(pretty_model_name("Qwen3-4B-Instruct-2507-GGUF"), "Qwen3 4B Instruct 2507");
+        assert_eq!(
+            pretty_model_name("Qwen3-4B-Instruct-2507-GGUF"),
+            "Qwen3 4B Instruct 2507"
+        );
     }
 }

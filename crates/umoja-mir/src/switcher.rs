@@ -44,7 +44,10 @@ pub enum Outcome {
     /// Key consumed, popup updated.
     Consumed,
     /// Activate this window (and, for an app, raise its other windows).
-    Activate { window: u64, raise: Vec<u64> },
+    Activate {
+        window: u64,
+        raise: Vec<u64>,
+    },
     /// Close these windows and keep the switcher open.
     Close(Vec<u64>),
     Cancel,
@@ -178,7 +181,12 @@ impl Switcher {
         let raise = if self.mode == Mode::Applications && self.sub.is_none() {
             // Like shell_app_activate(): bring the app's other windows up too,
             // least recent first, so the most recent ends on top.
-            item.windows.iter().rev().copied().filter(|&w| w != window).collect()
+            item.windows
+                .iter()
+                .rev()
+                .copied()
+                .filter(|&w| w != window)
+                .collect()
         } else {
             Vec::new()
         };

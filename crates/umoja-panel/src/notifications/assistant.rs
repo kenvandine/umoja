@@ -111,8 +111,16 @@ pub fn digest_input(notes: &[Note]) -> String {
         .iter()
         .take(DIGEST_LIMIT)
         .map(|n| {
-            let time = n.time.format("%H:%M").map(|s| s.to_string()).unwrap_or_default();
-            let app = if n.app_name.is_empty() { "System" } else { n.app_name.as_str() };
+            let time = n
+                .time
+                .format("%H:%M")
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let app = if n.app_name.is_empty() {
+                "System"
+            } else {
+                n.app_name.as_str()
+            };
             let body = plain_text(&n.body, BODY_LIMIT);
             if body.is_empty() {
                 format!("[{time}] {app}: {}", n.summary)
@@ -126,7 +134,11 @@ pub fn digest_input(notes: &[Note]) -> String {
 }
 
 fn reply_input(note: &Note) -> String {
-    let app = if note.app_name.is_empty() { "an app" } else { note.app_name.as_str() };
+    let app = if note.app_name.is_empty() {
+        "an app"
+    } else {
+        note.app_name.as_str()
+    };
     format!(
         "App: {app}\nFrom / subject: {}\nMessage: {}",
         note.summary,
@@ -247,7 +259,11 @@ pub fn clean(text: &str) -> String {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(|l| {
-            let unbold = |t: &str| t.trim_start_matches("**").trim_end_matches("**").to_string();
+            let unbold = |t: &str| {
+                t.trim_start_matches("**")
+                    .trim_end_matches("**")
+                    .to_string()
+            };
             match l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")) {
                 Some(rest) => format!("• {}", unbold(rest)),
                 None => unbold(l),
@@ -275,12 +291,13 @@ pub fn parse_replies(text: &str) -> Vec<String> {
                 if let Ok(v) = serde_json::from_str::<String>(l) {
                     return vec![v];
                 }
-                vec![l
-                    .trim_start_matches(|c: char| {
+                vec![
+                    l.trim_start_matches(|c: char| {
                         c.is_ascii_digit() || matches!(c, '.' | ')' | '•' | '-' | '*' | ' ')
                     })
                     .trim_matches('"')
-                    .to_string()]
+                    .to_string(),
+                ]
             })
             .collect()
     });
@@ -305,8 +322,14 @@ fn stream(
     let request = Request {
         model: model(),
         messages: vec![
-            Message { role: "system", content: system.into() },
-            Message { role: "user", content: user },
+            Message {
+                role: "system",
+                content: system.into(),
+            },
+            Message {
+                role: "user",
+                content: user,
+            },
         ],
         temperature,
         stream: true,
@@ -349,7 +372,9 @@ async fn run(body: Vec<u8>, tx: async_channel::Sender<Event>) {
     let mut buf = String::new();
     while let Some(chunk) = body.next().await {
         let Ok(chunk) = chunk else {
-            let _ = tx.send(Event::Error("Lost the connection to the assistant.".into())).await;
+            let _ = tx
+                .send(Event::Error("Lost the connection to the assistant.".into()))
+                .await;
             return;
         };
         buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -391,7 +416,6 @@ fn parse_sse(line: &str) -> Option<Sse> {
         .collect();
     (!text.is_empty()).then_some(Sse::Text(text))
 }
-
 
 #[cfg(test)]
 mod tests {

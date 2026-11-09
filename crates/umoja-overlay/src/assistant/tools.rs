@@ -157,7 +157,10 @@ pub fn registry() -> Vec<ToolSpec> {
 /// Helpers for reading tool arguments.
 #[allow(dead_code)]
 pub fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key)?.as_str().map(str::trim).filter(|s| !s.is_empty())
+    args.get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 #[allow(dead_code)]

@@ -133,12 +133,44 @@ pub fn overlay_call<B>(method: &'static str, body: B)
 where
     B: serde::Serialize + zbus::zvariant::DynamicType + Send + Sync + 'static,
 {
+    send_call(
+        (
+            dbus::OVERLAY_BUS_NAME,
+            dbus::OVERLAY_OBJECT_PATH,
+            dbus::OVERLAY_INTERFACE,
+        ),
+        method,
+        body,
+    )
+}
+
+/// The top bar (umoja-panel): open its calendar or quick settings menu.
+pub fn panel_call<B>(method: &'static str, body: B)
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType + Send + Sync + 'static,
+{
+    send_call(
+        (
+            dbus::PANEL_BUS_NAME,
+            dbus::PANEL_OBJECT_PATH,
+            dbus::PANEL_INTERFACE,
+        ),
+        method,
+        body,
+    )
+}
+
+fn send_call<B>(to: (&'static str, &'static str, &'static str), method: &'static str, body: B)
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType + Send + Sync + 'static,
+{
+    let (name, path, iface) = to;
     let send: Body = Box::new(move |conn: zbus::Connection| {
         Box::pin(async move {
-            // Fire and forget: never wait on the overlay's reply.
-            let msg = zbus::Message::method_call(dbus::OVERLAY_OBJECT_PATH, method)?
-                .destination(dbus::OVERLAY_BUS_NAME)?
-                .interface(dbus::OVERLAY_INTERFACE)?
+            // Fire and forget: never wait on the reply.
+            let msg = zbus::Message::method_call(path, method)?
+                .destination(name)?
+                .interface(iface)?
                 .with_flags(zbus::message::Flags::NoReplyExpected)?
                 .build(&body)?;
             conn.send(&msg).await

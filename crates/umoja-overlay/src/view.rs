@@ -537,9 +537,13 @@ impl Overlay {
         let attached = !self.attachments.borrow().is_empty();
         self.ask_button.set_visible(
             attached
-                || (!q.trim().is_empty() && (found.is_empty() || lemonade::looks_like_question(&q))),
+                || (!q.trim().is_empty()
+                    && (found.is_empty() || lemonade::looks_like_question(&q))),
         );
-        if q.trim().is_empty() && !attached && self.stack.visible_child_name().as_deref() != Some("clipboard") {
+        if q.trim().is_empty()
+            && !attached
+            && self.stack.visible_child_name().as_deref() != Some("clipboard")
+        {
             self.assistant.set_visible(false);
         }
         self.files.update(&q);
@@ -789,7 +793,10 @@ impl Overlay {
         self.answer.set_visible(true);
         self.copy_button.set_visible(false);
         self.answer_text.borrow_mut().clear();
-        for b in [self.chips.upcast_ref::<gtk::Widget>(), self.steps.upcast_ref()] {
+        for b in [
+            self.chips.upcast_ref::<gtk::Widget>(),
+            self.steps.upcast_ref(),
+        ] {
             while let Some(c) = b.first_child() {
                 c.unparent();
             }
@@ -1050,7 +1057,12 @@ impl Overlay {
     }
 
     /// Capture `rect` with the overlay out of the way, then OCR it.
-    fn read_screen(self: &Rc<Self>, rect: Option<(i32, i32, i32, i32)>, kind: Kind, pending: String) {
+    fn read_screen(
+        self: &Rc<Self>,
+        rect: Option<(i32, i32, i32, i32)>,
+        kind: Kind,
+        pending: String,
+    ) {
         let o = self.clone();
         glib::spawn_future_local(async move {
             match o.capture_aside(rect).await {
@@ -1274,9 +1286,10 @@ impl Overlay {
             let action = action.clone();
             dialog.connect_response(None, move |_, response| {
                 if response == "run"
-                    && let Some(o) = weak.upgrade() {
-                        o.execute(&action);
-                    }
+                    && let Some(o) = weak.upgrade()
+                {
+                    o.execute(&action);
+                }
             });
             dialog.present(Some(&self.window));
         } else {
@@ -1405,7 +1418,9 @@ impl agent::Ui for OverlayUi {
             StepState::Running => adw::Spinner::new().upcast(),
             StepState::Done => gtk::Image::from_icon_name("object-select-symbolic").upcast(),
             StepState::Failed => gtk::Image::from_icon_name("dialog-warning-symbolic").upcast(),
-            StepState::Declined => gtk::Image::from_icon_name("action-unavailable-symbolic").upcast(),
+            StepState::Declined => {
+                gtk::Image::from_icon_name("action-unavailable-symbolic").upcast()
+            }
         };
         icon.set_size_request(16, 16);
         row.prepend(&icon);

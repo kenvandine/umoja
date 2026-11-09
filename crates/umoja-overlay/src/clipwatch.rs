@@ -52,7 +52,9 @@ pub fn start() -> Option<Receiver<ClipEvent>> {
     let (globals, mut queue) = registry_queue_init::<State>(&conn).ok()?;
     let qh = queue.handle();
     let Ok(manager) = globals.bind::<ExtDataControlManagerV1, _, _>(&qh, 1..=1, ()) else {
-        tracing::warn!("compositor does not offer ext_data_control_manager_v1; no clipboard history");
+        tracing::warn!(
+            "compositor does not offer ext_data_control_manager_v1; no clipboard history"
+        );
         return None;
     };
     let seat = globals.bind::<WlSeat, _, _>(&qh, 1..=7, ()).ok()?;
@@ -80,7 +82,10 @@ pub fn start() -> Option<Receiver<ClipEvent>> {
 
 /// The text mime type to ask for, or `None` for non-text or secret data.
 pub fn pick_mime(mimes: &[String]) -> Option<&str> {
-    const SECRET: &[&str] = &["x-kde-passwordManagerHint", "application/x-nspasteboard-concealed-type"];
+    const SECRET: &[&str] = &[
+        "x-kde-passwordManagerHint",
+        "application/x-nspasteboard-concealed-type",
+    ];
     if mimes.iter().any(|m| SECRET.contains(&m.as_str())) {
         return None;
     }

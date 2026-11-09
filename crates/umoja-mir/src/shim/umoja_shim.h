@@ -202,6 +202,24 @@ enum {
 // Mir's idle or session-lock state changed (called on a Mir thread).
 void umoja_idle_state(uint32_t state);
 
+// Touch gestures (gestures.rs). `action`: 0 up, 1 down, 2 moved.
+typedef struct {
+    int32_t id;
+    uint32_t action;
+    float x, y;
+} UmojaTouchPoint;
+
+enum { UMOJA_SWIPE_BEGIN = 1, UMOJA_SWIPE_UPDATE = 2, UMOJA_SWIPE_END = 4 };
+
+typedef struct {
+    bool consume;
+    uint32_t swipe;
+    double progress;
+    int32_t dir;
+} UmojaTouchResult;
+
+bool umoja_touch(UmojaTouchPoint const* points, size_t n, uint64_t time_ns, UmojaRect screen, UmojaTouchResult* out);
+
 #ifdef __cplusplus
 }
 

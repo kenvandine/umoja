@@ -162,7 +162,11 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "toggle-application-view",
         Action::ToggleOverlay,
     ),
-    (gs::SHELL_KEYBINDINGS, "toggle-overview", Action::ToggleOverview),
+    (
+        gs::SHELL_KEYBINDINGS,
+        "toggle-overview",
+        Action::ToggleOverview,
+    ),
     (
         gs::SHELL_KEYBINDINGS,
         "shift-overview-up",
@@ -201,8 +205,16 @@ const SOURCES: &[(&str, &str, Action)] = &[
     (TILING_ASSISTANT, "tile-right-half", Action::TileRight),
     (TILING_ASSISTANT, "tile-top-half", Action::TileTopHalf),
     (TILING_ASSISTANT, "tile-bottom-half", Action::TileBottomHalf),
-    (TILING_ASSISTANT, "tile-topleft-quarter", Action::TileTopLeft),
-    (TILING_ASSISTANT, "tile-topright-quarter", Action::TileTopRight),
+    (
+        TILING_ASSISTANT,
+        "tile-topleft-quarter",
+        Action::TileTopLeft,
+    ),
+    (
+        TILING_ASSISTANT,
+        "tile-topright-quarter",
+        Action::TileTopRight,
+    ),
     (
         TILING_ASSISTANT,
         "tile-bottomleft-quarter",
@@ -235,8 +247,16 @@ const SOURCES: &[(&str, &str, Action)] = &[
         Action::TileBottomRight,
     ),
     (gs::UMOJA_SHELL, "dictation-hotkey", Action::ToggleDictation),
-    (gs::UMOJA_SHELL, "ask-about-screen-hotkey", Action::AskAboutScreen),
-    (gs::UMOJA_SHELL, "clipboard-history-hotkey", Action::ClipboardHistory),
+    (
+        gs::UMOJA_SHELL,
+        "ask-about-screen-hotkey",
+        Action::AskAboutScreen,
+    ),
+    (
+        gs::UMOJA_SHELL,
+        "clipboard-history-hotkey",
+        Action::ClipboardHistory,
+    ),
 ];
 
 /// Fallbacks used when a schema is missing (e.g. running nested for development).
@@ -252,11 +272,17 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Alt>Tab", Action::SwitchApplications as u32),
     ("<Super>Tab", Action::SwitchApplications as u32),
     ("<Shift><Alt>Tab", Action::SwitchApplicationsBackward as u32),
-    ("<Shift><Super>Tab", Action::SwitchApplicationsBackward as u32),
+    (
+        "<Shift><Super>Tab",
+        Action::SwitchApplicationsBackward as u32,
+    ),
     ("<Alt>Above_Tab", Action::SwitchGroup as u32),
     ("<Super>Above_Tab", Action::SwitchGroup as u32),
     ("<Shift><Alt>Above_Tab", Action::SwitchGroupBackward as u32),
-    ("<Shift><Super>Above_Tab", Action::SwitchGroupBackward as u32),
+    (
+        "<Shift><Super>Above_Tab",
+        Action::SwitchGroupBackward as u32,
+    ),
     ("<Super>KP_7", Action::TileTopLeft as u32),
     ("<Super>KP_9", Action::TileTopRight as u32),
     ("<Super>KP_1", Action::TileBottomLeft as u32),
@@ -371,11 +397,8 @@ pub fn reload() {
         "keybindings loaded"
     );
     let new_workspaces = cfg.workspaces;
-    let old_workspaces = std::mem::replace(
-        &mut *CONFIG.write().unwrap_or_else(|e| e.into_inner()),
-        cfg,
-    )
-    .workspaces;
+    let old_workspaces =
+        std::mem::replace(&mut *CONFIG.write().unwrap_or_else(|e| e.into_inner()), cfg).workspaces;
     // Switching dynamic workspaces off, changing the count or the
     // primary-only rule applies straight away, as in GNOME.
     if new_workspaces != old_workspaces {
@@ -448,7 +471,8 @@ pub fn is_overlay_key(keysym: u32) -> bool {
         .unwrap_or_else(|e| e.into_inner())
         .overlay_keysym;
     // mutter's default is "Super" (GNOME 46+), meaning either Super key.
-    configured == Some(keysym) || (configured == Some(XK_SUPER) && matches!(keysym, XK_SUPER_L | XK_SUPER_R))
+    configured == Some(keysym)
+        || (configured == Some(XK_SUPER) && matches!(keysym, XK_SUPER_L | XK_SUPER_R))
 }
 
 pub fn edge_tiling_enabled() -> bool {

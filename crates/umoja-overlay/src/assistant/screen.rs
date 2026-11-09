@@ -79,7 +79,10 @@ fn focused_window(_: Value) -> LocalFuture {
                 "{header}\nVisible text (OCR):\n{}",
                 context::truncate_chars(&text, context::MAX_CONTEXT_CHARS)
             ),
-            Err(e) => format!("{header}\nThe window's text couldn't be read: {}", e.message()),
+            Err(e) => format!(
+                "{header}\nThe window's text couldn't be read: {}",
+                e.message()
+            ),
         }
     })
 }

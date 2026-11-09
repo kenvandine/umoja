@@ -268,6 +268,31 @@ public:
         return consumed;
     }
 
+    // GNOME's touchscreen gestures (three-finger swipes, edge drags):
+    // gestures.rs decides, the workspace swipe happens here.
+    bool handle_touch_event(MirTouchEvent const* event) override {
+        UmojaTouchPoint pts[16];
+        size_t const n = std::min<size_t>(mir_touch_event_point_count(event), 16);
+        for (size_t i = 0; i < n; ++i) {
+            pts[i].id = mir_touch_event_id(event, i);
+            pts[i].action = static_cast<uint32_t>(mir_touch_event_action(event, i));
+            pts[i].x = mir_touch_event_axis_value(event, i, mir_touch_axis_x);
+            pts[i].y = mir_touch_event_axis_value(event, i, mir_touch_axis_y);
+        }
+        auto const r = primary_output();
+        UmojaRect const screen{r.top_left.x.as_int(), r.top_left.y.as_int(), r.size.width.as_int(),
+                               r.size.height.as_int()};
+        auto const time = mir_input_event_get_event_time(mir_touch_event_input_event(event));
+        UmojaTouchResult res{};
+        bool const consume = umoja_touch(pts, n, static_cast<uint64_t>(time), screen, &res);
+        if (res.swipe & UMOJA_SWIPE_BEGIN) workspace_swipe_begin();
+        if (res.swipe & UMOJA_SWIPE_UPDATE) workspace_swipe_update(res.progress);
+        // No switcher popup: as in GNOME the workspaces moving is the feedback.
+        if (res.swipe & UMOJA_SWIPE_END) workspace_swipe_end(res.dir);
+        if (consume) return true;
+        return MinimalWindowManager::handle_touch_event(event);
+    }
+
     // A window hidden because it is on another workspace must stay hidden
     // whatever its client asks. Chromium/Electron and Qt apps answer the
     // configure that hiding sends by re-requesting their own state (e.g.
@@ -718,12 +743,13 @@ private:
     void switch_to(size_t index, bool animate = false, Window const& pinned = Window{}) {
         if (index >= workspaces.size() || index == current) return;
         finish_slide();
+        end_swipe_now();
         applying = true;
         guarded("switch workspace", [&] {
             std::vector<Window> leaving, arriving;
             tools.for_each_window_in_workspace(workspaces[current], [&](Window const& w) { leaving.push_back(w); });
             tools.for_each_window_in_workspace(workspaces[index], [&](Window const& w) { arriving.push_back(w); });
-            int const dir = index > current ? 1 : -1;
+            int const dist = (index > current ? 1 : -1) * primary_output().size.width.as_int();
             current = index;
             // Drop focus before anything is hidden: hiding the active window
             // makes Mir pass focus on, possibly to a window that is already
@@ -732,44 +758,47 @@ private:
             Slide slide;
             for (auto const& w : leaving) {
                 if (in_workspace(w, workspaces[index])) continue;
-                auto const st = tools.info_for(w).state();
-                if (!animate || st == mir_window_state_hidden || st == mir_window_state_minimized) hide(w);
-                else slide.leaving.emplace_back(w, w.top_left());
+                if (!animate || !showing(w)) hide(w);
+                else slide.items.push_back({w, w.top_left(), 0, -dist, true});
             }
             for (auto const& w : arriving) {
                 unhide(w);
-                auto const st = tools.info_for(w).state();
-                if (animate && w != pinned && st != mir_window_state_hidden && st != mir_window_state_minimized)
-                    slide.arriving.emplace_back(w, w.top_left());
+                if (animate && w != pinned && showing(w)) slide.items.push_back({w, w.top_left(), dist, 0, false});
             }
             focus_current_workspace();
-            if (!slide.leaving.empty() || !slide.arriving.empty()) {
-                slide.distance = dir * primary_output().size.width.as_int();
-                slide.start = std::chrono::steady_clock::now();
-                slide.generation = ++slide_generation;
-                this->slide = std::move(slide);
-                step_slide(this->slide->generation);
-                run_slide(this->slide->generation);
-            }
+            start_slide(std::move(slide), SLIDE_MS);
         });
         applying = false;
         relayout_workspaces();
     }
 
+    bool showing(Window const& w) {
+        auto const st = tools.info_for(w).state();
+        return st != mir_window_state_hidden && st != mir_window_state_minimized;
+    }
+
     // ---- workspace slide ---------------------------------------------------
 
+    // A window sliding from offset `from` to `to` (pixels, horizontal) off
+    // its real position `base`, hidden at the end if it left the workspace.
+    struct SlideItem {
+        Window window;
+        geom::Point base;
+        int from, to;
+        bool hide_after;
+    };
     struct Slide {
-        std::vector<std::pair<Window, geom::Point>> leaving, arriving;
-        int distance = 0;
+        std::vector<SlideItem> items;
+        double ms = 0;
         std::chrono::steady_clock::time_point start;
         uint64_t generation = 0;
     };
     std::optional<Slide> slide;
     uint64_t slide_generation = 0;
     bool animating = false;
-    // gnome-shell's WORKSPACE_SWITCH_TIME.
-    // A little longer than gnome-shell's 250 ms: our frames come from a
-    // timer, not the display's vsync, and 250 ms read as a jump.
+    // A little longer than gnome-shell's 250 ms WORKSPACE_SWITCH_TIME: our
+    // frames come from a timer, not the display's vsync, and 250 ms read
+    // as a jump.
     static constexpr double SLIDE_MS = 400.0;
 
     // Focus the most recently used visible window on this workspace, or
@@ -777,8 +806,7 @@ private:
     void focus_current_workspace() {
         for (auto const& w : mru) {
             if (!on_current_workspace(w)) continue;
-            auto const st = tools.info_for(w).state();
-            if (st == mir_window_state_hidden || st == mir_window_state_minimized) continue;
+            if (!showing(w)) continue;
             tools.select_active_window(w);
             return;
         }
@@ -792,21 +820,32 @@ private:
         tools.modify_window(tools.info_for(w), spec);
     }
 
+    void place_at(SlideItem const& it, int offset) {
+        place(it.window, geom::Point{it.base.x.as_int() + offset, it.base.y.as_int()});
+    }
+
+    void start_slide(Slide slide, double ms) {
+        if (slide.items.empty()) return;
+        slide.ms = ms;
+        slide.start = std::chrono::steady_clock::now();
+        slide.generation = ++slide_generation;
+        this->slide = std::move(slide);
+        step_slide(this->slide->generation);
+        run_slide(this->slide->generation);
+    }
+
     // One frame; false once the slide is over (or replaced).
     bool step_slide(uint64_t generation) {
         if (!slide || slide->generation != generation) return false;
-        double const t = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slide->start).count() / SLIDE_MS;
+        double const t = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slide->start).count() / slide->ms;
         if (t >= 1.0) {
             finish_slide();
             return false;
         }
         double const e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
-        int const out = static_cast<int>(-slide->distance * e);
-        int const in = static_cast<int>(slide->distance * (1.0 - e));
         animating = true;
         guarded("slide", [&] {
-            for (auto const& [w, p] : slide->leaving) place(w, geom::Point{p.x.as_int() + out, p.y.as_int()});
-            for (auto const& [w, p] : slide->arriving) place(w, geom::Point{p.x.as_int() + in, p.y.as_int()});
+            for (auto const& it : slide->items) place_at(it, static_cast<int>(it.from + (it.to - it.from) * e));
         });
         animating = false;
         return true;
@@ -822,14 +861,14 @@ private:
         applying = true;
         guarded("finish slide", [&] {
             Window const active = tools.active_window();
-            bool const active_leaving = std::any_of(done.leaving.begin(), done.leaving.end(),
-                                                    [&](auto const& l) { return l.first == active; });
+            bool const active_leaving = std::any_of(done.items.begin(), done.items.end(),
+                                                    [&](auto const& it) { return it.hide_after && it.window == active; });
             if (active_leaving) tools.select_active_window(Window{});
-            for (auto const& [w, p] : done.leaving) {
-                place(w, p);
-                if (all_windows.count(w) && !in_workspace(w, workspaces[current])) hide(w);
+            for (auto const& it : done.items) {
+                place(it.window, it.base);
+                if (it.hide_after && all_windows.count(it.window) && !in_workspace(it.window, workspaces[current]))
+                    hide(it.window);
             }
-            for (auto const& [w, p] : done.arriving) place(w, p);
             if (active_leaving || !tools.active_window()) focus_current_workspace();
         });
         applying = was_applying;
@@ -851,6 +890,115 @@ private:
                 if (!more) return;
             }
         }).detach();
+    }
+
+    // ---- workspace swipe (touch gestures) -----------------------------------
+    //
+    // gnome-shell's WorkspaceAnimation: while three fingers swipe sideways
+    // the current workspace and its neighbours follow them; on release the
+    // swipe finishes (or snaps back) with the same slide.
+
+    struct Swipe {
+        std::vector<SlideItem> here, left, right;
+        int width = 0;
+        double progress = 0;
+    };
+    std::optional<Swipe> swipe;
+
+    void collect(size_t index, std::vector<SlideItem>& out, int base_offset) {
+        std::vector<Window> ws;
+        tools.for_each_window_in_workspace(workspaces[index], [&](Window const& w) { ws.push_back(w); });
+        for (auto const& w : ws) {
+            if (index != current && in_workspace(w, workspaces[current])) continue;
+            if (index != current) unhide(w);
+            if (!showing(w)) continue;
+            out.push_back({w, w.top_left(), base_offset, base_offset, index != current});
+        }
+    }
+
+    void place_swipe(double p) {
+        int const off = static_cast<int>(-p * swipe->width);
+        animating = true;
+        guarded("swipe", [&] {
+            for (auto const& it : swipe->here) place_at(it, off);
+            for (auto const& it : swipe->left) place_at(it, -swipe->width + off);
+            for (auto const& it : swipe->right) place_at(it, swipe->width + off);
+        });
+        animating = false;
+    }
+
+public:
+    void workspace_swipe_begin() {
+        if (swipe) return;
+        finish_slide();
+        Swipe s;
+        s.width = primary_output().size.width.as_int();
+        swipe = std::move(s);
+        applying = true;
+        guarded("swipe begin", [&] {
+            collect(current, swipe->here, 0);
+            if (current > 0) collect(current - 1, swipe->left, -swipe->width);
+            if (current + 1 < workspaces.size()) collect(current + 1, swipe->right, swipe->width);
+            place_swipe(0);
+        });
+        applying = false;
+    }
+
+    // `progress`: how far towards the next workspace (positive, fingers
+    // moving left) or the previous one (negative), in screen widths.
+    void workspace_swipe_update(double progress) {
+        if (!swipe) return;
+        bool const has_left = current > 0, has_right = current + 1 < workspaces.size();
+        // Past the first or last workspace it only gives a little.
+        if ((progress > 0 && !has_right) || (progress < 0 && !has_left)) progress *= 0.15;
+        progress = std::clamp(progress, -1.0, 1.0);
+        swipe->progress = progress;
+        applying = true;
+        place_swipe(progress);
+        applying = false;
+    }
+
+    // `dir`: -1 previous workspace, 1 next, 0 snap back.
+    void workspace_swipe_end(int dir) {
+        if (!swipe) return;
+        Swipe s = std::move(*swipe);
+        swipe.reset();
+        if (dir > 0 && current + 1 >= workspaces.size()) dir = 0;
+        if (dir < 0 && current == 0) dir = 0;
+        int const w = s.width;
+        int const now = static_cast<int>(-s.progress * w);
+        int const goal = -dir * w;
+        applying = true;
+        guarded("swipe end", [&] {
+            current = static_cast<size_t>(static_cast<long>(current) + dir);
+            Slide slide;
+            auto add = [&](std::vector<SlideItem> const& items, int base) {
+                for (auto it : items) {
+                    it.from = base + now;
+                    it.to = base + goal;
+                    it.hide_after = !in_workspace(it.window, workspaces[current]);
+                    slide.items.push_back(it);
+                }
+            };
+            add(s.here, 0);
+            add(s.left, -w);
+            add(s.right, w);
+            if (dir != 0) tools.select_active_window(Window{});
+            focus_current_workspace();
+            // The rest of the way at the slide's pace.
+            double const left_to_go = std::abs(goal - now) / static_cast<double>(std::max(w, 1));
+            start_slide(std::move(slide), std::max(120.0, SLIDE_MS * left_to_go));
+        });
+        applying = false;
+        relayout_workspaces();
+    }
+
+private:
+    // Something else switches workspace mid-swipe: settle the swipe first.
+    void end_swipe_now() {
+        if (!swipe) return;
+        workspace_swipe_end(0);
+        finish_slide();
     }
 
     void move_active_to(size_t index) { move_window_to(tools.active_window(), index); }

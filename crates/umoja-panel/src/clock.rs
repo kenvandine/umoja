@@ -122,9 +122,10 @@ impl ClockButton {
             let format = format.clone();
             move || {
                 if let Ok(now) = glib::DateTime::now_local()
-                    && let Ok(text) = now.format(&format.get().pattern()) {
-                        label.set_text(text.trim());
-                    }
+                    && let Ok(text) = now.format(&format.get().pattern())
+                {
+                    label.set_text(text.trim());
+                }
             }
         };
         refresh();

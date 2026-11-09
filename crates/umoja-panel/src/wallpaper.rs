@@ -71,7 +71,9 @@ impl Wallpaper {
         for w in self.windows.borrow_mut().drain(..) {
             w.destroy();
         }
-        let Some(display) = gdk::Display::default() else { return };
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
         let texture = gs::wallpaper_path(gs::prefers_dark())
             .and_then(|p| gdk::Texture::from_filename(&p).ok());
         if texture.is_none() {

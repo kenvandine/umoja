@@ -74,7 +74,12 @@ impl From<&str> for Question {
 }
 
 pub fn initial_messages(q: &Question) -> Vec<Value> {
-    let user = match q.context.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+    let user = match q
+        .context
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         Some(ctx) => format!("{ctx}\n\n{}", q.text),
         None => q.text.clone(),
     };
@@ -111,11 +116,10 @@ impl Toolbox {
     pub fn schemas(&self) -> Vec<Value> {
         let mut s: Vec<Value> = self.local.iter().map(ToolSpec::schema).collect();
         if let Some(m) = &self.mcp {
-            s.extend(
-                m.openai_schemas()
-                    .into_iter()
-                    .filter(|t| self.local(t["function"]["name"].as_str().unwrap_or("")).is_none()),
-            );
+            s.extend(m.openai_schemas().into_iter().filter(|t| {
+                self.local(t["function"]["name"].as_str().unwrap_or(""))
+                    .is_none()
+            }));
         }
         s
     }
@@ -291,7 +295,15 @@ async fn run_mcp(mcp: &McpClient, name: &str, args: Value, id: usize, ui: &Rc<dy
             .collect();
         crate::files::show_tool_hits(&hits);
     }
-    ui.step(id, &label, if r.is_error { StepState::Failed } else { StepState::Done });
+    ui.step(
+        id,
+        &label,
+        if r.is_error {
+            StepState::Failed
+        } else {
+            StepState::Done
+        },
+    );
     r.text
 }
 
@@ -349,7 +361,10 @@ fn inline_spans(text: &str, tools: &Toolbox) -> Vec<(usize, usize, ToolCall)> {
 }
 
 fn inline_tool_calls(text: &str, tools: &Toolbox) -> Vec<ToolCall> {
-    inline_spans(text, tools).into_iter().map(|(_, _, c)| c).collect()
+    inline_spans(text, tools)
+        .into_iter()
+        .map(|(_, _, c)| c)
+        .collect()
 }
 
 /// The text without reasoning, inline tool calls or their wrappers.
@@ -426,7 +441,10 @@ mod tests {
         let tools = toolbox();
         assert_eq!(visible_text("<think>hmm", &tools), "");
         assert_eq!(visible_text("<think>a</think>Done.", &tools), "Done.");
-        assert_eq!(visible_text("Ok <tool_call>{\"name\": \"set_", &tools), "Ok");
+        assert_eq!(
+            visible_text("Ok <tool_call>{\"name\": \"set_", &tools),
+            "Ok"
+        );
         assert_eq!(visible_text("It is running.\n.", &tools), "It is running.");
         assert_eq!(visible_text("Open **`a.png`**", &tools), "Open a.png");
     }
@@ -471,7 +489,10 @@ mod tests {
         let mcp = ctx
             .block_on(McpClient::start(&["--dry-run"]))
             .expect("build umoja-mcp first: cargo build -p umoja-mcp");
-        let tools = Toolbox { local: registry(), mcp: Some(mcp) };
+        let tools = Toolbox {
+            local: registry(),
+            mcp: Some(mcp),
+        };
         let prompts = [
             "turn on dark mode",
             "open firefox",

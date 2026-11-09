@@ -133,9 +133,10 @@ fn kernel_modes(connector: &str) -> Vec<(u32, u32)> {
             for line in text.lines() {
                 if let Some((w, h)) = line.trim().trim_end_matches('i').split_once('x')
                     && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
-                        && !modes.contains(&(w, h)) {
-                            modes.push((w, h));
-                        }
+                    && !modes.contains(&(w, h))
+                {
+                    modes.push((w, h));
+                }
             }
         }
     }

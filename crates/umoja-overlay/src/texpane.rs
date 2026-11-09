@@ -48,7 +48,10 @@ mod imp {
             let scale = (w / tw).max(h / th);
             let (dw, dh) = (tw * scale, th * scale);
             snapshot.push_clip(&bounds);
-            snapshot.append_texture(&tex, &graphene::Rect::new((w - dw) / 2.0, (h - dh) / 2.0, dw, dh));
+            snapshot.append_texture(
+                &tex,
+                &graphene::Rect::new((w - dw) / 2.0, (h - dh) / 2.0, dw, dh),
+            );
             snapshot.pop();
         }
     }

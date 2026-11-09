@@ -45,7 +45,8 @@ fn main() {
         .include_paths
         .iter()
         .chain(&mircommon.include_paths)
-        .chain(&mirserver.include_paths) {
+        .chain(&mirserver.include_paths)
+    {
         build.include(path);
     }
     build.compile("umoja_shim");
@@ -54,14 +55,16 @@ fn main() {
         .link_paths
         .iter()
         .chain(&mircommon.link_paths)
-        .chain(&mirserver.link_paths) {
+        .chain(&mirserver.link_paths)
+    {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
     for lib in miral
         .libs
         .iter()
         .chain(&mircommon.libs)
-        .chain(&mirserver.libs) {
+        .chain(&mirserver.libs)
+    {
         println!("cargo:rustc-link-lib={lib}");
     }
 }

@@ -222,33 +222,72 @@ mod tests {
 
     #[test]
     fn edges_and_corners() {
-        assert_eq!(target(0, 500, WIN, AREA, PickerTile::None), Action::TileLeft);
-        assert_eq!(target(1919, 500, WIN, AREA, PickerTile::None), Action::TileRight);
-        assert_eq!(target(960, 40, WIN, AREA, PickerTile::None), Action::Maximize);
-        assert_eq!(target(960, 1075, WIN, AREA, PickerTile::None), Action::TileBottomHalf);
-        assert_eq!(target(3, 40, WIN, AREA, PickerTile::None), Action::TileTopLeft);
-        assert_eq!(target(1919, 1079, WIN, AREA, PickerTile::None), Action::TileBottomRight);
+        assert_eq!(
+            target(0, 500, WIN, AREA, PickerTile::None),
+            Action::TileLeft
+        );
+        assert_eq!(
+            target(1919, 500, WIN, AREA, PickerTile::None),
+            Action::TileRight
+        );
+        assert_eq!(
+            target(960, 40, WIN, AREA, PickerTile::None),
+            Action::Maximize
+        );
+        assert_eq!(
+            target(960, 1075, WIN, AREA, PickerTile::None),
+            Action::TileBottomHalf
+        );
+        assert_eq!(
+            target(3, 40, WIN, AREA, PickerTile::None),
+            Action::TileTopLeft
+        );
+        assert_eq!(
+            target(1919, 1079, WIN, AREA, PickerTile::None),
+            Action::TileBottomRight
+        );
         assert_eq!(target(960, 500, WIN, AREA, PickerTile::None), Action::None);
     }
 
     #[test]
     fn title_bar_drag_along_side_with_window_at_top_is_a_quarter() {
         let w = Rect::new(0, AREA.y, 800, 600);
-        assert_eq!(target(2, AREA.y + 20, w, AREA, PickerTile::None), Action::TileTopLeft);
+        assert_eq!(
+            target(2, AREA.y + 20, w, AREA, PickerTile::None),
+            Action::TileTopLeft
+        );
     }
 
     #[test]
     fn picker_choice_wins() {
-        assert_eq!(target(960, 100, WIN, AREA, PickerTile::Right), Action::TileRight);
-        assert_eq!(target(960, 100, WIN, AREA, PickerTile::Left), Action::TileLeft);
-        assert_eq!(target(960, 100, WIN, AREA, PickerTile::Top), Action::TileTopHalf);
-        assert_eq!(target(960, 100, WIN, AREA, PickerTile::Q3), Action::TileBottomLeft);
-        assert_eq!(target(960, 100, WIN, AREA, PickerTile::Maximize), Action::Maximize);
+        assert_eq!(
+            target(960, 100, WIN, AREA, PickerTile::Right),
+            Action::TileRight
+        );
+        assert_eq!(
+            target(960, 100, WIN, AREA, PickerTile::Left),
+            Action::TileLeft
+        );
+        assert_eq!(
+            target(960, 100, WIN, AREA, PickerTile::Top),
+            Action::TileTopHalf
+        );
+        assert_eq!(
+            target(960, 100, WIN, AREA, PickerTile::Q3),
+            Action::TileBottomLeft
+        );
+        assert_eq!(
+            target(960, 100, WIN, AREA, PickerTile::Maximize),
+            Action::Maximize
+        );
     }
 
     #[test]
     fn picker_peeks_until_pointer_is_near() {
-        assert_eq!(picker(100, 500, AREA, MON), (Visibility::Peek, PickerTile::None));
+        assert_eq!(
+            picker(100, 500, AREA, MON),
+            (Visibility::Peek, PickerTile::None)
+        );
         let r = icon_rect(AREA, 1);
         assert_eq!(
             picker(r.x + 5, r.y + 30, AREA, MON),
@@ -260,12 +299,21 @@ mod tests {
         );
         let q = icon_rect(AREA, 2);
         assert_eq!(picker(q.x + 2, q.y + 2, AREA, MON).1, PickerTile::Q2);
-        assert_eq!(picker(q.right() - 2, q.bottom() - 2, AREA, MON).1, PickerTile::Q4);
+        assert_eq!(
+            picker(q.right() - 2, q.bottom() - 2, AREA, MON).1,
+            PickerTile::Q4
+        );
         let m = icon_rect(AREA, 3);
-        assert_eq!(picker(m.x + 30, m.y + 30, AREA, MON).1, PickerTile::Maximize);
+        assert_eq!(
+            picker(m.x + 30, m.y + 30, AREA, MON).1,
+            PickerTile::Maximize
+        );
         // Over the top bar, above the picker, it is shown but nothing picked.
         let x = picker_x(AREA) + PICKER_W / 2;
-        assert_eq!(picker(x, 5, AREA, MON), (Visibility::Shown, PickerTile::None));
+        assert_eq!(
+            picker(x, 5, AREA, MON),
+            (Visibility::Shown, PickerTile::None)
+        );
     }
 
     #[test]

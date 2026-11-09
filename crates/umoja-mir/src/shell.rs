@@ -343,7 +343,13 @@ extern "C" fn collect_workspaces(ctx: *mut c_void, desc: *const WindowDesc) {
 /// (window id, workspace) for every application window, -1 = all workspaces.
 pub fn list_window_workspaces() -> Vec<(u64, i32)> {
     let mut rows: Vec<(u64, i32)> = Vec::new();
-    unsafe { umoja_wm_list_windows(collect_workspaces, &mut rows as *mut _ as *mut c_void, false) };
+    unsafe {
+        umoja_wm_list_windows(
+            collect_workspaces,
+            &mut rows as *mut _ as *mut c_void,
+            false,
+        )
+    };
     rows
 }
 
@@ -422,13 +428,15 @@ impl Compositor {
 
     /// Switch to workspace `index` (0-based), showing the switcher popup.
     async fn switch_workspace(&self, index: u32) {
-        let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_switch_workspace(index) }).await;
+        let _ =
+            tokio::task::spawn_blocking(move || unsafe { umoja_wm_switch_workspace(index) }).await;
     }
 
     /// Move a window to workspace `index` (0-based) and follow it there.
     async fn move_window_to_workspace(&self, id: u64, index: u32) {
         let _ =
-            tokio::task::spawn_blocking(move || unsafe { umoja_wm_move_to_workspace(id, index) }).await;
+            tokio::task::spawn_blocking(move || unsafe { umoja_wm_move_to_workspace(id, index) })
+                .await;
     }
 
     /// (window id, workspace) for every window in `GetWindows`; the
@@ -441,14 +449,16 @@ impl Compositor {
 
     /// Switch to workspace `index` without the switcher popup (overview).
     async fn show_workspace(&self, index: u32) {
-        let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_show_workspace(index) }).await;
+        let _ =
+            tokio::task::spawn_blocking(move || unsafe { umoja_wm_show_workspace(index) }).await;
     }
 
     /// Put a window on workspace `index` without following it (overview
     /// drag and drop).
     async fn send_window_to_workspace(&self, id: u64, index: u32) {
         let _ =
-            tokio::task::spawn_blocking(move || unsafe { umoja_wm_send_to_workspace(id, index) }).await;
+            tokio::task::spawn_blocking(move || unsafe { umoja_wm_send_to_workspace(id, index) })
+                .await;
     }
 
     /// Emitted when the active workspace or the number of workspaces changes.

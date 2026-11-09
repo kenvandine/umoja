@@ -188,7 +188,11 @@ pub fn row(index: usize, text: &str, on: Rc<dyn Fn(RowAction)>) -> gtk::Widget {
         .build();
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     actions.set_valign(gtk::Align::Center);
-    for t in [Transform::Translate, Transform::Reformat, Transform::Summarize] {
+    for t in [
+        Transform::Translate,
+        Transform::Reformat,
+        Transform::Summarize,
+    ] {
         let b = gtk::Button::builder()
             .label(t.label())
             .css_classes(["pill", "clip-action"])

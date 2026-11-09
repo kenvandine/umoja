@@ -100,7 +100,11 @@ impl McpClient {
         glib::spawn_future_local(async move {
             while let Ok(mut line) = lines.recv().await {
                 line.push('\n');
-                if stdin.write_all_future(line.into_bytes(), glib::Priority::DEFAULT).await.is_err() {
+                if stdin
+                    .write_all_future(line.into_bytes(), glib::Priority::DEFAULT)
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -175,7 +179,9 @@ impl McpClient {
         let (tx, rx) = async_channel::bounded(1);
         self.pending.borrow_mut().insert(id, tx);
         self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
-        rx.recv().await.map_err(|_| "the Umoja tool server stopped".to_string())?
+        rx.recv()
+            .await
+            .map_err(|_| "the Umoja tool server stopped".to_string())?
     }
 
     fn receive(self: &Rc<Self>, msg: Value) {
@@ -241,7 +247,10 @@ impl McpClient {
 
     /// The progress line and risk for a call.
     pub async fn describe(&self, name: &str, args: &Value) -> (String, Risk) {
-        match self.request("umoja/describe", json!({"name": name, "arguments": args})).await {
+        match self
+            .request("umoja/describe", json!({"name": name, "arguments": args}))
+            .await
+        {
             Ok(v) => (
                 v["label"].as_str().unwrap_or(name).to_string(),
                 risk_from(v["risk"].as_str().unwrap_or("low")),
@@ -252,13 +261,20 @@ impl McpClient {
 
     pub async fn call(&self, name: &str, args: Value, confirm: Confirm) -> CallResult {
         *self.confirm.borrow_mut() = Some(confirm);
-        let r = self.request("tools/call", json!({"name": name, "arguments": args})).await;
+        let r = self
+            .request("tools/call", json!({"name": name, "arguments": args}))
+            .await;
         *self.confirm.borrow_mut() = None;
         match r {
             Ok(v) => CallResult {
                 text: v["content"]
                     .as_array()
-                    .map(|c| c.iter().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>().join("\n"))
+                    .map(|c| {
+                        c.iter()
+                            .filter_map(|i| i["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
                     .unwrap_or_default(),
                 is_error: v["isError"].as_bool().unwrap_or(false),
                 declined: v["_meta"]["umoja/declined"].as_bool().unwrap_or(false),

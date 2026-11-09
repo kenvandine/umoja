@@ -77,6 +77,11 @@ impl Win {
 /// Scale and row assignment for `sizes` inside `avail` (w, h): every window
 /// gets the same scale, rows keep the given order, and the row count that
 /// allows the largest scale wins. Never scales up.
+/// A touch drag this far sideways is a workspace swipe, not a tap.
+const TOUCH_SWIPE_CLAIM: f64 = 16.0;
+/// ...and this far switches workspace when the finger lifts.
+const TOUCH_SWIPE_SWITCH: f64 = 80.0;
+
 pub fn layout(sizes: &[(f64, f64)], avail: (f64, f64), gap: f64) -> (f64, Vec<Vec<usize>>) {
     let n = sizes.len();
     if n == 0 {
@@ -128,7 +133,12 @@ pub fn card_size(avail: (f64, f64), aspect: f64, peeks: bool) -> (f64, f64) {
 /// Where a window sits inside a workspace thumbnail of `scale` (thumbnail
 /// pixels per logical pixel), relative to the monitor at `origin`. `None`
 /// for a window that isn't on that monitor or would be too small to show.
-pub fn thumb_rect(w: &Win, origin: (i32, i32), mon: (i32, i32), scale: f64) -> Option<(f64, f64, f64, f64)> {
+pub fn thumb_rect(
+    w: &Win,
+    origin: (i32, i32),
+    mon: (i32, i32),
+    scale: f64,
+) -> Option<(f64, f64, f64, f64)> {
     let cx = w.x + w.w / 2 - origin.0;
     let cy = w.y + w.h / 2 - origin.1;
     if cx < 0 || cy < 0 || cx >= mon.0 || cy >= mon.1 {
@@ -144,7 +154,11 @@ pub fn thumb_rect(w: &Win, origin: (i32, i32), mon: (i32, i32), scale: f64) -> O
 /// Which workspace the window shows in: its own, or the current one for a
 /// window on every workspace.
 fn shown_on(w: &Win, current: u32) -> u32 {
-    if w.workspace < 0 { current } else { w.workspace as u32 }
+    if w.workspace < 0 {
+        current
+    } else {
+        w.workspace as u32
+    }
 }
 
 #[derive(Default)]
@@ -266,7 +280,9 @@ impl Spread {
                 return glib::Propagation::Proceed;
             };
             let plain = !mods.intersects(
-                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK,
+                gdk::ModifierType::CONTROL_MASK
+                    | gdk::ModifierType::ALT_MASK
+                    | gdk::ModifierType::SUPER_MASK,
             );
             match key {
                 gdk::Key::Escape => {
@@ -323,6 +339,26 @@ impl Spread {
             }
         });
         content.add_controller(click);
+
+        // On a touchscreen a one-finger sideways drag across the overview
+        // (not on a window, which drags the window) switches workspace,
+        // as in GNOME.
+        let swipe = gtk::GestureDrag::new();
+        swipe.set_touch_only(true);
+        swipe.connect_drag_update(|g, dx, dy| {
+            if dx.abs() >= TOUCH_SWIPE_CLAIM && dx.abs() > dy.abs() {
+                g.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        swipe.connect_drag_end(move |_, dx, dy| {
+            let Some(s) = weak.upgrade() else { return };
+            if dx.abs() >= TOUCH_SWIPE_SWITCH && dx.abs() > dy.abs() {
+                // Fingers moving left bring in the workspace on the right.
+                s.step_workspace(if dx < 0.0 { 1 } else { -1 });
+            }
+        });
+        content.add_controller(swipe);
 
         // Scrolling switches workspace, one step per notch or swipe.
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
@@ -531,9 +567,16 @@ impl Spread {
         let count = st.count.max(1);
         let current = st.current.min(count - 1);
         let per_workspace: Vec<usize> = (0..count)
-            .map(|i| st.windows.iter().filter(|w| shown_on(w, current) == i).count())
+            .map(|i| {
+                st.windows
+                    .iter()
+                    .filter(|w| shown_on(w, current) == i)
+                    .count()
+            })
             .collect();
-        tracing::info!("overview populated current={current} count={count} per_workspace={per_workspace:?}");
+        tracing::info!(
+            "overview populated current={current} count={count} per_workspace={per_workspace:?}"
+        );
 
         // Thumbnails, when there is more than one workspace (as in GNOME).
         let mut used_h = 24.0 + 40.0 + GAP;
@@ -556,7 +599,8 @@ impl Spread {
             let left = (current > 0).then(|| current - 1);
             self.main.append(&self.peek(left, ch, true));
         }
-        self.main.append(&self.workspace_card(&st, current, (cw, ch)));
+        self.main
+            .append(&self.workspace_card(&st, current, (cw, ch)));
         if peeks {
             let right = (current + 1 < count).then_some(current + 1);
             self.main.append(&self.peek(right, ch, false));
@@ -564,7 +608,12 @@ impl Spread {
     }
 
     fn wallpaper(&self, w: f64, h: f64) -> TexPane {
-        let pane = TexPane::new(self.wallpaper.borrow().as_ref(), true, w.round() as i32, h.round() as i32);
+        let pane = TexPane::new(
+            self.wallpaper.borrow().as_ref(),
+            true,
+            w.round() as i32,
+            h.round() as i32,
+        );
         pane.add_css_class("workspace-wallpaper");
         pane
     }
@@ -617,7 +666,9 @@ impl Spread {
             if w.workspace < 0 || w.workspace as u32 != index || w.flags & FLAG_MINIMIZED != 0 {
                 continue;
             }
-            let Some((x, y, rw, rh)) = thumb_rect(w, origin, mon, scale) else { continue };
+            let Some((x, y, rw, rh)) = thumb_rect(w, origin, mon, scale) else {
+                continue;
+            };
             let child: gtk::Widget = match previews.get(&w.id) {
                 Some(t) => TexPane::new(Some(t), false, 1, 1).upcast(),
                 None => {
@@ -625,7 +676,9 @@ impl Spread {
                     card.add_css_class("thumb-window-card");
                     let icon = apps::app_for_window(&w.app_id)
                         .and_then(|i| i.icon())
-                        .unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast());
+                        .unwrap_or_else(|| {
+                            gio::ThemedIcon::new("application-x-executable").upcast()
+                        });
                     let img = gtk::Image::from_gicon(&icon);
                     img.set_pixel_size(((rw.min(rh)) * 0.5).clamp(8.0, 32.0) as i32);
                     img.set_vexpand(true);
@@ -649,7 +702,9 @@ impl Spread {
             frame.add_css_class("active");
         }
         frame.set_widget_name(&format!("ws-{index}"));
-        frame.set_tooltip_text(Some(&i18n::shell("Workspace %d").replace("%d", &(index + 1).to_string())));
+        frame.set_tooltip_text(Some(
+            &i18n::shell("Workspace %d").replace("%d", &(index + 1).to_string()),
+        ));
         let click = gtk::GestureClick::new();
         let weak = Rc::downgrade(self);
         click.connect_released(move |g, _, _, _| {
@@ -663,7 +718,12 @@ impl Spread {
     }
 
     /// The current workspace: the wallpaper with its windows spread out.
-    fn workspace_card(self: &Rc<Self>, st: &State, index: u32, (cw, ch): (f64, f64)) -> gtk::Widget {
+    fn workspace_card(
+        self: &Rc<Self>,
+        st: &State,
+        index: u32,
+        (cw, ch): (f64, f64),
+    ) -> gtk::Widget {
         let rows = gtk::Box::new(gtk::Orientation::Vertical, GAP as i32);
         rows.set_valign(gtk::Align::Center);
         rows.set_halign(gtk::Align::Center);
@@ -683,7 +743,10 @@ impl Spread {
                 .map(|&i| (here[i].w.max(1) as f64, here[i].h.max(1) as f64))
                 .collect();
             // Leave room under each window for its title.
-            let avail = ((cw - 2.0 * CARD_PAD).max(100.0), (ch - 2.0 * CARD_PAD - 32.0).max(60.0));
+            let avail = (
+                (cw - 2.0 * CARD_PAD).max(100.0),
+                (ch - 2.0 * CARD_PAD - 32.0).max(60.0),
+            );
             let (scale, groups) = layout(&sizes, avail, GAP);
             let previews = self.previews.borrow();
             for g in groups {
@@ -838,7 +901,9 @@ impl Spread {
         let cell_w = cell.clone().upcast::<gtk::Widget>();
         drag.connect_drag_update(move |g, dx, dy| {
             let Some(s) = weak.upgrade() else { return };
-            let Some((sx, sy)) = g.start_point() else { return };
+            let Some((sx, sy)) = g.start_point() else {
+                return;
+            };
             if s.drag.borrow().is_none() {
                 if dx.hypot(dy) < DRAG_THRESHOLD {
                     return;
@@ -870,8 +935,10 @@ impl Spread {
                     target: None,
                 });
             }
-            let Some(p) = cell_w.compute_point(&s.window, &gtk::graphene::Point::new((sx + dx) as f32, (sy + dy) as f32))
-            else {
+            let Some(p) = cell_w.compute_point(
+                &s.window,
+                &gtk::graphene::Point::new((sx + dx) as f32, (sy + dy) as f32),
+            ) else {
                 return;
             };
             s.drag_motion(p.x() as f64, p.y() as f64);
@@ -889,7 +956,11 @@ impl Spread {
     fn target_at(&self, x: f64, y: f64) -> Option<(gtk::Widget, u32)> {
         let mut hit = self.window.pick(x, y, gtk::PickFlags::DEFAULT);
         while let Some(w) = hit {
-            if let Some(i) = w.widget_name().strip_prefix("ws-").and_then(|n| n.parse().ok()) {
+            if let Some(i) = w
+                .widget_name()
+                .strip_prefix("ws-")
+                .and_then(|n| n.parse().ok())
+            {
                 return Some((w, i));
             }
             hit = w.parent();
@@ -902,10 +973,15 @@ impl Spread {
         let mut drag = self.drag.borrow_mut();
         let Some(d) = drag.as_mut() else { return };
         let to = (x - d.size.0 / 2.0, y - d.size.1 / 2.0);
-        if let Some(p) = self.window.compute_point(&self.drag_layer, &gtk::graphene::Point::new(to.0 as f32, to.1 as f32)) {
+        if let Some(p) = self.window.compute_point(
+            &self.drag_layer,
+            &gtk::graphene::Point::new(to.0 as f32, to.1 as f32),
+        ) {
             self.drag_layer.move_(&d.ghost, p.x() as f64, p.y() as f64);
         }
-        let new = target.filter(|(_, i)| *i as i32 != d.workspace).map(|(w, _)| w);
+        let new = target
+            .filter(|(_, i)| *i as i32 != d.workspace)
+            .map(|(w, _)| w);
         if new != d.target {
             if let Some(old) = d.target.take() {
                 old.remove_css_class("drop-target");
@@ -918,11 +994,15 @@ impl Spread {
     }
 
     fn drop_window(self: &Rc<Self>) {
-        let Some(d) = self.drag.borrow_mut().take() else { return };
+        let Some(d) = self.drag.borrow_mut().take() else {
+            return;
+        };
         self.drag_layer.remove(&d.ghost);
         let target = d.target.as_ref().and_then(|t| {
             t.remove_css_class("drop-target");
-            t.widget_name().strip_prefix("ws-").and_then(|n| n.parse::<u32>().ok())
+            t.widget_name()
+                .strip_prefix("ws-")
+                .and_then(|n| n.parse::<u32>().ok())
         });
         match target {
             Some(i) if i as i32 != d.workspace => self.send_to_workspace(d.id, i),
@@ -1038,7 +1118,11 @@ pub async fn fetch_windows() -> Vec<Win> {
             w,
             h,
             flags,
-            workspace: if flags & FLAG_CURRENT_WORKSPACE != 0 { -1 } else { 0 },
+            workspace: if flags & FLAG_CURRENT_WORKSPACE != 0 {
+                -1
+            } else {
+                0
+            },
         })
         .collect()
 }
@@ -1060,7 +1144,11 @@ async fn fetch_state() -> State {
         w.workspace = map
             .get(&w.id)
             .copied()
-            .unwrap_or(if w.flags & FLAG_CURRENT_WORKSPACE != 0 { current as i32 } else { -2 });
+            .unwrap_or(if w.flags & FLAG_CURRENT_WORKSPACE != 0 {
+                current as i32
+            } else {
+                -2
+            });
     }
     windows.retain(|w| w.workspace >= -1);
     State {

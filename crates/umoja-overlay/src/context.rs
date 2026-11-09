@@ -95,7 +95,11 @@ pub fn build_context(attachments: &[Attachment]) -> Option<String> {
     for a in attachments {
         let text = truncate_chars(a.text.trim(), budget);
         budget = budget.saturating_sub(text.chars().count());
-        out.push_str(&format!("<<< {} >>>\n{}\n<<< end >>>\n\n", a.heading(), text));
+        out.push_str(&format!(
+            "<<< {} >>>\n{}\n<<< end >>>\n\n",
+            a.heading(),
+            text
+        ));
     }
     out.push_str("Question:");
     Some(out)
@@ -106,7 +110,11 @@ pub fn strip_fences(text: &str) -> String {
     let t = text.trim();
     if let Some(rest) = t.strip_prefix("```") {
         let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or("");
-        return body.trim_end().trim_end_matches("```").trim_end().to_string();
+        return body
+            .trim_end()
+            .trim_end_matches("```")
+            .trim_end()
+            .to_string();
     }
     t.to_string()
 }
@@ -242,7 +250,9 @@ pub async fn focused_window() -> Option<FocusedWindow> {
 
 /// Flags as in umoja-mir's `WindowDesc`: 1 focused, 2 minimized, 4 on the
 /// current workspace.
-fn pick_focused(rows: Vec<(u64, String, String, i32, i32, i32, i32, u32)>) -> Option<FocusedWindow> {
+fn pick_focused(
+    rows: Vec<(u64, String, String, i32, i32, i32, i32, u32)>,
+) -> Option<FocusedWindow> {
     let usable = |f: u32| f & 4 != 0 && f & 2 == 0;
     let row = rows
         .iter()
@@ -503,7 +513,11 @@ mod tests {
 
     #[test]
     fn transform_prompts_name_the_language() {
-        assert!(Transform::Translate.system_prompt("German").contains("into German"));
+        assert!(
+            Transform::Translate
+                .system_prompt("German")
+                .contains("into German")
+        );
     }
 
     #[test]

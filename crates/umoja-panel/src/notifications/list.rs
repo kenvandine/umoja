@@ -15,7 +15,7 @@ use gtk4 as gtk;
 use umoja_common::i18n;
 
 use super::assistant::{self, Event};
-use super::{bubbles::icon_widget, Center, CloseReason, Note};
+use super::{Center, CloseReason, Note, bubbles::icon_widget};
 
 /// Summarize automatically when the list opens with at least this many new
 /// notifications; below it the card offers a button.
@@ -139,7 +139,9 @@ impl MessageList {
             let weak = Rc::downgrade(&inner);
             move || {
                 let Some(inner) = weak.upgrade() else { return };
-                let Some(c) = inner.center.upgrade() else { return };
+                let Some(c) = inner.center.upgrade() else {
+                    return;
+                };
                 let notes = c.notes();
                 inner.sync_rows(&notes);
                 inner.digest.sync(&c.missed());
@@ -162,7 +164,9 @@ impl MessageList {
 
     /// The clock menu opened: summarize a pile of new notifications.
     pub fn opened(&self) {
-        let Some(c) = self.inner.center.upgrade() else { return };
+        let Some(c) = self.inner.center.upgrade() else {
+            return;
+        };
         let missed = c.missed();
         if missed.len() >= AUTO_DIGEST {
             self.inner.digest.run(&missed);
@@ -202,7 +206,9 @@ impl Inner {
                 .get(&n.id)
                 .and_then(|(_, r)| r.reply.as_ref())
                 .is_some_and(Reply::is_open);
-            let fresh = built.get(&n.id).is_none_or(|(old, _)| *old != fp && !replying);
+            let fresh = built
+                .get(&n.id)
+                .is_none_or(|(old, _)| *old != fp && !replying);
             if fresh {
                 if let Some((_, old)) = built.remove(&n.id) {
                     self.rows.remove(&old.widget);
@@ -310,7 +316,10 @@ fn row(note: &Note, center: Weak<Center>) -> Row {
         }
     });
     row.add_controller(click);
-    Row { widget: outer, reply }
+    Row {
+        widget: outer,
+        reply,
+    }
 }
 
 /// Quick reply under a message: suggestions drafted by the assistant, a
@@ -380,7 +389,11 @@ impl Reply {
             let hint = gtk::Label::builder()
                 .label(format!(
                     "{} can't take replies from here. Send copies your reply and opens it.",
-                    if note.app_name.is_empty() { "This app" } else { &note.app_name }
+                    if note.app_name.is_empty() {
+                        "This app"
+                    } else {
+                        &note.app_name
+                    }
                 ))
                 .xalign(0.0)
                 .wrap(true)
@@ -616,7 +629,13 @@ impl Digest {
             return; // already summarized these
         }
         self.stale.set(false);
-        start(missed, &self.text, &self.spinner, &self.button, &self.generation);
+        start(
+            missed,
+            &self.text,
+            &self.spinner,
+            &self.button,
+            &self.generation,
+        );
     }
 }
 
@@ -638,8 +657,12 @@ fn start(
     text.set_text(&i18n::shell("Summarizing…"));
     text.set_visible(true);
     let rx = assistant::digest(missed);
-    let (text, spinner, button, generation) =
-        (text.clone(), spinner.clone(), button.clone(), generation.clone());
+    let (text, spinner, button, generation) = (
+        text.clone(),
+        spinner.clone(),
+        button.clone(),
+        generation.clone(),
+    );
     glib::MainContext::default().spawn_local(async move {
         let mut acc = String::new();
         while let Ok(ev) = rx.recv().await {

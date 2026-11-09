@@ -5,6 +5,12 @@ pub const OVERLAY_BUS_NAME: &str = "org.umoja.Overlay";
 pub const OVERLAY_OBJECT_PATH: &str = "/org/umoja/Overlay";
 pub const OVERLAY_INTERFACE: &str = "org.umoja.Overlay";
 
+/// The top bar: `OpenMenu("calendar" | "quick-settings")` for the
+/// compositor's top-edge touch gesture.
+pub const PANEL_BUS_NAME: &str = "org.umoja.Panel";
+pub const PANEL_OBJECT_PATH: &str = "/org/umoja/Panel";
+pub const PANEL_INTERFACE: &str = "org.umoja.Panel";
+
 /// StatusNotifier (AppIndicator) host implemented by umoja-panel.
 pub const SNI_WATCHER_BUS_NAME: &str = "org.kde.StatusNotifierWatcher";
 pub const SNI_WATCHER_OBJECT_PATH: &str = "/StatusNotifierWatcher";

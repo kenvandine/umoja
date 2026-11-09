@@ -2,10 +2,10 @@
 //! bug in policy code can never unwind into Mir's C++ event loop.
 
 use crate::outputs::{self, Direction};
+use crate::switcher::{self, Outcome};
 use crate::tiling::{self, Action, Rect, TilingState};
 use crate::workspaces::{self, Request};
-use crate::switcher::{self, Outcome};
-use crate::{input, session, shell};
+use crate::{gestures, input, session, shell};
 use std::ffi::{CStr, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{LazyLock, Mutex};
@@ -111,7 +111,9 @@ pub extern "C" fn umoja_handle_action(action: u32) {
 /// inverted ("natural" scrolling). Called for every scroll event.
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_natural_scroll(source: u32) -> bool {
-    guard("natural_scroll", false, || crate::peripherals::natural_scroll(source))
+    guard("natural_scroll", false, || {
+        crate::peripherals::natural_scroll(source)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -325,7 +327,9 @@ fn lossy(p: *const c_char) -> String {
 }
 
 fn write_outcome(out: Option<Outcome>, res: *mut SwitchResult) -> u32 {
-    let Some(out) = out else { return SWITCH_NOT_OURS };
+    let Some(out) = out else {
+        return SWITCH_NOT_OURS;
+    };
     let fill = |ids: &[u64]| {
         if res.is_null() {
             return;
@@ -407,7 +411,9 @@ pub extern "C" fn umoja_switcher_pick(index: u32, out: *mut SwitchResult) -> u32
 
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_switcher_window_closed(id: u64) {
-    guard("switcher_window_closed", (), || shell::switcher_window_closed(id))
+    guard("switcher_window_closed", (), || {
+        shell::switcher_window_closed(id)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -449,7 +455,9 @@ pub extern "C" fn umoja_raise_tile_group() -> bool {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_is_tile_action(action: u32) -> bool {
-    guard("is_tile_action", false, || tiling::is_tile(Action::from_u32(action)))
+    guard("is_tile_action", false, || {
+        tiling::is_tile(Action::from_u32(action))
+    })
 }
 
 /// A keyboard workspace switch happened: show GNOME's switcher popup.
@@ -473,4 +481,99 @@ pub extern "C" fn umoja_workspaces_changed(current: usize, count: usize) {
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_idle_state(state: u32) {
     guard("idle_state", (), || crate::idle::mir_state(state))
+}
+
+/// One touch point from Mir (`action`: 0 up, 1 down, 2 moved).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UmojaTouchPoint {
+    pub id: i32,
+    pub action: u32,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// What the shim does with a touch frame. `swipe` is a set of
+/// `UMOJA_SWIPE_*` bits, applied begin, update, end.
+#[repr(C)]
+pub struct UmojaTouchResult {
+    pub consume: bool,
+    pub swipe: u32,
+    pub progress: f64,
+    pub dir: i32,
+}
+
+pub const SWIPE_BEGIN: u32 = 1;
+pub const SWIPE_UPDATE: u32 = 2;
+pub const SWIPE_END: u32 = 4;
+
+static GESTURES: LazyLock<Mutex<gestures::Recognizer>> = LazyLock::new(Default::default);
+
+/// A touch frame for GNOME's touchscreen gestures ([`gestures`]). `screen`
+/// is the output the gesture is on. Returns whether to keep it from apps.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_touch(
+    points: *const UmojaTouchPoint,
+    n: usize,
+    time_ns: u64,
+    screen: Rect,
+    out: *mut UmojaTouchResult,
+) -> bool {
+    guard("touch", false, || {
+        if points.is_null() || out.is_null() {
+            return false;
+        }
+        let pts: Vec<gestures::Point> = unsafe { std::slice::from_raw_parts(points, n) }
+            .iter()
+            .map(|p| gestures::Point {
+                id: p.id,
+                action: p.action,
+                x: p.x as f64,
+                y: p.y as f64,
+            })
+            .collect();
+        let screen = gestures::Screen {
+            x: screen.x as f64,
+            y: screen.y as f64,
+            w: screen.w as f64,
+            h: screen.h as f64,
+        };
+        let mut outs = Vec::new();
+        let consume = GESTURES.lock().unwrap_or_else(|e| e.into_inner()).feed(
+            &pts,
+            time_ns as f64 / 1e6,
+            screen,
+            &mut outs,
+        );
+        let res = unsafe { &mut *out };
+        *res = UmojaTouchResult {
+            consume,
+            swipe: 0,
+            progress: 0.0,
+            dir: 0,
+        };
+        for o in outs {
+            match o {
+                gestures::Out::SwipeBegin => res.swipe |= SWIPE_BEGIN,
+                gestures::Out::SwipeUpdate(p) => {
+                    res.swipe |= SWIPE_UPDATE;
+                    res.progress = p;
+                }
+                gestures::Out::SwipeEnd(d) => {
+                    res.swipe |= SWIPE_END;
+                    res.dir = d;
+                }
+                gestures::Out::OverviewUp => session::overlay_call("ShiftOverview", (true,)),
+                gestures::Out::OverviewDown => session::overlay_call("ShiftOverview", (false,)),
+                gestures::Out::OpenMenu(m) => session::panel_call(
+                    "OpenMenu",
+                    (match m {
+                        gestures::Menu::Calendar => "calendar",
+                        gestures::Menu::QuickSettings => "quick-settings",
+                    },),
+                ),
+            }
+        }
+        consume
+    })
 }

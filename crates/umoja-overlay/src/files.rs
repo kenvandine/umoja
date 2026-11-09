@@ -45,7 +45,12 @@ pub async fn search(query: &str, limit: u32) -> Result<Vec<Hit>, glib::Error> {
     let (hits,): (Vec<(String, String, String, f64)>,) = reply.get().unwrap_or_default();
     Ok(hits
         .into_iter()
-        .map(|(path, name, detail, score)| Hit { path, name, detail, score })
+        .map(|(path, name, detail, score)| Hit {
+            path,
+            name,
+            detail,
+            score,
+        })
         .collect())
 }
 
@@ -60,7 +65,9 @@ pub fn show_in_folder(path: &str) {
     let uri = gio::File::for_path(path).uri();
     let uris = vec![uri.to_string()];
     glib::spawn_future_local(async move {
-        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else { return };
+        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+            return;
+        };
         let r = conn
             .call_future(
                 Some("org.freedesktop.FileManager1"),
@@ -76,7 +83,10 @@ pub fn show_in_folder(path: &str) {
         if r.is_err() {
             // No FileManager1 service: open the folder itself.
             if let Some(parent) = gio::File::for_uri(&uris[0]).parent() {
-                let _ = gio::AppInfo::launch_default_for_uri(&parent.uri(), None::<&gio::AppLaunchContext>);
+                let _ = gio::AppInfo::launch_default_for_uri(
+                    &parent.uri(),
+                    None::<&gio::AppLaunchContext>,
+                );
             }
         }
     });
@@ -102,10 +112,31 @@ fn file_icon(path: &str) -> gio::Icon {
 /// instead of asking the assistant.
 pub fn looks_like_file_search(query: &str) -> bool {
     let q = query.trim().to_lowercase();
-    const STARTERS: &[&str] = &["find ", "where is ", "where's ", "where did i ", "open my ", "locate ", "search for "];
+    const STARTERS: &[&str] = &[
+        "find ",
+        "where is ",
+        "where's ",
+        "where did i ",
+        "open my ",
+        "locate ",
+        "search for ",
+    ];
     const NOUNS: &[&str] = &[
-        "file", "pdf", "document", "doc", "photo", "picture", "screenshot", "spreadsheet",
-        "presentation", "folder", "video", "recording", "invoice", "receipt", "notes",
+        "file",
+        "pdf",
+        "document",
+        "doc",
+        "photo",
+        "picture",
+        "screenshot",
+        "spreadsheet",
+        "presentation",
+        "folder",
+        "video",
+        "recording",
+        "invoice",
+        "receipt",
+        "notes",
     ];
     STARTERS.iter().any(|s| q.starts_with(s)) && NOUNS.iter().any(|n| q.contains(n))
 }
@@ -203,7 +234,9 @@ impl FilesSection {
 
     /// Open the top result. False when there is none.
     pub fn activate_first(&self) -> bool {
-        let Some(path) = self.first.borrow().clone() else { return false };
+        let Some(path) = self.first.borrow().clone() else {
+            return false;
+        };
         self.open_path(&path);
         true
     }
@@ -274,7 +307,9 @@ mod tests {
 
     #[test]
     fn file_search_phrases() {
-        assert!(looks_like_file_search("find the PDF about the lease from last spring"));
+        assert!(looks_like_file_search(
+            "find the PDF about the lease from last spring"
+        ));
         assert!(looks_like_file_search("where is my tax spreadsheet"));
         assert!(!looks_like_file_search("find a good text editor"));
         assert!(!looks_like_file_search("how do I set up a VPN?"));

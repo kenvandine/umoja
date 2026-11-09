@@ -17,9 +17,9 @@ use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use umoja_common::i18n;
 
+use super::Center;
 use super::bubbles::icon_widget;
 use super::list::Reply;
-use super::Center;
 
 pub struct QuickReply {
     app: gtk::Application,
@@ -38,7 +38,9 @@ impl QuickReply {
     }
 
     pub fn show(self: &Rc<Self>, id: u32) {
-        let Some(c) = self.center.upgrade() else { return };
+        let Some(c) = self.center.upgrade() else {
+            return;
+        };
         let Some(note) = c.note(id) else { return };
         if let Some((open_id, win)) = self.open.borrow().as_ref() {
             if *open_id == id {

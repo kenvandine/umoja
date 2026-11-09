@@ -8,6 +8,7 @@
 
 mod display_config;
 mod ffi;
+mod gestures;
 mod idle;
 mod input;
 mod outputs;
