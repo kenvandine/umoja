@@ -29,6 +29,22 @@ Umoja PPA:
   `MIR_PLATFORM_2.28_umoja` version node); `mrg::Renderer` only gains a
   private class and method, so its ABI is unchanged. umoja-panel and
   umoja-dock request it (`umoja_common::blur`).
+- `patches/3005_surface-destroy-pending-syncobj-commit.patch`: a commit
+  with a linux-drm-syncobj acquire point waits on an fd source in the
+  Wayland event loop, but `~WlSurface()` never removed it. When the client
+  died first (umoja-panel killed for a protocol error while the screen was
+  off, 2026-11-09), the fence later ran `complete_commit()` on the freed
+  surface, which spun forever in `std::advance` over a garbage list; the
+  main loop then blocked in `WaylandConnector::stop()` at the next VT
+  switch. Upstream report draft: `upstream-bugs/syncobj-commit-after-surface-destroy.md`.
+- `patches/3006_logind-own-session.patch`: Mir took control of seat0's
+  *active* logind session. umoja-session restarts a crashed umoja-mir in the
+  same login, and if the user was on another VT then, Mir controlled that
+  session and never resumed after switching back. It now uses
+  `XDG_SESSION_ID` (falling back to the active session). Upstream report
+  draft: `upstream-bugs/logind-active-session-not-own.md`.
+- The blur patch's GL error drain is bounded (a lost context reports
+  `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds
   `umoja<N>` (`SUFFIX`), which sorts above it and above `ubuntu<N>` updates.
 

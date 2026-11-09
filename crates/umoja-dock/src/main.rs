@@ -97,7 +97,12 @@ fn main() -> glib::ExitCode {
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_startup(|_| load_css());
-    app.connect_activate(build);
+    // Map nothing while the screen is blanked: Mir has no active output
+    // then (see umoja_common::screen).
+    app.connect_activate(|app| {
+        let a = app.clone();
+        umoja_common::screen::when_on(app, move || build(&a));
+    });
     app.run()
 }
 

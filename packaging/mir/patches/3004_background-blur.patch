@@ -704,7 +704,7 @@ Last-Update: 2026-11-09
  
      auto output = output_surface->commit();
  
-@@ -894,6 +1393,203 @@ void mrg::Renderer::draw(mg::Renderable const& renderable) const
+@@ -894,6 +1393,204 @@ void mrg::Renderer::draw(mg::Renderable const& renderable) const
      }
  }
  
@@ -776,7 +776,8 @@ Last-Update: 2026-11-09
 +    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &target);
 +    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_target);
 +    // GLES2 has no separate read binding (and reports an error, not a value).
-+    while (glGetError() != GL_NO_ERROR) {}
++    // Bounded: a lost context reports GL_CONTEXT_LOST on every call.
++    for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {}
 +
 +    GLuint blurred{0};
 +    try

@@ -15,6 +15,7 @@ pub mod gsettings;
 pub mod hidpi;
 pub mod i18n;
 pub mod lemonade;
+pub mod screen;
 pub mod terminal;
 pub mod types;
 

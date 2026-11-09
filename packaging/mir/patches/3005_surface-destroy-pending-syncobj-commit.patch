@@ -1,0 +1,41 @@
+Description: Drop a surface's pending explicit-sync commit when it is destroyed
+ WlSurface::commit() with a linux-drm-syncobj acquire point adds an fd
+ source to the Wayland event loop whose data is pending_context, but
+ ~WlSurface() never removed it. When a client goes away (crash, or killed
+ for a protocol error) while a commit waits on its fence, the fence later
+ fires handle_buffer_ready on the freed surface: complete_commit() then
+ walks a garbage std::list forever (endless std::advance), pinning the
+ Wayland thread. The main loop blocks for good in WaylandConnector::stop()
+ at the next session pause (VT switch), so the screen freezes.
+Author: Umoja developers
+Forwarded: not yet (bug report drafted in packaging/mir/upstream-bugs/)
+Last-Update: 2026-11-09
+---
+--- a/src/server/frontend_wayland/wl_surface.cpp
++++ b/src/server/frontend_wayland/wl_surface.cpp
+@@ -131,6 +131,25 @@ mf::WlSurface::WlSurface(
+ 
+ mf::WlSurface::~WlSurface()
+ {
++    /* A commit may still be waiting for its acquire point (explicit sync).
++     * The event source's data is pending_context, which dies with us: if the
++     * fence signals after the client has gone (it crashed, or was killed for
++     * a protocol error), handle_buffer_ready would run complete_commit() on
++     * freed memory. Seen as the Wayland thread spinning forever in
++     * std::advance over a garbage std::list, which in turn blocks the main
++     * loop in WaylandConnector::stop() at the next VT switch.
++     */
++    if (buffer_ready_source)
++    {
++        wl_event_source_remove(buffer_ready_source);
++        buffer_ready_source = nullptr;
++        if (pending_context)
++        {
++            pending_context->release.signal();
++            pending_context.reset();
++        }
++    }
++
+     // We can't use a function try block as we want to access `client`:
+     // "Before any catch clauses of a function-try-block on a destructor are entered,
+     // all bases and non-variant members have already been destroyed."

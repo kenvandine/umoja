@@ -163,6 +163,33 @@ impl State {
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Default::default);
+/// The connection serving org.freedesktop.ScreenSaver, for ActiveChanged.
+static SCREENSAVER_CONN: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
+
+/// Tell clients the screen blanked (`true`) or came back (`false`). The
+/// panel and dock wait for `false` before mapping their surfaces
+/// (umoja_common::screen).
+fn emit_active_changed(active: bool) {
+    let Some(conn) = SCREENSAVER_CONN.get().cloned() else {
+        return;
+    };
+    RUNTIME.spawn(async move {
+        for path in ["/org/freedesktop/ScreenSaver", "/ScreenSaver"] {
+            if let Err(e) = conn
+                .emit_signal(
+                    None::<&str>,
+                    path,
+                    SCREENSAVER_NAME,
+                    "ActiveChanged",
+                    &(active,),
+                )
+                .await
+            {
+                tracing::debug!(error = %e, "ActiveChanged not sent");
+            }
+        }
+    });
+}
 
 fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -241,6 +268,7 @@ fn on_mir_state(code: u32) {
             st.blanked_unlocked = !st.locked;
             st.generation += 1;
             apply(&mut st);
+            emit_active_changed(true);
             if let Some(delay) = lock_after_blank(&st.settings) {
                 let generation = st.generation;
                 RUNTIME.spawn(async move {
@@ -261,6 +289,7 @@ fn on_mir_state(code: u32) {
             st.blanked_unlocked = false;
             st.generation += 1;
             apply(&mut st);
+            emit_active_changed(false);
         }
         4 => st.locked = true,
         5 => st.locked = false,
@@ -454,6 +483,7 @@ fn serve_inhibitors() {
                 Err(e) => tracing::warn!(name, error = %e, "could not own bus name"),
             }
         }
+        let _ = SCREENSAVER_CONN.set(conn.clone());
         watch_owners(&conn).await;
         std::mem::forget(conn);
     });

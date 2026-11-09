@@ -51,7 +51,12 @@ fn main() -> glib::ExitCode {
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_startup(|_| load_css());
-    app.connect_activate(build);
+    // Map nothing while the screen is blanked: Mir has no active output
+    // then (see umoja_common::screen).
+    app.connect_activate(|app| {
+        let a = app.clone();
+        umoja_common::screen::when_on(app, move || build(&a));
+    });
     // systemd stops the panel with SIGTERM: quit cleanly so Myna's HUD,
     // which `snap run` puts in a scope of its own, goes with it.
     for sig in [libc::SIGTERM, libc::SIGINT] {

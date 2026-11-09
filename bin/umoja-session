@@ -40,14 +40,30 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+session_active() {
+    [ "$(loginctl show-session "$XDG_SESSION_ID" -p Active --value 2>/dev/null)" = yes ]
+}
+
 # LightDM starts the session before it has stopped the X greeter and made
 # this logind session active, and until then Mir can't open the GPU ("Failed
 # to find any platforms"). Wait for the hand-over, as gnome-session does.
+# After a crash, wait as long as it takes: the user may be on another VT
+# (e.g. a text console to kill a hung compositor), and a compositor started
+# in the background can't open the GPU or, with an unpatched Mir, takes
+# control of whichever session *is* in the foreground and never resumes.
 wait_active() {
     [ -n "${XDG_SESSION_ID:-}" ] || return 0
+    limit=${1:-100}
+    if [ "$limit" = forever ] && ! session_active; then
+        log "waiting for session $XDG_SESSION_ID to be in the foreground before restarting umoja-mir"
+        while ! session_active; do
+            sleep 0.5
+        done
+        return 0
+    fi
     i=0
-    while [ $i -lt 100 ]; do
-        [ "$(loginctl show-session "$XDG_SESSION_ID" -p Active --value 2>/dev/null)" = yes ] && return 0
+    while [ $i -lt "$limit" ]; do
+        session_active && return 0
         sleep 0.1
         i=$((i + 1))
     done
@@ -98,8 +114,9 @@ count_recent_crashes() {
     crashes=$kept
 }
 
+wait_limit=100    # 10s at login; a restart after a crash waits forever
 while :; do
-    wait_active
+    wait_active $wait_limit
     started=$(date +%s)
     run_mir "$@"
     status=$?
@@ -128,6 +145,7 @@ while :; do
     # reconnect cleanly; umoja-mir starts the target again once it's up.
     systemctl --user stop umoja-session.target
     startup_retry=yes
+    wait_limit=forever
     sleep 1
 done
 exit $status

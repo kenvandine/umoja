@@ -1,0 +1,94 @@
+Description: Take control of our own logind session, not the seat's active one
+ LogindConsoleServices used seat0's ActiveSession. A compositor restarted
+ inside its login (after a crash) while the user is on another VT then
+ took control of the foreground session: when the user switched back it
+ was paused and, as its own session's Active changes were never watched,
+ never resumed. Use XDG_SESSION_ID (logind Manager.GetSession) when it is
+ set and fall back to the active session otherwise.
+Author: Umoja developers
+Forwarded: not yet (bug report drafted in packaging/mir/upstream-bugs/)
+Last-Update: 2026-11-09
+---
+--- a/src/server/console/logind_console_services.cpp
++++ b/src/server/console/logind_console_services.cpp
+@@ -16,6 +16,9 @@
+ 
+ #include <cinttypes>
+ #include <cstring>
++#include <cstdlib>
++#include <optional>
++#include <string>
+ #include <boost/throw_exception.hpp>
+ #include <boost/current_function.hpp>
+ #include <boost/exception/info.hpp>
+@@ -190,6 +193,61 @@ std::string object_path_for_current_session(LogindSeat* seat_proxy)
+     return {object_path};
+ }
+ 
++/* The compositor's own logind session, if XDG_SESSION_ID names one.
++ *
++ * seat0's ActiveSession is only ours when we start in the foreground. A
++ * compositor restarted inside its login (after a crash) while the user is on
++ * another VT took control of *that* session instead: it was paused when the
++ * user switched back, and as its own session's Active changes were never
++ * watched it stayed paused for good.
++ */
++std::optional<std::string> object_path_for_own_session(GDBusConnection* connection)
++{
++    auto const id = getenv("XDG_SESSION_ID");
++    if (!id || !*id)
++    {
++        return std::nullopt;
++    }
++
++    GErrorPtr error;
++    std::unique_ptr<GVariant, decltype(&g_variant_unref)> const result{
++        g_dbus_connection_call_sync(
++            connection,
++            "org.freedesktop.login1",
++            "/org/freedesktop/login1",
++            "org.freedesktop.login1.Manager",
++            "GetSession",
++            g_variant_new("(s)", id),
++            G_VARIANT_TYPE("(o)"),
++            G_DBUS_CALL_FLAGS_NO_AUTO_START,
++            10000,
++            nullptr,
++            &error),
++        &g_variant_unref};
++
++    if (!result)
++    {
++        mir::log_warning(
++            "logind has no session %s (%s); using the seat's active session",
++            id, error ? error->message : "unknown error");
++        return std::nullopt;
++    }
++
++    gchar const* path = nullptr;
++    g_variant_get(result.get(), "(&o)", &path);
++    mir::log_debug("Discovered object path for own session %s = %s", id, path);
++    return std::string{path};
++}
++
++std::string object_path_for_session(GDBusConnection* connection, LogindSeat* seat_proxy)
++{
++    if (auto own = object_path_for_own_session(connection))
++    {
++        return *own;
++    }
++    return object_path_for_current_session(seat_proxy);
++}
++
+ std::unique_ptr<GDBusConnection, decltype(&g_object_unref)>
+ connect_to_system_bus(mir::GLibMainLoop& ml)
+ {
+@@ -258,7 +316,7 @@ mir::LogindConsoleServices::LogindConsoleServices(
+       connection{connect_to_system_bus(*ml)},
+       seat_proxy{
+         simple_seat_proxy_on_system_bus(*ml, connection.get(), "/org/freedesktop/login1/seat/seat0")},
+-      session_path{object_path_for_current_session(seat_proxy.get())},
++      session_path{object_path_for_session(connection.get(), seat_proxy.get())},
+       session_proxy{
+         simple_proxy_on_system_bus(
+             *ml,

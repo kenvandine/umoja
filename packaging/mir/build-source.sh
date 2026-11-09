@@ -25,4 +25,6 @@ dch --newversion "$upstream$suffix" --distribution "$series" --force-distributio
 dch --append "Bridge the PRIMARY selection between Xwayland and Wayland apps, for middle-click paste."
 dch --append "Keep a layer surface's margin when a popup is repositioned, so tooltips stop covering their widget."
 dch --append "Blur the background behind surfaces that ask for it (ext-background-effect-v1), for Umoja's frosted panel, dock, menus and notifications."
+dch --append "Drop a surface's pending explicit-sync commit when the surface is destroyed (use-after-free that hung the Wayland thread)."
+dch --append "Take control of our own logind session (XDG_SESSION_ID), so a compositor restarted while another VT is active resumes when switched back."
 echo "$PWD"
