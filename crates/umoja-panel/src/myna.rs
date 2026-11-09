@@ -301,6 +301,9 @@ impl Myna {
             tracing::info!("myna: no HUD renderer (snap run myna.hud) to host");
             return;
         };
+        // `snap run` puts the HUD in its own systemd scope, so one a
+        // crashed panel left behind outlives it: end it before starting ours.
+        kill_stale_hud();
         // Tell the daemon a pill is coming before the renderer takes its
         // seconds to start, so the first dictation isn't a notification.
         self.register();
@@ -314,6 +317,9 @@ impl Myna {
             }
         };
         tracing::info!(?argv, "myna: HUD started");
+        if let Some(pid) = child.identifier() {
+            let _ = std::fs::write(pid_file(), pid.as_str());
+        }
         let generation = self.hud.generation.get() + 1;
         self.hud.generation.set(generation);
         self.hud.started.set(Some(Instant::now()));
@@ -373,10 +379,16 @@ impl Myna {
         });
     }
 
+    /// The panel is quitting: take the HUD down with it.
+    pub fn shutdown(&self) {
+        self.stop_hud();
+    }
+
     fn stop_hud(&self) {
         self.hud.wanted.set(false);
         self.hud.generation.set(self.hud.generation.get() + 1);
         if let Some(child) = self.hud.child.borrow_mut().take() {
+            let _ = std::fs::remove_file(pid_file());
             child.send_signal(libc::SIGTERM);
             glib::timeout_add_local_once(KILL_GRACE, move || {
                 // Still running: it has not been reaped yet.
@@ -385,6 +397,29 @@ impl Myna {
                 }
             });
         }
+    }
+}
+
+fn pid_file() -> std::path::PathBuf {
+    glib::user_runtime_dir().join("umoja-myna-hud.pid")
+}
+
+/// SIGTERM the HUD a previous panel recorded, if it is still a myna-hud.
+fn kill_stale_hud() {
+    let Some(pid) = std::fs::read_to_string(pid_file())
+        .ok()
+        .and_then(|p| p.trim().parse::<i32>().ok())
+        .filter(|p| *p > 1)
+    else {
+        return;
+    };
+    let _ = std::fs::remove_file(pid_file());
+    let is_hud = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .is_ok_and(|c| String::from_utf8_lossy(&c).contains("myna-hud"));
+    if is_hud {
+        tracing::info!(pid, "myna: ending a HUD left by an earlier panel");
+        // SAFETY: plain kill(2) on a pid we checked is a myna-hud.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
     }
 }
 

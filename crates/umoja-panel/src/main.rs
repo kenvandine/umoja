@@ -44,6 +44,19 @@ fn main() -> glib::ExitCode {
         .build();
     app.connect_startup(|_| load_css());
     app.connect_activate(build);
+    // systemd stops the panel with SIGTERM: quit cleanly so Myna's HUD,
+    // which `snap run` puts in a scope of its own, goes with it.
+    for sig in [libc::SIGTERM, libc::SIGINT] {
+        let app = app.clone();
+        glib::unix_signal_add_local_once(sig, move || app.quit());
+    }
+    app.connect_shutdown(|_| {
+        MYNA.with(|m| {
+            if let Some(m) = m.get() {
+                m.shutdown();
+            }
+        })
+    });
     app.run()
 }
 
