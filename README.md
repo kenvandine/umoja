@@ -114,8 +114,13 @@ git push origin main v2026.46.2      # the tag name it printed
 
 Without `--tag` it only edits `debian/changelog`, `Cargo.toml` and
 `Cargo.lock`. The PPA job refuses a tag that doesn't match
-`debian/changelog`. Snapshots from `main` are versioned
-`<last release>+git<date>.<sha>`, so they sort above that release.
+`debian/changelog`. Instead of pushing a tag you can also run the Packages
+workflow by hand on `main` with **release** ticked: it uploads the
+`debian/changelog` version as a release and pushes the `v` tag itself.
+
+Snapshots from `main` are versioned `<release>+git<date>.<sha>` once that
+release is tagged, and `<release>~git<date>.<sha>` before, so a release
+always sorts above the snapshots that led up to it.
 
 ## Testing on a real machine
 

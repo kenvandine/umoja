@@ -1,10 +1,14 @@
 # Build Debian packages and publish them to ppa:ken-vandine/umoja.
 #
 # - Pull requests: build binary .debs in the target Ubuntu release (no upload).
-# - Pushes to main: upload a snapshot (2026.46.1+git<date>.<sha>~<series>1).
+# - Pushes to main: upload a snapshot. After v2026.46.1 is tagged that is
+#   2026.46.1+git<date>.<sha>~<series>1; while debian/changelog names a
+#   version not tagged yet it is 2026.46.1~git<date>.<sha>~<series>1, so the
+#   release still sorts above it.
 # - Tags v*: upload that release (e.g. v2026.46.1 -> 2026.46.1~<series>1).
 #   Versions are vYYYY.WW.REVISION (ISO week); packaging/bump-version makes one.
-# - Manual runs: pick the series and whether to upload.
+# - Manual runs: pick the series and whether to upload. With "release" the
+#   debian/changelog version is uploaded as a release and tagged v<version>.
 #
 # Launchpad builds offline, so the source package carries vendored crates
 # and the embedded Lemonade build (`make vendor`).
@@ -34,6 +38,10 @@ on:
         description: Upload the source package to the PPA
         type: boolean
         default: true
+      release:
+        description: Upload the debian/changelog version as a release and tag it
+        type: boolean
+        default: false
 
 env:
   SERIES: ${{ inputs.series || 'stonking' }}
@@ -129,6 +137,8 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.upload)
     runs-on: ubuntu-24.04
     container: ${{ inputs.image || 'ubuntu:26.10' }}
+    permissions:
+      contents: write
     steps:
       - name: Install tooling
         run: |
@@ -154,6 +164,16 @@ jobs:
               exit 1
             fi
             version="${tag}~${SERIES}1"
+          elif [[ "${{ inputs.release }}" == "true" ]]; then
+            if git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
+              echo "::error::v$base is already tagged; run packaging/bump-version first"
+              exit 1
+            fi
+            version="${base}~${SERIES}1"
+            echo "tag=v$base" >> "$GITHUB_OUTPUT"
+          elif ! git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
+            stamp=$(git log -1 --format=%cd --date=format:%Y%m%d%H%M)
+            version="${base}~git${stamp}.$(git rev-parse --short=8 HEAD)~${SERIES}1"
           else
             stamp=$(git log -1 --format=%cd --date=format:%Y%m%d%H%M)
             version="${base}+git${stamp}.$(git rev-parse --short=8 HEAD)~${SERIES}1"
@@ -203,6 +223,12 @@ jobs:
 
       - name: Upload to Launchpad
         run: dput "$PPA" ../umoja-desktop_*_source.changes
+
+      - name: Tag the release
+        if: steps.version.outputs.tag != ''
+        run: |
+          git tag "${{ steps.version.outputs.tag }}" "$GITHUB_SHA"
+          git push origin "${{ steps.version.outputs.tag }}"
 
       - name: Collect
         if: always()
