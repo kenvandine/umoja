@@ -48,6 +48,48 @@ impl Sel {
         p.0 >= self.x && p.0 <= self.x + self.w && p.1 >= self.y && p.1 <= self.y + self.h
     }
 
+    /// Which edges a press at `p` grabs: corners grab two, edges one,
+    /// as in gnome-shell. `None` if the press is not on the border.
+    fn edges_at(&self, p: (f64, f64)) -> Option<Edges> {
+        if self.w <= 0.0 || self.h <= 0.0 {
+            return None;
+        }
+        let (l, r, t, b) = (self.x, self.x + self.w, self.y, self.y + self.h);
+        let within_y = p.1 >= t - GRAB && p.1 <= b + GRAB;
+        let within_x = p.0 >= l - GRAB && p.0 <= r + GRAB;
+        // On a small selection the grab zones overlap; take the closer side.
+        let near_l = within_y && (p.0 - l).abs() <= GRAB && (p.0 - l).abs() <= (p.0 - r).abs();
+        let near_r = within_y && !near_l && (p.0 - r).abs() <= GRAB;
+        let near_t = within_x && (p.1 - t).abs() <= GRAB && (p.1 - t).abs() <= (p.1 - b).abs();
+        let near_b = within_x && !near_t && (p.1 - b).abs() <= GRAB;
+        let e = Edges {
+            left: near_l,
+            right: near_r,
+            top: near_t,
+            bottom: near_b,
+        };
+        (e.left || e.right || e.top || e.bottom).then_some(e)
+    }
+
+    /// `start` with the grabbed edges moved to `p`. Dragging past the
+    /// opposite edge flips the selection rather than collapsing it.
+    fn resized(start: Sel, edges: Edges, p: (f64, f64)) -> Sel {
+        let (mut l, mut r, mut t, mut b) = (start.x, start.x + start.w, start.y, start.y + start.h);
+        if edges.left {
+            l = p.0;
+        }
+        if edges.right {
+            r = p.0;
+        }
+        if edges.top {
+            t = p.1;
+        }
+        if edges.bottom {
+            b = p.1;
+        }
+        Sel::from_points((l, t), (r, b))
+    }
+
     /// Map to image pixels, clamped to the image.
     pub fn to_pixels(self, scale: f64, img_w: i32, img_h: i32) -> (i32, i32, i32, i32) {
         let x = ((self.x * scale).round() as i32).clamp(0, img_w.max(1) - 1);
@@ -82,10 +124,33 @@ pub struct ScreenshotUi {
 
 pub type AskCallback = Box<dyn FnOnce(Option<Pixbuf>)>;
 
+/// How far (logical px) from the border a press still grabs it.
+const GRAB: f64 = 12.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Edges {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+impl Edges {
+    fn cursor(self) -> &'static str {
+        match (self.left, self.right, self.top, self.bottom) {
+            (true, _, true, _) | (_, true, _, true) => "nwse-resize",
+            (true, _, _, true) | (_, true, true, _) => "nesw-resize",
+            (true, _, _, _) | (_, true, _, _) => "ew-resize",
+            _ => "ns-resize",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum DragKind {
     New((f64, f64)),
     Move { grab: (f64, f64), start: Sel },
+    Resize { edges: Edges, start: Sel },
 }
 
 /// `~/Pictures/Screenshots/Screenshot From 2026-11-07 21-05-33.png`
@@ -326,7 +391,9 @@ impl ScreenshotUi {
                 return;
             }
             let sel = ui.sel.get();
-            ui.drag.set(Some(if sel.w > 0.0 && sel.contains((x, y)) {
+            ui.drag.set(Some(if let Some(edges) = sel.edges_at((x, y)) {
+                DragKind::Resize { edges, start: sel }
+            } else if sel.w > 0.0 && sel.contains((x, y)) {
                 DragKind::Move {
                     grab: (x, y),
                     start: sel,
@@ -356,6 +423,10 @@ impl ScreenshotUi {
                         ..start
                     });
                 }
+                Some(DragKind::Resize { edges, start }) => {
+                    let p = ((sx + dx).clamp(0.0, w), (sy + dy).clamp(0.0, h));
+                    ui.sel.set(Sel::resized(start, edges, p));
+                }
                 None => {}
             }
             ui.area.queue_draw();
@@ -367,6 +438,28 @@ impl ScreenshotUi {
             }
         });
         self.area.add_controller(drag);
+
+        // Resize/move cursors on hover, like gnome-shell.
+        let motion = gtk::EventControllerMotion::new();
+        let weak = Rc::downgrade(self);
+        motion.connect_motion(move |_, x, y| {
+            let Some(ui) = weak.upgrade() else { return };
+            if ui.drag.get().is_some() {
+                return;
+            }
+            let sel = ui.sel.get();
+            let name = if ui.mode.get() != Mode::Selection {
+                "default"
+            } else if let Some(e) = sel.edges_at((x, y)) {
+                e.cursor()
+            } else if sel.w > 0.0 && sel.contains((x, y)) {
+                "move"
+            } else {
+                "crosshair"
+            };
+            ui.area.set_cursor_from_name(Some(name));
+        });
+        self.area.add_controller(motion);
     }
 
     fn connect_keys(self: &Rc<Self>) {
@@ -583,5 +676,58 @@ mod tests {
             h: 100.0,
         };
         assert_eq!(edge.to_pixels(1.0, 1920, 1080), (1900, 1000, 20, 80));
+    }
+
+    #[test]
+    fn corners_and_edges_resize() {
+        let s = Sel {
+            x: 100.0,
+            y: 100.0,
+            w: 200.0,
+            h: 100.0,
+        };
+        let br = s.edges_at((302.0, 198.0)).unwrap();
+        assert!(br.right && br.bottom && !br.left && !br.top);
+        let tl = s.edges_at((95.0, 104.0)).unwrap();
+        assert!(tl.left && tl.top && !tl.right && !tl.bottom);
+        let top = s.edges_at((200.0, 99.0)).unwrap();
+        assert_eq!(
+            top,
+            Edges {
+                top: true,
+                ..Default::default()
+            }
+        );
+        // Inside, away from the border: not a resize (it moves).
+        assert_eq!(s.edges_at((200.0, 150.0)), None);
+        // Far outside: not a resize (it starts a new selection).
+        assert_eq!(s.edges_at((500.0, 500.0)), None);
+
+        // Drag the bottom-right corner out; top-left stays put.
+        let r = Sel::resized(s, br, (400.0, 250.0));
+        assert_eq!(
+            r,
+            Sel {
+                x: 100.0,
+                y: 100.0,
+                w: 300.0,
+                h: 150.0
+            }
+        );
+        // Drag the left edge past the right edge: flips, no collapse.
+        let left = Edges {
+            left: true,
+            ..Default::default()
+        };
+        let r = Sel::resized(s, left, (350.0, 0.0));
+        assert_eq!(
+            r,
+            Sel {
+                x: 300.0,
+                y: 100.0,
+                w: 50.0,
+                h: 100.0
+            }
+        );
     }
 }
