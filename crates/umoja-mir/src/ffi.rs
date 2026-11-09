@@ -238,6 +238,22 @@ pub extern "C" fn umoja_center_new_windows() -> bool {
     })
 }
 
+/// GNOME's `mouse-button-modifier` as `UMOJA_MOD_*` bits, 0 when off.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_mouse_button_modifier() -> u32 {
+    guard("mouse_button_modifier", input::MOD_SUPER, || {
+        input::read().mouse_button_modifier
+    })
+}
+
+/// GNOME's `resize-with-right-button`.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_resize_with_right_button() -> bool {
+    guard("resize_with_right_button", false, || {
+        input::read().resize_with_right_button
+    })
+}
+
 /// Index into `rects` of the output next to `from` for a move-to-monitor
 /// action, or -1.
 #[unsafe(no_mangle)]

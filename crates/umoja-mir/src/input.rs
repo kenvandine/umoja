@@ -40,6 +40,12 @@ pub struct Config {
     /// Tiling Assistant: focusing a tiled window raises its tile group.
     pub raise_tile_group: bool,
     pub center_new_windows: bool,
+    /// `org.gnome.desktop.wm.preferences mouse-button-modifier` as
+    /// `MOD_*` bits (0: off). Holding it, left drag moves a window, middle
+    /// drag resizes it and right click opens the window menu.
+    pub mouse_button_modifier: u32,
+    /// `resize-with-right-button`: swap the middle and right buttons.
+    pub resize_with_right_button: bool,
     pub workspaces: workspaces::Settings,
     /// Commands of GNOME custom shortcuts; binding action
     /// `CUSTOM_BASE + i` runs `custom_commands[i]`.
@@ -65,6 +71,8 @@ pub static CONFIG: RwLock<Config> = RwLock::new(Config {
     layout_picker: true,
     raise_tile_group: true,
     center_new_windows: false,
+    mouse_button_modifier: MOD_SUPER,
+    resize_with_right_button: false,
     workspaces: workspaces::Settings {
         dynamic: true,
         fixed_count: 4,
@@ -531,6 +539,12 @@ pub fn reload() {
         layout_picker: !ta || gs::get_bool(TILING_ASSISTANT, "enable-layout-picker", true),
         raise_tile_group: !ta || gs::get_bool(TILING_ASSISTANT, "enable-raise-tile-group", true),
         center_new_windows: gs::get_bool(gs::MUTTER, "center-new-windows", false),
+        mouse_button_modifier: parse_modifiers(&gs::get_string(
+            gs::WM_PREFERENCES,
+            "mouse-button-modifier",
+            "<Super>",
+        )),
+        resize_with_right_button: gs::get_bool(gs::WM_PREFERENCES, "resize-with-right-button", false),
         workspaces: workspaces::Settings {
             dynamic: gs::get_bool(gs::MUTTER, "dynamic-workspaces", true),
             // mutter caps num-workspaces at 36.
@@ -772,6 +786,15 @@ fn normalize(keysym: u32) -> u32 {
 
 /// Parse a GTK accelerator like `<Super><Shift>Left` into (keysym, mods).
 pub fn parse_accelerator(accel: &str) -> Option<(u32, u32)> {
+    let (mods, rest) = split_modifiers(accel)?;
+    if rest.is_empty() || rest.eq_ignore_ascii_case("disabled") {
+        return None;
+    }
+    keysym_from_name(rest).map(|k| (normalize(k), mods))
+}
+
+/// Leading `<Mod>` tokens of an accelerator as `MOD_*` bits, and the rest.
+fn split_modifiers(accel: &str) -> Option<(u32, &str)> {
     let mut mods = 0;
     let mut rest = accel.trim();
     while let Some(stripped) = rest.strip_prefix('<') {
@@ -785,10 +808,17 @@ pub fn parse_accelerator(accel: &str) -> Option<(u32, u32)> {
         };
         rest = &stripped[end + 1..];
     }
-    if rest.is_empty() || rest.eq_ignore_ascii_case("disabled") {
-        return None;
+    Some((mods, rest))
+}
+
+/// A modifiers-only accelerator such as `mouse-button-modifier`'s
+/// `<Super>`. mutter ignores anything that is not just modifiers; an empty
+/// or unparsable value turns modified clicks off.
+pub fn parse_modifiers(accel: &str) -> u32 {
+    match split_modifiers(accel) {
+        Some((mods, rest)) if rest.trim().is_empty() => mods,
+        _ => 0,
     }
-    keysym_from_name(rest).map(|k| (normalize(k), mods))
 }
 
 /// Subset of X keysym names that show up in GNOME's default bindings.
@@ -874,6 +904,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_mouse_button_modifier() {
+        assert_eq!(parse_modifiers("<Super>"), MOD_SUPER);
+        assert_eq!(parse_modifiers("<Alt>"), MOD_ALT);
+        assert_eq!(parse_modifiers("<Control><Alt>"), MOD_CTRL | MOD_ALT);
+        assert_eq!(parse_modifiers(""), 0);
+        assert_eq!(parse_modifiers("disabled"), 0);
+        assert_eq!(parse_modifiers("<Super>a"), 0);
+        assert_eq!(parse_modifiers("<Hyper>"), 0);
+    }
+
+    #[test]
     fn every_fallback_binding_parses() {
         for (accel, action) in DEFAULTS {
             assert!(parse_accelerator(accel).is_some(), "{accel}");
@@ -945,7 +986,10 @@ mod tests {
         for (accel, action) in DEFAULTS {
             assert!(!default_id(*action).is_empty(), "{accel}");
         }
-        assert_eq!(default_id(Action::ShowShortcuts as u32), "shortcuts-guide-hotkey");
+        assert_eq!(
+            default_id(Action::ShowShortcuts as u32),
+            "shortcuts-guide-hotkey"
+        );
         assert_eq!(default_id(Action::TileLeft as u32), "toggle-tiled-left");
     }
 
@@ -962,6 +1006,8 @@ mod tests {
             layout_picker: true,
             raise_tile_group: true,
             center_new_windows: false,
+            mouse_button_modifier: MOD_SUPER,
+            resize_with_right_button: false,
             workspaces: workspaces::Settings::default(),
             custom_commands: Vec::new(),
             shortcuts: Vec::new(),

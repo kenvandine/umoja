@@ -177,6 +177,10 @@ size_t umoja_workspace_layout(bool const* occupied, size_t n, size_t current, si
 bool umoja_workspaces_only_on_primary(void);
 int32_t umoja_primary_output_id(void);
 bool umoja_center_new_windows(void);
+// org.gnome.desktop.wm.preferences mouse-button-modifier (UMOJA_MOD_*, 0 = off)
+// and resize-with-right-button.
+uint32_t umoja_mouse_button_modifier(void);
+bool umoja_resize_with_right_button(void);
 int32_t umoja_neighbor_output(uint32_t action, UmojaRect from, UmojaRect const* rects, size_t n);
 UmojaRect umoja_translate_rect(UmojaRect window, UmojaRect from, UmojaRect to);
 void umoja_screenshot_window(UmojaRect rect);
