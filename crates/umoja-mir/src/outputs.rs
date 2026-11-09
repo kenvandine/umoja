@@ -402,15 +402,9 @@ mod tests {
 </monitors>"#;
         let layouts = parse_monitors_xml(xml).unwrap();
         let both = ["HDMI-A-1".to_string(), "eDP-1".to_string()];
-        assert_eq!(
-            primary_in_layouts(&layouts, &both).as_deref(),
-            Some("HDMI-A-1")
-        );
+        assert_eq!(primary_in_layouts(&layouts, &both).as_deref(), Some("HDMI-A-1"));
         let laptop = ["eDP-1".to_string()];
-        assert_eq!(
-            primary_in_layouts(&layouts, &laptop).as_deref(),
-            Some("eDP-1")
-        );
+        assert_eq!(primary_in_layouts(&layouts, &laptop).as_deref(), Some("eDP-1"));
         let other = ["DP-2".to_string()];
         assert_eq!(primary_in_layouts(&layouts, &other), None);
     }
