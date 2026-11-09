@@ -70,6 +70,7 @@ enum {
     UMOJA_ACTION_TOGGLE_ABOVE = 53,
     UMOJA_ACTION_TOGGLE_STICKY = 54,
     UMOJA_ACTION_SCREEN_RECORDING_UI = 55,
+    UMOJA_ACTION_SHOW_SHORTCUTS = 56,
     /* 1000 + n: run GNOME custom shortcut n (input.rs CUSTOM_BASE). */
     UMOJA_ACTION_CUSTOM_BASE = 1000,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.

@@ -621,6 +621,14 @@ impl Compositor {
                 .await;
     }
 
+    /// (id, accelerator) for every keyboard shortcut the compositor
+    /// handles, as currently configured. The id is the GSettings key the
+    /// accelerator came from (`toggle-tiled-left`, `screensaver`, ...),
+    /// `custom:<name>` for a GNOME custom shortcut, or `overlay-key`.
+    async fn get_shortcuts(&self) -> Vec<(String, String)> {
+        crate::input::shortcuts()
+    }
+
     /// Emitted when the active workspace or the number of workspaces changes.
     #[zbus(signal)]
     async fn workspaces_changed(

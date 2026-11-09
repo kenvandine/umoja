@@ -44,6 +44,10 @@ pub struct Config {
     /// Commands of GNOME custom shortcuts; binding action
     /// `CUSTOM_BASE + i` runs `custom_commands[i]`.
     pub custom_commands: Vec<String>,
+    /// (id, accelerator) of every binding above, for the shortcuts guide:
+    /// the GSettings key it came from (`custom:<name>` for a custom
+    /// shortcut, `overlay-key` for the lone Super tap).
+    pub shortcuts: Vec<(String, String)>,
 }
 
 /// Action codes from here up run a GNOME custom shortcut's command.
@@ -67,6 +71,7 @@ pub static CONFIG: RwLock<Config> = RwLock::new(Config {
         only_on_primary: true,
     },
     custom_commands: Vec::new(),
+    shortcuts: Vec::new(),
 });
 
 const XK_SUPER_L: u32 = 0xffeb;
@@ -318,6 +323,11 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "clipboard-history-hotkey",
         Action::ClipboardHistory,
     ),
+    (
+        gs::UMOJA_SHELL,
+        "shortcuts-guide-hotkey",
+        Action::ShowShortcuts,
+    ),
 ];
 
 /// Fallbacks used when a schema is missing (e.g. running nested for development).
@@ -373,6 +383,7 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>KP_2", Action::TileBottomHalf as u32),
     ("<Super><Shift>a", Action::AskAboutScreen as u32),
     ("<Super><Shift>v", Action::ClipboardHistory as u32),
+    ("<Super>slash", Action::ShowShortcuts as u32),
     // gsettings-desktop-schemas' and gnome-shell's workspace defaults.
     ("<Super>Page_Up", Action::WorkspacePrev as u32),
     ("<Super>Page_Down", Action::WorkspaceNext as u32),
@@ -418,15 +429,19 @@ const DEFAULTS: &[(&str, u32)] = &[
 /// Rebuild [`CONFIG`] from GSettings.
 pub fn reload() {
     let mut bindings = Vec::new();
+    let mut shortcuts = Vec::new();
     let mut seen_schema = false;
-    let mut push = |accels: Vec<String>, action: u32| {
-        bindings.extend(accels.iter().filter_map(|a| parse_accelerator(a)).map(
-            |(keysym, mods)| Binding {
-                keysym,
-                mods,
-                action,
-            },
-        ));
+    let mut push = |id: &str, accels: Vec<String>, action: u32| {
+        for a in accels {
+            if let Some((keysym, mods)) = parse_accelerator(&a) {
+                bindings.push(Binding {
+                    keysym,
+                    mods,
+                    action,
+                });
+                shortcuts.push((id.to_string(), a));
+            }
+        }
     };
     let ta = tiling_assistant_active();
     // Accelerators Tiling Assistant binds itself (Super+arrows, keypad).
@@ -446,39 +461,48 @@ pub fn reload() {
         if ta && accels.is_empty() && TA_EMPTIED.contains(&(*schema, *key)) {
             accels = ta_restored(schema, key, &ta_accels);
         }
-        push(accels, *action as u32);
+        push(key, accels, *action as u32);
     }
     // switch-to-workspace-N / move-to-workspace-N
     for n in 1..=workspaces::MAX_NUMBERED {
+        let key = format!("switch-to-workspace-{n}");
         push(
-            gs::get_strv(gs::WM_KEYBINDINGS, &format!("switch-to-workspace-{n}")),
+            &key,
+            gs::get_strv(gs::WM_KEYBINDINGS, &key),
             workspaces::switch_code(n),
         );
+        let key = format!("move-to-workspace-{n}");
         push(
-            gs::get_strv(gs::WM_KEYBINDINGS, &format!("move-to-workspace-{n}")),
+            &key,
+            gs::get_strv(gs::WM_KEYBINDINGS, &key),
             workspaces::move_code(n),
         );
     }
     if !seen_schema {
-        bindings = DEFAULTS
-            .iter()
-            .filter_map(|(a, action)| {
-                parse_accelerator(a).map(|(k, m)| Binding {
-                    keysym: k,
-                    mods: m,
+        bindings.clear();
+        shortcuts.clear();
+        for (a, action) in DEFAULTS {
+            if let Some((keysym, mods)) = parse_accelerator(a) {
+                bindings.push(Binding {
+                    keysym,
+                    mods,
                     action: *action,
-                })
-            })
-            .collect();
+                });
+                shortcuts.push((default_id(*action), a.to_string()));
+            }
+        }
     }
     // Volume, brightness and playback keys, from gnome-settings-daemon's
     // schema (or its defaults when that isn't installed).
-    bindings.extend(crate::media_keys::bindings());
+    for (name, accel, binding) in crate::media_keys::bindings() {
+        bindings.push(binding);
+        shortcuts.push((name.to_string(), accel));
+    }
     // GNOME custom shortcuts come after the built-in ones, so a built-in
     // binding on the same key wins (gsd-media-keys can't grab a key the
     // shell already holds either).
     let mut custom_commands = Vec::new();
-    for (binding, command) in custom_keybindings() {
+    for (name, binding, command) in custom_keybindings() {
         let Some((keysym, mods)) = parse_accelerator(&binding) else {
             continue;
         };
@@ -487,9 +511,14 @@ pub fn reload() {
             mods,
             action: CUSTOM_BASE + custom_commands.len() as u32,
         });
+        let name = if name.is_empty() { command.clone() } else { name };
+        shortcuts.push((format!("custom:{name}"), binding));
         custom_commands.push(command);
     }
     let overlay = gs::get_string(gs::MUTTER, "overlay-key", "Super_L");
+    if keysym_from_name(&overlay).is_some() {
+        shortcuts.insert(0, ("overlay-key".to_string(), overlay.clone()));
+    }
     let cfg = Config {
         bindings,
         overlay_keysym: keysym_from_name(&overlay),
@@ -506,6 +535,7 @@ pub fn reload() {
             only_on_primary: gs::get_bool(gs::MUTTER, "workspaces-only-on-primary", true),
         },
         custom_commands,
+        shortcuts,
     };
     tracing::info!(
         bindings = cfg.bindings.len(),
@@ -524,18 +554,40 @@ pub fn reload() {
     }
 }
 
-/// (binding, command) of every GNOME custom shortcut with both set, in
-/// `custom-keybindings` order.
-fn custom_keybindings() -> Vec<(String, String)> {
+/// (name, binding, command) of every GNOME custom shortcut with a binding
+/// and a command, in `custom-keybindings` order.
+fn custom_keybindings() -> Vec<(String, String, String)> {
     custom_keybinding_paths()
         .iter()
         .filter_map(|path| {
             let s = gs::settings_at(gs::CUSTOM_KEYBINDING, path)?;
+            let name = s.string("name").trim().to_string();
             let binding = s.string("binding").to_string();
             let command = s.string("command").trim().to_string();
-            (!binding.is_empty() && !command.is_empty()).then_some((binding, command))
+            (!binding.is_empty() && !command.is_empty()).then_some((name, binding, command))
         })
         .collect()
+}
+
+/// The GSettings key a fallback binding stands for (the first key in
+/// [`SOURCES`] with that action), so the guide can name it.
+fn default_id(action: u32) -> String {
+    if let Some((_, key, _)) = SOURCES.iter().find(|(_, _, a)| *a as u32 == action) {
+        return key.to_string();
+    }
+    if action == workspaces::switch_code(1) {
+        return "switch-to-workspace-1".into();
+    }
+    if action == workspaces::move_code(1) {
+        return "move-to-workspace-1".into();
+    }
+    String::new()
+}
+
+/// (id, accelerator) of every shortcut the compositor handles, for the
+/// shortcuts guide (`org.umoja.Compositor.GetShortcuts`).
+pub fn shortcuts() -> Vec<(String, String)> {
+    read().shortcuts.clone()
 }
 
 fn custom_keybinding_paths() -> Vec<String> {
@@ -761,6 +813,18 @@ pub fn keysym_from_name(name: &str) -> Option<u32> {
         "Super_L" => 0xffeb,
         "Super_R" => 0xffec,
         "Above_Tab" | "grave" => 0x60,
+        "slash" => 0x2f,
+        "backslash" => 0x5c,
+        "question" => 0x3f,
+        "comma" => 0x2c,
+        "period" => 0x2e,
+        "minus" => 0x2d,
+        "equal" => 0x3d,
+        "plus" => 0x2b,
+        "semicolon" => 0x3b,
+        "apostrophe" => 0x27,
+        "bracketleft" => 0x5b,
+        "bracketright" => 0x5d,
         _ => 0,
     };
     if named != 0 {
@@ -863,6 +927,26 @@ mod tests {
     }
 
     #[test]
+    fn punctuation_keys_parse() {
+        assert_eq!(parse_accelerator("<Super>slash"), Some((0x2f, MOD_SUPER)));
+        assert_eq!(parse_accelerator("<Super>/"), Some((0x2f, MOD_SUPER)));
+        assert_eq!(
+            parse_accelerator("<Control>bracketleft"),
+            Some((0x5b, MOD_CTRL))
+        );
+    }
+
+    /// Every fallback binding has a GSettings key name for the guide.
+    #[test]
+    fn every_fallback_binding_has_an_id() {
+        for (accel, action) in DEFAULTS {
+            assert!(!default_id(*action).is_empty(), "{accel}");
+        }
+        assert_eq!(default_id(Action::ShowShortcuts as u32), "shortcuts-guide-hotkey");
+        assert_eq!(default_id(Action::TileLeft as u32), "toggle-tiled-left");
+    }
+
+    #[test]
     fn lookup_normalizes_case() {
         *CONFIG.write().unwrap() = Config {
             bindings: vec![Binding {
@@ -877,6 +961,7 @@ mod tests {
             center_new_windows: false,
             workspaces: workspaces::Settings::default(),
             custom_commands: Vec::new(),
+            shortcuts: Vec::new(),
         };
         assert_eq!(lookup('H' as u32, MOD_SUPER), Action::Minimize as u32);
         assert_eq!(lookup('h' as u32, 0), 0);

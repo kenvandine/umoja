@@ -16,6 +16,7 @@ mod model_picker;
 mod myna;
 mod screencast;
 mod screenshot;
+mod shortcuts;
 mod spread;
 mod texpane;
 mod view;
@@ -42,6 +43,7 @@ const IFACE_XML: &str = r#"
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
+    <method name="ToggleShortcuts"/>
     <method name="StopScreencast"/>
     <method name="IsScreencasting">
       <arg name="active" type="b" direction="out"/>
@@ -126,7 +128,8 @@ fn main() -> glib::ExitCode {
         let spread = spread::Spread::new(app, &overlay);
         let chrome = chrome::Chrome::new(app);
         let menu = window_menu::WindowMenu::new(app);
-        export(overlay, shots, spread, chrome, menu);
+        let guide = shortcuts::ShortcutsGuide::new(app);
+        export(overlay, shots, spread, chrome, menu, guide);
         // Keep the process alive while the overlay window is hidden.
         std::mem::forget(app.hold());
     });
@@ -139,6 +142,7 @@ fn export(
     spread: Rc<spread::Spread>,
     chrome: Rc<chrome::Chrome>,
     menu: Rc<window_menu::WindowMenu>,
+    guide: Rc<shortcuts::ShortcutsGuide>,
 ) {
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(IFACE_XML).expect("valid XML");
@@ -151,6 +155,7 @@ fn export(
         let spread = spread.clone();
         let chrome = chrome.clone();
         let menu = menu.clone();
+        let guide = guide.clone();
         // umoja-panel's recording indicator follows this.
         let signal_conn = conn.clone();
         shots.recorder().connect_changed(move |active| {
@@ -175,6 +180,15 @@ fn export(
                     "ShowScreenRecordingUI" => {
                         methods.hide();
                         shots.toggle_screen_recording();
+                    }
+                    "ToggleShortcuts" => {
+                        if !guide.is_visible() {
+                            methods.hide();
+                            spread.hide();
+                            chrome.hide_switcher();
+                            menu.hide();
+                        }
+                        guide.toggle();
                     }
                     "StopScreencast" => shots.recorder().stop(),
                     "IsScreencasting" => {

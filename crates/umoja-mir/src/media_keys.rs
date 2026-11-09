@@ -93,8 +93,9 @@ pub const KEYS: &[Key] = &[
     key("screensaver", false, &["XF86ScreenSaver"]),
 ];
 
-/// The media-key bindings, from GSettings when the schema is installed.
-pub fn bindings() -> Vec<Binding> {
+/// The media-key bindings, from GSettings when the schema is installed,
+/// each with its schema key name and accelerator (for the shortcuts guide).
+pub fn bindings() -> Vec<(&'static str, String, Binding)> {
     let schema = gs::settings(gs::MEDIA_KEYS);
     let mut out = Vec::new();
     for (i, k) in KEYS.iter().enumerate() {
@@ -113,11 +114,12 @@ pub fn bindings() -> Vec<Binding> {
         };
         for a in &accels {
             if let Some((keysym, mods)) = crate::input::parse_accelerator(a) {
-                out.push(Binding {
+                let binding = Binding {
                     keysym,
                     mods,
                     action: BASE + i as u32,
-                });
+                };
+                out.push((k.name, a.clone(), binding));
             }
         }
     }

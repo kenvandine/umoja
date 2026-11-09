@@ -77,6 +77,10 @@
       <default>['&lt;Super&gt;&lt;Shift&gt;v']</default>
       <summary>Show the clipboard history</summary>
     </key>
+    <key name="shortcuts-guide-hotkey" type="as">
+      <default>['&lt;Super&gt;slash']</default>
+      <summary>Show the keyboard shortcuts guide</summary>
+    </key>
     <key name="clipboard-history" type="b">
       <default>true</default>
       <summary>Keep a clipboard history</summary>
