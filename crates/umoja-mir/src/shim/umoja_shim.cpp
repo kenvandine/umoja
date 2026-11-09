@@ -165,6 +165,7 @@ public:
         if (key_grab && key_grab->window == w) key_grab.reset();
         above.erase(w);
         pinned.erase(w);
+        hidden_at.erase(w);
         untile(w);
         untiled.erase(w);
         tile_action.erase(w);
@@ -344,9 +345,28 @@ public:
 
     // Activation requests from windows on another workspace don't pull them
     // onto this one (GNOME shows a "ready" notice instead of switching).
+    //
+    // Other activations of a window on another workspace (the dock's icon
+    // via foreign-toplevel, an xdg-activation token from a launcher) take
+    // you to its workspace and focus it, as GNOME does. Chromium/Electron
+    // and Qt re-raise themselves right after being hidden; those don't.
     void handle_raise_window(WindowInfo& info) override {
-        if (hidden_states.count(info.window())) return;
+        Window const w = info.window();
+        if (is_app_window(info) && on_other_workspace(w)) {
+            auto const it = hidden_at.find(w);
+            if (it != hidden_at.end() && std::chrono::steady_clock::now() - it->second < std::chrono::seconds(1))
+                return;
+            activate(w);
+            return;
+        }
         MinimalWindowManager::handle_raise_window(info);
+    }
+
+    bool on_other_workspace(Window const& w) {
+        if (in_workspace(w, workspaces[current])) return false;
+        for (size_t i = 0; i < workspaces.size(); ++i)
+            if (i != current && in_workspace(w, workspaces[i])) return true;
+        return false;
     }
 
     void handle_request_move(WindowInfo& info, MirInputEvent const* input_event) override {
@@ -463,7 +483,7 @@ public:
             // Windows on another workspace take you there, as in GNOME.
             for (size_t i = 0; i < workspaces.size(); ++i)
                 if (i != current && in_workspace(w, workspaces[i])) {
-                    switch_to(i);
+                    switch_to(i, true);
                     break;
                 }
             auto& info = tools.info_for(w);
@@ -569,6 +589,8 @@ private:
     size_t current = 0;
     std::set<Window> all_windows;
     std::map<Window, MirWindowState> hidden_states;
+    // When each window was last hidden for a workspace switch.
+    std::map<Window, std::chrono::steady_clock::time_point> hidden_at;
     std::map<int, geom::Rectangle> outputs;
     std::map<int, geom::Rectangle> zones;
 
@@ -782,6 +804,7 @@ private:
         auto const state = info.state();
         if (state == mir_window_state_hidden || state == mir_window_state_minimized) return;
         hidden_states[w] = state;
+        hidden_at[w] = std::chrono::steady_clock::now();
         WindowSpecification spec;
         spec.state() = mir_window_state_hidden;
         tools.modify_window(info, spec);
