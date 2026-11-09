@@ -24,6 +24,7 @@ mod notifications;
 mod osd;
 mod polkit;
 mod quick_settings;
+mod screencast;
 mod sni;
 mod volume;
 mod wallpaper;
@@ -100,6 +101,8 @@ fn build(app: &adw::Application) {
     bar.set_center_widget(Some(&clock));
 
     let end = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // gnome-shell's screen recording indicator comes first on the right.
+    end.append(&screencast::indicator());
     // Myna's recording indicator, left of the tray like GNOME's privacy
     // indicators; the same object hosts Myna's HUD pill.
     end.append(&MYNA.with(|m| m.get_or_init(myna::Myna::start).widget()));

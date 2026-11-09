@@ -79,6 +79,7 @@ pub fn dispatch(action: Action) {
         }
         Action::ScreenshotUi => "ShowScreenshotUI",
         Action::Screenshot => "ScreenshotScreen",
+        Action::ScreenRecordingUi => "ShowScreenRecordingUI",
         _ => return,
     };
     overlay_call(method, ());

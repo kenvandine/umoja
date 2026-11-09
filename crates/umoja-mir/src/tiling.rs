@@ -72,6 +72,8 @@ pub enum Action {
     /// Window menu entries.
     ToggleAbove = 53,
     ToggleSticky = 54,
+    /// gnome-shell's show-screen-recording-ui (Ctrl+Shift+Alt+R).
+    ScreenRecordingUi = 55,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -133,6 +135,7 @@ impl Action {
             52 => CyclePanelsBackward,
             53 => ToggleAbove,
             54 => ToggleSticky,
+            55 => ScreenRecordingUi,
             _ => None,
         }
     }

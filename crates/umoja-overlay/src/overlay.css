@@ -129,6 +129,13 @@ window.umoja-screenshot {
 .capture-button:hover {
   background-color: #e0e0e0;
 }
+/* gnome-shell's record button: red inside the white ring. */
+.capture-button.screencast {
+  background-color: #e01b24;
+}
+.capture-button.screencast:hover {
+  background-color: #f0434b;
+}
 .type-group {
   border-radius: 999px;
   background-color: alpha(#ffffff, 0.08);

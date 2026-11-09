@@ -327,6 +327,17 @@ window.umoja-panel button.myna-indicator.recording {
   color: #f99b11;
 }
 
+/* gnome-shell's .screen-recording-indicator while recording. */
+window.umoja-panel button.screencast-indicator {
+  padding: 0 10px;
+  border-radius: 999px;
+  background-color: #c01c28;
+  color: #ffffff;
+}
+window.umoja-panel button.screencast-indicator:hover {
+  background-color: #d4313d;
+}
+
 /* ---- OSD (volume, brightness...), gnome-shell's .osd-window ---- */
 window.umoja-osd {
   background: transparent;

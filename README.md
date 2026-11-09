@@ -14,7 +14,7 @@ down. It also adds a local AI assistant (Lemonade, see
 | `crates/umoja-mir` | Wayland compositor. A thin MirAL C++ shim (`src/shim/`) with all policy in Rust: GNOME keybindings, half/quarter tiling with group resize, dynamic workspaces, multi-monitor, `org.gnome.Mutter.DisplayConfig` for Settings › Displays, HiDPI defaults, screen blanking and lock-on-blank from Settings › Power / Privacy with idle inhibitors (`org.freedesktop.ScreenSaver`, `org.gnome.SessionManager` Inhibit, Wayland idle-inhibit). |
 | `crates/umoja-panel` | Top bar: Activities, clock/calendar, AppIndicator tray (`org.kde.StatusNotifierWatcher` with native dbusmenu menus), network (NetworkManager), volume and battery (UPower) indicators, Quick Settings with Wi-Fi/Wired tiles and a network list, the lock screen, notifications, and the PolicyKit authentication agent (the "Authentication Required" password dialog). |
 | `crates/umoja-dock` | Ubuntu Dock work-alike driven by the `dash-to-dock` GSettings keys and `favorite-apps`, with running dots from `zwlr_foreign_toplevel`. |
-| `crates/umoja-overlay` | App grid + search, Lemonade assistant with action chips, Myna dictation, and the GNOME-style screenshot UI. |
+| `crates/umoja-overlay` | App grid + search, Lemonade assistant with action chips, Myna dictation, and the GNOME-style screenshot UI (selection, screen or window; screenshot or screencast via `wf-recorder`). |
 | `crates/umoja-greeter` | LightDM greeter over a blurred copy of Ubuntu's default wallpaper (`warty-final-ubuntu.png`). |
 | `crates/umoja-portal` | `xdg-desktop-portal-umoja`: Settings (GNOME keys incl. `button-layout`), Screenshot, ScreenCast (stub). |
 | `crates/umoja-common` | GSettings, i18n (reuses gnome-shell/GTK/control-center translations), HiDPI rules, shared types. |
@@ -106,4 +106,5 @@ gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 ```
 
 Then log into the Umoja session, press Super for the overlay, Print for the
-screenshot UI, and try Settings › Displays to change scale.
+screenshot UI (Ctrl+Shift+Alt+R to record the screen), and try Settings ›
+Displays to change scale.

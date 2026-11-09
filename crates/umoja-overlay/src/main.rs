@@ -14,6 +14,7 @@ mod lemonade;
 mod model;
 mod model_picker;
 mod myna;
+mod screencast;
 mod screenshot;
 mod spread;
 mod texpane;
@@ -40,6 +41,14 @@ const IFACE_XML: &str = r#"
     <method name="AskAboutScreen"/>
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
+    <method name="ShowScreenRecordingUI"/>
+    <method name="StopScreencast"/>
+    <method name="IsScreencasting">
+      <arg name="active" type="b" direction="out"/>
+    </method>
+    <signal name="ScreencastChanged">
+      <arg name="active" type="b"/>
+    </signal>
     <method name="ScreenshotScreen"/>
     <method name="ScreenshotArea">
       <arg name="x" type="i" direction="in"/>
@@ -142,6 +151,19 @@ fn export(
         let spread = spread.clone();
         let chrome = chrome.clone();
         let menu = menu.clone();
+        // umoja-panel's recording indicator follows this.
+        let signal_conn = conn.clone();
+        shots.recorder().connect_changed(move |active| {
+            if let Err(e) = signal_conn.emit_signal(
+                None,
+                dbus::OVERLAY_OBJECT_PATH,
+                dbus::OVERLAY_INTERFACE,
+                "ScreencastChanged",
+                Some(&(active,).to_variant()),
+            ) {
+                tracing::warn!(error = %e, "could not emit ScreencastChanged");
+            }
+        });
         let res = conn
             .register_object(dbus::OVERLAY_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {
@@ -149,6 +171,16 @@ fn export(
                     "ShowScreenshotUI" => {
                         methods.hide();
                         shots.open();
+                    }
+                    "ShowScreenRecordingUI" => {
+                        methods.hide();
+                        shots.toggle_screen_recording();
+                    }
+                    "StopScreencast" => shots.recorder().stop(),
+                    "IsScreencasting" => {
+                        invocation
+                            .return_value(Some(&(shots.recorder().is_recording(),).to_variant()));
+                        return;
                     }
                     "ScreenshotScreen" => shots.capture_screen(),
                     "ScreenshotArea" => match params.get::<(i32, i32, i32, i32)>() {

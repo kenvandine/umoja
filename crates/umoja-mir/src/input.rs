@@ -294,6 +294,11 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "screenshot-window",
         Action::ScreenshotWindow,
     ),
+    (
+        gs::SHELL_KEYBINDINGS,
+        "show-screen-recording-ui",
+        Action::ScreenRecordingUi,
+    ),
     (gs::UMOJA_SHELL, "tile-top-left", Action::TileTopLeft),
     (gs::UMOJA_SHELL, "tile-top-right", Action::TileTopRight),
     (gs::UMOJA_SHELL, "tile-bottom-left", Action::TileBottomLeft),
@@ -407,6 +412,7 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("Print", Action::ScreenshotUi as u32),
     ("<Shift>Print", Action::Screenshot as u32),
     ("<Alt>Print", Action::ScreenshotWindow as u32),
+    ("<Control><Shift><Alt>R", Action::ScreenRecordingUi as u32),
 ];
 
 /// Rebuild [`CONFIG`] from GSettings.
