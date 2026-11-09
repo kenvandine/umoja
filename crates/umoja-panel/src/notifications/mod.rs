@@ -523,8 +523,11 @@ impl Center {
             .as_deref()
             .and_then(|a| gio::DesktopAppInfo::new(&format!("{a}.desktop")))
         {
-            let ctx = gdk::Display::default().map(|d| d.app_launch_context());
-            if let Err(e) = app.launch(&[], ctx.as_ref()) {
+            let ctx: gio::AppLaunchContext = match gdk::Display::default() {
+                Some(d) => umoja_common::app_scope::scoped(d.app_launch_context()).upcast(),
+                None => umoja_common::app_scope::launch_context(),
+            };
+            if let Err(e) = app.launch(&[], Some(&ctx)) {
                 tracing::warn!(error = %e, "could not launch notification app");
             }
         }

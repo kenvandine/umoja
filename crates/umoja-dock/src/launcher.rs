@@ -17,17 +17,25 @@ pub fn key_for(info: &gio::DesktopAppInfo) -> String {
         .unwrap_or_default()
 }
 
+/// A launch context that puts the app in its own `app-*.scope`, so it isn't
+/// charged to (or killed with) umoja-dock.service.
+fn context() -> gio::AppLaunchContext {
+    match gdk::Display::default() {
+        Some(d) => umoja_common::app_scope::scoped(d.app_launch_context()).upcast(),
+        None => umoja_common::app_scope::launch_context(),
+    }
+}
+
 pub fn launch(info: &gio::DesktopAppInfo) {
-    let ctx = gdk::Display::default().map(|d| d.app_launch_context());
-    if let Err(e) = info.launch(&[], ctx.as_ref()) {
+    let ctx = context();
+    if let Err(e) = info.launch(&[], Some(&ctx)) {
         tracing::warn!(app = ?info.id(), error = %e, "launch failed");
     }
 }
 
 /// Run one of the app's desktop actions ("New Private Window"...).
 pub fn launch_action(info: &gio::DesktopAppInfo, action: &str) {
-    let ctx = gdk::Display::default().map(|d| d.app_launch_context());
-    info.launch_action(action, ctx.as_ref());
+    info.launch_action(action, Some(&context()));
 }
 
 /// `org.gnome.shell favorite-apps`, the same pinned list Ubuntu Dock uses.

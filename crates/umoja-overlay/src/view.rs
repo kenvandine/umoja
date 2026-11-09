@@ -613,7 +613,9 @@ impl Overlay {
     }
 
     fn launch(&self, app: &gio::AppInfo) {
-        let ctx = gtk::prelude::WidgetExt::display(&self.window).app_launch_context();
+        let ctx = umoja_common::app_scope::scoped(
+            gtk::prelude::WidgetExt::display(&self.window).app_launch_context(),
+        );
         if let Err(e) = app.launch(&[], Some(&ctx)) {
             tracing::warn!(error = %e, "launch failed");
         }
@@ -650,7 +652,9 @@ impl Overlay {
                 &label,
                 Box::new(move || {
                     if let Some(o) = weak.upgrade() {
-                        let ctx = gtk::prelude::WidgetExt::display(&o.window).app_launch_context();
+                        let ctx = umoja_common::app_scope::scoped(
+                            gtk::prelude::WidgetExt::display(&o.window).app_launch_context(),
+                        );
                         a.launch_action(&action, Some(&ctx));
                         o.hide();
                     }

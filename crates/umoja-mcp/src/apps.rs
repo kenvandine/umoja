@@ -780,7 +780,7 @@ async fn launch_app(a: Value) -> Outcome {
     let Some(app) = find_launcher(name) else {
         return Outcome::err(format!("no installed app matches \"{name}\""));
     };
-    match app.launch(&[], None::<&gio::AppLaunchContext>) {
+    match app.launch(&[], Some(&umoja_common::app_scope::launch_context())) {
         Ok(()) => Outcome::ok(format!("Opened {}", app.display_name())).hide(),
         Err(e) => Outcome::err(e),
     }

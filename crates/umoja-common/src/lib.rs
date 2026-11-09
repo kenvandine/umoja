@@ -6,6 +6,7 @@
 //! `monitors` features.
 
 pub mod agents;
+pub mod app_scope;
 pub mod apps;
 pub mod assistant_backend;
 #[cfg(feature = "blur")]
