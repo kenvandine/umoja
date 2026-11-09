@@ -147,6 +147,7 @@ impl Menu {
         popover.set_has_arrow(false);
         umoja_common::blur::blur_behind(&popover);
         popover.set_parent(anchor);
+        crate::menu_gap::below_bar(&popover);
         let menu = Rc::new(Self { proxy, popover });
 
         // Apps rebuild their menus while open (e.g. a "Connecting..." label);

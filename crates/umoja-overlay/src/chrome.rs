@@ -113,6 +113,12 @@ fn rounded(cr: &gtk::cairo::Context, r: R, radius: [f64; 4]) {
 
 // ---- tile preview -------------------------------------------------------------
 
+/// panel.css's @shell_bg, the dark surface shared by the bar, menus, OSD,
+/// notification bubbles and dock.
+const SHELL_BG: (f64, f64, f64) = (22.0 / 255.0, 22.0 / 255.0, 24.0 / 255.0);
+const PREVIEW_INSET: f64 = 6.0;
+const PREVIEW_RADIUS: f64 = 18.0;
+
 struct Preview {
     window: gtk::ApplicationWindow,
     area: gtk::DrawingArea,
@@ -179,19 +185,28 @@ impl Preview {
             y: r.y - my as f64,
             ..r
         };
-        let a = accent();
-        // gnome-shell's .tile-preview: accent at 35% with a 1px accent border.
-        cr.set_source_rgba(
-            a.red() as f64,
-            a.green() as f64,
-            a.blue() as f64,
-            0.35 * opacity,
-        );
-        cr.rectangle(r.x, r.y, r.w, r.h);
+        // The shell's dark translucent card (panel.css @shell_bg), inset
+        // and rounded, outlined in the accent color so the target reads.
+        let r = R {
+            x: r.x + PREVIEW_INSET,
+            y: r.y + PREVIEW_INSET,
+            w: (r.w - 2.0 * PREVIEW_INSET).max(0.0),
+            h: (r.h - 2.0 * PREVIEW_INSET).max(0.0),
+        };
+        let radius = PREVIEW_RADIUS.min(r.w / 2.0).min(r.h / 2.0);
+        cr.set_source_rgba(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, 0.55 * opacity);
+        rounded(cr, r, [radius; 4]);
         let _ = cr.fill();
-        cr.set_source_rgba(a.red() as f64, a.green() as f64, a.blue() as f64, opacity);
-        cr.set_line_width(1.0);
-        cr.rectangle(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0);
+        let a = accent();
+        cr.set_source_rgba(a.red() as f64, a.green() as f64, a.blue() as f64, 0.9 * opacity);
+        cr.set_line_width(2.0);
+        let inner = R {
+            x: r.x + 1.0,
+            y: r.y + 1.0,
+            w: (r.w - 2.0).max(0.0),
+            h: (r.h - 2.0).max(0.0),
+        };
+        rounded(cr, inner, [(radius - 1.0).max(0.0); 4]);
         let _ = cr.stroke();
     }
 
@@ -344,13 +359,22 @@ impl Picker {
             );
             let _ = cr.fill();
         }
-        cr.set_source_rgb(
-            0x2e as f64 / 255.0,
-            0x2e as f64 / 255.0,
-            0x32 as f64 / 255.0,
-        );
+        cr.set_source_rgba(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, 0.86);
         rounded(cr, boxr, [20.0; 4]);
         let _ = cr.fill();
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.08);
+        cr.set_line_width(1.0);
+        rounded(
+            cr,
+            R {
+                x: boxr.x + 0.5,
+                y: boxr.y + 0.5,
+                w: boxr.w - 1.0,
+                h: boxr.h - 1.0,
+            },
+            [19.5; 4],
+        );
+        let _ = cr.stroke();
 
         // Icons in tiling-assistant's order: vertical, horizontal, quarter, maximize.
         let tile = self.tile.get();

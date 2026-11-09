@@ -40,6 +40,15 @@ impl BtState {
 
     /// gnome-shell's tile subtitle: the device name for one connected
     /// device, a count for several.
+    /// The tile's second line: the connected device, or how many.
+    pub fn subtitle(&self) -> String {
+        if self.connected().next().is_none() {
+            String::new()
+        } else {
+            self.title()
+        }
+    }
+
     pub fn title(&self) -> String {
         let connected: Vec<_> = self.connected().collect();
         match connected.as_slice() {
@@ -261,7 +270,7 @@ pub fn tile(make: impl Fn(&str, &str) -> gtk::ToggleButton) -> (gtk::Box, gtk::R
             updating.set(true);
             toggle.set_active(s.powered);
             updating.set(false);
-            crate::network::set_tile_label(&toggle, &s.title());
+            crate::network::set_tile_subtitle(&toggle, &s.subtitle());
             crate::network::set_tile_icon(
                 &toggle,
                 if s.powered {

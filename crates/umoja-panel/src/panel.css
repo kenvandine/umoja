@@ -1,7 +1,17 @@
-/* Yaru-style top bar (white text, rounded hover pills), but translucent
-   with the same tint and opacity as the dock (.dock-list in dock.css). */
+/* Shell chrome: the bar, its menus, the OSD and the bubbles share one
+   flat, dark, slightly see-through surface (the notification bubble's),
+   whatever Settings > Appearance says (main.rs forces the dark scheme).
+   Coloured bits follow the GNOME accent color via @accent_bg_color. */
+@define-color shell_bg rgba(22, 22, 24, 0.86);
+@define-color shell_bar_bg rgba(22, 22, 24, 0.80);
+@define-color shell_hairline alpha(#ffffff, 0.08);
+@define-color shell_fill alpha(#ffffff, 0.08);
+@define-color shell_fill_hover alpha(#ffffff, 0.14);
+@define-color shell_fill_active alpha(#ffffff, 0.20);
+@define-color shell_section alpha(#ffffff, 0.05);
+
 window.umoja-panel {
-  background-color: alpha(#1d1d1d, 0.85);
+  background-color: @shell_bar_bg;
   color: #ffffff;
   min-height: 32px;
 }
@@ -16,20 +26,135 @@ window.umoja-panel button {
 window.umoja-panel button:hover {
   background-color: alpha(#ffffff, 0.15);
 }
+/* The button whose menu is open stays lit, like gnome-shell's. */
+window.umoja-panel menubutton > button:checked {
+  background-color: alpha(#ffffff, 0.20);
+}
 window.umoja-panel .tray-item {
   padding: 0 6px;
 }
+
+/* ---- Menus: floating dark cards, no arrow ---- */
+popover > contents {
+  background-color: @shell_bg;
+  color: #ffffff;
+  border-radius: 22px;
+  border: 1px solid @shell_hairline;
+  box-shadow: 0 10px 28px alpha(#000000, 0.30);
+  padding: 14px;
+}
+popover.menu > contents {
+  padding: 6px;
+  border-radius: 18px;
+}
+popover > arrow {
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+popover separator {
+  background-color: @shell_hairline;
+  margin: 6px 8px;
+}
+/* App indicator (dbusmenu) menus. */
+popover.menu modelbutton {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+}
+popover.menu modelbutton:hover,
+popover.menu modelbutton:selected {
+  background-color: @shell_fill_hover;
+}
+popover.menu modelbutton:active {
+  background-color: @shell_fill_active;
+}
+popover.menu modelbutton:disabled {
+  color: alpha(#ffffff, 0.4);
+}
+popover.menu modelbutton accelerator {
+  color: alpha(#ffffff, 0.55);
+}
+popover.menu check,
+popover.menu radio {
+  background-color: transparent;
+  box-shadow: inset 0 0 0 2px alpha(#ffffff, 0.35);
+}
+popover.menu check:checked,
+popover.menu radio:checked {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+  box-shadow: none;
+}
+
+/* ---- Quick Settings ---- */
 .quick-settings {
-  padding: 12px;
-  min-width: 340px;
+  min-width: 360px;
+}
+.quick-settings button.circular,
+.quick-settings .battery-button {
+  background-color: @shell_fill;
+  min-width: 36px;
+  min-height: 36px;
+  color: #ffffff;
+}
+.quick-settings button.circular:hover,
+.quick-settings .battery-button:hover {
+  background-color: @shell_fill_hover;
+}
+.quick-settings .battery-button {
+  border-radius: 999px;
+  padding: 0 14px;
+  font-weight: 600;
+}
+.quick-settings scale {
+  padding: 8px 6px;
+}
+.quick-settings scale trough {
+  min-height: 6px;
+  border-radius: 999px;
+  background-color: alpha(#ffffff, 0.16);
+}
+.quick-settings scale highlight {
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+}
+.quick-settings scale slider {
+  min-width: 20px;
+  min-height: 20px;
+  margin: -7px;
+  border-radius: 999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 4px alpha(#000000, 0.4);
 }
 .quick-settings .tile {
-  border-radius: 999px;
-  min-height: 48px;
+  border-radius: 20px;
+  min-height: 56px;
+  padding: 0 14px 0 16px;
+  background-color: @shell_fill;
+  color: #ffffff;
+  box-shadow: none;
+}
+.quick-settings .tile:hover {
+  background-color: @shell_fill_hover;
 }
 .quick-settings .tile:checked {
-  background-color: #E95420;
-  color: #ffffff;
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+  box-shadow: inset 0 1px alpha(#ffffff, 0.14);
+}
+.quick-settings .tile:checked:hover {
+  background-color: mix(@accent_bg_color, #ffffff, 0.08);
+}
+.quick-settings .tile-title {
+  font-weight: 600;
+}
+.quick-settings .tile-subtitle {
+  font-size: 0.87em;
+  opacity: 0.72;
+}
+.quick-settings .tile:checked .tile-subtitle {
+  opacity: 0.85;
 }
 /* System status area: icons spaced like gnome-shell's. */
 window.umoja-panel .system-status image {
@@ -45,27 +170,36 @@ window.umoja-panel .battery-percentage {
 .quick-settings .split-tile > .tile-arrow {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-  min-width: 36px;
+  min-width: 38px;
   padding: 0 8px;
+  border-left: 1px solid alpha(#ffffff, 0.08);
 }
+/* The arrow is part of the tile: it takes the accent when the tile is on. */
+.quick-settings .split-tile > .tile:checked + .tile-arrow,
 .quick-settings .split-tile > .tile-arrow:checked {
-  background-color: shade(#E95420, 0.9);
+  background-color: mix(@accent_bg_color, #000000, 0.10);
+  color: @accent_fg_color;
+  border-left-color: alpha(#000000, 0.14);
+  box-shadow: inset 0 1px alpha(#ffffff, 0.14);
 }
 .quick-settings .network-list {
   padding: 8px;
   border-radius: 18px;
-  background-color: alpha(currentColor, 0.06);
+  background-color: @shell_section;
 }
 .quick-settings .network-list-header {
   padding: 4px 8px;
 }
 .quick-settings .network-row {
   border-radius: 12px;
-  padding: 6px 8px;
+  padding: 6px 10px;
+  min-height: 26px;
 }
-.quick-settings .battery-button {
-  border-radius: 999px;
-  padding: 4px 12px;
+.quick-settings .network-row:hover {
+  background-color: @shell_fill;
+}
+.quick-settings .network-row image:last-child {
+  color: @accent_bg_color;
 }
 
 /* ---- Date menu: message list + calendar (gnome-shell layout) ---- */
@@ -74,15 +208,77 @@ window.umoja-panel .battery-percentage {
   color: #ffffff;
 }
 .date-menu {
-  padding: 12px;
+  padding: 0;
 }
 .message-list .message {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background-color: alpha(currentColor, 0.06);
+  padding: 12px 14px;
+  border-radius: 16px;
+  background-color: alpha(#ffffff, 0.06);
 }
 .message-list .message:hover {
-  background-color: alpha(currentColor, 0.12);
+  background-color: alpha(#ffffff, 0.10);
+}
+.message-list-clear {
+  border-radius: 999px;
+  padding: 0 16px;
+  min-height: 32px;
+  background-color: @shell_fill;
+  font-weight: 600;
+}
+.message-list-clear:hover {
+  background-color: @shell_fill_hover;
+}
+/* The calendar, as a lighter section beside the messages. */
+.date-menu calendar {
+  border: none;
+  border-radius: 18px;
+  padding: 8px;
+  background-color: @shell_section;
+  color: #ffffff;
+}
+.date-menu calendar > header {
+  border: none;
+  background: none;
+  padding-bottom: 6px;
+}
+.date-menu calendar > header > button {
+  border-radius: 999px;
+  background: none;
+  box-shadow: none;
+}
+.date-menu calendar > header > button:hover {
+  background-color: @shell_fill_hover;
+}
+.date-menu calendar > grid > label.day-name {
+  color: alpha(#ffffff, 0.6);
+  font-size: 0.85em;
+  font-weight: bold;
+}
+.date-menu calendar > grid > label.day-number {
+  min-width: 32px;
+  min-height: 32px;
+  margin: 1px 2px;
+  padding: 0;
+  border-radius: 999px;
+}
+.date-menu calendar > grid > label.day-number:hover {
+  background-color: @shell_fill_hover;
+}
+.date-menu calendar > grid > label.day-number.other-month {
+  color: alpha(#ffffff, 0.35);
+}
+.date-menu calendar > grid > label.day-number.today {
+  box-shadow: inset 0 0 0 2px @accent_bg_color;
+}
+.date-menu calendar > grid > label.day-number:selected {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+  font-weight: 800;
+  box-shadow: none;
+}
+.date-menu calendar > grid > label.week-number {
+  color: alpha(#ffffff, 0.45);
+  font-size: 0.85em;
 }
 .message-list .message-title {
   font-weight: bold;
@@ -103,15 +299,15 @@ window.umoja-notifications {
   background: transparent;
 }
 .osd-bubble {
-  background-color: rgba(18, 18, 18, 0.88);
+  background-color: @shell_bg;
   color: #ffffff;
-  border-radius: 12px;
+  border-radius: 18px;
   padding: 14px 16px;
   margin: 6px;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), inset 0 0 0 1px @shell_hairline;
 }
 .osd-bubble.critical {
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55), inset 0 0 0 1px alpha(#E95420, 0.9);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), inset 0 0 0 1px alpha(@accent_bg_color, 0.9);
 }
 .osd-title {
   font-weight: bold;
@@ -128,20 +324,20 @@ window.umoja-notifications {
 .osd-gauge progress {
   min-height: 6px;
   border-radius: 3px;
-  background-color: #ffffff;
+  background-color: @accent_bg_color;
 }
 .osd-actions {
   margin-top: 8px;
 }
 .osd-actions button {
   color: #ffffff;
-  background-color: rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  min-height: 28px;
-  font-weight: normal;
+  background-color: @shell_fill;
+  border-radius: 999px;
+  min-height: 32px;
+  font-weight: 600;
 }
 .osd-actions button:hover {
-  background-color: rgba(255, 255, 255, 0.22);
+  background-color: @shell_fill_hover;
 }
 .osd-close {
   min-width: 20px;
@@ -166,14 +362,21 @@ overlay:hover > .osd-close {
   margin-top: 4px;
 }
 
-/* The bar's white-on-black button style must not leak into its menus:
-   popovers are children of the bar, and in the light style their
-   background is light. */
+/* The bar's pill buttons must not leak into its menus (popovers are
+   children of the bar). */
 window.umoja-panel popover button {
-  color: inherit;
+  margin: 0;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-weight: normal;
+}
+window.umoja-panel popover button.circular {
+  padding: 0;
+  border-radius: 999px;
 }
 window.umoja-panel popover button:hover {
-  background-color: alpha(currentColor, 0.1);
+  background-color: @shell_fill_hover;
 }
 /* Lock screen, like gnome-shell's: white text over the blurred wallpaper. */
 window.umoja-lock {
@@ -249,10 +452,10 @@ window.umoja-quick-reply {
 .quick-reply {
   margin: 12px;
   padding: 14px 16px;
-  border-radius: 14px;
-  background-color: @popover_bg_color;
-  color: @popover_fg_color;
-  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
+  border-radius: 18px;
+  background-color: @shell_bg;
+  color: #ffffff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), inset 0 0 0 1px @shell_hairline;
 }
 .quick-reply .message-reply {
   margin-left: 44px;
@@ -344,9 +547,8 @@ window.umoja-osd {
 }
 .osd-window {
   color: #ffffff;
-  /* $osd_bg_color: lighten(#222226, 5%) */
-  background-color: #2e2e33;
-  border: 1px solid rgba(255, 255, 255, 0.02);
+  background-color: @shell_bg;
+  border: 1px solid @shell_hairline;
   border-radius: 999px;
   padding: 12px 18px;
   margin-bottom: 4em;

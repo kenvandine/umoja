@@ -77,9 +77,12 @@ impl ClockButton {
         menu.add_css_class("date-menu");
         let list = Rc::new(crate::notifications::MessageList::new(center));
         menu.append(&list.widget());
-        menu.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         menu.append(&calendar);
-        let popover = gtk::Popover::builder().child(&menu).build();
+        let popover = gtk::Popover::builder()
+            .child(&menu)
+            .has_arrow(false)
+            .build();
+        crate::menu_gap::below_bar(&popover);
         umoja_common::blur::blur_behind(&popover);
         {
             let dot = dot.clone();

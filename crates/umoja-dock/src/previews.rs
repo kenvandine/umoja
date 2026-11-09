@@ -8,7 +8,10 @@ use gtk4 as gtk;
 
 pub fn popover(windows: &[WindowInfo], commands: async_channel::Sender<Command>) -> gtk::Popover {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    let popover = gtk::Popover::builder().child(&list).build();
+    let popover = gtk::Popover::builder()
+        .child(&list)
+        .has_arrow(false)
+        .build();
     for w in windows {
         let title = if w.title.is_empty() {
             w.app_id.clone()

@@ -7,3 +7,9 @@
 # GNOME did before it changed the default to false.
 [org.gnome.desktop.interface:Umoja]
 gtk-enable-primary-paste=true
+
+# The dock floats off the screen edge (Ubuntu's own default is the
+# full-height "panel mode"); Settings > Ubuntu Desktop > Panel mode still
+# turns it back on.
+[org.gnome.shell.extensions.dash-to-dock:Umoja]
+extend-height=false

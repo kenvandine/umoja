@@ -28,6 +28,8 @@ const APP_ID: &str = "org.umoja.Dock";
 const HIDDEN_SIZE: i32 = 2;
 /// Gap between the dock and the screen edges it sits against.
 const EDGE_GAP: i32 = 8;
+/// Pixels between the dock card and its menus, as umoja-panel's menu_gap.
+const MENU_GAP: i32 = 6;
 
 #[derive(Clone, Copy, Debug)]
 struct Config {
@@ -49,7 +51,8 @@ impl Config {
             icon_size: gs::get_int(d, "dash-max-icon-size", 48).clamp(16, 128),
             // Ubuntu ships dock-fixed=true; autohide only matters when unfixed.
             fixed: gs::get_bool(d, "dock-fixed", true),
-            extend: gs::get_bool(d, "extend-height", true),
+            // data/90_umoja.gschema.override makes Umoja default to the floating dock.
+            extend: gs::get_bool(d, "extend-height", false),
             show_apps_at_top: gs::get_bool(d, "show-apps-at-top", false),
             show_windows_preview: gs::get_bool(d, "show-windows-preview", true),
             default_windows_preview_to_open: gs::get_bool(
@@ -419,6 +422,7 @@ impl Dock {
         let popover = gtk::Popover::builder()
             .child(&col)
             .position(self.menu_side())
+            .has_arrow(false)
             .build();
         let weak_pop = popover.downgrade();
         let button = |label: &str, action: Box<dyn Fn()>| {
@@ -557,8 +561,31 @@ impl Dock {
     /// Attach a transient popover, hold rebuilds while it is open, and drop
     /// it again once it closes.
     fn show_popover(self: &Rc<Self>, popover: &gtk::Popover, parent: &impl IsA<gtk::Widget>) {
-        popover.set_position(self.menu_side());
+        let side = self.menu_side();
+        popover.set_position(side);
         popover.set_parent(parent);
+        // Open MENU_GAP clear of the dock card itself, not of the icon, so
+        // the right-click menu sits like the panel's menus do under the bar.
+        if let Some(at) = parent
+            .as_ref()
+            .compute_point(&self.list, &gtk::graphene::Point::new(0.0, 0.0))
+        {
+            let (w, h) = (parent.as_ref().width(), parent.as_ref().height());
+            let rect = match side {
+                gtk::PositionType::Left | gtk::PositionType::Right => {
+                    gtk::gdk::Rectangle::new(-(at.x() as i32), 0, self.list.width(), h)
+                }
+                _ => gtk::gdk::Rectangle::new(0, -(at.y() as i32), w, self.list.height()),
+            };
+            popover.set_pointing_to(Some(&rect));
+            let (dx, dy) = match side {
+                gtk::PositionType::Right => (MENU_GAP, 0),
+                gtk::PositionType::Left => (-MENU_GAP, 0),
+                gtk::PositionType::Bottom => (0, MENU_GAP),
+                _ => (0, -MENU_GAP),
+            };
+            popover.set_offset(dx, dy);
+        }
         umoja_common::blur::blur_behind(popover);
         self.menu_open.set(true);
         let weak = Rc::downgrade(self);
@@ -610,6 +637,9 @@ fn toggle_overlay() {
 }
 
 fn load_css() {
+    // The shell chrome is always dark, like the notification bubbles,
+    // whatever Settings > Appearance says; apps keep following it.
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
     let provider = gtk::CssProvider::new();
     provider.load_from_string(include_str!("dock.css"));
     if let Some(display) = gtk::gdk::Display::default() {
