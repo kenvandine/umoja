@@ -205,26 +205,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
             // Like GDM: the login card on the built-in panel, the same
             // blurred wallpaper on every other screen.
             for mon in others {
-                let w = adw::ApplicationWindow::builder()
-                    .application(app)
-                    .css_classes(["umoja-greeter"])
-                    .build();
-                let bg = Backdrop::new(BLUR_RADIUS);
-                bg.set_wallpaper(Some(backdrop::GREETER_WALLPAPER));
-                w.set_content(Some(&bg));
-                w.set_decorated(false);
-                w.fullscreen_on_monitor(&mon);
-                follow_monitor(w.upcast_ref(), &mon);
-                // A click there shouldn't take the keyboard from the card.
-                let main = window.downgrade();
-                w.connect_is_active_notify(move |w| {
-                    if w.is_active() {
-                        if let Some(main) = main.upgrade() {
-                            main.present();
-                        }
-                    }
-                });
-                w.present();
+                wallpaper_on(app, &window, &mon);
             }
             window.fullscreen_on_monitor(&login);
             follow_monitor(window.upcast_ref(), &login);
@@ -243,6 +224,45 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         });
     });
     window.present();
+}
+
+/// The blurred wallpaper alone on `monitor`: a background layer surface
+/// filling the screen (a fullscreen toplevel there didn't always end up
+/// covering it), or a fullscreen window without layer shell.
+fn wallpaper_on(app: &adw::Application, main: &adw::ApplicationWindow, monitor: &gtk::gdk::Monitor) {
+    use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+    let w = gtk::Window::builder()
+        .application(app)
+        .css_classes(["umoja-greeter"])
+        .decorated(false)
+        .build();
+    let bg = Backdrop::new(BLUR_RADIUS);
+    bg.set_wallpaper(Some(backdrop::GREETER_WALLPAPER));
+    w.set_child(Some(&bg));
+    if gtk4_layer_shell::is_supported() {
+        w.init_layer_shell();
+        w.set_namespace("umoja-greeter-wallpaper");
+        w.set_layer(Layer::Background);
+        w.set_monitor(monitor);
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            w.set_anchor(edge, true);
+        }
+        w.set_exclusive_zone(-1);
+        w.set_keyboard_mode(KeyboardMode::None);
+    } else {
+        w.fullscreen_on_monitor(monitor);
+        follow_monitor(&w, monitor);
+        // A click there shouldn't take the keyboard from the card.
+        let main = main.downgrade();
+        w.connect_is_active_notify(move |w| {
+            if w.is_active() {
+                if let Some(main) = main.upgrade() {
+                    main.present();
+                }
+            }
+        });
+    }
+    w.present();
 }
 
 /// Keep a fullscreen window on its monitor when the screens are rearranged

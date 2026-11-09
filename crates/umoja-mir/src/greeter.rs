@@ -49,6 +49,8 @@ static CLIENT_CONFIG_HOME: OnceLock<Option<std::ffi::OsString>> = OnceLock::new(
 /// method and virtual keyboard are kept for on-screen keyboards.
 pub const PROTOCOLS: &[&str] = &[
     "zxdg_output_manager_v1",
+    // The wallpaper on the screens without the login card.
+    "zwlr_layer_shell_v1",
     "zwp_virtual_keyboard_manager_v1",
     "zwp_input_method_manager_v2",
     "zwp_primary_selection_device_manager_v1",
