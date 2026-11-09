@@ -33,6 +33,10 @@ use crate::Dock;
 /// Width of the strip left on the screen edge while the dock is hidden: the
 /// pointer touching it brings the dock back.
 const HIDDEN_SIZE: i32 = 2;
+/// The slide takes this much longer than dash-to-dock's animation-time
+/// (0.2 s by default, so 0.35 s): a fade that quick reads fine, a slide
+/// that quick looks like a jump.
+const SLIDE_SLOWER: f64 = 1.75;
 /// How often intellihide looks at window positions.
 const POLL: Duration = Duration::from_millis(250);
 
@@ -101,6 +105,8 @@ pub struct Hide {
     overlapped: Cell<bool>,
     timer: RefCell<Option<glib::SourceId>>,
     anim: RefCell<Option<adw::TimedAnimation>>,
+    /// How far the dock has slid off the edge: 0 shown, 1 gone.
+    progress: Cell<f64>,
     polling: Cell<bool>,
     in_flight: Cell<bool>,
     /// Size of the shown dock (across the edge, along it), for the hidden
@@ -189,16 +195,31 @@ impl Dock {
         if let Some(a) = self.hide.anim.borrow_mut().take() {
             a.pause();
         }
-        let ms = self.config.borrow().hide.animation.as_millis() as u32;
-        let from = self.list.opacity();
-        let target = adw::PropertyAnimationTarget::new(&self.list, "opacity");
-        let anim =
-            adw::TimedAnimation::new(&self.list, from, if show { 1.0 } else { 0.0 }, ms, target);
-        anim.set_easing(adw::Easing::EaseOutCubic);
+        let base = self.config.borrow().hide.animation.as_millis() as f64;
+        let ms = (base * SLIDE_SLOWER).round().max(1.0) as u32;
+        let from = self.hide.progress.get();
         if show {
             self.list.set_visible(true);
             self.update_reserved_space();
+        }
+        // Start from where it is now, so a reversal mid-slide is smooth and
+        // a dock coming back from the hidden strip starts off screen.
+        self.place_slide();
+        let weak = Rc::downgrade(self);
+        let target = adw::CallbackAnimationTarget::new(move |p| {
+            if let Some(d) = weak.upgrade() {
+                d.hide.progress.set(p);
+                d.place_slide();
+            }
+        });
+        let anim =
+            adw::TimedAnimation::new(&self.list, from, if show { 0.0 } else { 1.0 }, ms, target);
+        anim.set_easing(if show {
+            adw::Easing::EaseOutCubic
         } else {
+            adw::Easing::EaseInOutCubic
+        });
+        if !show {
             let weak = Rc::downgrade(self);
             anim.connect_done(move |_| {
                 if let Some(d) = weak.upgrade()
@@ -210,6 +231,19 @@ impl Dock {
         }
         anim.play();
         *self.hide.anim.borrow_mut() = Some(anim);
+    }
+
+    /// Shift the dock towards its screen edge by the slide's progress.
+    pub fn place_slide(&self) {
+        let p = self.hide.progress.get() as f32;
+        let distance = self.thickness() as f32 * p;
+        let (x, y) = match self.config.borrow().position {
+            DockPosition::Left => (-distance, 0.0),
+            DockPosition::Right => (distance, 0.0),
+            DockPosition::Top => (0.0, -distance),
+            DockPosition::Bottom => (0.0, distance),
+        };
+        self.slide.set_offset(x, y);
     }
 
     /// Shrink to the thin strip along the edge that brings the dock back.

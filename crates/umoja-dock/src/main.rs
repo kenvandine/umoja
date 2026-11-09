@@ -10,6 +10,7 @@ mod launcher;
 mod launcher_entry;
 mod placement;
 mod previews;
+mod slide;
 mod tracker;
 
 use gio::prelude::*;
@@ -28,8 +29,10 @@ use umoja_common::types::DockPosition;
 use umoja_common::{dbus, i18n};
 
 const APP_ID: &str = "org.umoja.Dock";
-/// Gap between the dock and the screen edges it sits against.
-const EDGE_GAP: i32 = 8;
+/// Gap between the dock and the screen edge it sits against.
+const EDGE_GAP: i32 = 2;
+/// Gap off both ends of the screen edge when the dock spans it (panel mode).
+const END_GAP: i32 = 8;
 /// Pixels between the dock card and its menus, as umoja-panel's menu_gap.
 const MENU_GAP: i32 = 6;
 
@@ -75,6 +78,8 @@ impl Config {
 struct Dock {
     window: gtk::ApplicationWindow,
     list: gtk::Box,
+    /// Holds `list`; slides it off the edge while auto-hiding.
+    slide: slide::Slide,
     config: RefCell<Config>,
     /// Every window the tracker knows, shared by the docks on each monitor.
     windows: Rc<RefCell<BTreeMap<WindowId, WindowInfo>>>,
@@ -147,11 +152,13 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
     list.add_css_class("dock-list");
-    window.set_child(Some(&list));
+    let slide = slide::Slide::new(&list);
+    window.set_child(Some(&slide));
 
     let dock = Rc::new(Dock {
         window: window.clone(),
         list,
+        slide,
         config: RefCell::new(Config::load()),
         windows: shared.windows.clone(),
         monitor: monitor.clone(),
@@ -212,19 +219,20 @@ impl Dock {
         });
         // Float the rounded dock slightly off the screen edge, and off both
         // ends too when it spans the edge (panel mode).
-        let gap = |on: bool| if on { EDGE_GAP } else { 0 };
         let (vertical, along) = (cfg.position.is_vertical(), cfg.extend);
-        self.list.set_margin_start(gap(
-            cfg.position == DockPosition::Left || (!vertical && along)
-        ));
-        self.list.set_margin_end(gap(
-            cfg.position == DockPosition::Right || (!vertical && along)
-        ));
-        self.list
-            .set_margin_top(gap(cfg.position == DockPosition::Top || (vertical && along)));
-        self.list.set_margin_bottom(gap(
-            cfg.position == DockPosition::Bottom || (vertical && along)
-        ));
+        let gap = |edge: DockPosition, end: bool| {
+            if cfg.position == edge {
+                EDGE_GAP
+            } else if end && along {
+                END_GAP
+            } else {
+                0
+            }
+        };
+        self.list.set_margin_start(gap(DockPosition::Left, !vertical));
+        self.list.set_margin_end(gap(DockPosition::Right, !vertical));
+        self.list.set_margin_top(gap(DockPosition::Top, vertical));
+        self.list.set_margin_bottom(gap(DockPosition::Bottom, vertical));
         for (pos, class) in [
             (DockPosition::Left, "left"),
             (DockPosition::Right, "right"),
@@ -239,6 +247,7 @@ impl Dock {
         }
         self.list.set_visible(self.hide.shown());
         self.update_reserved_space();
+        self.place_slide();
     }
 
     /// How far the dock reaches in from its screen edge: the list's real
