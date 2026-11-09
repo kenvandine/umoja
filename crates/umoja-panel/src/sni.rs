@@ -423,7 +423,7 @@ impl ItemState {
             if !theme
                 .search_path()
                 .iter()
-                .any(|p| p.as_os_str() == dir.as_str())
+                .any(|p| p.as_os_str() == dir)
             {
                 theme.add_search_path(&dir);
             }
