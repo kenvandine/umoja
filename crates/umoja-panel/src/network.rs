@@ -779,12 +779,6 @@ fn tile_labels(t: &gtk::ToggleButton) -> Option<(gtk::Label, gtk::Label)> {
     Some((title, subtitle))
 }
 
-pub fn set_tile_label(t: &gtk::ToggleButton, text: &str) {
-    if let Some((title, _)) = tile_labels(t) {
-        title.set_label(text);
-    }
-}
-
 /// The dimmer second line; empty hides it so the title centres.
 pub fn set_tile_subtitle(t: &gtk::ToggleButton, text: &str) {
     if let Some((_, subtitle)) = tile_labels(t) {
