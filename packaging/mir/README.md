@@ -50,6 +50,12 @@ Umoja PPA:
   fence, so windows tore. Like mutter, a commit now waits (on the existing
   acquire-point path) until the dmabuf is readable; a buffer whose commit
   is superseded before then is released back to the client.
+- `patches/3008_nvidia-finish-before-release.patch`: NVIDIA doesn't add its
+  reads of imported dma-bufs to their implicit fences, so clients got
+  buffers back while the GPU was still sampling them and GTK windows drawn
+  on the Intel iGPU tore on NVIDIA-driven monitors. The GL renderer now
+  calls `glFinish()` after each frame on NVIDIA (`MIR_GL_FINISH_AFTER_RENDER`
+  overrides).
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds
