@@ -20,6 +20,7 @@
 //! (ext-image-capture-source's foreign-toplevel source), and one surface per
 //! monitor for multi-monitor selection.
 
+use crate::context;
 use crate::screencast::Recorder;
 use crate::spread::{self, Win};
 use adw::prelude::*;
@@ -121,6 +122,8 @@ enum Mode {
 pub enum Kind {
     Screenshot,
     Screencast,
+    /// Umoja's addition: read the area's text (OCR) onto the clipboard.
+    Text,
 }
 
 const FLAG_FOCUSED: u32 = 1 << 0;
@@ -412,7 +415,22 @@ impl ScreenshotUi {
             .tooltip_text(i18n::shell("Screencast"))
             .build();
         cast.set_group(Some(&shot));
-        for (b, k) in [(&shot, Kind::Screenshot), (&cast, Kind::Screencast)] {
+        let text = gtk::ToggleButton::builder()
+            .child(&gtk::Image::from_gicon(&gtk::gio::ThemedIcon::from_names(
+                &[
+                    "text-recognition-symbolic",
+                    "insert-text-symbolic",
+                    "edit-copy-symbolic",
+                ],
+            )))
+            .tooltip_text(i18n::umoja("Copy Text"))
+            .build();
+        text.set_group(Some(&shot));
+        for (b, k) in [
+            (&shot, Kind::Screenshot),
+            (&cast, Kind::Screencast),
+            (&text, Kind::Text),
+        ] {
             let weak = Rc::downgrade(self);
             b.connect_toggled(move |b| {
                 if let (true, Some(ui)) = (b.is_active(), weak.upgrade()) {
@@ -423,6 +441,7 @@ impl ScreenshotUi {
         }
         kinds.append(&shot);
         kinds.append(&cast);
+        kinds.append(&text);
         *self.capture_button.borrow_mut() = Some(capture.clone());
 
         // The screenshot-ui-* icons ship inside gnome-shell, not in icon
@@ -660,6 +679,14 @@ impl ScreenshotUi {
         }
     }
 
+    /// Super+Ctrl+Print: the UI in Copy Text mode, starting on Selection.
+    pub fn open_copy_text(self: &Rc<Self>) {
+        self.open_as(Kind::Text);
+        if self.window.is_visible() {
+            self.set_mode(Mode::Selection);
+        }
+    }
+
     pub fn recorder(&self) -> &Rc<Recorder> {
         &self.recorder
     }
@@ -701,12 +728,20 @@ impl ScreenshotUi {
         self.load_windows();
         // The assistant wants a picture, and only one recording runs at a time.
         let can_cast = self.ask.borrow().is_none() && !self.recorder.is_recording();
+        let asking = self.ask.borrow().is_some();
         for (k, b) in self.kind_buttons.borrow().iter() {
-            if *k == Kind::Screencast {
-                b.set_sensitive(can_cast);
+            match k {
+                Kind::Screencast => b.set_sensitive(can_cast),
+                Kind::Text => b.set_sensitive(!asking),
+                Kind::Screenshot => {}
             }
         }
-        self.select_kind(if can_cast { kind } else { Kind::Screenshot });
+        let kind = match kind {
+            Kind::Screencast if !can_cast => Kind::Screenshot,
+            Kind::Text if asking => Kind::Screenshot,
+            k => k,
+        };
+        self.select_kind(kind);
         self.window.present();
         self.area.queue_draw();
     }
@@ -765,7 +800,11 @@ impl ScreenshotUi {
                 c.set_tooltip_text(Some(&i18n::shell("Record Screen")));
             } else {
                 c.remove_css_class("screencast");
-                c.set_tooltip_text(Some(&i18n::shell("Capture")));
+                c.set_tooltip_text(Some(&if kind == Kind::Text {
+                    i18n::umoja("Copy Text")
+                } else {
+                    i18n::shell("Capture")
+                }));
             }
         }
     }
@@ -872,9 +911,11 @@ impl ScreenshotUi {
             full.new_subpixbuf(x, y, w, h)
         };
         let ask = self.ask.borrow_mut().take();
+        let kind = self.kind.get();
         self.close();
         match ask {
             Some(done) => done(Some(pixbuf)),
+            None if kind == Kind::Text => copy_text(&self.app, &pixbuf),
             None => {
                 save_and_notify(&self.app, &pixbuf);
             }
@@ -894,8 +935,9 @@ impl ScreenshotUi {
 
     fn capture_raised(self: &Rc<Self>, id: u64, sel: Sel) {
         let region = self.layout_region(sel);
-        let cursor = self.show_pointer.get();
+        let cursor = self.show_pointer.get() && self.kind.get() != Kind::Text;
         let ask = self.ask.borrow_mut().take();
+        let kind = self.kind.get();
         self.close();
         activate_window(id);
         let app = self.app.clone();
@@ -909,6 +951,7 @@ impl ScreenshotUi {
             let _ = std::fs::remove_file(&path);
             match (ask, pixbuf) {
                 (Some(done), p) => done(p),
+                (None, Some(p)) if kind == Kind::Text => copy_text(&app, &p),
                 (None, Some(p)) => {
                     save_and_notify(&app, &p);
                 }
@@ -1067,6 +1110,56 @@ fn save_and_notify(app: &adw::Application, pixbuf: &Pixbuf) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Copy Text: OCR `pixbuf` off the GTK thread, put the text on the
+/// clipboard and say so (or why it failed) in a notification.
+fn copy_text(app: &adw::Application, pixbuf: &Pixbuf) {
+    let path = context::temp_png();
+    if let Err(e) = pixbuf.savev(&path, "png", &[]) {
+        tracing::warn!(error = %e, "could not save the area for OCR");
+        return;
+    }
+    let image = context::TempImage(path);
+    let app = app.clone();
+    glib::spawn_future_local(async move {
+        let result = context::blocking(move || {
+            if !context::ocr_available() {
+                return Err(context::OcrError::NotInstalled);
+            }
+            context::ocr_file(&image.0)
+        })
+        .await;
+        let n = match result {
+            Ok(text) => {
+                if let Some(display) = gdk::Display::default() {
+                    display.clipboard().set_text(&text);
+                }
+                let n = gio::Notification::new(&i18n::umoja("Text copied"));
+                n.set_body(Some(&text_preview(&text)));
+                n
+            }
+            Err(e) => {
+                let n = gio::Notification::new(&i18n::umoja("Couldn't copy the text"));
+                n.set_body(Some(&e.message()));
+                n
+            }
+        };
+        n.set_icon(&gio::ThemedIcon::new("edit-copy-symbolic"));
+        app.send_notification(Some("copy-text"), &n);
+    });
+}
+
+/// The first couple of lines of OCR text, for the notification body.
+fn text_preview(text: &str) -> String {
+    const MAX: usize = 120;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= MAX {
+        flat
+    } else {
+        let cut: String = flat.chars().take(MAX).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
 /// Clipboard + "Screenshot captured" notification, as gnome-shell does.
 fn finish(app: &adw::Application, path: &Path, pixbuf: &Pixbuf) {
     if let Some(display) = gdk::Display::default() {
@@ -1103,6 +1196,18 @@ mod tests {
             flags,
             workspace: 0,
         }
+    }
+
+    #[test]
+    fn copy_text_preview() {
+        assert_eq!(
+            text_preview("Call  me\n at 555-0100"),
+            "Call me at 555-0100"
+        );
+        let long = "word ".repeat(60);
+        let p = text_preview(&long);
+        assert!(p.ends_with('…'));
+        assert!(p.chars().count() <= 121);
     }
 
     #[test]

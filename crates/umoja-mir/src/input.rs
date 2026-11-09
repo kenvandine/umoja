@@ -318,6 +318,7 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "clipboard-history-hotkey",
         Action::ClipboardHistory,
     ),
+    (gs::UMOJA_SHELL, "copy-text-hotkey", Action::CopyTextUi),
 ];
 
 /// Fallbacks used when a schema is missing (e.g. running nested for development).
@@ -373,6 +374,7 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>KP_2", Action::TileBottomHalf as u32),
     ("<Super><Shift>a", Action::AskAboutScreen as u32),
     ("<Super><Shift>v", Action::ClipboardHistory as u32),
+    ("<Super><Control>Print", Action::CopyTextUi as u32),
     // gsettings-desktop-schemas' and gnome-shell's workspace defaults.
     ("<Super>Page_Up", Action::WorkspacePrev as u32),
     ("<Super>Page_Down", Action::WorkspaceNext as u32),
