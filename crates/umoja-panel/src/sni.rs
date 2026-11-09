@@ -9,7 +9,7 @@ use gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use umoja_common::dbus;
