@@ -411,8 +411,10 @@ public:
         WindowSpecification spec = modifications;
         auto const target = spec.state().is_set() ? spec.state().value() : info.state();
         if (target == mir_window_state_fullscreen && (spec.size().is_set() || spec.top_left().is_set())) {
-            spec.size().consume();
-            spec.top_left().consume();
+            // consume() on an unset optional is a Mir fatal error, and X11
+            // ConfigureRequests often carry only one of the two.
+            if (spec.size().is_set()) spec.size().consume();
+            if (spec.top_left().is_set()) spec.top_left().consume();
             if (info.state() == mir_window_state_fullscreen && !spec.state().is_set()) {
                 // Already fullscreen: snap back to its monitor in case an
                 // earlier request got through.
