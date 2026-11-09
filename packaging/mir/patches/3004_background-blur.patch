@@ -1,0 +1,1278 @@
+Description: Blur the background behind surfaces that ask for it
+ Implements ext-background-effect-v1 (wayland-protocols staging): a client
+ sets a blur region on a wl_surface, and the GL renderer blurs whatever is
+ drawn behind that region before drawing the surface. The grab is a
+ glBlitFramebuffer (glCopyTexSubImage2D on GLES2) of the region's bounding
+ box, blurred with dual-Kawase down/up passes at reduced resolution, and
+ drawn back weighted by the surface's own alpha, so rounded corners and
+ soft shadows inside the region aren't blurred. MIR_BLUR_PASSES (1-6,
+ default 3) and MIR_BLUR_OFFSET (default 2.0) tune the strength.
+ .
+ The region applies when set rather than on the next commit; clients set
+ it and commit together, so the difference doesn't show. The shell has to
+ enable "ext_background_effect_manager_v1" like any other extension.
+ .
+ The frontend and the renderer share the regions through
+ mir::graphics::background_blur, keyed by the surface's buffer stream (the
+ renderable id), exported from libmirplatform in its own version node.
+ Renderer gains a private class and a private non-virtual method only.
+Author: Umoja developers
+Forwarded: no
+Last-Update: 2026-11-09
+---
+--- /dev/null
++++ b/include/platform/mir/graphics/background_blur.h
+@@ -0,0 +1,44 @@
++/*
++ * Copyright © Umoja developers
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 or 3,
++ * as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef MIR_GRAPHICS_BACKGROUND_BLUR_H_
++#define MIR_GRAPHICS_BACKGROUND_BLUR_H_
++
++#include <mir/geometry/rectangles.h>
++
++#include <optional>
++
++namespace mir
++{
++namespace graphics
++{
++/// Blur-behind regions set by clients with ext-background-effect-v1.
++///
++/// The key is the buffer stream a surface is drawn from, which is what
++/// Renderable::id() returns for a scene surface's renderables. The region
++/// is in surface-local (logical) coordinates. The frontend sets and clears
++/// regions on the Wayland thread; the GL renderer reads them while it draws.
++namespace background_blur
++{
++void set_region(void const* stream, std::optional<geometry::Rectangles> const& region);
++auto region(void const* stream) -> std::optional<geometry::Rectangles>;
++/// Cheap check so the renderer can skip lookups when nothing asks for blur.
++auto any() -> bool;
++}
++}
++}
++
++#endif // MIR_GRAPHICS_BACKGROUND_BLUR_H_
+--- a/include/platform/mir/renderers/gl/renderer.h
++++ b/include/platform/mir/renderers/gl/renderer.h
+@@ -76,6 +76,9 @@ public:
+ private:
+     class OutputFilter;
+     std::unique_ptr<OutputFilter> output_surface;
++    class BackgroundBlur;
++    /// Umoja: blur what is behind a renderable within a surface-local region.
++    void draw_background_blur(graphics::Renderable const& renderable, geometry::Rectangles const& region) const;
+ 
+ protected:
+     /**
+--- a/src/platform/renderers/gl/CMakeLists.txt
++++ b/src/platform/renderers/gl/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ ADD_LIBRARY(mirrenderergl OBJECT
+ 
+   renderer.cpp
++  background_blur.cpp
+   renderer_factory.cpp
+ )
+ 
+--- /dev/null
++++ b/src/platform/renderers/gl/background_blur.cpp
+@@ -0,0 +1,65 @@
++/*
++ * Copyright © Umoja developers
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 or 3,
++ * as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <mir/graphics/background_blur.h>
++
++#include <atomic>
++#include <mutex>
++#include <unordered_map>
++
++namespace mg = mir::graphics;
++namespace geom = mir::geometry;
++
++namespace
++{
++std::mutex regions_mutex;
++std::unordered_map<void const*, geom::Rectangles> regions;
++std::atomic<bool> have_regions{false};
++}
++
++void mg::background_blur::set_region(void const* stream, std::optional<geom::Rectangles> const& region)
++{
++    std::lock_guard lock{regions_mutex};
++    if (region && region->bounding_rectangle().size != geom::Size{})
++    {
++        regions[stream] = region.value();
++    }
++    else
++    {
++        regions.erase(stream);
++    }
++    have_regions = !regions.empty();
++}
++
++auto mg::background_blur::region(void const* stream) -> std::optional<geom::Rectangles>
++{
++    if (!have_regions)
++    {
++        return std::nullopt;
++    }
++    std::lock_guard lock{regions_mutex};
++    auto const i = regions.find(stream);
++    if (i == regions.end())
++    {
++        return std::nullopt;
++    }
++    return i->second;
++}
++
++auto mg::background_blur::any() -> bool
++{
++    return have_regions;
++}
+--- a/src/platform/renderers/gl/renderer.cpp
++++ b/src/platform/renderers/gl/renderer.cpp
+@@ -28,6 +28,7 @@
+ #include <mir/graphics/program_factory.h>
+ #include <mir/graphics/program.h>
+ #include <mir/renderer/gl/gl_surface.h>
++#include <mir/graphics/background_blur.h>
+ 
+ #define GLM_FORCE_RADIANS
+ #include <glm/gtc/matrix_transform.hpp>
+@@ -41,6 +42,13 @@
+ #include <mutex>
+ #include <ranges>
+ #include <type_traits>
++#include <algorithm>
++#include <array>
++#include <cstdlib>
++#include <limits>
++#include <optional>
++#include <string>
++#include <unordered_map>
+ 
+ namespace mg = mir::graphics;
+ namespace mgl = mir::gl;
+@@ -317,6 +325,468 @@ GLchar const* const invert_src =
+     "   return vec4(1.0 - col[0], 1.0 - col[1], 1.0 - col[2], col[3]);\n"
+     "}\n";
+ 
++/* Umoja: blur behind surfaces that ask for it (ext-background-effect-v1).
++ *
++ * Before a renderable with a blur region is drawn, the part of the frame
++ * behind it is grabbed (glBlitFramebuffer, or glCopyTexSubImage2D on GLES2),
++ * blurred with a few dual-Kawase down/up passes at reduced resolution, and
++ * drawn back over the blur region. The blurred background is weighted by
++ * the surface's own alpha, so rounded corners and soft shadows inside the
++ * region stay unblurred, and by the renderable's alpha so fades work. Then
++ * the surface itself is drawn on top as usual.
++ */
++namespace
++{
++#ifndef GL_READ_FRAMEBUFFER
++#define GL_READ_FRAMEBUFFER 0x8CA8
++#endif
++#ifndef GL_DRAW_FRAMEBUFFER
++#define GL_DRAW_FRAMEBUFFER 0x8CA9
++#endif
++#ifndef GL_READ_FRAMEBUFFER_BINDING
++#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
++#endif
++
++using BlitFramebufferFn = void (*)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
++
++auto blur_env(char const* name, float fallback, float min, float max) -> float
++{
++    if (auto const value = getenv(name))
++    {
++        try
++        {
++            return std::clamp(std::stof(value), min, max);
++        }
++        catch (std::exception const&)
++        {
++        }
++    }
++    return fallback;
++}
++
++auto blur_compile_shader(GLenum type, GLchar const* src) -> GLuint
++{
++    GLuint id = glCreateShader(type);
++    if (!id)
++    {
++        BOOST_THROW_EXCEPTION(mg::gl_error("Failed to create blur shader"));
++    }
++    glShaderSource(id, 1, &src, NULL);
++    glCompileShader(id);
++    GLint ok{0};
++    glGetShaderiv(id, GL_COMPILE_STATUS, &ok);
++    if (!ok)
++    {
++        GLchar log[1024] = "(No log info)";
++        glGetShaderInfoLog(id, sizeof log, NULL, log);
++        glDeleteShader(id);
++        BOOST_THROW_EXCEPTION(std::runtime_error(std::string("Blur shader compile failed: ") + log + " for:\n" + src));
++    }
++    return id;
++}
++
++auto blur_link_program(GLuint vertex, GLuint fragment) -> GLuint
++{
++    GLuint program = glCreateProgram();
++    glAttachShader(program, vertex);
++    glAttachShader(program, fragment);
++    glLinkProgram(program);
++    GLint ok{0};
++    glGetProgramiv(program, GL_LINK_STATUS, &ok);
++    if (!ok)
++    {
++        GLchar log[1024] = "(No log info)";
++        glGetProgramInfoLog(program, sizeof log - 1, NULL, log);
++        log[sizeof log - 1] = '\0';
++        glDeleteProgram(program);
++        BOOST_THROW_EXCEPTION(std::runtime_error(std::string("Linking blur shader failed: ") + log));
++    }
++    return program;
++}
++
++GLchar const* const blur_pass_vertex_src =
++    "attribute vec2 position;\n"
++    "attribute vec2 texcoord;\n"
++    "varying vec2 v_texcoord;\n"
++    "void main() {\n"
++    "    gl_Position = vec4(position, 0.0, 1.0);\n"
++    "    v_texcoord = texcoord;\n"
++    "}\n";
++
++// Dual-Kawase ("dual filter") blur, as in KWin and most compositors.
++GLchar const* const blur_down_src =
++    "#ifdef GL_ES\n"
++    "precision mediump float;\n"
++    "#endif\n"
++    "uniform sampler2D tex;\n"
++    "uniform vec2 halfpixel;\n"
++    "uniform float offset;\n"
++    "varying vec2 v_texcoord;\n"
++    "void main() {\n"
++    "    vec2 uv = v_texcoord;\n"
++    "    vec2 o = halfpixel * offset;\n"
++    "    vec4 sum = texture2D(tex, uv) * 4.0;\n"
++    "    sum += texture2D(tex, uv - o);\n"
++    "    sum += texture2D(tex, uv + o);\n"
++    "    sum += texture2D(tex, uv + vec2(o.x, -o.y));\n"
++    "    sum += texture2D(tex, uv - vec2(o.x, -o.y));\n"
++    "    gl_FragColor = sum / 8.0;\n"
++    "}\n";
++
++GLchar const* const blur_up_src =
++    "#ifdef GL_ES\n"
++    "precision mediump float;\n"
++    "#endif\n"
++    "uniform sampler2D tex;\n"
++    "uniform vec2 halfpixel;\n"
++    "uniform float offset;\n"
++    "varying vec2 v_texcoord;\n"
++    "void main() {\n"
++    "    vec2 uv = v_texcoord;\n"
++    "    vec2 o = halfpixel * offset;\n"
++    "    vec4 sum = texture2D(tex, uv + vec2(-o.x * 2.0, 0.0));\n"
++    "    sum += texture2D(tex, uv + vec2(-o.x, o.y)) * 2.0;\n"
++    "    sum += texture2D(tex, uv + vec2(0.0, o.y * 2.0));\n"
++    "    sum += texture2D(tex, uv + vec2(o.x, o.y)) * 2.0;\n"
++    "    sum += texture2D(tex, uv + vec2(o.x * 2.0, 0.0));\n"
++    "    sum += texture2D(tex, uv + vec2(o.x, -o.y)) * 2.0;\n"
++    "    sum += texture2D(tex, uv + vec2(0.0, -o.y * 2.0));\n"
++    "    sum += texture2D(tex, uv + vec2(-o.x, -o.y)) * 2.0;\n"
++    "    gl_FragColor = sum / 12.0;\n"
++    "}\n";
++
++struct BlurPassProgram
++{
++    explicit BlurPassProgram(GLuint id)
++        : id{id},
++          position{glGetAttribLocation(id, "position")},
++          texcoord{glGetAttribLocation(id, "texcoord")},
++          tex{glGetUniformLocation(id, "tex")},
++          halfpixel{glGetUniformLocation(id, "halfpixel")},
++          offset{glGetUniformLocation(id, "offset")}
++    {
++    }
++
++    ProgramHandle id;
++    GLint position, texcoord, tex, halfpixel, offset;
++};
++
++/// The program that draws the blurred background into the frame: the
++/// renderer's vertex shader, so it lands exactly where the surface does,
++/// and a fragment shader built on the surface texture's sample_to_rgba(),
++/// so it can use the surface's alpha as a mask.
++struct BlurMaskProgram : mg::gl::Program
++{
++    explicit BlurMaskProgram(GLuint handle)
++        : handle{handle},
++          uniforms{handle},
++          blur_tex{glGetUniformLocation(handle, "blur_tex")},
++          blur_box{glGetUniformLocation(handle, "blur_box")},
++          use_alpha_mask{glGetUniformLocation(handle, "use_alpha_mask")}
++    {
++    }
++
++    ProgramHandle handle;
++    mrg::Renderer::Program uniforms;
++    GLint blur_tex, blur_box, use_alpha_mask;
++};
++
++class BlurMaskProgramFactory : public mg::gl::ProgramFactory
++{
++public:
++    // NOTE: This must be called with a current GL context
++    BlurMaskProgramFactory()
++        : vertex_shader{blur_compile_shader(GL_VERTEX_SHADER, vertex_shader_src)}
++    {
++    }
++
++    auto compile_fragment_shader(void const* id, char const* extension_fragment, char const* fragment_fragment)
++        -> mg::gl::Program& override
++    {
++        for (auto const& [cached_id, program] : programs)
++        {
++            if (cached_id == id)
++            {
++                return *program;
++            }
++        }
++
++        std::stringstream fragment;
++        fragment
++            << extension_fragment
++            << "\n"
++            << "#ifdef GL_ES\n"
++               "precision mediump float;\n"
++               "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
++               "#define BLUR_HIGHP highp\n"
++               "#else\n"
++               "#define BLUR_HIGHP mediump\n"
++               "#endif\n"
++               "#else\n"
++               "#define BLUR_HIGHP\n"
++               "#endif\n"
++            << "\n"
++            << fragment_fragment
++            << "\n"
++            << "varying vec2 v_texcoord;\n"
++               "uniform float alpha;\n"
++               "uniform float use_alpha_mask;\n"
++               "uniform sampler2D blur_tex;\n"
++               "uniform BLUR_HIGHP vec4 blur_box;\n"
++               "void main() {\n"
++               // Blur behind the opaque-ish body of the surface only: not
++               // behind its transparent corners or its faint shadow.
++               "    float a = mix(1.0, sample_to_rgba(v_texcoord).a, use_alpha_mask);\n"
++               "    float coverage = smoothstep(0.3, 0.6, a) * alpha;\n"
++               "    BLUR_HIGHP vec2 uv = (gl_FragCoord.xy - blur_box.xy) * blur_box.zw;\n"
++               "    gl_FragColor = vec4(texture2D(blur_tex, uv).rgb, 1.0) * coverage;\n"
++               "}\n";
++
++        GLuint const fragment_shader = blur_compile_shader(GL_FRAGMENT_SHADER, fragment.str().c_str());
++        GLuint program{0};
++        try
++        {
++            program = blur_link_program(vertex_shader, fragment_shader);
++        }
++        catch (...)
++        {
++            glDeleteShader(fragment_shader);
++            throw;
++        }
++        glDeleteShader(fragment_shader);
++
++        programs.emplace_back(id, std::make_unique<BlurMaskProgram>(program));
++        return *programs.back().second;
++    }
++
++private:
++    ShaderHandle const vertex_shader;
++    std::vector<std::pair<void const*, std::unique_ptr<BlurMaskProgram>>> programs;
++};
++
++struct BlurLevel
++{
++    BlurLevel(GLsizei width, GLsizei height)
++        : width{width},
++          height{height},
++          texture{make_texture(width, height)},
++          framebuffer{make_framebuffer(texture)}
++    {
++    }
++
++    static auto make_texture(GLsizei width, GLsizei height) -> GLuint
++    {
++        GLuint tex{0};
++        glGenTextures(1, &tex);
++        glBindTexture(GL_TEXTURE_2D, tex);
++        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++        return tex;
++    }
++
++    static auto make_framebuffer(GLuint tex) -> GLuint
++    {
++        GLint previous{0};
++        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous);
++        GLuint fb{0};
++        glGenFramebuffers(1, &fb);
++        glBindFramebuffer(GL_FRAMEBUFFER, fb);
++        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
++        glBindFramebuffer(GL_FRAMEBUFFER, previous);
++        return fb;
++    }
++
++    GLsizei const width;
++    GLsizei const height;
++    TextureHandle const texture;
++    FramebufferHandle const framebuffer;
++};
++
++/// Blur textures for one surface: levels[0] is half the grabbed box, each
++/// further level half the one before. `grab` holds the full-size copy when
++/// glBlitFramebuffer is not available.
++struct BlurChain
++{
++    GLsizei box_width{0};
++    GLsizei box_height{0};
++    std::optional<TextureHandle> grab;
++    std::vector<std::unique_ptr<BlurLevel>> levels;
++    long long last_used_frame{0};
++};
++}
++
++/// Per-output blur state, owned by the OutputFilter so it lives and dies on
++/// the output's GL context.
++class mrg::Renderer::BackgroundBlur
++{
++public:
++    // NOTE: This must be called with a current GL context
++    BackgroundBlur()
++        : passes{static_cast<int>(blur_env("MIR_BLUR_PASSES", 3, 1, 6))},
++          offset{blur_env("MIR_BLUR_OFFSET", 2.0f, 0.5f, 8.0f)},
++          blit{find_blit()}
++    {
++        ShaderHandle const vertex{blur_compile_shader(GL_VERTEX_SHADER, blur_pass_vertex_src)};
++        ShaderHandle const down_fragment{blur_compile_shader(GL_FRAGMENT_SHADER, blur_down_src)};
++        ShaderHandle const up_fragment{blur_compile_shader(GL_FRAGMENT_SHADER, blur_up_src)};
++        down = std::make_unique<BlurPassProgram>(blur_link_program(vertex, down_fragment));
++        up = std::make_unique<BlurPassProgram>(blur_link_program(vertex, up_fragment));
++        mir::log_info(
++            "Background blur: %d passes, offset %.1f, %s",
++            passes, offset, blit ? "glBlitFramebuffer" : "glCopyTexSubImage2D");
++    }
++
++    /// How far (in framebuffer pixels) the blur reaches outside the region.
++    auto padding() const -> int
++    {
++        return static_cast<int>(std::ceil(offset * static_cast<float>(4 << passes)));
++    }
++
++    /// Grabs `box` (framebuffer pixels, GL's bottom-left origin) from
++    /// `target` and blurs it. Returns the texture holding the result, which
++    /// covers exactly `box`. Leaves `target` bound for drawing.
++    auto blur(void const* id, GLint target, GLint read_target, std::array<GLint, 4> box, long long frame) -> GLuint
++    {
++        auto& chain = chain_for(id, box[2], box[3]);
++        chain.last_used_frame = frame;
++
++        glDisable(GL_BLEND);
++        glDisable(GL_SCISSOR_TEST);
++
++        auto& first = *chain.levels.front();
++        if (blit)
++        {
++            glBindFramebuffer(GL_READ_FRAMEBUFFER, target);
++            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, first.framebuffer);
++            blit(box[0], box[1], box[0] + box[2], box[1] + box[3],
++                 0, 0, first.width, first.height,
++                 GL_COLOR_BUFFER_BIT, GL_LINEAR);
++        }
++        else
++        {
++            glBindFramebuffer(GL_FRAMEBUFFER, target);
++            glActiveTexture(GL_TEXTURE0);
++            glBindTexture(GL_TEXTURE_2D, *chain.grab);
++            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, box[0], box[1], box[2], box[3]);
++            run_pass(*down, *chain.grab, box[2], box[3], first);
++        }
++
++        for (size_t i = 0; i + 1 < chain.levels.size(); ++i)
++        {
++            run_pass(*down, chain.levels[i]->texture, chain.levels[i]->width, chain.levels[i]->height, *chain.levels[i + 1]);
++        }
++        for (size_t i = chain.levels.size() - 1; i > 0; --i)
++        {
++            run_pass(*up, chain.levels[i]->texture, chain.levels[i]->width, chain.levels[i]->height, *chain.levels[i - 1]);
++        }
++
++        if (blit)
++        {
++            glBindFramebuffer(GL_READ_FRAMEBUFFER, read_target);
++            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
++        }
++        else
++        {
++            glBindFramebuffer(GL_FRAMEBUFFER, target);
++        }
++        return first.texture;
++    }
++
++    /// Drop the textures of surfaces that stopped asking for blur.
++    void end_frame(long long frame)
++    {
++        std::erase_if(chains, [frame](auto const& entry) { return frame - entry.second.last_used_frame > 120; });
++    }
++
++    BlurMaskProgramFactory mask_programs;
++
++private:
++    static auto find_blit() -> BlitFramebufferFn
++    {
++        // glBlitFramebuffer is GLES 3.0 (and desktop GL 3.0).
++        auto const version = reinterpret_cast<char const*>(glGetString(GL_VERSION));
++        if (!version)
++        {
++            return nullptr;
++        }
++        std::string const v{version};
++        auto const es = v.find("OpenGL ES ");
++        auto const number = es == std::string::npos ? v : v.substr(es + 10);
++        if (number.empty() || number[0] < '3' || number[0] > '9')
++        {
++            return nullptr;
++        }
++        return reinterpret_cast<BlitFramebufferFn>(eglGetProcAddress("glBlitFramebuffer"));
++    }
++
++    auto chain_for(void const* id, GLsizei width, GLsizei height) -> BlurChain&
++    {
++        auto& chain = chains[id];
++        if (chain.box_width != width || chain.box_height != height || chain.levels.empty())
++        {
++            chain.levels.clear();
++            chain.grab.reset();
++            chain.box_width = width;
++            chain.box_height = height;
++            if (!blit)
++            {
++                GLuint tex{0};
++                glGenTextures(1, &tex);
++                glBindTexture(GL_TEXTURE_2D, tex);
++                // GL_RGB: glCopyTexSubImage2D needs a subset of the
++                // framebuffer's channels, which may not include alpha.
++                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
++                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++                chain.grab.emplace(tex);
++            }
++            for (int level = 1; level <= passes + 1; ++level)
++            {
++                chain.levels.push_back(std::make_unique<BlurLevel>(
++                    std::max<GLsizei>(1, width >> level),
++                    std::max<GLsizei>(1, height >> level)));
++            }
++        }
++        return chain;
++    }
++
++    void run_pass(BlurPassProgram const& program, GLuint source, GLsizei source_width, GLsizei source_height,
++                  BlurLevel const& destination) const
++    {
++        glBindFramebuffer(GL_FRAMEBUFFER, destination.framebuffer);
++        glViewport(0, 0, destination.width, destination.height);
++        glUseProgram(program.id);
++        glActiveTexture(GL_TEXTURE0);
++        glBindTexture(GL_TEXTURE_2D, source);
++        glUniform1i(program.tex, 0);
++        glUniform2f(program.halfpixel, 0.5f / static_cast<float>(source_width), 0.5f / static_cast<float>(source_height));
++        glUniform1f(program.offset, offset);
++
++        // One triangle that covers the whole target.
++        GLfloat const vertices[] = {-1, -1, 3, -1, -1, 3};
++        GLfloat const tex_coords[] = {0, 0, 2, 0, 0, 2};
++        glEnableVertexAttribArray(program.position);
++        glVertexAttribPointer(program.position, 2, GL_FLOAT, GL_FALSE, 0, vertices);
++        glEnableVertexAttribArray(program.texcoord);
++        glVertexAttribPointer(program.texcoord, 2, GL_FLOAT, GL_FALSE, 0, tex_coords);
++        glDrawArrays(GL_TRIANGLES, 0, 3);
++        glDisableVertexAttribArray(program.texcoord);
++        glDisableVertexAttribArray(program.position);
++    }
++
++    int const passes;
++    float const offset;
++    BlitFramebufferFn const blit;
++    std::unique_ptr<BlurPassProgram> down;
++    std::unique_ptr<BlurPassProgram> up;
++    std::unordered_map<void const*, BlurChain> chains;
++};
++
+ class mrg::Renderer::OutputFilter : public mg::gl::OutputSurface
+ {
+ public:
+@@ -422,6 +892,24 @@ public:
+         return output->layout();
+     }
+ 
++    // NOTE: This must be called with a current GL context
++    auto background_blur() -> BackgroundBlur&
++    {
++        if (!blur)
++        {
++            blur = std::make_unique<BackgroundBlur>();
++        }
++        return *blur;
++    }
++
++    void end_frame(long long frame)
++    {
++        if (blur)
++        {
++            blur->end_frame(frame);
++        }
++    }
++
+ private:
+     static GLuint compile_shader(GLenum type, GLchar const* src)
+     {
+@@ -533,6 +1021,8 @@ private:
+     GLint position_attrib;
+     GLint texcoord_attrib;
+     GLint tex_uniform;
++    // Declared last, so it is destroyed before the output and its GL context.
++    std::unique_ptr<BackgroundBlur> blur;
+ };
+ 
+ mrg::Renderer::Program::Program(GLuint program_id)
+@@ -669,10 +1159,19 @@ auto mrg::Renderer::render(mg::RenderableList const& renderables) const -> std::
+     glClear(GL_COLOR_BUFFER_BIT);
+ 
+     ++frameno;
++    bool const blur_wanted = mg::background_blur::any();
+     for (auto const& r : renderables)
+     {
++        if (blur_wanted)
++        {
++            if (auto const region = mg::background_blur::region(r->id()))
++            {
++                draw_background_blur(*r, region.value());
++            }
++        }
+         draw(*r);
+     }
++    output_surface->end_frame(frameno);
+ 
+     auto output = output_surface->commit();
+ 
+@@ -894,6 +1393,203 @@ void mrg::Renderer::draw(mg::Renderable const& renderable) const
+     }
+ }
+ 
++void mrg::Renderer::draw_background_blur(mg::Renderable const& renderable, geom::Rectangles const& region) const
++{
++    auto const surface_rect = renderable.screen_position();
++    auto const clip_area = renderable.clip_area();
++
++    // The region is surface-local and clipped to the surface (and to the
++    // renderable's clip area, if any).
++    std::vector<geom::Rectangle> rects;
++    for (auto const& local : region)
++    {
++        auto rect = local;
++        rect.top_left = rect.top_left + as_displacement(surface_rect.top_left);
++        rect = intersection_of(rect, surface_rect);
++        if (clip_area)
++        {
++            rect = intersection_of(rect, clip_area.value());
++        }
++        if (rect.size.width.as_int() > 0 && rect.size.height.as_int() > 0)
++        {
++            rects.push_back(rect);
++        }
++    }
++    if (rects.empty())
++    {
++        return;
++    }
++
++    auto& blur = output_surface->background_blur();
++
++    // Where the rects land in the framebuffer, in GL window coordinates.
++    std::array<GLint, 4> gl_viewport{};
++    glGetIntegerv(GL_VIEWPORT, gl_viewport.data());
++    auto const to_window = display_transform * screen_to_gl_coords;
++    float min_x = std::numeric_limits<float>::max(), min_y = min_x;
++    float max_x = std::numeric_limits<float>::lowest(), max_y = max_x;
++    for (auto const& rect : rects)
++    {
++        for (auto const& corner : {rect.top_left, rect.top_right(), rect.bottom_left(), rect.bottom_right()})
++        {
++            auto ndc = to_window * glm::vec4{corner.x.as_int(), corner.y.as_int(), 0.0f, 1.0f};
++            if (ndc.w != 0.0f)
++            {
++                ndc /= ndc.w;
++            }
++            float const x = static_cast<float>(gl_viewport[0]) + (ndc.x * 0.5f + 0.5f) * static_cast<float>(gl_viewport[2]);
++            float const y = static_cast<float>(gl_viewport[1]) + (ndc.y * 0.5f + 0.5f) * static_cast<float>(gl_viewport[3]);
++            min_x = std::min(min_x, x);
++            min_y = std::min(min_y, y);
++            max_x = std::max(max_x, x);
++            max_y = std::max(max_y, y);
++        }
++    }
++    auto const output_size = output_surface->size();
++    int const pad = blur.padding();
++    GLint const x0 = std::clamp(static_cast<int>(std::floor(min_x)) - pad, 0, output_size.width.as_int());
++    GLint const y0 = std::clamp(static_cast<int>(std::floor(min_y)) - pad, 0, output_size.height.as_int());
++    GLint const x1 = std::clamp(static_cast<int>(std::ceil(max_x)) + pad, 0, output_size.width.as_int());
++    GLint const y1 = std::clamp(static_cast<int>(std::ceil(max_y)) + pad, 0, output_size.height.as_int());
++    if (x1 - x0 < 2 || y1 - y0 < 2)
++    {
++        return;
++    }
++    std::array<GLint, 4> const box{x0, y0, x1 - x0, y1 - y0};
++
++    GLint target{0}, read_target{0};
++    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &target);
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_target);
++    // GLES2 has no separate read binding (and reports an error, not a value).
++    while (glGetError() != GL_NO_ERROR) {}
++
++    GLuint blurred{0};
++    try
++    {
++        blurred = blur.blur(renderable.id(), target, read_target, box, frameno);
++    }
++    catch (std::exception const&)
++    {
++        report_exception();
++        glBindFramebuffer(GL_FRAMEBUFFER, target);
++        glViewport(gl_viewport[0], gl_viewport[1], gl_viewport[2], gl_viewport[3]);
++        return;
++    }
++    glViewport(gl_viewport[0], gl_viewport[1], gl_viewport[2], gl_viewport[3]);
++
++    // Draw the blurred background over the rects, with the same transform
++    // the surface itself is about to be drawn with.
++    auto const texture = gl_interface->as_texture(renderable.buffer());
++    auto const& program = static_cast<BlurMaskProgram const&>(texture->shader(blur.mask_programs));
++    auto const& prog = program.uniforms;
++
++    glUseProgram(prog.id);
++    for (auto const [index, uniform] : enumerate_with_idx_type<GLint>(prog.tex_uniforms))
++    {
++        if (uniform != -1)
++        {
++            glUniform1i(uniform, index);
++        }
++    }
++    glUniformMatrix4fv(prog.display_transform_uniform, 1, GL_FALSE, glm::value_ptr(display_transform));
++    glUniformMatrix4fv(prog.screen_to_gl_coords_uniform, 1, GL_FALSE, glm::value_ptr(screen_to_gl_coords));
++
++    GLfloat const centre_x = surface_rect.top_left.x.round_to<GLfloat>() + surface_rect.size.width.round_to<GLfloat>() / 2.0f;
++    GLfloat const centre_y = surface_rect.top_left.y.round_to<GLfloat>() + surface_rect.size.height.round_to<GLfloat>() / 2.0f;
++    GLfloat oriented_x = centre_x, oriented_y = centre_y;
++    auto const orientation = renderable.orientation();
++    if (orientation == mir_orientation_left || orientation == mir_orientation_right)
++    {
++        oriented_x = surface_rect.top_left.x.round_to<GLfloat>() + surface_rect.size.height.round_to<GLfloat>() / 2.0f;
++        oriented_y = surface_rect.top_left.y.round_to<GLfloat>() + surface_rect.size.width.round_to<GLfloat>() / 2.0f;
++    }
++    glUniform2f(prog.centre_uniform, centre_x, centre_y);
++    glUniform2f(prog.oriented_centre, oriented_x, oriented_y);
++
++    auto const orientation_transform = glm::mat4(mg::inverse_transformation(orientation));
++    glUniformMatrix4fv(prog.orientation_transform_uniform, 1, GL_FALSE, glm::value_ptr(orientation_transform));
++    glm::mat4 transform = renderable.transformation() * glm::mat4(mg::transformation(renderable.mirror_mode()));
++    if (texture->layout() == mg::gl::Texture::Layout::TopRowFirst)
++    {
++        transform *= glm::mat4{
++            1.0, 0.0, 0.0, 0.0,
++            0.0, -1.0, 0.0, 0.0,
++            0.0, 0.0, 1.0, 0.0,
++            0.0, 0.0, 0.0, 1.0
++        };
++    }
++    glUniformMatrix4fv(prog.transform_uniform, 1, GL_FALSE, glm::value_ptr(transform));
++    if (prog.alpha_uniform >= 0)
++    {
++        glUniform1f(prog.alpha_uniform, renderable.alpha());
++    }
++    glUniform1f(program.use_alpha_mask, renderable.shaped() ? 1.0f : 0.0f);
++    glUniform4f(program.blur_box,
++        static_cast<GLfloat>(box[0]), static_cast<GLfloat>(box[1]),
++        1.0f / static_cast<GLfloat>(box[2]), 1.0f / static_cast<GLfloat>(box[3]));
++
++    // Unit 7 for the blurred background, out of the way of the surface's
++    // own textures (which start at unit 0).
++    glActiveTexture(GL_TEXTURE7);
++    glBindTexture(GL_TEXTURE_2D, blurred);
++    glUniform1i(program.blur_tex, 7);
++    glActiveTexture(GL_TEXTURE0);
++
++    // The vertex shader moves a vertex p to T·O·(p - centre) + oriented
++    // centre. Invert that so each rect ends up where it should on screen,
++    // and give each vertex the texcoord the surface's own quad has there.
++    auto const full = mgl::tessellate_renderable_into_rectangle(renderable, geom::Displacement{0, 0});
++    auto const& top_left = full.vertices[0];
++    auto const& bottom_right = full.vertices[3];
++    float const quad_w = bottom_right.position[0] - top_left.position[0];
++    float const quad_h = bottom_right.position[1] - top_left.position[1];
++    auto const inverse = glm::inverse(transform * orientation_transform);
++    auto const pre_transform = [&](float x, float y) -> mgl::Vertex
++        {
++            auto const v = inverse * glm::vec4{x - oriented_x, y - oriented_y, 0.0f, 1.0f};
++            float const px = v.x + centre_x;
++            float const py = v.y + centre_y;
++            float const fx = quad_w != 0.0f ? (px - top_left.position[0]) / quad_w : 0.0f;
++            float const fy = quad_h != 0.0f ? (py - top_left.position[1]) / quad_h : 0.0f;
++            return mgl::Vertex{
++                {px, py, 0.0f},
++                {top_left.texcoord[0] + fx * (bottom_right.texcoord[0] - top_left.texcoord[0]),
++                 top_left.texcoord[1] + fy * (bottom_right.texcoord[1] - top_left.texcoord[1])}};
++        };
++
++    glEnable(GL_BLEND);
++    // Over the frame by coverage; leave the frame's alpha alone.
++    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
++    glEnableVertexAttribArray(prog.position_attr);
++    glEnableVertexAttribArray(prog.texcoord_attr);
++    try
++    {
++        texture->bind();
++        for (auto const& rect : rects)
++        {
++            float const left = rect.left().as_int();
++            float const top = rect.top().as_int();
++            float const right = rect.right().as_int();
++            float const bottom = rect.bottom().as_int();
++            std::array<mgl::Vertex, 4> const vertices{
++                pre_transform(left, top),
++                pre_transform(left, bottom),
++                pre_transform(right, top),
++                pre_transform(right, bottom)};
++            glVertexAttribPointer(prog.position_attr, 3, GL_FLOAT, GL_FALSE, sizeof(mgl::Vertex), &vertices[0].position);
++            glVertexAttribPointer(prog.texcoord_attr, 2, GL_FLOAT, GL_FALSE, sizeof(mgl::Vertex), &vertices[0].texcoord);
++            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++        }
++        texture->add_syncpoint();
++    }
++    catch (std::exception const&)
++    {
++        report_exception();
++    }
++    glDisableVertexAttribArray(prog.texcoord_attr);
++    glDisableVertexAttribArray(prog.position_attr);
++}
++
+ void mrg::Renderer::set_viewport(geometry::Rectangle const& rect)
+ {
+     if (rect == viewport)
+--- a/src/platform/symbols.map
++++ b/src/platform/symbols.map
+@@ -224,3 +224,11 @@ MIR_PLATFORM_2.24 {
+  };
+  local: *;
+ };
++
++MIR_PLATFORM_2.28_umoja {
++ global:
++  extern "C++" {
++    mir::graphics::background_blur::*;
++  };
++} MIR_PLATFORM_2.24;
++
+--- a/src/server/frontend_wayland/CMakeLists.txt
++++ b/src/server/frontend_wayland/CMakeLists.txt
+@@ -50,6 +50,7 @@ set(
+   input_method_v2.cpp           input_method_v2.h
+   input_method_grab_keyboard_v2.cpp input_method_grab_keyboard_v2.h
+   idle_inhibit_v1.cpp           idle_inhibit_v1.h
++  background_effect_v1.cpp      background_effect_v1.h
+   wlr_screencopy_v1.cpp         wlr_screencopy_v1.h
+   ext_image_capture_v1.cpp      ext_image_capture_v1.h
+   text_input_v1.cpp             text_input_v1.h
+@@ -116,6 +117,8 @@ add_library(mirfrontend-wayland OBJECT
+   ${WAYLAND_SOURCES}
+ )
+ 
++mir_generate_protocol_wrapper(mirfrontend-wayland "ext_" ext-background-effect-v1.xml)
++
+ target_include_directories(mirfrontend-wayland
+   PUBLIC
+     ${PROJECT_SOURCE_DIR}/include/server
+--- /dev/null
++++ b/src/server/frontend_wayland/background_effect_v1.cpp
+@@ -0,0 +1,141 @@
++/*
++ * Copyright © Umoja developers
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 3,
++ * as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "background_effect_v1.h"
++
++#include "wl_region.h"
++#include "wl_surface.h"
++
++#include <mir/graphics/background_blur.h>
++#include <mir/wayland/protocol_error.h>
++#include <mir/wayland/weak.h>
++
++#include <unordered_set>
++
++namespace mf = mir::frontend;
++namespace mg = mir::graphics;
++namespace mw = mir::wayland;
++namespace geom = mir::geometry;
++
++namespace
++{
++// Surfaces that already have an effect object (background_effect_exists).
++// Only touched on the Wayland thread.
++std::unordered_set<mf::WlSurface const*> surfaces_with_effect;
++
++class BackgroundEffectSurfaceV1 : public mw::BackgroundEffectSurfaceV1
++{
++public:
++    BackgroundEffectSurfaceV1(wl_resource* resource, mf::WlSurface* surface)
++        : mw::BackgroundEffectSurfaceV1{resource, Version<1>()},
++          surface{surface},
++          raw_surface{surface},
++          stream{surface->stream.get()},
++          surface_destroyed_id{surface->add_destroy_listener([this]() { surface_gone(); })}
++    {
++        surfaces_with_effect.insert(raw_surface);
++    }
++
++    ~BackgroundEffectSurfaceV1()
++    {
++        if (surface)
++        {
++            surface.value().remove_destroy_listener(surface_destroyed_id);
++            surface_gone();
++        }
++    }
++
++private:
++    void set_blur_region(std::optional<wl_resource*> const& region) override
++    {
++        if (!surface)
++        {
++            throw mw::ProtocolError{
++                resource, Error::surface_destroyed, "ext_background_effect_surface_v1 used after its surface was destroyed"};
++        }
++
++        // The protocol makes the region double-buffered state. Applying it
++        // straight away is close enough: clients set it and commit together,
++        // and the renderer clips it to whatever the surface is showing.
++        std::optional<geom::Rectangles> blur;
++        if (region)
++        {
++            geom::Rectangles rects;
++            for (auto const& rect : mf::WlRegion::from(region.value())->rectangle_vector())
++            {
++                rects.add(rect);
++            }
++            blur = rects;
++        }
++        mg::background_blur::set_region(stream, blur);
++    }
++
++    void surface_gone()
++    {
++        mg::background_blur::set_region(stream, std::nullopt);
++        surfaces_with_effect.erase(raw_surface);
++        surface = {};
++    }
++
++    mw::Weak<mf::WlSurface> surface;
++    mf::WlSurface const* const raw_surface;
++    void const* const stream;
++    mw::DestroyListenerId const surface_destroyed_id;
++};
++
++class BackgroundEffectManagerV1 : public mw::BackgroundEffectManagerV1
++{
++public:
++    BackgroundEffectManagerV1(wl_resource* resource)
++        : mw::BackgroundEffectManagerV1{resource, Version<1>()}
++    {
++        send_capabilities_event(Capability::blur);
++    }
++
++private:
++    void get_background_effect(wl_resource* id, wl_resource* surface) override
++    {
++        auto const wl_surface = mf::WlSurface::from(surface);
++        if (surfaces_with_effect.contains(wl_surface))
++        {
++            throw mw::ProtocolError{
++                resource, Error::background_effect_exists, "Surface already has a background effect object"};
++        }
++        new BackgroundEffectSurfaceV1{id, wl_surface};
++    }
++};
++
++class BackgroundEffectManagerV1Global : public mw::BackgroundEffectManagerV1::Global
++{
++public:
++    BackgroundEffectManagerV1Global(wl_display* display)
++        : Global{display, Version<1>()}
++    {
++    }
++
++private:
++    void bind(wl_resource* new_resource) override
++    {
++        new BackgroundEffectManagerV1{new_resource};
++    }
++};
++}
++
++auto mf::create_background_effect_manager_v1(wl_display* display)
++    -> std::shared_ptr<mw::BackgroundEffectManagerV1::Global>
++{
++    return std::make_shared<BackgroundEffectManagerV1Global>(display);
++}
+--- /dev/null
++++ b/src/server/frontend_wayland/background_effect_v1.h
+@@ -0,0 +1,35 @@
++/*
++ * Copyright © Umoja developers
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 3,
++ * as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef MIR_FRONTEND_BACKGROUND_EFFECT_V1_H_
++#define MIR_FRONTEND_BACKGROUND_EFFECT_V1_H_
++
++#include "ext-background-effect-v1_wrapper.h"
++
++#include <memory>
++
++namespace mir
++{
++namespace frontend
++{
++/// ext-background-effect-v1: clients ask for the background behind (part
++/// of) a surface to be blurred. The GL renderer does the blurring.
++auto create_background_effect_manager_v1(wl_display* display)
++    -> std::shared_ptr<wayland::BackgroundEffectManagerV1::Global>;
++}
++}
++
++#endif // MIR_FRONTEND_BACKGROUND_EFFECT_V1_H_
+--- a/src/server/frontend_wayland/wayland_default_configuration.cpp
++++ b/src/server/frontend_wayland/wayland_default_configuration.cpp
+@@ -30,6 +30,7 @@
+ #include "foreign_toplevel_manager_v1.h"
+ #include "foreign_toplevel_list_v1.h"
+ #include "idle_inhibit_v1.h"
++#include "background_effect_v1.h"
+ #include "input_method_v1.h"
+ #include "input_method_v2.h"
+ #include "layer_shell_v1.h"
+@@ -292,6 +293,10 @@ std::vector<ExtensionBuilder> const internal_extension_builders = {
+                     ctx.display,
+                     ctx.action_group_manager);
+         }),
++    make_extension_builder<mw::BackgroundEffectManagerV1>([](auto const& ctx)
++        {
++            return mf::create_background_effect_manager_v1(ctx.display);
++        }),
+ };
+ 
+ ExtensionBuilder const xwayland_builder {
+--- /dev/null
++++ b/wayland-protocols/ext-background-effect-v1.xml
+@@ -0,0 +1,129 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="ext_background_effect_v1">
++  <copyright>
++    Copyright (C) 2015 Martin Gräßlin
++    Copyright (C) 2015 Marco Martin
++    Copyright (C) 2020 Vlad Zahorodnii
++    Copyright (C) 2024 Xaver Hugl
++
++    Permission is hereby granted, free of charge, to any person obtaining a
++    copy of this software and associated documentation files (the "Software"),
++    to deal in the Software without restriction, including without limitation
++    the rights to use, copy, modify, merge, publish, distribute, sublicense,
++    and/or sell copies of the Software, and to permit persons to whom the
++    Software is furnished to do so, subject to the following conditions:
++
++    The above copyright notice and this permission notice (including the next
++    paragraph) shall be included in all copies or substantial portions of the
++    Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++  </copyright>
++
++  <interface name="ext_background_effect_manager_v1" version="1">
++    <description summary="background effect factory">
++      This protocol provides a way to improve visuals of translucent surfaces
++      by applying effects like blur to the background behind them.
++
++      The capabilities are send when the global is bound, and every time they
++      change. Note that when the capability goes away, the corresponding effect
++      is no longer applied by the compositor, even if it was set before.
++
++      Warning! The protocol described in this file is currently in the testing
++      phase. Backward compatible changes may be added together with the
++      corresponding interface version bump. Backward incompatible changes can
++      only be done by creating a new major version of the extension.
++    </description>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy the background effect manager">
++        Informs the server that the client will no longer be using this
++        protocol object. Existing objects created by this object are not
++        affected.
++      </description>
++    </request>
++
++    <enum name="error">
++      <entry name="background_effect_exists" value="0"
++             summary="the surface already has a background effect object"/>
++    </enum>
++
++    <enum name="capability" bitfield="true">
++      <entry name="blur" value="1"
++             summary="the compositor supports applying blur"/>
++    </enum>
++
++    <event name="capabilities">
++      <description summary="capabilities of the compositor"/>
++      <arg name="flags" type="uint" enum="capability"/>
++    </event>
++
++    <request name="get_background_effect">
++      <description summary="get a background effects object">
++        Instantiate an interface extension for the given wl_surface to add
++        effects like blur for the background behind it.
++
++        If the given wl_surface already has a ext_background_effect_surface_v1
++        object associated, the background_effect_exists protocol error will be
++        raised.
++      </description>
++      <arg name="id" type="new_id" interface="ext_background_effect_surface_v1"
++           summary="the new ext_background_effect_surface_v1 object"/>
++      <arg name="surface" type="object" interface="wl_surface"
++           summary="the surface"/>
++    </request>
++  </interface>
++
++  <interface name="ext_background_effect_surface_v1" version="1">
++    <description summary="background effects for a surface">
++      The background effect object provides a way to specify a region behind
++      a surface that should have background effects like blur applied.
++
++      If the wl_surface associated with the ext_background_effect_surface_v1
++      object has been destroyed, this object becomes inert.
++    </description>
++
++    <request name="destroy" type="destructor">
++      <description summary="release the blur object">
++        Informs the server that the client will no longer be using this protocol
++        object. The effect regions will be removed on the next commit.
++      </description>
++    </request>
++
++    <enum name="error">
++      <entry name="surface_destroyed" value="0"
++             summary="the associated surface has been destroyed"/>
++    </enum>
++
++    <request name="set_blur_region">
++      <description summary="set blur region">
++        This request sets the region of the surface that will have its
++        background blurred.
++
++        The blur region is specified in the surface-local coordinates, and
++        clipped by the compositor to the surface size.
++
++        The initial value for the blur region is empty. Setting the pending
++        blur region has copy semantics, and the wl_region object can be
++        destroyed immediately. A NULL wl_region removes the effect.
++
++        The blur region is double-buffered state, and will be applied on
++        the next wl_surface.commit.
++
++        The blur algorithm is subject to compositor policies.
++
++        If the associated surface has been destroyed, the surface_destroyed
++        error will be raised.
++      </description>
++      <arg name="region" type="object" interface="wl_region" allow-null="true"
++           summary="blur region of the surface"/>
++    </request>
++
++  </interface>
++</protocol>

@@ -27,6 +27,7 @@ pub fn button() -> gtk::MenuButton {
         .has_arrow(false)
         .build();
     crate::menu_gap::below_bar(&popover);
+    umoja_common::blur::blur_behind(&popover);
     let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     icons.add_css_class("system-status");
     let (net, vpn) = network::indicators();

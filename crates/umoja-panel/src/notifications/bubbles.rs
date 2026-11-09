@@ -50,6 +50,7 @@ impl Bubbles {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-notifications");
+        umoja_common::blur::blur_behind(&window);
         window.set_keyboard_mode(KeyboardMode::None);
         // A fixed-size surface at the top center, under the clock and the
         // notification list, as GNOME places its banners. Anchored to the

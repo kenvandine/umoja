@@ -83,6 +83,7 @@ impl ClockButton {
             .has_arrow(false)
             .build();
         crate::menu_gap::below_bar(&popover);
+        umoja_common::blur::blur_behind(&popover);
         {
             let dot = dot.clone();
             let list = list.clone();

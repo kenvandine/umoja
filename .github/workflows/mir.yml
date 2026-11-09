@@ -66,6 +66,9 @@ jobs:
           mv "$RUNNER_TEMP"/mir/*.deb dist/
           dpkg-deb -x dist/mir-platform-input-evdev*_amd64.deb "$RUNNER_TEMP/evdev"
           find "$RUNNER_TEMP/evdev" -name 'input-evdev.so*' -type f -exec grep -c mir_touchpad_gesture_hook {} +
+          # Background blur (3004): the renderer's region table is exported.
+          dpkg-deb -x dist/libmirplatform[0-9]*_amd64.deb "$RUNNER_TEMP/platform"
+          find "$RUNNER_TEMP/platform" -name 'libmirplatform.so.*' -type f -exec grep -c background_blur {} +
 
       - uses: actions/upload-artifact@v4
         with:

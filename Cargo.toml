@@ -23,6 +23,7 @@ repository = "https://github.com/kenvandine/umoja"
 umoja-common = { path = "crates/umoja-common" }
 
 gtk4 = { version = "0.9", features = ["v4_16"] }
+gdk4-wayland = { version = "0.9", features = ["wayland_crate"] }
 libadwaita = { version = "0.7", features = ["v1_6"] }
 gtk4-layer-shell = "0.4"
 gtk4-session-lock = "0.1"
@@ -41,6 +42,10 @@ libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wayland-client = "0.31"
+# dlopen: gdk4-wayland needs the system libwayland backend, but linking
+# libwayland-client directly would put it ahead of gtk4-layer-shell, which
+# must come first or layer surfaces fall back to plain toplevels.
+wayland-backend = { version = "0.3", features = ["dlopen"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols = { version = "0.32.6", features = ["client", "staging"] }
 cc = "1.1"

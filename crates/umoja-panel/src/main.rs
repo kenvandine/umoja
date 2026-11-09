@@ -95,6 +95,7 @@ fn build(app: &adw::Application) {
         window.set_anchor(edge, true);
     }
     window.auto_exclusive_zone_enable();
+    umoja_common::blur::blur_behind(&window);
 
     let bar = gtk::CenterBox::new();
     bar.set_start_widget(Some(&activities_button()));
