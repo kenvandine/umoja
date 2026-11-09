@@ -1,3 +1,13 @@
+umoja-desktop (2026.46.3) stonking; urgency=medium
+
+  * Fix the panel and dock crashing in a loop (black screen) on GTK 4.24,
+    which handles background blur itself; blur is now requested through
+    CSS backdrop-filter. The panel, dock, menus, bubbles and OSD are more
+    see-through so the blur shows. Power Off asks for confirmation with
+    gnome-shell's end-session dialog.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 13:21:07 +0000
+
 umoja-desktop (2026.46.2) stonking; urgency=medium
 
   * New look: the panel, its menus, the OSD, notification bubbles, the
