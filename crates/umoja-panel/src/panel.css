@@ -2,8 +2,8 @@
    flat, dark, slightly see-through surface (the notification bubble's),
    whatever Settings > Appearance says (main.rs forces the dark scheme).
    Coloured bits follow the GNOME accent color via @accent_bg_color. */
-@define-color shell_bg rgba(22, 22, 24, 0.86);
-@define-color shell_bar_bg rgba(22, 22, 24, 0.80);
+@define-color shell_bg rgba(22, 22, 24, 0.66);
+@define-color shell_bar_bg rgba(22, 22, 24, 0.60);
 @define-color shell_hairline alpha(#ffffff, 0.08);
 @define-color shell_fill alpha(#ffffff, 0.08);
 @define-color shell_fill_hover alpha(#ffffff, 0.14);

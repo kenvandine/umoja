@@ -1,7 +1,7 @@
 /* Same flat, dark, slightly see-through surface as the panel and the
    notification bubbles (panel.css); always dark (main.rs forces the dark
    scheme). The running dots follow the GNOME accent color. */
-@define-color shell_bg rgba(22, 22, 24, 0.86);
+@define-color shell_bg rgba(22, 22, 24, 0.66);
 @define-color shell_hairline alpha(#ffffff, 0.08);
 @define-color shell_fill alpha(#ffffff, 0.08);
 @define-color shell_fill_hover alpha(#ffffff, 0.14);
