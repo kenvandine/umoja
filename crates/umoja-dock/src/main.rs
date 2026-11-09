@@ -45,6 +45,8 @@ struct Config {
     default_windows_preview_to_open: bool,
     /// Auto-hide and intellihide, used when `fixed` is off.
     hide: autohide::HideConfig,
+    /// isolate-monitors: each dock shows only its own monitor's windows.
+    isolate_monitors: bool,
 }
 
 impl Config {
@@ -65,6 +67,7 @@ impl Config {
                 false,
             ),
             hide: autohide::HideConfig::load(),
+            isolate_monitors: gs::get_bool(d, "isolate-monitors", false),
         }
     }
 }
@@ -75,6 +78,10 @@ struct Dock {
     config: RefCell<Config>,
     /// Every window the tracker knows, shared by the docks on each monitor.
     windows: Rc<RefCell<BTreeMap<WindowId, WindowInfo>>>,
+    /// The monitor this dock is on.
+    monitor: gtk::gdk::Monitor,
+    /// Which monitors each window is on (see placement::Homes).
+    homes: Rc<placement::Homes>,
     commands: Option<async_channel::Sender<Command>>,
     /// A menu or window list is open. Rebuilding would destroy the button it
     /// hangs off (and close it), so rebuilds wait until it closes.
@@ -120,6 +127,7 @@ fn build(app: &adw::Application) {
 /// The state every dock shares, whichever monitor it is on.
 struct Shared {
     windows: Rc<RefCell<BTreeMap<WindowId, WindowInfo>>>,
+    homes: Rc<placement::Homes>,
     commands: Option<async_channel::Sender<Command>>,
     entries: Rc<launcher_entry::Entries>,
 }
@@ -146,6 +154,8 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
         list,
         config: RefCell::new(Config::load()),
         windows: shared.windows.clone(),
+        monitor: monitor.clone(),
+        homes: shared.homes.clone(),
         commands: shared.commands.clone(),
         menu_open: Cell::new(false),
         rebuild_pending: Cell::new(false),
@@ -296,7 +306,11 @@ impl Dock {
             .into_iter()
             .map(|a| (a, true, Vec::new()))
             .collect();
-        for w in windows.values() {
+        let isolate = cfg.isolate_monitors;
+        for w in windows
+            .values()
+            .filter(|w| !isolate || self.homes.shows_on(w.id, &self.monitor))
+        {
             let key = launcher::app_for_window(&w.app_id).map(|a| launcher::key_for(&a));
             match entries
                 .iter_mut()

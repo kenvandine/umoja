@@ -9,6 +9,11 @@
 //!   back to the primary monitor.
 //! * `preferred-monitor`: the older index form (-2 primary, else an index).
 //!
+//! * `isolate-monitors`: each dock lists only the windows on its monitor.
+//!   Foreign-toplevel handles say nothing about outputs under Mir, so
+//!   window positions come from `org.umoja.Compositor.GetWindows`, matched
+//!   to the dock's windows by app id and title (see [`Homes`]).
+//!
 //! The docks follow hotplug, the primary monitor changing (Settings ›
 //! Displays) and these keys, live.
 
@@ -18,11 +23,13 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use tracker::Event;
+use tracker::{WindowId, WindowInfo};
 use umoja_common::gsettings as gs;
-use umoja_common::{monitors, screen};
+use umoja_common::{dbus, monitors, screen};
 
 pub struct Docks {
     app: adw::Application,
@@ -56,6 +63,7 @@ impl Docks {
             app: app.clone(),
             shared: Shared {
                 windows: Rc::default(),
+                homes: Rc::default(),
                 commands: tracker.as_ref().map(|t| t.commands.clone()),
                 entries,
             },
@@ -96,6 +104,8 @@ impl Docks {
                     for d in all() {
                         d.rebuild();
                     }
+                    // A new window lands on its monitor's dock promptly.
+                    refresh_homes();
                 }
             });
         }
@@ -113,6 +123,10 @@ impl Docks {
 
         monitors::connect_changed(sync);
         docks.sync_now();
+        glib::timeout_add_local(HOMES_POLL, || {
+            refresh_homes();
+            glib::ControlFlow::Continue
+        });
     }
 
     /// Add and remove docks to match the monitors and settings.
@@ -220,6 +234,139 @@ fn pick(
     vec![by_name.or(by_index).unwrap_or(primary)]
 }
 
+/// How often window positions are re-read while isolate-monitors is on
+/// (GetWindows has no change signal; windows get dragged between monitors).
+const HOMES_POLL: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Which monitors (connectors) each window is on, for isolate-monitors.
+/// A window with no entry yet shows on every dock.
+#[derive(Default)]
+pub struct Homes {
+    map: RefCell<HashMap<WindowId, Vec<String>>>,
+    in_flight: Cell<bool>,
+}
+
+impl Homes {
+    pub fn shows_on(&self, id: WindowId, monitor: &gdk::Monitor) -> bool {
+        let Some(here) = monitor.connector() else {
+            return true;
+        };
+        match self.map.borrow().get(&id) {
+            Some(on) => on.iter().any(|c| monitors::same_connector(c, &here)),
+            None => true,
+        }
+    }
+}
+
+/// A window as GetWindows reports it: app id, title, centre point.
+struct Placed {
+    app_id: String,
+    title: String,
+    centre: (i32, i32),
+}
+
+/// Re-read where windows are and rebuild the docks if any moved monitor.
+fn refresh_homes() {
+    let Some(docks) = DOCKS.with(|d| d.borrow().clone()) else {
+        return;
+    };
+    if !docks
+        .docks
+        .borrow()
+        .iter()
+        .any(|(_, d)| d.config.borrow().isolate_monitors)
+    {
+        return;
+    }
+    let homes = docks.shared.homes.clone();
+    if homes.in_flight.replace(true) {
+        return;
+    }
+    glib::spawn_future_local(async move {
+        let placed = fetch_placed().await;
+        homes.in_flight.set(false);
+        let Some(placed) = placed else { return };
+        let geometry: Vec<(String, gdk::Rectangle)> = monitors::all()
+            .iter()
+            .filter_map(|m| Some((m.connector()?.to_string(), m.geometry())))
+            .collect();
+        let new = {
+            let windows = docks.shared.windows.borrow();
+            match_homes(windows.values(), &placed, &geometry)
+        };
+        if *homes.map.borrow() != new {
+            *homes.map.borrow_mut() = new;
+            for d in all() {
+                d.rebuild();
+            }
+        }
+    });
+}
+
+/// Each window's monitors: those holding a GetWindows entry with the same
+/// app id and title (or, with none, the same app id). Two identical windows
+/// on different monitors can't be told apart, so both show on both docks.
+fn match_homes<'a>(
+    windows: impl Iterator<Item = &'a WindowInfo>,
+    placed: &[Placed],
+    geometry: &[(String, gdk::Rectangle)],
+) -> HashMap<WindowId, Vec<String>> {
+    let monitor_of = |(x, y): (i32, i32)| {
+        geometry
+            .iter()
+            .find(|(_, g)| {
+                x >= g.x() && y >= g.y() && x < g.x() + g.width() && y < g.y() + g.height()
+            })
+            .map(|(c, _)| c.clone())
+    };
+    let mut out = HashMap::new();
+    for w in windows {
+        let same_app = || placed.iter().filter(|p| p.app_id == w.app_id);
+        let mut candidates: Vec<&Placed> = same_app().filter(|p| p.title == w.title).collect();
+        if candidates.is_empty() {
+            candidates = same_app().collect();
+        }
+        let mut on: Vec<String> = candidates
+            .iter()
+            .filter_map(|p| monitor_of(p.centre))
+            .collect();
+        on.sort_unstable();
+        on.dedup();
+        if !on.is_empty() {
+            out.insert(w.id, on);
+        }
+    }
+    out
+}
+
+async fn fetch_placed() -> Option<Vec<Placed>> {
+    let conn = gio::bus_get_future(gio::BusType::Session).await.ok()?;
+    let v = conn
+        .call_future(
+            Some(dbus::COMPOSITOR_BUS_NAME),
+            dbus::COMPOSITOR_OBJECT_PATH,
+            dbus::COMPOSITOR_INTERFACE,
+            "GetWindows",
+            None,
+            Some(glib::VariantTy::new("(a(tssiiiiu))").unwrap()),
+            gio::DBusCallFlags::NONE,
+            1000,
+        )
+        .await
+        .map_err(|e| tracing::debug!(error = %e, "GetWindows failed"))
+        .ok()?;
+    let (rows,) = v.get::<(Vec<(u64, String, String, i32, i32, i32, i32, u32)>,)>()?;
+    Some(
+        rows.into_iter()
+            .map(|(_, app_id, title, x, y, w, h, _)| Placed {
+                app_id,
+                title,
+                centre: (x + w / 2, y + h / 2),
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::pick;
@@ -245,5 +392,53 @@ mod tests {
         assert_eq!(pick(false, "primary", 0, &two, Some(1)), vec![0]);
         assert_eq!(pick(false, "primary", 5, &two, Some(1)), vec![1]);
         assert!(pick(false, "primary", -2, &[], None).is_empty());
+    }
+
+    #[test]
+    fn windows_belong_to_the_monitor_under_their_centre() {
+        use super::{Placed, match_homes};
+        use crate::tracker::WindowInfo;
+        let geometry = vec![
+            (
+                "eDP-1".to_string(),
+                gtk4::gdk::Rectangle::new(0, 0, 1728, 1080),
+            ),
+            (
+                "HDMI-A-1".to_string(),
+                gtk4::gdk::Rectangle::new(1728, 0, 2560, 1440),
+            ),
+        ];
+        let win = |id, app: &str, title: &str| WindowInfo {
+            id,
+            app_id: app.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let at = |app: &str, title: &str, x| Placed {
+            app_id: app.into(),
+            title: title.into(),
+            centre: (x, 500),
+        };
+        let windows = [
+            win(1, "firefox", "News"),
+            win(2, "firefox", "Mail"),
+            win(3, "term", "ken@umoja: ~"),
+            win(4, "term", "ken@umoja: ~"),
+            win(5, "new", "Opening"),
+        ];
+        let placed = [
+            at("firefox", "News", 100),
+            at("firefox", "Mail", 2000),
+            at("term", "ken@umoja: ~", 100),
+            at("term", "ken@umoja: ~", 3000),
+        ];
+        let homes = match_homes(windows.iter(), &placed, &geometry);
+        assert_eq!(homes[&1], vec!["eDP-1".to_string()]);
+        assert_eq!(homes[&2], vec!["HDMI-A-1".to_string()]);
+        // Identical windows on two monitors show on both docks.
+        assert_eq!(homes[&3], vec!["HDMI-A-1".to_string(), "eDP-1".to_string()]);
+        assert_eq!(homes[&3], homes[&4]);
+        // Not reported yet: no entry, so every dock shows it.
+        assert!(!homes.contains_key(&5));
     }
 }
