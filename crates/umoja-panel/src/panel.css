@@ -319,3 +319,10 @@ window.umoja-polkit {
 window.umoja-curtain {
   background-color: #000000;
 }
+/* Myna dictation: GNOME Shell's privacy-indicator orange while recording. */
+window.umoja-panel button.myna-indicator {
+  padding: 0 8px;
+}
+window.umoja-panel button.myna-indicator.recording {
+  color: #f99b11;
+}

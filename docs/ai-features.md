@@ -9,8 +9,13 @@ By default all of it runs on your computer, on Umoja's own copy of
 cloud model if you prefer; see [Using a cloud model](#using-a-cloud-model)
 and [Privacy](#privacy).
 
-Voice dictation is handled by Myna, not by Umoja. The overlay only has a
-button for it (and **Super+D**); see Myna's own documentation for setup.
+Voice dictation is handled by Myna, not by Umoja. Set it up with Myna
+Settings (`myna-config`), which binds its shortcut (**Super+J** by default)
+as a GNOME custom shortcut; Umoja runs GNOME custom shortcuts just as
+Ubuntu's GNOME session does, so whatever key Myna Settings chooses works
+here. While Myna records, a microphone shows in the top bar (click it to
+stop) and Myna's own pill with the voice wave shows at the bottom of the
+screen, as in Ubuntu. The overlay's search box also has a microphone button.
 
 ## Contents
 
@@ -385,11 +390,12 @@ From a terminal, `umoja-files --search "lease pdf"` searches the index.
 | **Super** | Open the overlay: search apps or ask the assistant |
 | **Super+Shift+A** | Ask about the selected text or the current window |
 | **Super+Shift+V** | Show the clipboard history |
-| **Super+D** | Start or stop Myna dictation |
+| **Super+J** | Start or stop Myna dictation (set in Myna Settings) |
 | **Escape** | Close the overlay |
 
-The three Umoja shortcuts can be changed with the `ask-about-screen-hotkey`,
-`clipboard-history-hotkey` and `dictation-hotkey` keys below.
+The two Umoja shortcuts can be changed with the `ask-about-screen-hotkey`
+and `clipboard-history-hotkey` keys below. Myna's shortcut is changed in
+Myna Settings.
 
 ## Settings reference
 
@@ -407,7 +413,7 @@ All in the `org.umoja.shell` schema, for example
 | `file-search-embedding-model` | `'nomic-embed-text-v1-GGUF'` | Embedding model for file search; changing it rebuilds the index |
 | `ask-about-screen-hotkey` | `['<Super><Shift>a']` | Ask about the screen |
 | `clipboard-history-hotkey` | `['<Super><Shift>v']` | Clipboard history |
-| `dictation-hotkey` | `['<Super>d']` | Myna dictation |
+| `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |
 
 The embedded Lemonade server's port and memory limits are covered in
 [Embedded Lemonade](../README.md#embedded-lemonade) in the README.

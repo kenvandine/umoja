@@ -103,7 +103,11 @@ pub extern "C" fn umoja_tiling_resized(
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_handle_action(action: u32) {
     guard("handle_action", (), || {
-        session::dispatch(Action::from_u32(action))
+        if action >= input::CUSTOM_BASE {
+            input::run_custom(action)
+        } else {
+            session::dispatch(Action::from_u32(action))
+        }
     })
 }
 

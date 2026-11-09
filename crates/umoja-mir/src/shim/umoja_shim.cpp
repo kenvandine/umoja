@@ -1160,6 +1160,12 @@ private:
             return true;
         }
 
+        // GNOME custom shortcuts (Myna's dictation key among them).
+        if (action >= UMOJA_ACTION_CUSTOM_BASE) {
+            umoja_handle_action(action);
+            return true;
+        }
+
         switch (action) {
         case UMOJA_ACTION_TOGGLE_OVERLAY:
         case UMOJA_ACTION_TOGGLE_OVERVIEW:

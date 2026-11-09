@@ -15,6 +15,7 @@ mod launch;
 mod lock;
 mod login;
 mod menu_api;
+mod myna;
 mod network;
 mod notifications;
 mod polkit;
@@ -51,6 +52,8 @@ thread_local! {
         const { std::cell::OnceCell::new() };
     static NOTIFICATIONS: std::cell::OnceCell<std::rc::Rc<notifications::Center>> =
         const { std::cell::OnceCell::new() };
+    static MYNA: std::cell::OnceCell<std::rc::Rc<myna::Myna>> =
+        const { std::cell::OnceCell::new() };
 }
 
 fn build(app: &adw::Application) {
@@ -80,6 +83,9 @@ fn build(app: &adw::Application) {
     bar.set_center_widget(Some(&clock));
 
     let end = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // Myna's recording indicator, left of the tray like GNOME's privacy
+    // indicators; the same object hosts Myna's HUD pill.
+    end.append(&MYNA.with(|m| m.get_or_init(myna::Myna::start).widget()));
     end.append(&sni::Tray::start().widget());
     let quick = quick_settings::button();
     end.append(&quick);

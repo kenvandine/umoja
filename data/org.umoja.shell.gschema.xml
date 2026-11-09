@@ -61,8 +61,13 @@
       </description>
     </key>
     <key name="dictation-hotkey" type="as">
-      <default>['&lt;Super&gt;d']</default>
-      <summary>Toggle Myna voice dictation</summary>
+      <default>[]</default>
+      <summary>Extra shortcut to toggle Myna voice dictation</summary>
+      <description>
+        Myna Settings binds Myna's own shortcut (Super+J by default) as a
+        GNOME custom shortcut, which Umoja honours; this key is only an
+        additional one.
+      </description>
     </key>
     <key name="ask-about-screen-hotkey" type="as">
       <default>['&lt;Super&gt;&lt;Shift&gt;a']</default>

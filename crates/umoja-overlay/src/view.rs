@@ -487,15 +487,6 @@ impl Overlay {
                     self.myna_pill.remove_css_class("listening");
                 }
             }
-            MynaEvent::Partial(text) if self.is_visible() => self.entry.set_text(&text),
-            MynaEvent::Final(text) if self.is_visible() => {
-                self.entry.set_text(&text);
-                self.entry.set_position(-1);
-                if lemonade::looks_like_question(&text) {
-                    self.ask(&text);
-                }
-            }
-            _ => {}
         }
     }
 

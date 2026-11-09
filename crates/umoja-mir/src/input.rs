@@ -5,6 +5,12 @@
 //! `org.gnome.shell.keybindings`), so shortcuts changed in Settings apply
 //! here immediately. Changes are picked up by a GLib main loop on a helper
 //! thread that rebuilds the table behind an `RwLock`.
+//!
+//! GNOME's custom shortcuts (media-keys `custom-keybindings`, which
+//! gsd-media-keys runs in a GNOME session) are honoured too: each one runs
+//! its command. That is how Myna's dictation key works: Myna Settings writes
+//! a custom shortcut (Super+J by default) whose command calls Myna's
+//! `Toggle` over D-Bus.
 
 use crate::tiling::Action;
 use crate::workspaces;
@@ -35,7 +41,14 @@ pub struct Config {
     pub raise_tile_group: bool,
     pub center_new_windows: bool,
     pub workspaces: workspaces::Settings,
+    /// Commands of GNOME custom shortcuts; binding action
+    /// `CUSTOM_BASE + i` runs `custom_commands[i]`.
+    pub custom_commands: Vec<String>,
 }
+
+/// Action codes from here up run a GNOME custom shortcut's command.
+/// Mirrors `UMOJA_ACTION_CUSTOM_BASE` in the shim.
+pub const CUSTOM_BASE: u32 = 1000;
 
 /// Ubuntu's Tiling Assistant extension (enabled by default in Ubuntu).
 pub const TILING_ASSISTANT: &str = "org.gnome.shell.extensions.tiling-assistant";
@@ -53,6 +66,7 @@ pub static CONFIG: RwLock<Config> = RwLock::new(Config {
         fixed_count: 4,
         only_on_primary: true,
     },
+    custom_commands: Vec::new(),
 });
 
 const XK_SUPER_L: u32 = 0xffeb;
@@ -289,7 +303,6 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>KP_3", Action::TileBottomRight as u32),
     ("<Super>KP_8", Action::TileTopHalf as u32),
     ("<Super>KP_2", Action::TileBottomHalf as u32),
-    ("<Super>d", Action::ToggleDictation as u32),
     ("<Super><Shift>a", Action::AskAboutScreen as u32),
     ("<Super><Shift>v", Action::ClipboardHistory as u32),
     // gsettings-desktop-schemas' and gnome-shell's workspace defaults.
@@ -373,6 +386,21 @@ pub fn reload() {
             })
             .collect();
     }
+    // GNOME custom shortcuts come after the built-in ones, so a built-in
+    // binding on the same key wins (gsd-media-keys can't grab a key the
+    // shell already holds either).
+    let mut custom_commands = Vec::new();
+    for (binding, command) in custom_keybindings() {
+        let Some((keysym, mods)) = parse_accelerator(&binding) else {
+            continue;
+        };
+        bindings.push(Binding {
+            keysym,
+            mods,
+            action: CUSTOM_BASE + custom_commands.len() as u32,
+        });
+        custom_commands.push(command);
+    }
     let overlay = gs::get_string(gs::MUTTER, "overlay-key", "Super_L");
     let ta = tiling_assistant_active();
     let cfg = Config {
@@ -390,10 +418,12 @@ pub fn reload() {
             fixed_count: gs::get_int(gs::WM_PREFERENCES, "num-workspaces", 4).clamp(1, 36) as usize,
             only_on_primary: gs::get_bool(gs::MUTTER, "workspaces-only-on-primary", true),
         },
+        custom_commands,
     };
     tracing::info!(
         bindings = cfg.bindings.len(),
         edge_tiling = cfg.edge_tiling,
+        custom = cfg.custom_commands.len(),
         "keybindings loaded"
     );
     let new_workspaces = cfg.workspaces;
@@ -404,6 +434,63 @@ pub fn reload() {
     if new_workspaces != old_workspaces {
         tracing::info!(?new_workspaces, "workspace settings changed");
         crate::shell::workspace_settings_changed();
+    }
+}
+
+/// (binding, command) of every GNOME custom shortcut with both set, in
+/// `custom-keybindings` order.
+fn custom_keybindings() -> Vec<(String, String)> {
+    custom_keybinding_paths()
+        .iter()
+        .filter_map(|path| {
+            let s = gs::settings_at(gs::CUSTOM_KEYBINDING, path)?;
+            let binding = s.string("binding").to_string();
+            let command = s.string("command").trim().to_string();
+            (!binding.is_empty() && !command.is_empty()).then_some((binding, command))
+        })
+        .collect()
+}
+
+fn custom_keybinding_paths() -> Vec<String> {
+    gs::get_strv(gs::MEDIA_KEYS, "custom-keybindings")
+        .into_iter()
+        .filter(|p| p.starts_with('/') && p.ends_with('/'))
+        .collect()
+}
+
+/// Run the command of custom shortcut `code`, as gsd-media-keys does:
+/// shell-style word splitting, no shell, not waited for.
+pub fn run_custom(code: u32) {
+    let Some(index) = code.checked_sub(CUSTOM_BASE) else {
+        return;
+    };
+    let command = {
+        let cfg = CONFIG.read().unwrap_or_else(|e| e.into_inner());
+        match cfg.custom_commands.get(index as usize) {
+            Some(c) => c.clone(),
+            None => return,
+        }
+    };
+    let argv = match glib::shell_parse_argv(&command) {
+        Ok(argv) if !argv.is_empty() => argv,
+        _ => {
+            tracing::warn!(command, "custom shortcut: cannot parse command");
+            return;
+        }
+    };
+    tracing::info!(command, "custom shortcut");
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null());
+    match cmd.spawn() {
+        // Reap it off Mir's input thread.
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(e) => tracing::warn!(command, error = %e, "custom shortcut: could not run"),
     }
 }
 
@@ -440,11 +527,37 @@ pub fn start_watching() {
                         keep.push(s);
                     }
                 }
+                // Custom shortcuts: the list, and each entry it names (Myna
+                // Settings rebinds by editing its entry in place).
+                let entries = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                watch_custom_entries(&entries);
+                if let Some(s) = gs::settings(gs::MEDIA_KEYS) {
+                    let entries = entries.clone();
+                    s.connect_changed(Some("custom-keybindings"), move |_, _| {
+                        watch_custom_entries(&entries);
+                        reload();
+                    });
+                    keep.push(s);
+                }
                 glib::MainLoop::new(Some(&ctx), false).run();
                 drop(keep);
+                drop(entries);
             });
         })
         .expect("spawn settings thread");
+}
+
+fn watch_custom_entries(entries: &std::cell::RefCell<Vec<gio::Settings>>) {
+    let mut entries = entries.borrow_mut();
+    entries.clear();
+    for path in custom_keybinding_paths() {
+        if let Some(s) = gs::settings_at(gs::CUSTOM_KEYBINDING, &path) {
+            s.connect_changed(None, |_, _| reload());
+            // GSettings only emits `changed` for keys that were read.
+            let _ = (s.string("binding"), s.string("command"));
+            entries.push(s);
+        }
+    }
 }
 
 /// Look up the action code bound to a key press (0 = none).
@@ -592,6 +705,7 @@ mod tests {
             raise_tile_group: true,
             center_new_windows: false,
             workspaces: workspaces::Settings::default(),
+            custom_commands: Vec::new(),
         };
         assert_eq!(lookup('H' as u32, MOD_SUPER), Action::Minimize as u32);
         assert_eq!(lookup('h' as u32, 0), 0);

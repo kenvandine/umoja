@@ -1,112 +1,76 @@
-//! Myna dictation.
+//! Myna dictation, for the search box's microphone button.
 //!
-//! Connects to the myna-desktop daemon's socket (`/tmp/myna.sock`) and reads
-//! newline-delimited JSON status messages:
-//!
-//! ```json
-//! {"state": "listening"}            // or "idle"
-//! {"partial": "how do i set"}       // live transcription
-//! {"final": "how do i set up vpn"}  // finished utterance
-//! ```
-//!
-//! A bare text line is treated as a final transcript. Toggling sends
-//! `toggle\n` on the socket, or falls back to calling `Toggle` on the
-//! `org.canonical.Myna` D-Bus interface.
-//!
-//! While the overlay is open, transcripts go into the search box. Otherwise
-//! myna-desktop types them into the focused app itself (via the
-//! compositor's virtual-keyboard / input-method protocols).
+//! The myna snap's daemon owns `com.canonical.Myna.Dictation` on the
+//! session bus. It types what it hears into the focused text field itself
+//! (through IBus), so while the overlay is open the transcript lands in the
+//! search box like anywhere else; this module only follows whether the
+//! daemon is there and whether it is recording, and calls `Toggle`. The top
+//! bar's indicator and the HUD pill live in umoja-panel.
 
-use crate::lemonade::RUNTIME;
-use serde::Deserialize;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use gio::prelude::*;
 use umoja_common::dbus;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MynaEvent {
     Listening(bool),
-    Partial(String),
-    Final(String),
     Available(bool),
-}
-
-#[derive(Deserialize)]
-struct Wire {
-    state: Option<String>,
-    partial: Option<String>,
-    #[serde(rename = "final")]
-    final_: Option<String>,
 }
 
 pub struct Myna {
     pub events: async_channel::Receiver<MynaEvent>,
-    toggle: tokio::sync::mpsc::UnboundedSender<()>,
+    proxy: std::rc::Rc<std::cell::RefCell<Option<gio::DBusProxy>>>,
 }
 
 impl Myna {
-    /// Connect (and keep reconnecting) in the background.
+    /// Follow the daemon in the background (must run on the GTK thread).
     pub fn start() -> Self {
-        let (ev_tx, ev_rx) = async_channel::unbounded();
-        let (tg_tx, mut tg_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-        RUNTIME.spawn(async move {
-            loop {
-                match UnixStream::connect(dbus::MYNA_SOCKET_PATH).await {
-                    Ok(stream) => {
-                        let _ = ev_tx.send(MynaEvent::Available(true)).await;
-                        let (read, mut write) = stream.into_split();
-                        let mut lines = BufReader::new(read).lines();
-                        loop {
-                            tokio::select! {
-                                line = lines.next_line() => match line {
-                                    Ok(Some(l)) => if let Some(ev) = parse(&l)
-                                        && ev_tx.send(ev).await.is_err() { return; },
-                                    _ => break,
-                                },
-                                Some(()) = tg_rx.recv() => {
-                                    if write.write_all(b"toggle\n").await.is_err() { break; }
-                                }
-                            }
-                        }
-                        let _ = ev_tx.send(MynaEvent::Available(false)).await;
-                    }
-                    Err(_) => {
-                        // Daemon not running: honour toggles over D-Bus instead.
-                        while let Ok(()) = tg_rx.try_recv() {
-                            glib::MainContext::default().invoke(toggle_over_dbus);
-                        }
-                        if ev_tx.is_closed() {
-                            return;
-                        }
-                        tokio::time::sleep(Duration::from_secs(3)).await;
-                    }
+        let (tx, rx) = async_channel::unbounded();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let keep = slot.clone();
+        glib::spawn_future_local(async move {
+            let proxy = match gio::DBusProxy::for_bus_future(
+                gio::BusType::Session,
+                gio::DBusProxyFlags::DO_NOT_AUTO_START
+                    | gio::DBusProxyFlags::DO_NOT_CONNECT_SIGNALS,
+                None,
+                dbus::MYNA_BUS_NAME,
+                dbus::MYNA_OBJECT_PATH,
+                dbus::MYNA_INTERFACE,
+            )
+            .await
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(error = %e, "myna: no session bus proxy");
+                    return;
                 }
-            }
+            };
+            let send = move |p: &gio::DBusProxy| {
+                let _ = tx.try_send(MynaEvent::Available(p.name_owner().is_some()));
+                let _ = tx.try_send(MynaEvent::Listening(listening(p)));
+            };
+            send(&proxy);
+            let s = send.clone();
+            proxy.connect_g_properties_changed(move |p, _, _| s(p));
+            proxy.connect_notify_local(Some("g-name-owner"), move |p, _| send(p));
+            *keep.borrow_mut() = Some(proxy);
         });
         Self {
-            events: ev_rx,
-            toggle: tg_tx,
+            events: rx,
+            proxy: slot,
         }
     }
 
     pub fn toggle(&self) {
-        let _ = self.toggle.send(());
-    }
-}
-
-fn toggle_over_dbus() {
-    gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
-        let Ok(conn) = conn else { return };
-        conn.call(
-            Some(dbus::MYNA_BUS_NAME),
-            dbus::MYNA_OBJECT_PATH,
-            dbus::MYNA_BUS_NAME,
+        let Some(proxy) = self.proxy.borrow().clone() else {
+            tracing::warn!("myna is not available");
+            return;
+        };
+        proxy.call(
             "Toggle",
             None,
-            None,
             gio::DBusCallFlags::NONE,
-            1000,
+            2000,
             gio::Cancellable::NONE,
             |r| {
                 if let Err(e) = r {
@@ -114,50 +78,12 @@ fn toggle_over_dbus() {
                 }
             },
         );
-    });
-}
-
-fn parse(line: &str) -> Option<MynaEvent> {
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
-    match serde_json::from_str::<Wire>(line) {
-        Ok(w) => {
-            if let Some(f) = w.final_ {
-                Some(MynaEvent::Final(f))
-            } else if let Some(p) = w.partial {
-                Some(MynaEvent::Partial(p))
-            } else {
-                w.state.map(|s| MynaEvent::Listening(s == "listening"))
-            }
-        }
-        Err(_) => Some(MynaEvent::Final(line.to_string())),
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wire_format() {
-        assert_eq!(
-            parse(r#"{"state":"listening"}"#),
-            Some(MynaEvent::Listening(true))
-        );
-        assert_eq!(
-            parse(r#"{"partial":"how do"}"#),
-            Some(MynaEvent::Partial("how do".into()))
-        );
-        assert_eq!(
-            parse(r#"{"final":"how do i"}"#),
-            Some(MynaEvent::Final("how do i".into()))
-        );
-        assert_eq!(
-            parse("plain words"),
-            Some(MynaEvent::Final("plain words".into()))
-        );
-        assert_eq!(parse("  "), None);
-    }
+fn listening(p: &gio::DBusProxy) -> bool {
+    p.name_owner().is_some()
+        && p.cached_property("State")
+            .and_then(|v| v.str().map(|s| s == "recording" || s == "active"))
+            .unwrap_or(false)
 }

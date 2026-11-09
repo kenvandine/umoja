@@ -20,6 +20,10 @@ pub const SHELL: &str = "org.gnome.shell";
 pub const SHELL_KEYBINDINGS: &str = "org.gnome.shell.keybindings";
 pub const DASH_TO_DOCK: &str = "org.gnome.shell.extensions.dash-to-dock";
 pub const MEDIA_KEYS: &str = "org.gnome.settings-daemon.plugins.media-keys";
+/// One GNOME custom shortcut (relocatable, under media-keys'
+/// `custom-keybindings` paths): `name`, `command`, `binding`.
+pub const CUSTOM_KEYBINDING: &str =
+    "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding";
 pub const NIGHT_LIGHT: &str = "org.gnome.settings-daemon.plugins.color";
 
 /// Look up a schema without aborting when it is not installed.
@@ -30,6 +34,17 @@ pub fn settings(schema_id: &str) -> Option<gio::Settings> {
         &schema,
         None::<&gio::SettingsBackend>,
         None,
+    ))
+}
+
+/// A relocatable schema at `path`, without aborting when it is missing.
+pub fn settings_at(schema_id: &str, path: &str) -> Option<gio::Settings> {
+    let source = gio::SettingsSchemaSource::default()?;
+    let schema = source.lookup(schema_id, true)?;
+    Some(gio::Settings::new_full(
+        &schema,
+        None::<&gio::SettingsBackend>,
+        Some(path),
     ))
 }
 

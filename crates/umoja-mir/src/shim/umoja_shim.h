@@ -55,6 +55,8 @@ enum {
     UMOJA_ACTION_CLIPBOARD_HISTORY = 38,
     UMOJA_ACTION_SHIFT_OVERVIEW_UP = 39,
     UMOJA_ACTION_SHIFT_OVERVIEW_DOWN = 40,
+    /* 1000 + n: run GNOME custom shortcut n (input.rs CUSTOM_BASE). */
+    UMOJA_ACTION_CUSTOM_BASE = 1000,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.
     UMOJA_ACTION_SWITCH_TO_WORKSPACE_BASE = 100,
     UMOJA_ACTION_MOVE_TO_WORKSPACE_BASE = 200,

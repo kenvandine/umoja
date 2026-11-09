@@ -15,10 +15,13 @@ pub const PANEL_INTERFACE: &str = "org.umoja.Panel";
 pub const SNI_WATCHER_BUS_NAME: &str = "org.kde.StatusNotifierWatcher";
 pub const SNI_WATCHER_OBJECT_PATH: &str = "/StatusNotifierWatcher";
 
-/// Myna dictation daemon.
-pub const MYNA_BUS_NAME: &str = "org.canonical.Myna";
-pub const MYNA_OBJECT_PATH: &str = "/org/canonical/Myna";
-pub const MYNA_SOCKET_PATH: &str = "/tmp/myna.sock";
+/// Myna dictation daemon (`myna-desktop`, from the myna snap). Myna
+/// Settings binds its shortcut (Super+J by default) as a GNOME media-keys
+/// custom keybinding that calls `Toggle` here; the HUD and the top bar
+/// follow its `State` property.
+pub const MYNA_BUS_NAME: &str = "com.canonical.Myna.Dictation";
+pub const MYNA_OBJECT_PATH: &str = "/com/canonical/Myna/Dictation";
+pub const MYNA_INTERFACE: &str = "com.canonical.Myna.Dictation";
 
 /// Window management API served by umoja-mir (window list for the overview,
 /// activation, Alt+Tab clicks, tiling).
