@@ -1,0 +1,17 @@
+[Unit]
+Description=Umoja: connect AI coding agents to the desktop's skill and tools
+Documentation=https://github.com/kenvandine/umoja/blob/main/docs/ai-features.md
+PartOf=umoja-session.target
+After=umoja-session.target umoja-panel.service
+
+[Service]
+Type=oneshot
+# Sets up each agent (Claude Code, Codex, Gemini CLI, OpenCode) once, the
+# first time it is seen; `umoja-agent-setup --remove` opts an agent out.
+ExecStart=/usr/bin/umoja-agent-setup --auto
+Nice=10
+Slice=background.slice
+TimeoutStartSec=2min
+
+[Install]
+WantedBy=umoja-session.target

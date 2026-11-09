@@ -49,6 +49,7 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/umoja-files $(DESKTOP)/usr/bin/umoja-files
 	install -D -m 0755 target/release/umoja-mcp $(DESKTOP)/usr/bin/umoja-mcp
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
+	install -D -m 0755 bin/umoja-agent-setup $(DESKTOP)/usr/bin/umoja-agent-setup
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
 	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
 	install -D -m 0755 bin/umoja-greeter-session $(GREETER)/usr/libexec/umoja-greeter-session
@@ -77,6 +78,10 @@ override_dh_auto_install:
 	cp -a $(LEMONADE_SRC)/. $(DESKTOP)/usr/lib/umoja/lemonade/
 	install -D -m 0755 bin/umoja-lemonade $(DESKTOP)/usr/lib/umoja/umoja-lemonade
 	install -D -m 0644 data/lemonade/defaults.json $(DESKTOP)/usr/share/umoja/lemonade/defaults.json
+
+	# Agent skill for AI coding agents (linked by umoja-agent-setup)
+	install -d $(DESKTOP)/usr/share/umoja/agents/skills
+	cp -r data/agents/skills/umoja $(DESKTOP)/usr/share/umoja/agents/skills/
 
 	# Greeter
 	install -D -m 0644 data/lightdm-umoja-greeter.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter.desktop
