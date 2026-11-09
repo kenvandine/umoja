@@ -211,14 +211,28 @@ impl CloudForm {
         let form = self.clone();
         let (tx, rx) = async_channel::bounded(1);
         RUNTIME.spawn_blocking(move || {
-            let _ = tx.send_blocking(backend::token::lookup().is_some());
+            let _ = tx.send_blocking(backend::token::lookup());
         });
+        let in_use = backend::cloud_selected() && backend::current().cloud;
         glib::spawn_future_local(async move {
-            let stored = rx.recv().await.unwrap_or(false);
+            let key = rx.recv().await.ok().flatten();
+            let stored = key.is_some();
             form.has_key.set(stored);
             form.set_key_hint(stored);
             if stored {
                 form.forget.set_visible(true);
+            }
+            // OpenRouter says how much credit is left; show it beside "In use".
+            if let (true, Some(key)) = (in_use && url.contains("openrouter.ai"), key) {
+                let (tx, rx) = async_channel::bounded(1);
+                let base = url.clone();
+                RUNTIME.spawn(async move {
+                    let _ = tx.send(openrouter_credit(&base, &key).await).await;
+                });
+                if let Some(credit) = rx.recv().await.ok().flatten() {
+                    let text = format!("{} {credit}", form.status.text());
+                    form.show_status(&text, Some(true));
+                }
             }
         });
     }
@@ -566,6 +580,45 @@ pub fn parse_models(v: &serde_json::Value) -> Vec<RemoteModel> {
     out
 }
 
+/// "Credit left: $4.20." from OpenRouter's `/credits` (account balance),
+/// else `/key` (this key's own limit). Best effort: `None` on any error.
+async fn openrouter_credit(base_url: &str, key: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+    let root = base_url.trim_end_matches('/');
+    let get = |path: &str| client.get(format!("{root}/{path}")).bearer_auth(key).send();
+    if let Ok(r) = get("credits").await
+        && r.status().is_success()
+        && let Ok(v) = r.json::<serde_json::Value>().await
+        && let Some(text) = credit_text(&v)
+    {
+        return Some(text);
+    }
+    let v: serde_json::Value = get("key").await.ok()?.json().await.ok()?;
+    credit_text(&v)
+}
+
+/// The credit line for an OpenRouter `/credits` or `/key` answer.
+pub fn credit_text(v: &serde_json::Value) -> Option<String> {
+    let d = &v["data"];
+    if let (Some(total), Some(used)) = (d["total_credits"].as_f64(), d["total_usage"].as_f64()) {
+        return Some(
+            i18n::umoja("Credit left: $%s.")
+                .replace("%s", &format!("{:.2}", (total - used).max(0.0))),
+        );
+    }
+    if let Some(left) = d["limit_remaining"].as_f64() {
+        return Some(
+            i18n::umoja("Credit left on this key: $%s.").replace("%s", &format!("{left:.2}")),
+        );
+    }
+    d["usage"]
+        .as_f64()
+        .map(|u| i18n::umoja("Used so far: $%s.").replace("%s", &format!("{u:.2}")))
+}
+
 async fn list_models(base_url: &str, key: &str) -> Result<Vec<RemoteModel>, String> {
     let ep = Endpoint::cloud(base_url, "");
     let mut req = reqwest::Client::builder()
@@ -756,6 +809,26 @@ mod tests {
             println!("bad model: {ok} {msg}");
             assert!(!ok);
         });
+    }
+
+    #[test]
+    fn openrouter_credit_lines() {
+        let credits = serde_json::json!({"data": {"total_credits": 10.0, "total_usage": 5.8}});
+        assert_eq!(
+            credit_text(&credits).as_deref(),
+            Some("Credit left: $4.20.")
+        );
+        let key = serde_json::json!({"data": {"usage": 1.5, "limit": 5.0, "limit_remaining": 3.5}});
+        assert_eq!(
+            credit_text(&key).as_deref(),
+            Some("Credit left on this key: $3.50.")
+        );
+        let unlimited = serde_json::json!({"data": {"usage": 1.5, "limit": null}});
+        assert_eq!(
+            credit_text(&unlimited).as_deref(),
+            Some("Used so far: $1.50.")
+        );
+        assert_eq!(credit_text(&serde_json::json!({})), None);
     }
 
     #[test]

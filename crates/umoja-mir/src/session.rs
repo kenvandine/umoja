@@ -82,6 +82,7 @@ pub fn dispatch(action: Action) {
         Action::ScreenRecordingUi => "ShowScreenRecordingUI",
         Action::CopyTextUi => "ShowCopyTextUI",
         Action::ShowShortcuts => "ToggleShortcuts",
+        Action::LaunchAgent => "LaunchAgent",
         _ => return,
     };
     overlay_call(method, ());

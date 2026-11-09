@@ -42,7 +42,10 @@ relative changes like \"bigger\" or \"slower to dim\", compute the new value fro
 one rather than switching the feature off. For windows, pass the app name as window (e.g. \
 arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. If you called a tool, \
 reply in one short sentence saying what it did. For questions, answer in at most four short \
-sentences of practical guidance. Write plain text: no Markdown, no backticks, no bold.";
+sentences of practical guidance. For coding jobs (writing a script or program, changing code in \
+a project, fixing a build), don't write the code yourself: call hand_off_to_agent with the whole \
+task, and if no agent is installed, say so in one sentence. Write plain text: no Markdown, no \
+backticks, no bold.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepState {
@@ -539,6 +542,7 @@ mod tests {
             "why did nautilus crash?",
             "send the nautilus crash to ubuntu",
             "free up the memory the AI model is using",
+            "write me a script that renames my photos by the date they were taken",
         ];
         for p in prompts {
             let rec = Rc::new(Rec(RefCell::new(Vec::new()), RefCell::new(String::new())));

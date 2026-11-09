@@ -78,6 +78,8 @@ pub enum Action {
     CopyTextUi = 56,
     /// The keyboard shortcuts guide (Super+/).
     ShowShortcuts = 57,
+    /// Umoja's ai-agent-hotkey: open the chosen coding agent in a terminal.
+    LaunchAgent = 58,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -142,6 +144,7 @@ impl Action {
             55 => ScreenRecordingUi,
             56 => CopyTextUi,
             57 => ShowShortcuts,
+            58 => LaunchAgent,
             _ => None,
         }
     }

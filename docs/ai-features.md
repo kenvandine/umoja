@@ -31,6 +31,7 @@ screen, as in Ubuntu. The overlay's search box also has a microphone button.
 - [Troubleshooting your computer](#troubleshooting-your-computer)
 - [When an app crashes](#when-an-app-crashes)
 - [Finding files](#finding-files)
+- [Handing coding jobs to a coding agent](#handing-coding-jobs-to-a-coding-agent)
 - [Privacy](#privacy)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Settings reference](#settings-reference)
@@ -118,7 +119,8 @@ your own network.
    why (wrong key, unknown model, server unreachable…).
 4. Click **Use Cloud Model**.
 
-The Cloud page then says *In use: model on host*. To go back to your own
+The Cloud page then says *In use: model on host*; with OpenRouter it also
+shows how much credit is left. To go back to your own
 computer, click a model on **This Computer**, or click **Remove** on the
 Cloud page, which also deletes the API key from your keyring.
 
@@ -469,6 +471,29 @@ gsettings set org.umoja.shell file-search-enabled false
 
 From a terminal, `umoja-files --search "lease pdf"` searches the index.
 
+## Handing coding jobs to a coding agent
+
+The assistant is good at doing things on the desktop, but a small local
+model isn't the right tool for writing a script or changing code. If you
+have an AI coding agent installed (Claude Code, Codex, Gemini CLI or
+OpenCode), the assistant hands those jobs to it:
+
+- Ask for a coding job ("write me a script that renames my photos by
+  date") and the assistant offers to open your coding agent with the task.
+  The **Allow** dialog says which agent and what it will be asked.
+- Under any answer to a coding question there is also a **Continue in
+  Claude Code** button (named after your agent).
+- The agent opens in a terminal with your request as its first message, in
+  its normal mode, so it asks before it changes or runs anything. It
+  already knows Umoja through the skill and tools `umoja-agent-setup`
+  added.
+
+Pick which agent gets these jobs under **Coding agent** in the model
+button's popover (only installed agents are listed; **None** turns the
+hand-off off), or with `gsettings set org.umoja.shell ai-agent claude`.
+Umoja never installs an agent for you. The `ai-agent-hotkey` key (unset by
+default) can open the agent with a keyboard shortcut.
+
 ## Privacy
 
 - **Local by default.** Questions, screen and clipboard text, the
@@ -526,6 +551,8 @@ All in the `org.umoja.shell` schema, for example
 | `ask-about-screen-hotkey` | `['<Super><Shift>a']` | Ask about the screen |
 | `clipboard-history-hotkey` | `['<Super><Shift>v']` | Clipboard history |
 | `copy-text-hotkey` | `['<Super><Control>Print']` | Copy the text in a screen area |
+| `ai-agent` | `''` | Coding agent for coding jobs: `claude`, `codex`, `gemini`, `opencode`, `none`; empty picks the first installed |
+| `ai-agent-hotkey` | `[]` | Open the coding agent in a terminal |
 | `crash-notifications` | `true` | Notify when an app crashes, with **Ask Why** |
 | `crash-notifications-muted` | `[]` | Programs whose crashes don't notify |
 | `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |

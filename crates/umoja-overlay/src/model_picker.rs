@@ -84,6 +84,53 @@ fn pick(entries: Vec<(String, CatalogEntry)>, mem_gb: f64) -> Vec<ModelInfo> {
     out
 }
 
+/// "Coding agent: [Claude Code ▾]": who gets coding jobs. Lists only the
+/// agents installed here, plus None; hidden when there are none.
+fn agent_row() -> gtk::Box {
+    use umoja_common::agents;
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_margin_top(6);
+    let installed = agents::installed();
+    if installed.is_empty() {
+        row.set_visible(false);
+        return row;
+    }
+    let label = gtk::Label::builder()
+        .label(i18n::umoja("Coding agent"))
+        .xalign(0.0)
+        .hexpand(true)
+        .tooltip_text(i18n::umoja(
+            "The assistant hands coding jobs, like writing a script, to this app",
+        ))
+        .build();
+    let mut names: Vec<String> = installed.iter().map(|a| a.name.to_string()).collect();
+    names.push(i18n::umoja("None"));
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let drop = gtk::DropDown::from_strings(&refs);
+    let current = gs::get_string(gs::UMOJA_SHELL, agents::AGENT_KEY, "");
+    let selected = if current == "none" {
+        installed.len()
+    } else {
+        agents::chosen()
+            .and_then(|c| installed.iter().position(|a| *a == c))
+            .unwrap_or(0)
+    };
+    drop.set_selected(selected as u32);
+    drop.connect_selected_notify(move |d| {
+        let value = installed
+            .get(d.selected() as usize)
+            .map(|a| a.id)
+            .unwrap_or("none");
+        if let Some(s) = gs::settings(gs::UMOJA_SHELL).filter(|s| gs::has_key(s, agents::AGENT_KEY))
+        {
+            let _ = s.set_string(agents::AGENT_KEY, value);
+        }
+    });
+    row.append(&label);
+    row.append(&drop);
+    row
+}
+
 /// The model to suggest for this computer: the largest one that is good
 /// at tools and fits in a quarter of the memory, so apps keep the rest.
 pub fn best_fit(models: &[ModelInfo], mem_gb: f64) -> Option<&ModelInfo> {
@@ -222,6 +269,7 @@ pub fn button() -> gtk::MenuButton {
     content.append(&heading);
     content.append(&switcher);
     content.append(&stack);
+    content.append(&agent_row());
     popover.set_child(Some(&content));
     {
         let popover = popover.clone();

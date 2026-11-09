@@ -40,6 +40,7 @@ const IFACE_XML: &str = r#"
     <method name="Hide"/>
     <method name="ToggleDictation"/>
     <method name="AskAboutScreen"/>
+    <method name="LaunchAgent"/>
     <method name="Ask">
       <arg name="question" type="s" direction="in"/>
     </method>
@@ -309,6 +310,10 @@ fn export(
                     "AskAboutScreen" => {
                         spread.hide();
                         methods.ask_about_screen()
+                    }
+                    "LaunchAgent" => {
+                        spread.hide();
+                        methods.launch_agent("")
                     }
                     "Ask" => {
                         let Some((question,)) = params.get::<(String,)>() else {

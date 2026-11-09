@@ -4,6 +4,7 @@
 //! headless daemons can use it without pulling in a toolkit. The one
 //! exception, [`blur`], is behind the `blur` feature.
 
+pub mod agents;
 pub mod apps;
 pub mod assistant_backend;
 #[cfg(feature = "blur")]

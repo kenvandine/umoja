@@ -329,6 +329,7 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "shortcuts-guide-hotkey",
         Action::ShowShortcuts,
     ),
+    (gs::UMOJA_SHELL, "ai-agent-hotkey", Action::LaunchAgent),
 ];
 
 /// Fallbacks used when a schema is missing (e.g. running nested for development).

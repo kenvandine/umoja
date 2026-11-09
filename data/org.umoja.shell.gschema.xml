@@ -98,6 +98,19 @@
         "Don't Show for This App" button.
       </description>
     </key>
+    <key name="ai-agent" type="s">
+      <default>''</default>
+      <summary>Coding agent the assistant hands coding jobs to</summary>
+      <description>
+        One of 'claude' (Claude Code), 'codex', 'gemini' (Gemini CLI) or
+        'opencode', used when it is installed. Empty picks the first one
+        installed; 'none' turns the hand-off off. Umoja never installs one.
+      </description>
+    </key>
+    <key name="ai-agent-hotkey" type="as">
+      <default>[]</default>
+      <summary>Open the coding agent in a terminal</summary>
+    </key>
     <key name="clipboard-history-hotkey" type="as">
       <default>['&lt;Super&gt;&lt;Shift&gt;v']</default>
       <summary>Show the clipboard history</summary>

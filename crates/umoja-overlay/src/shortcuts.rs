@@ -142,6 +142,7 @@ const CATALOG: &[(&str, Group, &str)] = &[
     ("copy-text-hotkey", Group::Screenshots, "Copy text from the screen"),
     ("ask-about-screen-hotkey", Group::Assistant, "Ask about the screen"),
     ("clipboard-history-hotkey", Group::Assistant, "Clipboard history"),
+    ("ai-agent-hotkey", Group::Assistant, "Open your coding agent"),
     ("dictation-hotkey", Group::Assistant, "Dictate with Myna"),
 ];
 

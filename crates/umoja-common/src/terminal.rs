@@ -47,6 +47,34 @@ pub fn spawn_in_terminal(cmd: &str) -> std::io::Result<()> {
     Err(last)
 }
 
+/// Run `argv` in a new terminal window in `dir`, as an interactive
+/// program (a coding agent): no shell in between and no "press Enter" at
+/// the end.
+pub fn spawn_program_in_terminal(argv: &[String], dir: &std::path::Path) -> std::io::Result<()> {
+    let candidates: [(&str, &[&str]); 4] = [
+        ("xdg-terminal-exec", &[]),
+        ("ptyxis", &["--"]),
+        ("gnome-terminal", &["--"]),
+        ("x-terminal-emulator", &["-e"]),
+    ];
+    let mut last = std::io::Error::from(std::io::ErrorKind::NotFound);
+    for (bin, flag) in candidates {
+        if glib::find_program_in_path(bin).is_none() {
+            continue;
+        }
+        match Command::new(bin)
+            .args(flag)
+            .args(argv)
+            .current_dir(dir)
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 #[cfg(test)]
 mod tests {
     use super::needs_terminal;
@@ -59,7 +87,9 @@ mod tests {
         assert!(needs_terminal("flatpak install flathub org.gimp.GIMP"));
         assert!(needs_terminal("cd /tmp && /usr/bin/sudo make install"));
         assert!(!needs_terminal("xdg-open ~/Downloads"));
-        assert!(!needs_terminal("gsettings set org.gnome.desktop.interface color-scheme prefer-dark"));
+        assert!(!needs_terminal(
+            "gsettings set org.gnome.desktop.interface color-scheme prefer-dark"
+        ));
         assert!(!needs_terminal("echo snapshot"));
     }
 }

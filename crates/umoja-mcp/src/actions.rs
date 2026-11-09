@@ -244,6 +244,23 @@ pub fn tools() -> Vec<Tool> {
             |_| Box::pin(async { Outcome::from(blocking(system_info).await) }),
         ),
         Tool::new(
+            "hand_off_to_agent",
+            "Hand a coding job to the user's AI coding agent (Claude Code, Codex, Gemini CLI or OpenCode, whichever is installed and chosen): writing a script or program, changing code in a project, fixing a build. It opens in a terminal with the task as its first message and asks the user before changing anything. Pass the whole task in the user's words, and a folder when the job is about one.",
+            obj(json!({
+                "task": {"type": "string", "description": "The job, fully described"},
+                "folder": {"type": "string", "description": "Optional project folder to start in"}
+            }), &["task"]),
+            |a| Box::pin(async move { hand_off(&a).hide_if_ok() }),
+        )
+        .with_risk(crate::tool::medium)
+        .with_summary(|a| {
+            let who = umoja_common::agents::chosen().map(|g| g.name).unwrap_or("a coding agent");
+            match arg_str(a, "task") {
+                Some(t) => format!("Open {who} to: {}", truncate_words(t, 80)),
+                None => format!("Open {who}"),
+            }
+        }),
+        Tool::new(
             "free_ai_memory",
             "Unload the assistant's local AI model from memory, to free RAM and graphics memory for a game, a build or a VM. It loads again by itself with the next question (which then takes a few seconds longer).",
             obj(json!({}), &[]),
@@ -267,6 +284,36 @@ pub fn tools() -> Vec<Tool> {
             None => "Open the crash report".into(),
         }),
     ]
+}
+
+fn truncate_words(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn hand_off(a: &Value) -> Outcome {
+    use umoja_common::agents;
+    let Some(task) = arg_str(a, "task").filter(|t| !t.trim().is_empty()) else {
+        return err("task is required");
+    };
+    let Some(agent) = agents::chosen() else {
+        return err(if agents::installed().is_empty() {
+            "No coding agent is installed (Claude Code, Codex, Gemini CLI or OpenCode). Tell the user they can install one, for example Claude Code, and Umoja will connect it at the next login."
+        } else {
+            "The coding agent hand-off is turned off (org.umoja.shell ai-agent is 'none')."
+        });
+    };
+    let folder = arg_str(a, "folder").map(expand);
+    match agents::launch(agent, task, folder.as_deref()) {
+        Ok(()) => Outcome::ok(format!(
+            "Opened {} in a terminal with the task. It will ask the user before it changes anything.",
+            agent.name
+        )),
+        Err(e) => err(format!("Couldn't open {}: {e}", agent.name)),
+    }
 }
 
 /// Hand the Apport report for a crash to `ubuntu-bug`, which shows what

@@ -735,6 +735,8 @@ impl Overlay {
             LemonadeClient::new()
         };
         let weak = Rc::downgrade(self);
+        let coding =
+            umoja_common::agents::looks_like_coding(&question.text).then(|| question.text.clone());
         glib::spawn_future_local(async move {
             let text = agent::run(client, question, ui).await;
             let Some(o) = weak.upgrade() else { return };
@@ -744,6 +746,12 @@ impl Overlay {
             // Older models may still answer with action JSON: offer chips.
             for action in extract_actions(&text) {
                 o.chips.append(&o.chip(action));
+            }
+            // A coding job: offer to carry on in the user's coding agent.
+            if let Some(task) = coding
+                && let Some(agent) = umoja_common::agents::chosen()
+            {
+                o.chips.append(&o.agent_chip(agent, task));
             }
             if text.is_empty() && o.answer.text() == i18n::umoja("Thinking…") {
                 o.answer.set_visible(false);
@@ -1384,6 +1392,52 @@ impl Overlay {
             }
         });
         button.upcast()
+    }
+
+    /// "Continue in Claude Code": hand the question to the coding agent.
+    fn agent_chip(
+        self: &Rc<Self>,
+        agent: umoja_common::agents::Agent,
+        task: String,
+    ) -> gtk::Widget {
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.append(&gtk::Image::from_icon_name("utilities-terminal-symbolic"));
+        content.append(&gtk::Label::new(Some(
+            &i18n::umoja("Continue in %s").replace("%s", agent.name),
+        )));
+        let button = gtk::Button::builder()
+            .child(&content)
+            .css_classes(["pill", "action-chip"])
+            .build();
+        let weak = Rc::downgrade(self);
+        button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.launch_agent(&task);
+            }
+        });
+        button.upcast()
+    }
+
+    /// Open the chosen coding agent in a terminal, on `task` if given
+    /// (the ai-agent-hotkey opens it with no task).
+    pub fn launch_agent(self: &Rc<Self>, task: &str) {
+        use umoja_common::agents;
+        let Some(agent) = agents::chosen() else {
+            self.show();
+            self.assistant.set_visible(true);
+            self.answer.set_visible(true);
+            self.answer.set_text(&i18n::umoja(
+                "No coding agent is installed. Install one, such as Claude Code, and Umoja connects it at your next login.",
+            ));
+            return;
+        };
+        match agents::launch(agent, task, None) {
+            Ok(()) => self.hide(),
+            Err(e) => {
+                tracing::warn!(error = %e, agent = agent.id, "could not start the coding agent");
+                self.answer.set_text(&e);
+            }
+        }
     }
 
     fn run_action(self: &Rc<Self>, action: &AssistantAction) {
