@@ -205,6 +205,14 @@ pub fn tools() -> Vec<Tool> {
         .with_preflight(force_quit_preflight)
         .with_summary(|a| format!("Force quit {}", arg_str(a, "app").unwrap_or("the app"))),
         Tool::new(
+            "open_in_terminal",
+            "Run a command-line program or command in a new window of the user's default terminal, where they can see and use it (btop, htop, a script). The user is asked first. Never start a terminal app such as gnome-terminal yourself; to open a program by name, launch_app is enough.",
+            obj(json!({"command": {"type": "string", "description": "The command line, e.g. \"btop\""}}), &["command"]),
+            |a| Box::pin(open_in_terminal(a)),
+        )
+        .confirm()
+        .with_summary(|a| format!("Run \"{}\" in a terminal", arg_str(a, "command").unwrap_or(""))),
+        Tool::new(
             "install_app",
             "Install an app by name (from the Snap Store, or the Ubuntu archive when there is no snap). Just pass the app's name; it finds the package and asks the user itself. Never tell the user to run apt or snap.",
             obj(json!({
@@ -1514,9 +1522,75 @@ pub enum Redirect {
     Hint(&'static str),
 }
 
+async fn open_in_terminal(a: Value) -> Outcome {
+    let Some(cmd) = arg_str(&a, "command").map(str::trim).filter(|c| !c.is_empty()) else {
+        return Outcome::err("command is required");
+    };
+    match umoja_common::terminal::spawn_in_terminal(cmd) {
+        Ok(()) => Outcome::ok(format!("Opened a terminal running \"{cmd}\"")).hide(),
+        Err(e) => Outcome::err(format!("couldn't open a terminal: {e}")),
+    }
+}
+
+/// Terminal emulators a model may name in a command ("gnome-terminal --
+/// btop"). The user's own terminal is chosen by xdg-terminal-exec instead.
+const TERMINALS: &[&str] = &[
+    "gnome-terminal", "ptyxis", "kgx", "gnome-console", "konsole", "xterm", "uxterm",
+    "x-terminal-emulator", "xdg-terminal-exec", "xfce4-terminal", "mate-terminal",
+    "tilix", "terminator", "alacritty", "kitty", "foot", "wezterm", "ghostty",
+];
+
+/// "gnome-terminal -- btop" → Some("btop"); a bare "gnome-terminal" →
+/// Some(""); anything else → None.
+fn terminal_command(command: &str) -> Option<String> {
+    let command = command.trim();
+    let command = command.strip_prefix("sudo ").unwrap_or(command).trim_start();
+    let mut words = command.split_whitespace();
+    let first = Path::new(words.next()?).file_name()?.to_str()?.to_lowercase();
+    if !TERMINALS.contains(&first.as_str()) {
+        return None;
+    }
+    // Skip the terminal's own options up to the command: "--", "-e",
+    // "-x", "--command=" or the first non-option word.
+    let rest: Vec<&str> = words.collect();
+    let mut i = 0;
+    let mut cmd = String::new();
+    while i < rest.len() {
+        let w = rest[i];
+        if matches!(w, "--" | "-e" | "-x" | "--command" | "--execute" | "-c") {
+            cmd = rest[i + 1..].join(" ");
+            break;
+        }
+        if let Some(c) = w.strip_prefix("--command=") {
+            cmd = std::iter::once(c).chain(rest[i + 1..].iter().copied()).collect::<Vec<_>>().join(" ");
+            break;
+        }
+        if !w.starts_with('-') {
+            cmd = rest[i..].join(" ");
+            break;
+        }
+        i += 1;
+    }
+    let cmd = cmd.trim();
+    let unquoted = cmd
+        .strip_prefix('\'')
+        .and_then(|c| c.strip_suffix('\''))
+        .or_else(|| cmd.strip_prefix('"').and_then(|c| c.strip_suffix('"')))
+        .unwrap_or(cmd);
+    Some(unquoted.trim().to_string())
+}
+
 /// A shell command a model reached for that one of our tools does better.
 pub fn redirect(command: &str) -> Option<Redirect> {
     use Redirect::*;
+    // "gnome-terminal -- btop": the user's terminal may be another one.
+    if let Some(cmd) = terminal_command(command) {
+        return Some(if cmd.is_empty() {
+            Call("launch_app", json!({"name": "Terminal"}))
+        } else {
+            Call("open_in_terminal", json!({"command": cmd}))
+        });
+    }
     let c = command.trim().to_lowercase();
     let c = c.strip_prefix("sudo ").unwrap_or(&c).trim();
     let words: Vec<&str> = c.split_whitespace().collect();
@@ -1709,5 +1783,18 @@ mod tests {
         assert_eq!(call("ls ~/Downloads"), "none");
         assert_eq!(call("date +%s"), "none");
         assert_eq!(call("systemctl status bluetooth"), "none");
+    }
+
+    #[test]
+    fn named_terminals_use_the_default_one() {
+        assert_eq!(terminal_command("gnome-terminal -- btop").as_deref(), Some("btop"));
+        assert_eq!(terminal_command("xterm -e 'htop -d 5'").as_deref(), Some("htop -d 5"));
+        assert_eq!(terminal_command("konsole --noclose -e btop").as_deref(), Some("btop"));
+        assert_eq!(terminal_command("/usr/bin/kitty btop").as_deref(), Some("btop"));
+        assert_eq!(terminal_command("gnome-terminal --command=btop").as_deref(), Some("btop"));
+        assert_eq!(terminal_command("gnome-terminal").as_deref(), Some(""));
+        assert_eq!(terminal_command("btop"), None);
+        assert!(matches!(redirect("gnome-terminal -- btop"), Some(Redirect::Call("open_in_terminal", _))));
+        assert!(matches!(redirect("ptyxis"), Some(Redirect::Call("launch_app", _))));
     }
 }

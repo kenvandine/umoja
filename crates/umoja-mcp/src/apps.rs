@@ -740,7 +740,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             "launch_app",
-            "Open an installed application by name (e.g. \"Firefox\", \"Files\", \"Terminal\", \"text editor\").",
+            "Open an installed application by name (e.g. \"Firefox\", \"Files\", \"Terminal\", \"text editor\"). Command-line apps such as btop open in the user's terminal.",
             json!({"type": "object", "properties": {
                 "name": {"type": "string", "description": "App name, or what it's for"}
             }, "required": ["name"]}),
@@ -778,11 +778,70 @@ pub fn tools() -> Vec<Tool> {
 async fn launch_app(a: Value) -> Outcome {
     let Some(name) = arg_str(&a, "name") else { return Outcome::err("name is required") };
     let Some(app) = find_launcher(name) else {
+        if let Some((bin, terminal)) = snap_command(name) {
+            return launch_command(&bin, terminal);
+        }
         return Outcome::err(format!("no installed app matches \"{name}\""));
     };
     match app.launch(&[], Some(&umoja_common::app_scope::launch_context())) {
         Ok(()) => Outcome::ok(format!("Opened {}", app.display_name())).hide(),
         Err(e) => Outcome::err(e),
+    }
+}
+
+/// A snap's command (btop, ...) that has no launcher snapd exports:
+/// `/snap/bin/<name>`, and whether it runs in a terminal. Only snaps:
+/// any other program in PATH could be `shutdown`.
+fn snap_command(query: &str) -> Option<(PathBuf, bool)> {
+    let name = clean_query(query).trim().to_lowercase().replace(' ', "-");
+    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+        return None;
+    }
+    let bin = Path::new("/snap/bin").join(&name);
+    if !bin.exists() {
+        return None;
+    }
+    let snap = name.split('.').next().unwrap_or(&name);
+    Some((bin, snap_wants_terminal(Path::new("/snap").join(snap).join("current").as_path())))
+}
+
+/// Whether the launcher a snap ships inside itself (not exported) says
+/// Terminal=true. A command with no launcher at all is a command-line
+/// program, so it runs in a terminal too.
+fn snap_wants_terminal(root: &Path) -> bool {
+    for dir in ["meta/gui", "usr/share/applications", "usr/local/share/applications", "share/applications"] {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "desktop") {
+                continue;
+            }
+            let kf = glib::KeyFile::new();
+            if kf.load_from_file(&path, glib::KeyFileFlags::NONE).is_ok() {
+                return kf.boolean("Desktop Entry", "Terminal").unwrap_or(false);
+            }
+        }
+    }
+    true
+}
+
+/// Start `bin`, in the user's default terminal when it's a command-line
+/// program.
+fn launch_command(bin: &Path, terminal: bool) -> Outcome {
+    let name = bin.file_name().and_then(|n| n.to_str()).unwrap_or("it").to_string();
+    if terminal {
+        let argv = [bin.to_string_lossy().into_owned()];
+        return match umoja_common::terminal::spawn_program_in_terminal(&argv, &glib::home_dir()) {
+            Ok(()) => Outcome::ok(format!("Opened {name} in a terminal")).hide(),
+            Err(e) => Outcome::err(format!("couldn't open a terminal for {name}: {e}")),
+        };
+    }
+    match Command::new(bin).current_dir(glib::home_dir()).spawn() {
+        Ok(child) => {
+            umoja_common::app_scope::move_to_scope(&name, child.id());
+            Outcome::ok(format!("Opened {name}")).hide()
+        }
+        Err(e) => Outcome::err(format!("couldn't start {name}: {e}")),
     }
 }
 

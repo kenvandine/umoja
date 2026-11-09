@@ -33,7 +33,8 @@ take_screenshot (target window by default, screen, area, or overlay only if the 
 picture of you), screen_recording, session (log out, lock, suspend, restart, power off), \
 set_volume, set_audio_device, set_brightness, media_control, set_do_not_disturb, \
 set_night_light, set_airplane_mode, connect_wifi, bluetooth_device, open_url (web pages and \
-web searches), open_folder, set_wallpaper, empty_trash, clear_folder, eject_drive, force_quit_app, \
+web searches), open_in_terminal (command-line programs, in the user's own terminal; never \
+name a terminal app), open_folder, set_wallpaper, empty_trash, clear_folder, eject_drive, force_quit_app, \
 check_updates, install_updates, copy_to_clipboard, and date_time or system_info for facts \
 about now and this computer. Those tools ask the user themselves when needed. For \
 settings, call list_settings to find the right one and its current value, then change_setting \
