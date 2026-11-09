@@ -12,8 +12,9 @@
 //! sized to the monitor's full width (Mir doesn't stretch a surface anchored
 //! to both sides) with an empty input region so it never takes clicks. The
 //! pill is centred inside it. The surface is mapped when the OSD shows and
-//! unmapped once it has faded out; at a fixed full width, Mir places it the
-//! same way on every map.
+//! unmapped once it has faded out (keeping it mapped left the fade's last
+//! frames on screen). Mir places a re-mapped layer surface wrongly, so the
+//! next show uses a fresh surface.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -101,6 +102,8 @@ struct Window {
     bar: gtk::DrawingArea,
     shown: Cell<bool>,
     hiding: Cell<bool>,
+    /// Unmapped after fading out; replaced on the next show.
+    retired: Cell<bool>,
     level: Rc<Cell<f64>>,
     max_level: Rc<Cell<f64>>,
     level_anim: RefCell<Option<adw::TimedAnimation>>,
@@ -175,8 +178,7 @@ impl Window {
                 surface.set_input_region(&gtk::cairo::Region::create());
             }
         });
-        // Mapped on first show and unmapped once faded out. The surface is
-        // the monitor's full width, so Mir places it the same on every map.
+        // Mapped on first show, unmapped once faded out, then replaced.
 
         let this = Rc::new(Self {
             monitor: monitor.clone(),
@@ -188,6 +190,7 @@ impl Window {
             bar,
             shown: Cell::new(false),
             hiding: Cell::new(false),
+            retired: Cell::new(false),
             level,
             max_level,
             level_anim: RefCell::default(),
@@ -298,6 +301,7 @@ impl Window {
                     // sending frame callbacks partway through the fade, so
                     // the last frame stayed on screen at ~15% opacity.
                     t.window.set_visible(false);
+                    t.retired.set(true);
                     t.label.set_visible(false);
                     t.bar.set_visible(false);
                 }
@@ -461,6 +465,20 @@ impl Osd {
     }
 
     fn show(&self, r: &Request) {
+        // A surface that faded out was unmapped. Mir places a re-mapped
+        // layer surface wrongly (this one came back ~280px too high), so
+        // build a fresh one, which Mir places right on its first map.
+        let shows_here = |w: &Window| match r.connector.as_deref() {
+            Some(c) => w.monitor.connector().as_deref() == Some(c),
+            None => true,
+        };
+        for w in self.windows.borrow_mut().iter_mut() {
+            if w.retired.get() && shows_here(w) {
+                w.window.destroy();
+                let monitor = w.monitor.clone();
+                *w = Window::new(&self.app, &monitor);
+            }
+        }
         let windows = self.windows.borrow().clone();
         let target = r.connector.as_deref().and_then(|c| {
             windows
