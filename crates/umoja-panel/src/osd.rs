@@ -334,8 +334,12 @@ fn draw_bar(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: f64, heigh
     }
     #[allow(deprecated)]
     let fg = area.color();
-    let dark = adw::StyleManager::default().is_dark();
-    let track = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), if dark { 0.1 } else { 0.3 });
+    let style = adw::StyleManager::default();
+    let dark = style.is_dark();
+    let track = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), if dark { 0.16 } else { 0.3 });
+    // The level follows the GNOME accent color, like the Quick Settings
+    // sliders; the overdrive separator stays in the foreground color.
+    let fill = style.accent_color_rgba();
     // $destructive_color: $red_4 (dark) / $red_3 (light).
     let overdrive = if dark {
         gdk::RGBA::new(0xc0 as f32 / 255.0, 0x1c as f32 / 255.0, 0x28 as f32 / 255.0, 1.0)
@@ -370,7 +374,7 @@ fn draw_bar(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: f64, heigh
     cr.line_to(x, top);
     cr.line_to(x, bottom);
     cr.line_to(radius, bottom);
-    set(if value > 0.0 { &fg } else { &track });
+    set(if value > 0.0 { &fill } else { &track });
     let _ = cr.fill();
 
     // Overdrive fill, past the separator.
@@ -383,7 +387,7 @@ fn draw_bar(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: f64, heigh
 
     // Rounded end of the fill.
     if value > 0.0 {
-        set(if value <= OVERDRIVE_START { &fg } else { &overdrive });
+        set(if value <= OVERDRIVE_START { &fill } else { &overdrive });
         cr.arc(end_x, mid, radius, TAU * 0.75, TAU * 0.25);
         cr.line_to(end_x.floor(), bottom);
         cr.line_to(end_x.floor(), top);

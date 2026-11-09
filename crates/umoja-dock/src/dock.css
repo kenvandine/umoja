@@ -1,40 +1,90 @@
+/* Same flat, dark, slightly see-through surface as the panel and the
+   notification bubbles (panel.css); always dark (main.rs forces the dark
+   scheme). The running dots follow the GNOME accent color. */
+@define-color shell_bg rgba(22, 22, 24, 0.86);
+@define-color shell_hairline alpha(#ffffff, 0.08);
+@define-color shell_fill alpha(#ffffff, 0.08);
+@define-color shell_fill_hover alpha(#ffffff, 0.14);
+@define-color shell_fill_active alpha(#ffffff, 0.20);
+
 window.umoja-dock {
   background-color: transparent;
 }
 /* The visible dock: rounded and floating off the screen edge (the gap is
    set as widget margins in apply_layout). */
 .dock-list {
-  background-color: alpha(#1d1d1d, 0.85);
-  border-radius: 16px;
-  padding: 6px 4px;
+  background-color: @shell_bg;
+  border: 1px solid @shell_hairline;
+  border-radius: 22px;
+  padding: 8px 6px;
 }
 window.umoja-dock.top .dock-list,
 window.umoja-dock.bottom .dock-list {
-  padding: 4px 6px;
+  padding: 6px 8px;
 }
 .dock-item {
   padding: 4px;
-  border-radius: 12px;
+  border-radius: 16px;
+}
+.dock-item:hover {
+  background-color: @shell_fill;
 }
 .dock-item.focused {
   background-color: alpha(#ffffff, 0.12);
 }
 .running-dot {
-  min-width: 6px;
-  min-height: 6px;
+  min-width: 5px;
+  min-height: 5px;
   border-radius: 999px;
-  background-color: #E95420;
+  background-color: @accent_bg_color;
   margin: 1px;
 }
 
+/* Right-click menu and window list: the panel's menu card. */
+popover > contents {
+  background-color: @shell_bg;
+  color: #ffffff;
+  border-radius: 18px;
+  border: 1px solid @shell_hairline;
+  box-shadow: 0 10px 28px alpha(#000000, 0.30);
+  padding: 6px;
+}
+popover > arrow {
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+popover separator {
+  background-color: @shell_hairline;
+  margin: 6px 8px;
+}
+popover button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: none;
+  box-shadow: none;
+  color: #ffffff;
+}
+popover button:hover {
+  background-color: @shell_fill_hover;
+}
+popover button:active {
+  background-color: @shell_fill_active;
+}
 .dock-menu {
-  min-width: 200px;
+  min-width: 220px;
 }
 .dock-menu-heading {
   font-weight: bold;
-  opacity: 0.7;
-  padding: 4px 10px;
+  color: alpha(#ffffff, 0.6);
+  padding: 6px 12px 4px 12px;
 }
 .dock-menu-submenu > title {
-  padding: 4px 10px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+}
+.dock-menu-submenu > title:hover {
+  background-color: @shell_fill_hover;
 }

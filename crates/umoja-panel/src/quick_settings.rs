@@ -24,7 +24,9 @@ pub fn button() -> gtk::MenuButton {
     let popover = gtk::Popover::builder()
         .child(&menu())
         .css_classes(["quick-settings-popover"])
+        .has_arrow(false)
         .build();
+    crate::menu_gap::below_bar(&popover);
     let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     icons.add_css_class("system-status");
     let (net, vpn) = network::indicators();
@@ -91,15 +93,31 @@ fn menu() -> gtk::Box {
 }
 
 pub fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // gnome-shell 46+ QuickToggle: icon, then a title over an optional
+    // subtitle (network name, connected device, active profile...).
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     content.append(&gtk::Image::from_icon_name(icon));
-    content.append(
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .valign(gtk::Align::Center)
+        .build();
+    text.append(
         &gtk::Label::builder()
             .label(label)
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["tile-title"])
             .build(),
     );
+    text.append(
+        &gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["tile-subtitle"])
+            .visible(false)
+            .build(),
+    );
+    content.append(&text);
     gtk::ToggleButton::builder()
         .child(&content)
         .css_classes(["tile"])
@@ -312,7 +330,7 @@ fn power_profile_tile() -> (gtk::Box, gtk::Revealer) {
                 .copied()
                 .unwrap_or(PROFILES[1]);
             network::set_tile_icon(&toggle, icon);
-            network::set_tile_label(&toggle, &i18n::shell(label));
+            network::set_tile_subtitle(&toggle, &i18n::shell(label));
             updating.set(true);
             toggle.set_active(active != "balanced");
             updating.set(false);

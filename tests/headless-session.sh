@@ -30,7 +30,8 @@ expect() { # schema key value
     [ "$v" = "$3" ] && pass "$1 $2 is $3" || fail "$1 $2 is $v, expected $3"
 }
 expect org.gnome.shell.extensions.dash-to-dock dock-position "'LEFT'"
-expect org.gnome.shell.extensions.dash-to-dock extend-height true
+# Umoja's own override (data/90_umoja.gschema.override): a floating dock.
+expect org.gnome.shell.extensions.dash-to-dock extend-height false
 expect org.gnome.desktop.interface gtk-theme "'Yaru'"
 expect org.gnome.desktop.interface icon-theme "'Yaru'"
 expect org.gnome.desktop.interface font-name "'Ubuntu Sans 11'"
