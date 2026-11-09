@@ -3,5 +3,14 @@ Description=Umoja desktop session
 Documentation=https://github.com/kenvandine/umoja
 # Started by umoja-mir once Wayland is accepting clients.
 Requires=basic.target
+# This is the session, so it brings up graphical-session.target the way
+# gnome-session's targets do (that target refuses a manual start). Without
+# it, services that are Requisite=/PartOf= graphical-session.target never
+# run: xdg-desktop-portal-gnome failed every activation, so OpenURI (Firefox
+# opening a download), AppChooser and the GNOME file chooser did nothing.
+# BindsTo also stops it again when this target stops at logout or on a
+# compositor restart.
+BindsTo=graphical-session.target
+Before=graphical-session.target
 Wants=umoja-panel.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service
 StopWhenUnneeded=no
