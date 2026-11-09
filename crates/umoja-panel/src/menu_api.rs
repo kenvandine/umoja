@@ -9,6 +9,8 @@
 //! Unfocus()            hand the keyboard back (a click elsewhere)
 //! LogOut()             Log Out as the Quick Settings button does
 //!                      (the assistant's session tool)
+//! ConfirmPowerOff()    show the Power Off dialog, as the Quick Settings
+//!                      button does (it powers off after 60 s)
 //! ```
 
 use std::cell::Cell;
@@ -25,6 +27,7 @@ const XML: &str = r#"<node>
     <method name="Focus"/>
     <method name="Unfocus"/>
     <method name="LogOut"/>
+    <method name="ConfirmPowerOff"/>
   </interface>
 </node>"#;
 
@@ -131,6 +134,11 @@ pub fn own_name(
                         invocation.return_value(None);
                         // After the reply, so the caller isn't left waiting.
                         gtk::glib::idle_add_local_once(crate::fade::log_out);
+                        return;
+                    }
+                    "ConfirmPowerOff" => {
+                        invocation.return_value(None);
+                        gtk::glib::idle_add_local_once(crate::power_dialog::open);
                         return;
                     }
                     "OpenMenu" | "ToggleMenu" => {}

@@ -24,6 +24,7 @@ mod network;
 mod notifications;
 mod osd;
 mod polkit;
+mod power_dialog;
 mod quick_settings;
 mod screencast;
 mod sni;

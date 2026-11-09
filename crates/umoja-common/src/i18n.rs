@@ -39,6 +39,11 @@ pub fn shell(msgid: &str) -> String {
     dgettext(DOMAIN_SHELL, msgid)
 }
 
+/// A plural string from gnome-shell's catalog ("... in %d seconds.").
+pub fn shell_n(singular: &str, plural: &str, n: u32) -> String {
+    gettextrs::dngettext(DOMAIN_SHELL, singular, plural, n)
+}
+
 /// A string from GTK's catalog ("Cancel", "OK"...).
 pub fn gtk(msgid: &str) -> String {
     dgettext(DOMAIN_GTK, msgid)

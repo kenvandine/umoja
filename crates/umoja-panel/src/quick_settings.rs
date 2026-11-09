@@ -429,7 +429,7 @@ fn session_row() -> gtk::Box {
             "system-shutdown-symbolic",
             i18n::shell("Power Off"),
             "power-off",
-            || run(&["systemctl", "poweroff"]),
+            crate::power_dialog::open,
         ),
     ];
     for (icon, label, name, action) in items {
@@ -473,7 +473,7 @@ pub fn open_settings(panel: &str) {
     crate::launch::spawn_app("org.gnome.Settings", &argv, token.as_deref());
 }
 
-fn run(argv: &[&str]) {
+pub fn run(argv: &[&str]) {
     let argv: Vec<&std::ffi::OsStr> = argv.iter().map(|a| a.as_ref()).collect();
     if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
         tracing::warn!(cmd = ?argv[0], error = %e, "could not run");
