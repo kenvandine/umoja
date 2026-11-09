@@ -52,7 +52,7 @@ vendor-lemonade:
 	  mkdir -p $(VENDOR)/lemonade/dl; \
 	  if [ ! -f $(VENDOR)/lemonade/dl/$$tarball ]; then \
 	    echo "downloading $$tarball"; \
-	    curl -fsSL -o $(VENDOR)/lemonade/dl/$$tarball $(LEMONADE_BASE)/$$tarball; \
+	    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o $(VENDOR)/lemonade/dl/$$tarball $(LEMONADE_BASE)/$$tarball; \
 	  fi; \
 	  (cd $(VENDOR)/lemonade/dl && grep " $$tarball\$$" ../../../lemonade.sha256 | sha256sum -c -); \
 	  rm -rf $(VENDOR)/lemonade/$$arch; mkdir -p $(VENDOR)/lemonade/$$arch; \
