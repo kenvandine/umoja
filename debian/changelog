@@ -1,10 +1,20 @@
 umoja-desktop (2026.46.1) stonking; urgency=medium
 
   * Switch to vYYYY.WW.REVISION versions (ISO year and week, then a
-    counter starting at 1 each week). packaging/bump-version moves to the
-    next one.
+    counter starting at 1 each week); packaging/bump-version makes one.
+  * Screenshot UI: window mode, and GNOME-style screencasts with a
+    recording pill in the panel (Ctrl+Shift+Alt+R). Depends on grim and
+    wf-recorder.
+  * Clicking a dock icon whose window is on another workspace switches
+    to that workspace.
+  * Panel calendar shows week numbers when Settings turns them on.
+  * Middle-click paste works again in the Umoja session.
+  * Notification quick-reply Send button takes clicks.
+  * Fix D-Bus property writes that broke Power Mode, Wi-Fi and Bluetooth
+    toggles.
+  * Restart the Umoja settings portal on upgrade.
 
- -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 02:25:43 +0000
+ -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 02:55:00 +0000
 
 umoja-desktop (0.2.0) stonking; urgency=medium
 
