@@ -389,7 +389,11 @@ impl Reply {
         let send = gtk::Button::from_icon_name("mail-send-symbolic");
         send.add_css_class("suggested-action");
         send.add_css_class("circular");
-        send.set_tooltip_text(Some(&i18n::shell("Send")));
+        // No tooltip: in the quick-reply window (a layer surface with a top
+        // margin) Mir places a repositioned popup margin-pixels too high,
+        // which put the "Send" tooltip right over this button, and the click
+        // went to the tooltip instead. The name stays for screen readers.
+        send.update_property(&[gtk::accessible::Property::Label(&i18n::shell("Send"))]);
         send.set_sensitive(false);
         line.append(&entry);
         line.append(&send);
