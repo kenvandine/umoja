@@ -213,6 +213,48 @@ const SOURCES: &[(&str, &str, Action)] = &[
         "switch-windows-backward",
         Action::SwitchWindowsBackward,
     ),
+    (gs::WM_KEYBINDINGS, "cycle-group", Action::CycleGroup),
+    (
+        gs::WM_KEYBINDINGS,
+        "cycle-group-backward",
+        Action::CycleGroupBackward,
+    ),
+    (gs::WM_KEYBINDINGS, "cycle-windows", Action::CycleWindows),
+    (
+        gs::WM_KEYBINDINGS,
+        "cycle-windows-backward",
+        Action::CycleWindowsBackward,
+    ),
+    (gs::WM_KEYBINDINGS, "switch-panels", Action::SwitchPanels),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-panels-backward",
+        Action::SwitchPanelsBackward,
+    ),
+    (gs::WM_KEYBINDINGS, "cycle-panels", Action::CyclePanels),
+    (
+        gs::WM_KEYBINDINGS,
+        "cycle-panels-backward",
+        Action::CyclePanelsBackward,
+    ),
+    (gs::WM_KEYBINDINGS, "begin-move", Action::BeginMove),
+    (gs::WM_KEYBINDINGS, "begin-resize", Action::BeginResize),
+    (
+        gs::WM_KEYBINDINGS,
+        "activate-window-menu",
+        Action::WindowMenu,
+    ),
+    (gs::WM_KEYBINDINGS, "always-on-top", Action::ToggleAbove),
+    (
+        gs::WM_KEYBINDINGS,
+        "toggle-on-all-workspaces",
+        Action::ToggleSticky,
+    ),
+    (
+        gs::SHELL_KEYBINDINGS,
+        "toggle-message-tray",
+        Action::ToggleMessageTray,
+    ),
     // Ubuntu's Tiling Assistant takes over Super+arrows (it empties mutter's
     // toggle-tiled-*/maximize keys while enabled) and adds keypad quarters.
     (TILING_ASSISTANT, "tile-left-half", Action::TileLeft),
@@ -297,6 +339,27 @@ const DEFAULTS: &[(&str, u32)] = &[
         "<Shift><Super>Above_Tab",
         Action::SwitchGroupBackward as u32,
     ),
+    ("<Alt>F5", Action::Unmaximize as u32),
+    ("<Alt>F10", Action::ToggleMaximized as u32),
+    ("<Alt>F6", Action::CycleGroup as u32),
+    ("<Shift><Alt>F6", Action::CycleGroupBackward as u32),
+    ("<Alt>Escape", Action::CycleWindows as u32),
+    ("<Shift><Alt>Escape", Action::CycleWindowsBackward as u32),
+    ("<Control><Alt>Tab", Action::SwitchPanels as u32),
+    (
+        "<Shift><Control><Alt>Tab",
+        Action::SwitchPanelsBackward as u32,
+    ),
+    ("<Control><Alt>Escape", Action::CyclePanels as u32),
+    (
+        "<Shift><Control><Alt>Escape",
+        Action::CyclePanelsBackward as u32,
+    ),
+    ("<Alt>F7", Action::BeginMove as u32),
+    ("<Alt>F8", Action::BeginResize as u32),
+    ("<Alt>space", Action::WindowMenu as u32),
+    ("<Super>v", Action::ToggleMessageTray as u32),
+    ("<Super>m", Action::ToggleMessageTray as u32),
     ("<Super>KP_7", Action::TileTopLeft as u32),
     ("<Super>KP_9", Action::TileTopRight as u32),
     ("<Super>KP_1", Action::TileBottomLeft as u32),
@@ -696,6 +759,62 @@ mod tests {
         assert_eq!(parse_accelerator("<Super>A"), Some(('a' as u32, MOD_SUPER)));
         assert_eq!(parse_accelerator(""), None);
         assert_eq!(parse_accelerator("<Hyper>x"), None);
+    }
+
+    #[test]
+    fn every_fallback_binding_parses() {
+        for (accel, action) in DEFAULTS {
+            assert!(parse_accelerator(accel).is_some(), "{accel}");
+            // 100+n / 200+n are numbered workspace codes.
+            assert!(
+                *action >= 100 || Action::from_u32(*action) != Action::None,
+                "{accel}"
+            );
+        }
+        assert_eq!(parse_accelerator("<Alt>space"), Some((0x20, MOD_ALT)));
+        assert_eq!(parse_accelerator("<Alt>Escape"), Some((0xff1b, MOD_ALT)));
+        assert_eq!(
+            parse_accelerator("<Control><Alt>Tab"),
+            Some((0xff09, MOD_CTRL | MOD_ALT))
+        );
+    }
+
+    /// Ubuntu's "Navigate desktop" / "Navigate windows" shortcuts (the
+    /// keyboard-navigation-shortcuts page) all resolve to the right action.
+    #[test]
+    fn ubuntu_navigation_shortcuts() {
+        let find = |accel: &str| -> Vec<Action> {
+            let (k, m) = parse_accelerator(accel).unwrap();
+            DEFAULTS
+                .iter()
+                .filter(|(a, _)| parse_accelerator(a) == Some((k, m)))
+                .map(|(_, act)| Action::from_u32(*act))
+                .collect()
+        };
+        for (accel, want) in [
+            ("<Super>Tab", Action::SwitchApplications),
+            ("<Shift><Super>Tab", Action::SwitchApplicationsBackward),
+            ("<Super>grave", Action::SwitchGroup),
+            ("<Control><Alt>Tab", Action::SwitchPanels),
+            ("<Alt>F6", Action::CycleGroup),
+            ("<Alt>Escape", Action::CycleWindows),
+            ("<Super>v", Action::ToggleMessageTray),
+            ("<Alt>F4", Action::Close),
+            ("<Alt>F5", Action::Unmaximize),
+            ("<Super>Down", Action::Unmaximize),
+            ("<Alt>F7", Action::BeginMove),
+            ("<Alt>F8", Action::BeginResize),
+            ("<Shift><Super>Left", Action::MoveToMonitorLeft),
+            ("<Shift><Super>Right", Action::MoveToMonitorRight),
+            ("<Alt>F10", Action::ToggleMaximized),
+            ("<Super>Up", Action::Maximize),
+            ("<Super>h", Action::Minimize),
+            ("<Super>Left", Action::TileLeft),
+            ("<Super>Right", Action::TileRight),
+            ("<Alt>space", Action::WindowMenu),
+        ] {
+            assert_eq!(find(accel), vec![want], "{accel}");
+        }
     }
 
     #[test]

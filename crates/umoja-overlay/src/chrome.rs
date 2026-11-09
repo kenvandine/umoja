@@ -632,8 +632,18 @@ impl Switcher {
         };
         let mut buttons = Vec::new();
         for (i, (app_id, title, windows)) in data.iter().enumerate() {
-            let (icon, name) = icon_for(app_id);
-            let label_text = if self.mode.get() == 0 {
+            // Mode 3 is Ctrl+Alt+Tab: an icon name and a gnome-shell msgid.
+            let (icon, name) = if self.mode.get() == 3 {
+                (
+                    gio::ThemedIcon::new(app_id).upcast(),
+                    umoja_common::i18n::shell(title),
+                )
+            } else {
+                icon_for(app_id)
+            };
+            let label_text = if self.mode.get() == 3 {
+                name
+            } else if self.mode.get() == 0 {
                 if name.is_empty() { title.clone() } else { name }
             } else {
                 windows.first().cloned().unwrap_or_else(|| title.clone())

@@ -18,6 +18,7 @@ mod screenshot;
 mod spread;
 mod texpane;
 mod view;
+mod window_menu;
 
 use gio::prelude::*;
 use gtk::glib;
@@ -81,6 +82,15 @@ const IFACE_XML: &str = r#"
     <method name="ShiftOverview">
       <arg name="up" type="b" direction="in"/>
     </method>
+    <method name="ShowWindowMenu">
+      <arg name="id" type="t" direction="in"/>
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="flags" type="u" direction="in"/>
+      <arg name="workspace" type="u" direction="in"/>
+      <arg name="n_workspaces" type="u" direction="in"/>
+      <arg name="neighbours" type="u" direction="in"/>
+    </method>
     <property name="Visible" type="b" access="read"/>
   </interface>
 </node>"#;
@@ -106,7 +116,8 @@ fn main() -> glib::ExitCode {
         }));
         let spread = spread::Spread::new(app, &overlay);
         let chrome = chrome::Chrome::new(app);
-        export(overlay, shots, spread, chrome);
+        let menu = window_menu::WindowMenu::new(app);
+        export(overlay, shots, spread, chrome, menu);
         // Keep the process alive while the overlay window is hidden.
         std::mem::forget(app.hold());
     });
@@ -118,6 +129,7 @@ fn export(
     shots: Rc<screenshot::ScreenshotUi>,
     spread: Rc<spread::Spread>,
     chrome: Rc<chrome::Chrome>,
+    menu: Rc<window_menu::WindowMenu>,
 ) {
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(IFACE_XML).expect("valid XML");
@@ -129,6 +141,7 @@ fn export(
         let shots = shots.clone();
         let spread = spread.clone();
         let chrome = chrome.clone();
+        let menu = menu.clone();
         let res = conn
             .register_object(dbus::OVERLAY_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {
@@ -157,6 +170,7 @@ fn export(
                         chrome.tile_preview(false, (0, 0, 0, 0), (0, 0, 0, 0));
                         chrome.layout_picker(0, 0, 0, 0);
                         chrome.hide_switcher();
+                        menu.hide();
                         // Super from the app grid closes it, as in GNOME.
                         if methods.is_visible() {
                             methods.hide();
@@ -189,6 +203,21 @@ fn export(
                         }
                     }
                     "HideSwitcher" => chrome.hide_switcher(),
+                    "ShowWindowMenu" => {
+                        if let Some((id, x, y, flags, workspace, n_workspaces, neighbours)) =
+                            params.get::<(u64, i32, i32, u32, u32, u32, u32)>()
+                        {
+                            menu.show(window_menu::Target {
+                                id,
+                                x,
+                                y,
+                                flags,
+                                workspace,
+                                n_workspaces,
+                                neighbours,
+                            });
+                        }
+                    }
                     "WorkspaceSwitched" => {
                         // The overview shows the switch itself (it follows
                         // WorkspacesChanged), so no popup on top of it.

@@ -11,6 +11,10 @@ pub const PANEL_BUS_NAME: &str = "org.umoja.Panel";
 pub const PANEL_OBJECT_PATH: &str = "/org/umoja/Panel";
 pub const PANEL_INTERFACE: &str = "org.umoja.Panel";
 
+pub const DOCK_BUS_NAME: &str = "org.umoja.Dock";
+pub const DOCK_OBJECT_PATH: &str = "/org/umoja/Dock";
+pub const DOCK_INTERFACE: &str = "org.umoja.Dock";
+
 /// StatusNotifier (AppIndicator) host implemented by umoja-panel.
 pub const SNI_WATCHER_BUS_NAME: &str = "org.kde.StatusNotifierWatcher";
 pub const SNI_WATCHER_OBJECT_PATH: &str = "/StatusNotifierWatcher";

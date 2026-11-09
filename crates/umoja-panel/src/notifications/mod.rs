@@ -532,7 +532,8 @@ pub fn want_keyboard(widget: &impl IsA<gtk::Widget>, on: bool) {
     };
     // The clock menu is a popover; its root is the panel window.
     if win.is_layer_window() {
-        win.set_keyboard_mode(if on {
+        // Ctrl+Alt+Tab navigation keeps the keyboard when a menu closes.
+        win.set_keyboard_mode(if on || crate::menu_api::keyboard_nav() {
             KeyboardMode::Exclusive
         } else {
             KeyboardMode::None

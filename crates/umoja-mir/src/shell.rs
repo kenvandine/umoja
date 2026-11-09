@@ -25,9 +25,22 @@ pub const OBJECT_PATH: &str = "/org/umoja/Compositor";
 
 // ---- switcher ---------------------------------------------------------------
 
+/// What a held-modifier popup is cycling through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Alt+Tab and friends: the popup, activate on release.
+    Switcher,
+    /// mutter's cycle-windows/cycle-group (Alt+Esc, Alt+F6): no popup, the
+    /// selected window is raised as you go (gnome-shell's WindowCycler).
+    Cycler { origin: u64 },
+    /// Ctrl+Alt+Tab: the top bar and dock (gnome-shell's CtrlAltTabPopup).
+    Panels { popup: bool },
+}
+
 struct Open {
     switcher: Switcher,
     titles: HashMap<u64, String>,
+    kind: Kind,
 }
 
 static SWITCHER: LazyLock<Mutex<Option<Open>>> = LazyLock::new(Default::default);
@@ -45,15 +58,92 @@ pub fn switcher_binding(action: u32) -> Option<(Mode, bool)> {
         Action::SwitchGroupBackward => (Mode::Group, true),
         Action::SwitchWindows => (Mode::Windows, false),
         Action::SwitchWindowsBackward => (Mode::Windows, true),
+        Action::CycleGroup => (Mode::Group, false),
+        Action::CycleGroupBackward => (Mode::Group, true),
+        Action::CycleWindows => (Mode::Windows, false),
+        Action::CycleWindowsBackward => (Mode::Windows, true),
+        Action::SwitchPanels | Action::CyclePanels => (Mode::Windows, false),
+        Action::SwitchPanelsBackward | Action::CyclePanelsBackward => (Mode::Windows, true),
         _ => return None,
     })
 }
 
-fn mode_code(m: Mode) -> u32 {
-    match m {
+fn kind_for(action: u32, mru: &[Window]) -> Kind {
+    match Action::from_u32(action) {
+        Action::CycleGroup
+        | Action::CycleGroupBackward
+        | Action::CycleWindows
+        | Action::CycleWindowsBackward => Kind::Cycler {
+            origin: mru.first().map(|w| w.id).unwrap_or(0),
+        },
+        Action::SwitchPanels | Action::SwitchPanelsBackward => Kind::Panels { popup: true },
+        Action::CyclePanels | Action::CyclePanelsBackward => Kind::Panels { popup: false },
+        _ => Kind::Switcher,
+    }
+}
+
+fn mode_code(open: &Open) -> u32 {
+    if matches!(open.kind, Kind::Panels { .. }) {
+        return 3;
+    }
+    match open.switcher.mode {
         Mode::Applications => 0,
         Mode::Group => 1,
         Mode::Windows => 2,
+    }
+}
+
+/// Whether this open switcher draws a popup.
+fn has_popup(open: &Open) -> bool {
+    match open.kind {
+        Kind::Switcher => true,
+        Kind::Cycler { .. } => false,
+        Kind::Panels { popup } => popup,
+    }
+}
+
+/// The places Ctrl+Alt+Tab moves keyboard focus to, in gnome-shell's
+/// order (top bar first, the dock at the bottom of the list). The "window"
+/// id is the place's index; the app id carries an icon name for the popup.
+pub const PANEL_TOP_BAR: u64 = 0;
+pub const PANEL_DOCK: u64 = 1;
+
+fn panel_places() -> Vec<Window> {
+    vec![
+        Window {
+            id: PANEL_TOP_BAR,
+            app_id: "focus-top-bar-symbolic".into(),
+            // gnome-shell msgids; the overlay translates them.
+            title: "Top Bar".into(),
+        },
+        Window {
+            id: PANEL_DOCK,
+            app_id: "user-bookmarks-symbolic".into(),
+            title: "Dash".into(),
+        },
+    ]
+}
+
+static PANEL_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Give the keyboard to the top bar or the dock.
+fn focus_place(place: u64) {
+    PANEL_FOCUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+    if place == PANEL_DOCK {
+        crate::session::dock_call("Focus", ());
+        crate::session::panel_call("Unfocus", ());
+    } else {
+        crate::session::dock_call("Unfocus", ());
+        crate::session::panel_call("Focus", ());
+    }
+}
+
+/// Take the keyboard back from the top bar/dock (a click elsewhere, or a
+/// window activated with Alt+Tab).
+pub fn unfocus_places() {
+    if PANEL_FOCUSED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        crate::session::panel_call("Unfocus", ());
+        crate::session::dock_call("Unfocus", ());
     }
 }
 
@@ -72,10 +162,13 @@ fn announce(open: &Open) {
         })
         .collect();
     let (sel, sub) = open.switcher.selection();
+    if !has_popup(open) {
+        return;
+    }
     overlay_call(
         "ShowSwitcher",
         (
-            mode_code(open.switcher.mode),
+            mode_code(open),
             items,
             sel as u32,
             sub.map(|s| s as i32).unwrap_or(-1),
@@ -84,6 +177,9 @@ fn announce(open: &Open) {
 }
 
 fn announce_selection(open: &Open) {
+    if !has_popup(open) {
+        return;
+    }
     let (sel, sub) = open.switcher.selection();
     overlay_call(
         "SwitcherSelect",
@@ -101,13 +197,24 @@ pub fn open_switcher(action: u32, mods: u32, mru: Vec<Window>) -> bool {
     if hold == 0 {
         return false;
     }
+    let kind = kind_for(action, &mru);
+    let mru = if matches!(kind, Kind::Panels { .. }) {
+        panel_places()
+    } else {
+        mru
+    };
     let titles = mru.iter().map(|w| (w.id, w.title.clone())).collect();
-    let Some(s) = Switcher::open(mode, backward, &mru, hold) else {
+    let Some(mut s) = Switcher::open(mode, backward, &mru, hold) else {
         return false;
     };
+    if matches!(kind, Kind::Panels { .. }) && !backward {
+        // Ctrl+Alt+Tab starts on the top bar.
+        s.selected = 0;
+    }
     let open = Open {
         switcher: s,
         titles,
+        kind,
     };
     announce(&open);
     *switcher() = Some(open);
@@ -149,9 +256,13 @@ pub fn switcher_key(keysym: u32, mods: u32, down: bool) -> Option<Outcome> {
     };
     if released {
         let out = open.switcher.finish();
+        let kind = open.kind;
+        let popup = has_popup(open);
         *guard = None;
-        overlay_call("HideSwitcher", ());
-        return Some(out);
+        if popup {
+            overlay_call("HideSwitcher", ());
+        }
+        return Some(settle(kind, out));
     }
     if !down || modifier_bit(keysym) != 0 {
         return Some(Outcome::Consumed);
@@ -160,31 +271,80 @@ pub fn switcher_key(keysym: u32, mods: u32, down: bool) -> Option<Outcome> {
         0 => None,
         a => switcher_binding(a),
     };
-    let out = open.switcher.key_down(keysym, mods, binding);
+    let mut out = open.switcher.key_down(keysym, mods, binding);
+    let kind = open.kind;
+    if kind != Kind::Switcher && matches!(out, Outcome::Close(_)) {
+        // Q/W only close things in the Alt+Tab popups.
+        out = Outcome::Consumed;
+    }
     match &out {
-        Outcome::Consumed => announce_selection(open),
-        Outcome::Cancel | Outcome::Activate { .. } => {
+        Outcome::Consumed => {
+            announce_selection(open);
+            if let Kind::Cycler { .. } = kind {
+                return Some(Outcome::Preview(current_window(open)));
+            }
+        }
+        Outcome::Cancel | Outcome::Activate { .. } | Outcome::Preview(_) => {
+            let popup = has_popup(open);
             *guard = None;
-            overlay_call("HideSwitcher", ());
+            if popup {
+                overlay_call("HideSwitcher", ());
+            }
         }
         Outcome::Close(_) => {}
     }
-    Some(out)
+    Some(settle(kind, out))
+}
+
+fn current_window(open: &Open) -> u64 {
+    let (sel, sub) = open.switcher.selection();
+    let item = &open.switcher.items[sel];
+    item.windows[sub.unwrap_or(0).min(item.windows.len() - 1)]
+}
+
+/// Turn the switcher's answer into what the compositor should do for the
+/// cycler and the Ctrl+Alt+Tab popup.
+fn settle(kind: Kind, out: Outcome) -> Outcome {
+    match (kind, out) {
+        // Escape puts the window you started from back on top.
+        (Kind::Cycler { origin }, Outcome::Cancel) if origin != 0 => Outcome::Activate {
+            window: origin,
+            raise: Vec::new(),
+        },
+        (Kind::Panels { .. }, Outcome::Activate { window, .. }) => {
+            focus_place(window);
+            Outcome::Consumed
+        }
+        (_, out) => out,
+    }
+}
+
+/// The window a cycler shows right now (0 when none is open).
+pub fn switcher_preview() -> u64 {
+    match switcher().as_ref() {
+        Some(open) if matches!(open.kind, Kind::Cycler { .. }) => current_window(open),
+        _ => 0,
+    }
 }
 
 pub fn switcher_pick(index: usize) -> Option<Outcome> {
     let mut guard = switcher();
-    let out = guard.as_mut()?.switcher.pick(index);
+    let open = guard.as_mut()?;
+    let kind = open.kind;
+    let out = open.switcher.pick(index);
     if out.is_some() {
         *guard = None;
         overlay_call("HideSwitcher", ());
     }
-    out
+    out.map(|o| settle(kind, o))
 }
 
 pub fn switcher_window_closed(id: u64) {
     let mut guard = switcher();
     let Some(open) = guard.as_mut() else { return };
+    if matches!(open.kind, Kind::Panels { .. }) {
+        return;
+    }
     if open.switcher.remove_window(id) {
         announce(open);
     } else {

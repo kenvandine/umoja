@@ -160,6 +160,9 @@ public:
             elevated = false;
         }
         if (w == press_window) press_window = Window{};
+        if (key_grab && key_grab->window == w) key_grab.reset();
+        above.erase(w);
+        pinned.erase(w);
         untile(w);
         untiled.erase(w);
         tile_action.erase(w);
@@ -205,12 +208,18 @@ public:
         auto const keysym = mir_keyboard_event_keysym(event);
         auto mods = to_umoja_mods(mir_keyboard_event_modifiers(event));
         if (track_modifiers) mods |= tracked_modifiers(keysym, action);
+        // mutter's "Above_Tab" is the key above Tab on any layout, so
+        // Super+` and Alt+` work on non-US keyboards too.
+        uint32_t const bind_sym = mir_keyboard_event_scan_code(event) == KEY_ABOVE_TAB ? XK_GRAVE : keysym;
+
+        // Alt+F7 / Alt+F8: the arrow keys move or resize the window.
+        if (key_grab && handle_key_grab(action, keysym, mods)) return true;
 
         // While Alt+Tab is open it sees every key, releases included.
         {
             UmojaSwitchResult res{};
             bool const down = action != mir_keyboard_action_up;
-            uint32_t const r = umoja_switcher_key(keysym, mods, down, &res);
+            uint32_t const r = umoja_switcher_key(bind_sym, mods, down, &res);
             if (r != UMOJA_SWITCH_NOT_OURS) {
                 apply_switch(r, res);
                 overlay_key_armed = false;
@@ -234,7 +243,7 @@ public:
         // Volume, brightness and playback keys work whatever has focus, as
         // in GNOME. Volume and brightness keep stepping while held. The
         // release is swallowed too, since the client never saw the press.
-        uint32_t const bound = umoja_lookup_binding(keysym, mods);
+        uint32_t const bound = umoja_lookup_binding(bind_sym, mods);
         if (uint32_t const media = umoja_media_action(bound); media != UMOJA_MEDIA_NONE) {
             if (action == mir_keyboard_action_down ||
                 (action == mir_keyboard_action_repeat && media == UMOJA_MEDIA_REPEATS))
@@ -257,6 +266,20 @@ public:
         auto const action = mir_pointer_event_action(event);
         int32_t const px = static_cast<int32_t>(mir_pointer_event_axis_value(event, mir_pointer_axis_x));
         int32_t const py = static_cast<int32_t>(mir_pointer_event_axis_value(event, mir_pointer_axis_y));
+
+        // Moving with Alt+F7: the pointer moves the window too, a click drops it.
+        if (key_grab) {
+            if (action == mir_pointer_action_button_down) {
+                key_grab.reset();
+                return true;
+            }
+            if (action == mir_pointer_action_motion) {
+                key_grab_pointer(px, py);
+                return true;
+            }
+            if (action == mir_pointer_action_button_up) return true;
+        }
+        if (action == mir_pointer_action_button_down) umoja_pointer_pressed();
 
         bool const consumed = MinimalWindowManager::handle_pointer_event(event);
 
@@ -326,7 +349,8 @@ public:
 
     void handle_request_move(WindowInfo& info, MirInputEvent const* input_event) override {
         MinimalWindowManager::handle_request_move(info, input_event);
-        if (!is_app_window(info) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer) return;
+        if (!all_windows.count(info.window()) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer)
+            return;
         auto const* pev = mir_input_event_get_pointer_event(input_event);
         int32_t const px = static_cast<int32_t>(mir_pointer_event_axis_value(pev, mir_pointer_axis_x));
         int32_t const py = static_cast<int32_t>(mir_pointer_event_axis_value(pev, mir_pointer_axis_y));
@@ -506,6 +530,21 @@ private:
 
     bool overlay_key_armed = false;
     bool applying = false;
+    // Window menu: Always on Top, Always on Visible Workspace.
+    std::set<Window> above;
+    std::set<Window> pinned;
+
+    // Alt+F7 / Alt+F8 (mutter's keyboard move and resize grabs).
+    struct KeyGrab {
+        Window window;
+        bool resize = false;
+        geom::Rectangle original;
+        int hedge = 0; // resize: -1 left edge, +1 right edge, 0 not picked yet
+        int vedge = 0; // -1 top, +1 bottom
+        bool have_pointer = false;
+        geom::Point pointer;
+    };
+    std::optional<KeyGrab> key_grab;
     bool raising_group = false;
     std::map<uint64_t, Window> tiled;
     std::map<Window, uint32_t> tile_action;
@@ -591,12 +630,20 @@ private:
         }
         for (size_t i = 0; i < list.size(); ++i)
             entries.push_back({window_id(list[i]), strings[2 * i].c_str(), strings[2 * i + 1].c_str()});
-        umoja_switcher_open(action, mods, entries.data(), entries.size());
+        if (umoja_switcher_open(action, mods, entries.data(), entries.size())) preview(umoja_switcher_preview());
+    }
+
+    // Window cycler (Alt+Esc): show the selected window on top for now.
+    void preview(uint64_t id) {
+        if (!id) return;
+        Window const w = find(id);
+        if (w && visible_here(w)) guarded("cycle preview", [&] { tools.raise_tree(w); });
     }
 
     void apply_switch(uint32_t code, UmojaSwitchResult const& res) {
         switch (code) {
         case UMOJA_SWITCH_ACTIVATE:
+            umoja_pointer_pressed(); // hand the keyboard back from the top bar
             guarded("switch", [&] {
                 for (size_t i = 0; i < res.n_ids; ++i) {
                     Window const w = find(res.ids[i]);
@@ -607,6 +654,9 @@ private:
             break;
         case UMOJA_SWITCH_CLOSE:
             for (size_t i = 0; i < res.n_ids; ++i) close(find(res.ids[i]));
+            break;
+        case UMOJA_SWITCH_PREVIEW:
+            preview(res.window);
             break;
         default:
             break;
@@ -676,7 +726,7 @@ private:
         if (elevated) {
             elevated = false;
             WindowSpecification drop;
-            drop.depth_layer() = mir_depth_layer_application;
+            drop.depth_layer() = above.count(w) ? mir_depth_layer_above : mir_depth_layer_application;
             guarded("drop dragged window", [&] {
                 tools.modify_window(tools.info_for(w), drop);
                 tools.raise_tree(w);
@@ -708,7 +758,7 @@ private:
     // org.gnome.mutter workspaces-only-on-primary: windows on secondary
     // monitors are on every workspace. Returns whether membership changed.
     bool update_workspace_membership(Window const& w) {
-        bool const sticky = umoja_workspaces_only_on_primary() && !on_primary(w);
+        bool const sticky = (umoja_workspaces_only_on_primary() && !on_primary(w)) || pinned.count(w);
         bool const member = in_any_workspace(w);
         if (sticky && member) {
             std::vector<std::shared_ptr<Workspace>> containing;
@@ -1186,6 +1236,7 @@ private:
         case UMOJA_ACTION_CLIPBOARD_HISTORY:
         case UMOJA_ACTION_SHIFT_OVERVIEW_UP:
         case UMOJA_ACTION_SHIFT_OVERVIEW_DOWN:
+        case UMOJA_ACTION_TOGGLE_MESSAGE_TRAY:
             umoja_handle_action(action);
             return true;
         default:
@@ -1228,11 +1279,28 @@ private:
         case UMOJA_ACTION_MOVE_TO_MONITOR_UP:
         case UMOJA_ACTION_MOVE_TO_MONITOR_DOWN:
             return move_to_monitor(info, action);
+        case UMOJA_ACTION_BEGIN_MOVE:
+        case UMOJA_ACTION_BEGIN_RESIZE:
+            if (!all_windows.count(target)) return false;
+            begin_key_grab(target, action == UMOJA_ACTION_BEGIN_RESIZE);
+            return true;
+        case UMOJA_ACTION_WINDOW_MENU:
+            if (!all_windows.count(target)) return false;
+            show_window_menu(target);
+            return true;
+        case UMOJA_ACTION_TOGGLE_ABOVE:
+            if (!all_windows.count(target)) return false;
+            toggle_above(target);
+            return true;
+        case UMOJA_ACTION_TOGGLE_STICKY:
+            if (!all_windows.count(target)) return false;
+            toggle_pinned(target);
+            return true;
         default:
             break;
         }
 
-        if (!is_app_window(info) || !umoja_is_tile_action(action)) return false;
+        if (!all_windows.count(target) || !umoja_is_tile_action(action)) return false;
 
         // Tiling a window into the tile it already has untiles it again
         // (mutter's toggle-tiled-*, Tiling Assistant's toggleTiling()).
@@ -1268,6 +1336,169 @@ private:
         tile_action[target] = action;
         umoja_tiling_register(id, action, out);
         return true;
+    }
+
+    // ---- keyboard move / resize -----------------------------------------------
+
+    static constexpr int KEY_ABOVE_TAB = 41; // evdev KEY_GRAVE
+    static constexpr uint32_t XK_GRAVE = 0x60;
+
+    static bool resizable(WindowInfo const& info) {
+        return info.min_width() != info.max_width() || info.min_height() != info.max_height();
+    }
+
+    void begin_key_grab(Window w, bool resize) {
+        auto& info = tools.info_for(w);
+        if (info.state() == mir_window_state_fullscreen) return;
+        if (resize && !resizable(info)) return;
+        // A maximized or tiled window comes back to its own size first.
+        if (tiled.count(window_id(w))) restore_untiled(info);
+        else if (info.state() != mir_window_state_restored) set_state(info, mir_window_state_restored);
+        KeyGrab g;
+        g.window = w;
+        g.resize = resize;
+        g.original = geom::Rectangle{w.top_left(), w.size()};
+        key_grab = g;
+        if (moving) end_move();
+    }
+
+    void key_grab_set(KeyGrab const& g, geom::Rectangle const& r) {
+        WindowSpecification spec;
+        spec.top_left() = r.top_left;
+        spec.size() = r.size;
+        applying = true;
+        guarded("keyboard move", [&] { tools.modify_window(tools.info_for(g.window), spec); });
+        applying = false;
+    }
+
+    static bool is_modifier_key(uint32_t keysym) {
+        return (keysym >= 0xffe1 && keysym <= 0xffee) || keysym == 0xfe03 || keysym == 0xff7e;
+    }
+
+    // Returns true when the key was used by the grab.
+    bool handle_key_grab(MirKeyboardAction action, uint32_t keysym, uint32_t mods) {
+        if (is_modifier_key(keysym)) return false;
+        auto& g = *key_grab;
+        if (!all_windows.count(g.window)) {
+            key_grab.reset();
+            return false;
+        }
+        if (action == mir_keyboard_action_up) return true;
+        int dx = 0, dy = 0;
+        switch (keysym) {
+        case 0xff51: case 0xff96: dx = -1; break; // Left, KP_Left
+        case 0xff53: case 0xff98: dx = 1; break;  // Right
+        case 0xff52: case 0xff97: dy = -1; break; // Up
+        case 0xff54: case 0xff99: dy = 1; break;  // Down
+        case 0xff0d: case 0xff8d: case 0x20:      // Return, KP_Enter, space
+            key_grab.reset();
+            return true;
+        case 0xff1b: // Escape: back to where it started
+            key_grab_set(g, g.original);
+            key_grab.reset();
+            return true;
+        default:
+            // Any other key ends the grab and goes on as usual (mutter).
+            key_grab.reset();
+            return false;
+        }
+        // mutter: 10 px steps, 1 px with Ctrl.
+        int const step = (mods & UMOJA_MOD_CTRL) ? 1 : 10;
+        geom::Rectangle r{g.window.top_left(), g.window.size()};
+        int x = r.top_left.x.as_int(), y = r.top_left.y.as_int();
+        int w = r.size.width.as_int(), h = r.size.height.as_int();
+        if (!g.resize) {
+            x += dx * step;
+            y += dy * step;
+        } else {
+            auto const& info = tools.info_for(g.window);
+            int const min_w = std::max(1, info.min_width().as_int()), max_w = info.max_width().as_int();
+            int const min_h = std::max(1, info.min_height().as_int()), max_h = info.max_height().as_int();
+            // The first arrow on an axis picks that edge (Left: left edge...).
+            if (dx && !g.hedge) g.hedge = dx;
+            if (dy && !g.vedge) g.vedge = dy;
+            if (dx) {
+                int const nw = std::clamp(w + dx * step * g.hedge, min_w, std::max(min_w, max_w));
+                if (g.hedge < 0) x -= nw - w;
+                w = nw;
+            }
+            if (dy) {
+                int const nh = std::clamp(h + dy * step * g.vedge, min_h, std::max(min_h, max_h));
+                if (g.vedge < 0) y -= nh - h;
+                h = nh;
+            }
+        }
+        key_grab_set(g, geom::Rectangle{geom::Point{x, y}, geom::Size{w, h}});
+        return true;
+    }
+
+    // Pointer motion during a keyboard move drags the window along.
+    void key_grab_pointer(int32_t px, int32_t py) {
+        auto& g = *key_grab;
+        geom::Point const p{px, py};
+        if (g.have_pointer && !g.resize && all_windows.count(g.window)) {
+            auto const d = p - g.pointer;
+            key_grab_set(g, geom::Rectangle{g.window.top_left() + d, g.window.size()});
+        }
+        g.pointer = p;
+        g.have_pointer = true;
+    }
+
+    // ---- window menu (Alt+Space) -----------------------------------------------
+
+    void show_window_menu(Window w) {
+        auto const& info = tools.info_for(w);
+        uint32_t flags = 0;
+        auto const state = info.state();
+        if (state == mir_window_state_maximized) flags |= UMOJA_WINDOW_MAXIMIZED;
+        if (state == mir_window_state_fullscreen) flags |= UMOJA_WINDOW_FULLSCREEN;
+        if (tiled.count(window_id(w))) flags |= UMOJA_WINDOW_TILED;
+        if (above.count(w)) flags |= UMOJA_WINDOW_ABOVE;
+        if (!in_any_workspace(w)) flags |= UMOJA_WINDOW_STICKY;
+        if (resizable(info)) flags |= UMOJA_WINDOW_RESIZABLE;
+        int32_t const ws = workspace_of(w);
+
+        // Which "Move to Monitor" entries apply: bits 1 left, 2 right, 4 up, 8 down.
+        uint32_t neighbours = 0;
+        if (outputs.size() > 1) {
+            std::vector<UmojaRect> rects;
+            geom::Rectangle from{};
+            for (auto const& [id, r] : outputs) {
+                rects.push_back(to_rect(r));
+                if (r.contains(centre_of(w))) from = r;
+            }
+            uint32_t const dirs[] = {UMOJA_ACTION_MOVE_TO_MONITOR_LEFT, UMOJA_ACTION_MOVE_TO_MONITOR_RIGHT,
+                                     UMOJA_ACTION_MOVE_TO_MONITOR_UP, UMOJA_ACTION_MOVE_TO_MONITOR_DOWN};
+            for (uint32_t i = 0; i < 4; ++i)
+                if (umoja_neighbor_output(dirs[i], to_rect(from), rects.data(), rects.size()) >= 0)
+                    neighbours |= 1u << i;
+        }
+        // Like mutter for the keyboard: at the window's top-left corner.
+        umoja_window_menu(window_id(w), w.top_left().x.as_int(), w.top_left().y.as_int(), flags,
+                          ws < 0 ? static_cast<uint32_t>(current) : static_cast<uint32_t>(ws),
+                          static_cast<uint32_t>(workspaces.size()), neighbours);
+    }
+
+    void toggle_above(Window w) {
+        bool const on = !above.count(w);
+        if (on) above.insert(w);
+        else above.erase(w);
+        WindowSpecification spec;
+        spec.depth_layer() = on ? mir_depth_layer_above : mir_depth_layer_application;
+        guarded("always on top", [&] {
+            tools.modify_window(tools.info_for(w), spec);
+            tools.raise_tree(w);
+        });
+    }
+
+    // "Always on Visible Workspace": on every workspace, like windows on a
+    // secondary monitor with workspaces-only-on-primary.
+    void toggle_pinned(Window w) {
+        if (pinned.count(w)) pinned.erase(w);
+        else pinned.insert(w);
+        guarded("pin to all workspaces", [&] {
+            if (update_workspace_membership(w)) relayout_workspaces();
+        });
     }
 
     bool move_to_monitor(WindowInfo& info, uint32_t action) {

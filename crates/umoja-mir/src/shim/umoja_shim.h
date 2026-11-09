@@ -55,6 +55,20 @@ enum {
     UMOJA_ACTION_CLIPBOARD_HISTORY = 38,
     UMOJA_ACTION_SHIFT_OVERVIEW_UP = 39,
     UMOJA_ACTION_SHIFT_OVERVIEW_DOWN = 40,
+    UMOJA_ACTION_CYCLE_GROUP = 41,
+    UMOJA_ACTION_CYCLE_GROUP_BACKWARD = 42,
+    UMOJA_ACTION_CYCLE_WINDOWS = 43,
+    UMOJA_ACTION_CYCLE_WINDOWS_BACKWARD = 44,
+    UMOJA_ACTION_SWITCH_PANELS = 45,
+    UMOJA_ACTION_SWITCH_PANELS_BACKWARD = 46,
+    UMOJA_ACTION_BEGIN_MOVE = 47,
+    UMOJA_ACTION_BEGIN_RESIZE = 48,
+    UMOJA_ACTION_WINDOW_MENU = 49,
+    UMOJA_ACTION_TOGGLE_MESSAGE_TRAY = 50,
+    UMOJA_ACTION_CYCLE_PANELS = 51,
+    UMOJA_ACTION_CYCLE_PANELS_BACKWARD = 52,
+    UMOJA_ACTION_TOGGLE_ABOVE = 53,
+    UMOJA_ACTION_TOGGLE_STICKY = 54,
     /* 1000 + n: run GNOME custom shortcut n (input.rs CUSTOM_BASE). */
     UMOJA_ACTION_CUSTOM_BASE = 1000,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.
@@ -95,6 +109,8 @@ enum {
     UMOJA_SWITCH_ACTIVATE = 2,
     UMOJA_SWITCH_CLOSE = 3,
     UMOJA_SWITCH_CANCEL = 4,
+    // Window cycler (Alt+Esc, Alt+F6): raise `window` as a preview.
+    UMOJA_SWITCH_PREVIEW = 5,
 };
 
 // org.umoja.Compositor window listing (src/shell.rs).
@@ -116,6 +132,10 @@ enum {
     UMOJA_WINDOW_MAXIMIZED = 1 << 3,
     UMOJA_WINDOW_FULLSCREEN = 1 << 4,
     UMOJA_WINDOW_TILED = 1 << 5,
+    // Window menu only.
+    UMOJA_WINDOW_ABOVE = 1 << 6,
+    UMOJA_WINDOW_STICKY = 1 << 7,
+    UMOJA_WINDOW_RESIZABLE = 1 << 8,
 };
 
 typedef void (*UmojaWindowCallback)(void* ctx, UmojaWindowDesc const* desc);
@@ -173,6 +193,16 @@ uint32_t umoja_switcher_key(uint32_t keysym, uint32_t mods, bool down, UmojaSwit
 uint32_t umoja_switcher_pick(uint32_t index, UmojaSwitchResult* out);
 void umoja_switcher_window_closed(uint64_t id);
 void umoja_switcher_cancel(void);
+// The window a cycler (Alt+Esc) shows right now, 0 for none.
+uint64_t umoja_switcher_preview(void);
+// Alt+Space: show the window menu for `id` at (x, y). `flags` are
+// UMOJA_WINDOW_*; `workspace`/`n_workspaces` and `n_outputs` decide which
+// "Move to" entries apply.
+void umoja_window_menu(uint64_t id, int32_t x, int32_t y, uint32_t flags, uint32_t workspace, uint32_t n_workspaces,
+                       uint32_t neighbours);
+// A pointer button went down: hand keyboard focus back from the top bar or
+// dock (Ctrl+Alt+Tab).
+void umoja_pointer_pressed(void);
 void umoja_drag_begin(int32_t px, int32_t py, UmojaRect window, UmojaRect area, UmojaRect monitor);
 uint32_t umoja_drag_motion(int32_t px, int32_t py, UmojaRect window, UmojaRect area, UmojaRect monitor);
 uint32_t umoja_drag_end(void);

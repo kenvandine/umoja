@@ -51,6 +51,8 @@ pub enum Outcome {
     /// Close these windows and keep the switcher open.
     Close(Vec<u64>),
     Cancel,
+    /// Window cycler: raise this window as a preview, keep cycling.
+    Preview(u64),
 }
 
 #[derive(Debug, Clone)]

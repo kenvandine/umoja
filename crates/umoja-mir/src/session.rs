@@ -69,6 +69,10 @@ pub fn dispatch(action: Action) {
             overlay_call("ShiftOverview", (false,));
             return;
         }
+        Action::ToggleMessageTray => {
+            panel_call("ToggleMenu", ("calendar",));
+            return;
+        }
         Action::ScreenshotUi => "ShowScreenshotUI",
         Action::Screenshot => "ScreenshotScreen",
         _ => return,
@@ -170,6 +174,22 @@ pub fn media_key(name: &'static str) {
         ),
         "Press",
         (name,),
+    )
+}
+
+/// The dock (umoja-dock): keyboard focus for Ctrl+Alt+Tab.
+pub fn dock_call<B>(method: &'static str, body: B)
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType + Send + Sync + 'static,
+{
+    send_call(
+        (
+            dbus::DOCK_BUS_NAME,
+            dbus::DOCK_OBJECT_PATH,
+            dbus::DOCK_INTERFACE,
+        ),
+        method,
+        body,
     )
 }
 

@@ -4,6 +4,7 @@
 //! Dock, pins apps from `org.gnome.shell favorite-apps`, and shows running
 //! windows (with dots) from the compositor's foreign-toplevel protocol.
 
+mod keynav;
 mod launcher;
 mod previews;
 mod tracker;
@@ -156,6 +157,7 @@ fn build(app: &adw::Application) {
     });
 
     dock.install_autohide();
+    keynav::start(&dock);
     dock.apply_layout();
     dock.rebuild();
     fade_in_on_map(&window);
@@ -251,6 +253,7 @@ impl Dock {
         motion.connect_leave(move |_| {
             if let Some(d) = leave.upgrade()
                 && !d.config.borrow().fixed
+                && !keynav::focused()
             {
                 d.list.set_visible(false);
                 d.window.set_default_size(HIDDEN_SIZE, HIDDEN_SIZE);

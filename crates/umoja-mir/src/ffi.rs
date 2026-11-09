@@ -332,6 +332,7 @@ pub const SWITCH_CONSUMED: u32 = 1;
 pub const SWITCH_ACTIVATE: u32 = 2;
 pub const SWITCH_CLOSE: u32 = 3;
 pub const SWITCH_CANCEL: u32 = 4;
+pub const SWITCH_PREVIEW: u32 = 5;
 
 fn lossy(p: *const c_char) -> String {
     if p.is_null() {
@@ -367,6 +368,12 @@ fn write_outcome(out: Option<Outcome>, res: *mut SwitchResult) -> u32 {
         Outcome::Close(ids) => {
             fill(&ids);
             SWITCH_CLOSE
+        }
+        Outcome::Preview(window) => {
+            if !res.is_null() {
+                unsafe { (*res).window = window };
+            }
+            SWITCH_PREVIEW
         }
     }
 }
@@ -434,6 +441,34 @@ pub extern "C" fn umoja_switcher_window_closed(id: u64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_switcher_cancel() {
     guard("switcher_cancel", (), shell::switcher_cancel)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_preview() -> u64 {
+    guard("switcher_preview", 0, shell::switcher_preview)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_window_menu(
+    id: u64,
+    x: i32,
+    y: i32,
+    flags: u32,
+    workspace: u32,
+    n_workspaces: u32,
+    neighbours: u32,
+) {
+    guard("window_menu", (), || {
+        crate::session::overlay_call(
+            "ShowWindowMenu",
+            (id, x, y, flags, workspace, n_workspaces, neighbours),
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_pointer_pressed() {
+    guard("pointer_pressed", (), shell::unfocus_places)
 }
 
 // ---- drag to snap ----------------------------------------------------------

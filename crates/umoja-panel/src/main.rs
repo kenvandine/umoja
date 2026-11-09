@@ -107,7 +107,7 @@ fn build(app: &adw::Application) {
     let quick = quick_settings::button();
     end.append(&quick);
     if let Some(calendar) = clock.downcast_ref::<gtk::MenuButton>() {
-        menu_api::own_name(calendar, &quick);
+        menu_api::own_name(window.upcast_ref(), calendar, &quick);
     }
     bar.set_end_widget(Some(&end));
 
@@ -138,7 +138,13 @@ fn activities_button() -> gtk::Button {
     button.update_property(&[gtk::accessible::Property::Label(&label)]);
     button.add_css_class("flat");
     button.add_css_class("activities");
-    button.connect_clicked(|_| toggle_overlay());
+    button.connect_clicked(|b| {
+        // The overview takes the keyboard from Ctrl+Alt+Tab navigation.
+        if let Some(w) = b.root().and_downcast::<gtk::Window>() {
+            menu_api::unfocus(&w);
+        }
+        toggle_overlay()
+    });
     watch_workspaces(&dots);
     button
 }

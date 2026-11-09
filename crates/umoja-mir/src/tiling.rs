@@ -51,6 +51,27 @@ pub enum Action {
     /// gnome-shell's shift-overview-up/down: desktop → overview → app grid.
     ShiftOverviewUp = 39,
     ShiftOverviewDown = 40,
+    /// mutter's cycle-group / cycle-windows (Alt+F6, Alt+Esc): switch
+    /// directly, no popup.
+    CycleGroup = 41,
+    CycleGroupBackward = 42,
+    CycleWindows = 43,
+    CycleWindowsBackward = 44,
+    /// gnome-shell's Ctrl+Alt+Tab: move keyboard focus to the top bar/dock.
+    SwitchPanels = 45,
+    SwitchPanelsBackward = 46,
+    /// Alt+F7 / Alt+F8: move or resize the window with the keyboard.
+    BeginMove = 47,
+    BeginResize = 48,
+    /// Alt+Space: the window menu.
+    WindowMenu = 49,
+    /// Super+V: the notification list.
+    ToggleMessageTray = 50,
+    CyclePanels = 51,
+    CyclePanelsBackward = 52,
+    /// Window menu entries.
+    ToggleAbove = 53,
+    ToggleSticky = 54,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -98,6 +119,20 @@ impl Action {
             38 => ClipboardHistory,
             39 => ShiftOverviewUp,
             40 => ShiftOverviewDown,
+            41 => CycleGroup,
+            42 => CycleGroupBackward,
+            43 => CycleWindows,
+            44 => CycleWindowsBackward,
+            45 => SwitchPanels,
+            46 => SwitchPanelsBackward,
+            47 => BeginMove,
+            48 => BeginResize,
+            49 => WindowMenu,
+            50 => ToggleMessageTray,
+            51 => CyclePanels,
+            52 => CyclePanelsBackward,
+            53 => ToggleAbove,
+            54 => ToggleSticky,
             _ => None,
         }
     }
