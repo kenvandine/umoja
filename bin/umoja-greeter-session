@@ -83,6 +83,30 @@ x11_fallback() {
     exit $gstatus
 }
 
+# Mir's gbm/atomic backends can't drive screens on the proprietary NVIDIA
+# driver; only the eglstream backend can. On a laptop whose screens are all
+# wired to the NVIDIA GPU (BIOS "Discrete"/"Dynamic" graphics, or a dock on
+# the dGPU's ports) umoja-mir would start fine and draw the login screen
+# where nobody can see it. Use the X11 greeter instead in that case.
+mir_can_show() {
+    eglstream=no
+    for m in /usr/lib/*/mir/server-platform/graphics-eglstream-kms.so*; do
+        [ -e "$m" ] && eglstream=yes
+    done
+    any=no
+    for c in /sys/class/drm/card[0-9]*-*; do
+        [ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
+        any=yes
+        card=${c##*/}; card=${card%%-*}
+        driver=$(basename "$(readlink "/sys/class/drm/$card/device/driver")")
+        [ "$driver" != nvidia ] && return 0
+        [ $eglstream = yes ] && return 0
+    done
+    # No connector information at all (unusual drivers): let Mir try.
+    [ $any = no ] && return 0
+    return 1
+}
+
 # One retry if the compositor dies straight away (the GPU race above, or
 # the previous session's compositor still letting go of it at logout).
 # If it still won't start, fall back to X11 rather than leave no login
@@ -93,6 +117,10 @@ wait_gpu
 case "${UMOJA_GREETER_X11:-}" in
     1|yes|true) x11_fallback ;;
 esac
+if ! mir_can_show; then
+    log "every connected screen is on the NVIDIA GPU and Mir's eglstream backend isn't installed"
+    x11_fallback
+fi
 for attempt in 1 2; do
     wait_active
     started=$(date +%s)
