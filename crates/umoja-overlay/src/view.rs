@@ -77,6 +77,9 @@ pub struct Overlay {
     answer_text: RefCell<String>,
 }
 
+/// Width of an app grid tile, icon plus label, as in GNOME (about 128px).
+const TILE_WIDTH: i32 = 128;
+
 impl Overlay {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let window = adw::ApplicationWindow::builder()
@@ -91,6 +94,7 @@ impl Overlay {
         }
         window.set_exclusive_zone(-1);
         window.set_keyboard_mode(KeyboardMode::Exclusive);
+        umoja_common::blur::blur_behind(&window);
 
         let entry = gtk::SearchEntry::builder()
             .placeholder_text(i18n::umoja("Search apps, or ask anything…"))
@@ -214,13 +218,18 @@ impl Overlay {
         assistant.append(&chips);
         assistant.set_visible(false);
 
+        // Like GNOME's app grid: a compact block of fixed-width tiles in the
+        // middle of the screen. Centering the FlowBox gives it its natural
+        // width (at most 8 tiles), so on a wide monitor the leftover space
+        // goes to the sides instead of between the icons.
         let grid = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .max_children_per_line(8)
             .min_children_per_line(4)
             .homogeneous(true)
-            .row_spacing(24)
-            .column_spacing(24)
+            .row_spacing(12)
+            .column_spacing(12)
+            .halign(gtk::Align::Center)
             .valign(gtk::Align::Start)
             .build();
         let scroller = gtk::ScrolledWindow::builder()
@@ -572,13 +581,14 @@ impl Overlay {
         let label = gtk::Label::builder()
             .label(app.display_name())
             .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(14)
+            .max_width_chars(12)
             .build();
         let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
         content.append(&image);
         content.append(&label);
         let button = gtk::Button::builder()
             .child(&content)
+            .width_request(TILE_WIDTH)
             .css_classes(["flat", "app-tile"])
             .build();
         let weak = Rc::downgrade(self);

@@ -1,6 +1,8 @@
-/* No compositor blur protocol yet; a deep translucent scrim stands in. */
+/* A translucent scrim, frosted by the compositor's blur like the panel
+   and dock. */
 window.umoja-overlay {
-  background-color: alpha(#120a10, 0.82);
+  background-color: rgba(22, 22, 24, 0.70);
+  backdrop-filter: blur(24px);
   color: #ffffff;
 }
 .umoja-overlay entry {
