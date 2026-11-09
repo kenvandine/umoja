@@ -4,6 +4,7 @@
 //! Dock, pins apps from `org.gnome.shell favorite-apps`, and shows running
 //! windows (with dots) from the compositor's foreign-toplevel protocol.
 
+mod autohide;
 mod keynav;
 mod launcher;
 mod launcher_entry;
@@ -26,7 +27,6 @@ use umoja_common::types::DockPosition;
 use umoja_common::{dbus, i18n};
 
 const APP_ID: &str = "org.umoja.Dock";
-const HIDDEN_SIZE: i32 = 2;
 /// Gap between the dock and the screen edges it sits against.
 const EDGE_GAP: i32 = 8;
 /// Pixels between the dock card and its menus, as umoja-panel's menu_gap.
@@ -42,6 +42,8 @@ struct Config {
     /// Ubuntu Dock lists windows under an "All Windows" submenu when set.
     show_windows_preview: bool,
     default_windows_preview_to_open: bool,
+    /// Auto-hide and intellihide, used when `fixed` is off.
+    hide: autohide::HideConfig,
 }
 
 impl Config {
@@ -61,6 +63,7 @@ impl Config {
                 "default-windows-preview-to-open",
                 false,
             ),
+            hide: autohide::HideConfig::load(),
         }
     }
 }
@@ -80,6 +83,7 @@ struct Dock {
     /// The badge widgets of the icons now in the dock, by dock key, so an
     /// update (a download's progress ticks often) needs no rebuild.
     badges: RefCell<HashMap<String, Badge>>,
+    hide: autohide::Hide,
     _settings: Vec<gio::Settings>,
 }
 
@@ -139,6 +143,7 @@ fn build(app: &adw::Application) {
         rebuild_pending: Cell::new(false),
         entries: OnceCell::new(),
         badges: RefCell::default(),
+        hide: autohide::Hide::new(),
         _settings: settings.clone(),
     });
     let weak = Rc::downgrade(&dock);
@@ -155,6 +160,7 @@ fn build(app: &adw::Application) {
                 *d.config.borrow_mut() = Config::load();
                 d.apply_layout();
                 d.rebuild();
+                d.refresh_autohide();
             }
         });
     }
@@ -189,6 +195,7 @@ fn build(app: &adw::Application) {
     keynav::start(&dock);
     dock.apply_layout();
     dock.rebuild();
+    dock.refresh_autohide();
     fade_in_on_map(&window);
     window.present();
 }
@@ -255,40 +262,52 @@ impl Dock {
                 self.window.remove_css_class(class);
             }
         }
-        let thickness = cfg.icon_size + 16 + EDGE_GAP;
-        if cfg.position.is_vertical() {
-            self.window.set_default_size(thickness, -1);
-        } else {
-            self.window.set_default_size(-1, thickness);
-        }
-        if cfg.fixed {
-            self.window.set_exclusive_zone(thickness);
-        } else {
-            self.window.set_exclusive_zone(0);
-        }
-        self.list.set_visible(true);
+        self.list.set_visible(self.hide.shown());
+        self.update_reserved_space();
     }
 
-    /// Unfixed dock: collapse to a thin strip until the pointer touches it.
-    fn install_autohide(self: &Rc<Self>) {
-        let motion = gtk::EventControllerMotion::new();
-        let enter = Rc::downgrade(self);
-        motion.connect_enter(move |_, _, _| {
-            if let Some(d) = enter.upgrade() {
-                d.list.set_visible(true);
+    /// How far the dock reaches in from its screen edge: the list's real
+    /// size across the dock (icons, item and list padding, border) plus the
+    /// gap it floats off the edge. Measured rather than computed from the
+    /// icon size so CSS changes can't let maximized windows slide under it.
+    fn thickness(&self) -> i32 {
+        let cfg = *self.config.borrow();
+        let fallback = cfg.icon_size + 16 + EDGE_GAP;
+        if !self.list.is_visible() || self.list.first_child().is_none() {
+            return fallback;
+        }
+        let across = if cfg.position.is_vertical() {
+            gtk::Orientation::Horizontal
+        } else {
+            gtk::Orientation::Vertical
+        };
+        // measure() includes the widget margins, i.e. the EDGE_GAP.
+        let (_, natural, _, _) = self.list.measure(across, -1);
+        natural.max(fallback)
+    }
+
+    /// Size the dock and, when it is fixed, reserve exactly the space it
+    /// covers so maximized and tiled windows start right after it, like
+    /// Ubuntu Dock.
+    fn update_reserved_space(&self) {
+        let cfg = *self.config.borrow();
+        let thickness = self.thickness();
+        self.remember_extent(thickness);
+        if self.hide.shown() {
+            if cfg.position.is_vertical() {
+                self.window.set_default_size(thickness, -1);
+            } else {
+                self.window.set_default_size(-1, thickness);
             }
-        });
-        let leave = Rc::downgrade(self);
-        motion.connect_leave(move |_| {
-            if let Some(d) = leave.upgrade()
-                && !d.config.borrow().fixed
-                && !keynav::focused()
-            {
-                d.list.set_visible(false);
-                d.window.set_default_size(HIDDEN_SIZE, HIDDEN_SIZE);
-            }
-        });
-        self.window.add_controller(motion);
+        } else {
+            self.collapse();
+        }
+        // An auto-hiding dock floats over windows and reserves nothing.
+        let thickness = if cfg.fixed { thickness } else { 0 };
+        if self.window.exclusive_zone() != thickness {
+            tracing::debug!(thickness, "dock exclusive zone");
+            self.window.set_exclusive_zone(thickness);
+        }
     }
 
     fn rebuild(self: &Rc<Self>) {
@@ -338,6 +357,7 @@ impl Dock {
             self.list.append(&spacer);
             self.list.append(&self.show_apps_button(cfg.icon_size));
         }
+        self.update_reserved_space();
     }
 
     fn app_button(
@@ -687,6 +707,7 @@ impl Dock {
                     if d.rebuild_pending.get() {
                         d.rebuild();
                     }
+                    d.update_visibility();
                 }
             });
         });

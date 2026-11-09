@@ -27,17 +27,17 @@ thread_local! {
     static FOCUSED: Cell<bool> = const { Cell::new(false) };
 }
 
-fn focus(dock: &Dock) {
+fn focus(dock: &Rc<Dock>) {
     FOCUSED.with(|f| f.set(true));
     // An autohidden dock shows itself while it has the keyboard.
-    dock.list.set_visible(true);
+    dock.update_visibility();
     dock.window.set_keyboard_mode(KeyboardMode::Exclusive);
     dock.window.set_focus_visible(true);
     GtkWindowExt::set_focus(&dock.window, None::<&gtk::Widget>);
     dock.window.child_focus(gtk::DirectionType::TabForward);
 }
 
-fn unfocus(dock: &Dock) {
+fn unfocus(dock: &Rc<Dock>) {
     if !FOCUSED.with(|f| f.replace(false)) {
         return;
     }
@@ -45,9 +45,7 @@ fn unfocus(dock: &Dock) {
     if !dock.menu_open.get() {
         dock.window.set_keyboard_mode(KeyboardMode::None);
     }
-    if !dock.config.borrow().fixed {
-        dock.list.set_visible(false);
-    }
+    dock.update_visibility();
 }
 
 /// Whether Ctrl+Alt+Tab gave the dock the keyboard (menus closing keep it).
