@@ -637,11 +637,11 @@ pub fn wifi_tile(tile: impl Fn(&str, &str) -> gtk::ToggleButton) -> (gtk::Box, g
                 arrow.set_active(false);
                 revealer.set_reveal_child(false);
             }
-            let title = match (&w.ssid, w.state) {
+            let subtitle = match (&w.ssid, w.state) {
                 (Some(ssid), DEV_ACTIVATED) => ssid.clone(),
-                _ => i18n::control_center("Wi-Fi"),
+                _ => String::new(),
             };
-            set_tile_label(&toggle, &title);
+            set_tile_subtitle(&toggle, &subtitle);
             set_tile_icon(
                 &toggle,
                 &if w.state == DEV_ACTIVATED {
@@ -752,11 +752,11 @@ pub fn wired_tile(tile: impl Fn(&str, &str) -> gtk::ToggleButton) -> gtk::Toggle
             updating.set(true);
             t.set_active(w.state == DEV_ACTIVATED);
             updating.set(false);
-            let title = match (&w.name, w.state) {
+            let subtitle = match (&w.name, w.state) {
                 (Some(n), DEV_ACTIVATED) => n.clone(),
-                _ => i18n::control_center("Wired"),
+                _ => String::new(),
             };
-            set_tile_label(&t, &title);
+            set_tile_subtitle(&t, &subtitle);
         }
     });
     t.connect_toggled(move |_| {
@@ -771,12 +771,25 @@ fn tile_content(t: &gtk::ToggleButton) -> Option<gtk::Box> {
     t.child().and_downcast()
 }
 
+/// The title and subtitle labels built by quick_settings::tile.
+fn tile_labels(t: &gtk::ToggleButton) -> Option<(gtk::Label, gtk::Label)> {
+    let text = tile_content(t)?.last_child()?;
+    let title = text.first_child().and_downcast::<gtk::Label>()?;
+    let subtitle = text.last_child().and_downcast::<gtk::Label>()?;
+    Some((title, subtitle))
+}
+
 pub fn set_tile_label(t: &gtk::ToggleButton, text: &str) {
-    if let Some(l) = tile_content(t)
-        .and_then(|b| b.last_child())
-        .and_downcast::<gtk::Label>()
-    {
-        l.set_label(text);
+    if let Some((title, _)) = tile_labels(t) {
+        title.set_label(text);
+    }
+}
+
+/// The dimmer second line; empty hides it so the title centres.
+pub fn set_tile_subtitle(t: &gtk::ToggleButton, text: &str) {
+    if let Some((_, subtitle)) = tile_labels(t) {
+        subtitle.set_label(text);
+        subtitle.set_visible(!text.is_empty());
     }
 }
 

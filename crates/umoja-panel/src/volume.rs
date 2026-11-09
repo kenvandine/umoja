@@ -190,7 +190,11 @@ pub fn apply_key(old: VolumeState, key: Key, step: f64, max: f64) -> (VolumeStat
 
 /// 100%, or ~150% with "Over-Amplification" on, like gnome-shell's slider.
 pub fn max_volume() -> f64 {
-    if umoja_common::gsettings::get_bool("org.gnome.desktop.sound", "allow-volume-above-100-percent", false) {
+    if umoja_common::gsettings::get_bool(
+        "org.gnome.desktop.sound",
+        "allow-volume-above-100-percent",
+        false,
+    ) {
         1.5
     } else {
         1.0
@@ -297,16 +301,24 @@ impl Volume {
         if !gs::get_bool("org.gnome.desktop.sound", "event-sounds", true) {
             return;
         }
-        if self.feedback.borrow().as_ref().is_some_and(|p| p.identifier().is_some()) {
+        if self
+            .feedback
+            .borrow()
+            .as_ref()
+            .is_some_and(|p| p.identifier().is_some())
+        {
             return;
         }
         let theme = gs::get_string("org.gnome.desktop.sound", "theme-name", "freedesktop");
-        let Some(file) = [theme.as_str(), "Yaru", "freedesktop"].iter().find_map(|t| {
-            ["oga", "ogg", "wav"].iter().find_map(|ext| {
-                let p = format!("/usr/share/sounds/{t}/stereo/audio-volume-change.{ext}");
-                std::path::Path::new(&p).exists().then_some(p)
+        let Some(file) = [theme.as_str(), "Yaru", "freedesktop"]
+            .iter()
+            .find_map(|t| {
+                ["oga", "ogg", "wav"].iter().find_map(|ext| {
+                    let p = format!("/usr/share/sounds/{t}/stereo/audio-volume-change.{ext}");
+                    std::path::Path::new(&p).exists().then_some(p)
+                })
             })
-        }) else {
+        else {
             return;
         };
         crate::mpris::any_playing(move |playing| {
@@ -380,18 +392,42 @@ mod tests {
             volume,
             muted,
         };
-        assert_eq!(apply_key(s(0.5, false), Key::Up, 0.06, 1.0).0, s(0.56, false));
-        assert_eq!(apply_key(s(0.98, false), Key::Up, 0.06, 1.0).0, s(1.0, false));
+        assert_eq!(
+            apply_key(s(0.5, false), Key::Up, 0.06, 1.0).0,
+            s(0.56, false)
+        );
+        assert_eq!(
+            apply_key(s(0.98, false), Key::Up, 0.06, 1.0).0,
+            s(1.0, false)
+        );
         assert_eq!(apply_key(s(1.0, false), Key::Up, 0.06, 1.0).1, false);
-        assert_eq!(apply_key(s(1.0, false), Key::Up, 0.06, 1.5).0, s(1.06, false));
+        assert_eq!(
+            apply_key(s(1.0, false), Key::Up, 0.06, 1.5).0,
+            s(1.06, false)
+        );
         // Unmuting with Up keeps the old volume unless it was 0.
         assert_eq!(apply_key(s(0.5, true), Key::Up, 0.06, 1.0).0, s(0.5, false));
-        assert_eq!(apply_key(s(0.0, true), Key::Up, 0.06, 1.0).0, s(0.06, false));
+        assert_eq!(
+            apply_key(s(0.0, true), Key::Up, 0.06, 1.0).0,
+            s(0.06, false)
+        );
         // Down to the bottom mutes.
-        assert_eq!(apply_key(s(0.04, false), Key::Down, 0.06, 1.0).0, s(0.0, true));
-        assert_eq!(apply_key(s(0.06, false), Key::Down, 0.06, 1.0).0, s(0.0, true));
-        assert_eq!(apply_key(s(0.5, false), Key::Down, 0.06, 1.0).0, s(0.44, false));
-        assert_eq!(apply_key(s(0.5, false), Key::Mute, 0.06, 1.0).0, s(0.5, true));
+        assert_eq!(
+            apply_key(s(0.04, false), Key::Down, 0.06, 1.0).0,
+            s(0.0, true)
+        );
+        assert_eq!(
+            apply_key(s(0.06, false), Key::Down, 0.06, 1.0).0,
+            s(0.0, true)
+        );
+        assert_eq!(
+            apply_key(s(0.5, false), Key::Down, 0.06, 1.0).0,
+            s(0.44, false)
+        );
+        assert_eq!(
+            apply_key(s(0.5, false), Key::Mute, 0.06, 1.0).0,
+            s(0.5, true)
+        );
     }
 
     #[test]

@@ -31,30 +31,34 @@ pub fn own_name() {
         let iface = info
             .lookup_interface(dbus::MEDIA_KEYS_INTERFACE)
             .expect("interface");
-        let res = conn
-            .register_object(dbus::MEDIA_KEYS_OBJECT_PATH, &iface)
-            .method_call(|_, _, _, _, method, params, invocation| match method {
-                "Press" => match params.get::<(String,)>() {
-                    Some((key,)) => {
-                        invocation.return_value(None);
-                        press(&key);
-                    }
-                    None => invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "s"),
-                },
-                "ShowOSD" => {
-                    let dict = glib::VariantDict::new(Some(&params.child_value(0)));
-                    match osd::Request::from_dict(&dict) {
-                        Some(r) => {
+        let res =
+            conn.register_object(dbus::MEDIA_KEYS_OBJECT_PATH, &iface)
+                .method_call(|_, _, _, _, method, params, invocation| match method {
+                    "Press" => match params.get::<(String,)>() {
+                        Some((key,)) => {
                             invocation.return_value(None);
-                            osd::show(r);
+                            press(&key);
                         }
                         None => invocation
-                            .return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "icon is required"),
+                            .return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "s"),
+                    },
+                    "ShowOSD" => {
+                        let dict = glib::VariantDict::new(Some(&params.child_value(0)));
+                        match osd::Request::from_dict(&dict) {
+                            Some(r) => {
+                                invocation.return_value(None);
+                                osd::show(r);
+                            }
+                            None => invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "icon is required",
+                            ),
+                        }
                     }
-                }
-                _ => invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method),
-            })
-            .build();
+                    _ => invocation
+                        .return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method),
+                })
+                .build();
         if let Err(e) = res {
             tracing::warn!(error = %e, "could not export org.umoja.MediaKeys");
         }
@@ -94,7 +98,9 @@ pub fn press(key: &str) {
         "stop" => mpris::send("Stop"),
         "previous" => mpris::send("Previous"),
         "next" => mpris::send("Next"),
-        "calculator" => launch_desktop(&["org.gnome.Calculator.desktop", "gnome-calculator.desktop"]),
+        "calculator" => {
+            launch_desktop(&["org.gnome.Calculator.desktop", "gnome-calculator.desktop"])
+        }
         "control-center" => crate::quick_settings::open_settings(""),
         "www" => launch_default(gio::AppInfo::default_for_uri_scheme("http"), None),
         "email" => launch_default(gio::AppInfo::default_for_uri_scheme("mailto"), None),
@@ -125,8 +131,12 @@ fn launch_default(info: Option<gio::AppInfo>, arg: Option<String>) {
 
 /// Start an app in its own scope, like the rest of the panel's launches.
 fn launch_info(info: gio::AppInfo, arg: Option<String>) {
-    let Some(cmd) = info.commandline() else { return };
-    let Ok(words) = glib::shell_parse_argv(cmd.as_os_str()) else { return };
+    let Some(cmd) = info.commandline() else {
+        return;
+    };
+    let Ok(words) = glib::shell_parse_argv(cmd.as_os_str()) else {
+        return;
+    };
     let mut argv: Vec<String> = words
         .iter()
         .map(|w| w.to_string_lossy().into_owned())
@@ -135,7 +145,10 @@ fn launch_info(info: gio::AppInfo, arg: Option<String>) {
     if let Some(arg) = arg {
         argv.push(arg);
     }
-    let id = info.id().map(|s| s.trim_end_matches(".desktop").to_string()).unwrap_or_default();
+    let id = info
+        .id()
+        .map(|s| s.trim_end_matches(".desktop").to_string())
+        .unwrap_or_default();
     // An activation token, so the compositor focuses the new window.
     let token = gtk4::gdk::Display::default()
         .and_then(|d| d.app_launch_context().startup_notify_id(Some(&info), &[]))

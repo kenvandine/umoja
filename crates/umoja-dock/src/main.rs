@@ -49,7 +49,8 @@ impl Config {
             icon_size: gs::get_int(d, "dash-max-icon-size", 48).clamp(16, 128),
             // Ubuntu ships dock-fixed=true; autohide only matters when unfixed.
             fixed: gs::get_bool(d, "dock-fixed", true),
-            extend: gs::get_bool(d, "extend-height", true),
+            // data/90_umoja.gschema.override makes Umoja default to the floating dock.
+            extend: gs::get_bool(d, "extend-height", false),
             show_apps_at_top: gs::get_bool(d, "show-apps-at-top", false),
             show_windows_preview: gs::get_bool(d, "show-windows-preview", true),
             default_windows_preview_to_open: gs::get_bool(
@@ -418,6 +419,7 @@ impl Dock {
         let popover = gtk::Popover::builder()
             .child(&col)
             .position(self.menu_side())
+            .has_arrow(false)
             .build();
         let weak_pop = popover.downgrade();
         let button = |label: &str, action: Box<dyn Fn()>| {
@@ -608,6 +610,9 @@ fn toggle_overlay() {
 }
 
 fn load_css() {
+    // The shell chrome is always dark, like the notification bubbles,
+    // whatever Settings > Appearance says; apps keep following it.
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
     let provider = gtk::CssProvider::new();
     provider.load_from_string(include_str!("dock.css"));
     if let Some(display) = gtk::gdk::Display::default() {
