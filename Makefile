@@ -5,6 +5,7 @@
 #   make vendor          vendor crates + the embedded Lemonade (needed for .debs)
 #   make deb             build binary packages locally
 #   make source-package  build a signed-ready source package for the PPA
+#   make bump-version    move to the next vYYYY.WW.REVISION (see packaging/bump-version)
 #   make nested          run umoja-mir in a window inside your current session
 
 CARGO ?= cargo
@@ -13,9 +14,12 @@ LEMONADE_ARCHES ?= x64 arm64
 LEMONADE_BASE := https://github.com/lemonade-sdk/lemonade/releases/download/v$(LEMONADE_VERSION)
 VENDOR := vendor
 
-.PHONY: all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
+.PHONY: bump-version all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
 
 all: build
+
+bump-version:
+	packaging/bump-version
 
 build:
 	$(CARGO) build --release --workspace

@@ -1,8 +1,9 @@
 # Build Debian packages and publish them to ppa:ken-vandine/umoja.
 #
 # - Pull requests: build binary .debs in the target Ubuntu release (no upload).
-# - Pushes to main: upload a snapshot (0.1.0+git<date>.<sha>~<series>1).
-# - Tags v*: upload that release (e.g. v0.2.0 -> 0.2.0~<series>1).
+# - Pushes to main: upload a snapshot (2026.46.1+git<date>.<sha>~<series>1).
+# - Tags v*: upload that release (e.g. v2026.46.1 -> 2026.46.1~<series>1).
+#   Versions are vYYYY.WW.REVISION (ISO week); packaging/bump-version makes one.
 # - Manual runs: pick the series and whether to upload.
 #
 # Launchpad builds offline, so the source package carries vendored crates
@@ -147,7 +148,12 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           base=$(dpkg-parsechangelog -S Version | sed 's/[~+].*//')
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}~${SERIES}1"
+            tag="${GITHUB_REF#refs/tags/v}"
+            if [[ "$tag" != "$base" ]]; then
+              echo "::error::Tag v$tag does not match debian/changelog ($base); run packaging/bump-version --tag"
+              exit 1
+            fi
+            version="${tag}~${SERIES}1"
           else
             stamp=$(git log -1 --format=%cd --date=format:%Y%m%d%H%M)
             version="${base}+git${stamp}.$(git rev-parse --short=8 HEAD)~${SERIES}1"

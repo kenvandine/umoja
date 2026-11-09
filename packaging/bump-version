@@ -1,0 +1,81 @@
+#!/bin/bash
+# Bump the Umoja version to the next vYYYY.WW.REVISION.
+#
+#   packaging/bump-version [--tag] [changelog entry...]
+#
+# YYYY.WW is the ISO year and week of today (date +%G.%V). REVISION starts
+# at 1 each week and counts up for every release made in the same week.
+#
+# The version is written as:
+#   debian/changelog   2026.46.1   (week zero-padded, e.g. 2027.05.1)
+#   Cargo.toml         2026.46.1   (week without the zero, e.g. 2027.5.1,
+#                                   because semver forbids leading zeros)
+#   git tag            v2026.46.1  (only with --tag, after you commit)
+#
+# Set UMOJA_DATE=YYYY-MM-DD to pretend today is another day.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+tag=false
+if [[ "${1:-}" == "--tag" ]]; then
+    tag=true
+    shift
+fi
+
+today=${UMOJA_DATE:-$(date -u +%F)}
+week=$(date -u -d "$today" +%G.%V)
+
+current=$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
+current=${current%%[~+-]*}
+
+if [[ "$current" =~ ^([0-9]{4}\.[0-9]{2})\.([0-9]+)$ && "${BASH_REMATCH[1]}" == "$week" ]]; then
+    revision=$((BASH_REMATCH[2] + 1))
+else
+    revision=1
+fi
+
+version="$week.$revision"
+year=${week%.*}
+ww=${week#*.}
+cargo_version="$year.$((10#$ww)).$revision"
+
+if [[ $# -gt 0 ]]; then
+    entry="$*"
+else
+    entry="Release $version."
+fi
+
+name=${DEBFULLNAME:-Umoja Maintainers}
+email=${DEBEMAIL:-dev@umoja.internal}
+stamp=$(date -u -R)
+
+# debian/changelog: new entry on top, same distribution as the last one.
+dist=$(sed -n '1s/^[^)]*) \([^;]*\);.*/\1/p' debian/changelog)
+{
+    printf 'umoja-desktop (%s) %s; urgency=medium\n\n' "$version" "$dist"
+    printf '%s\n' "$entry" | fold -s -w 70 | sed '1s/^/  * /; 2,$s/^/    /; s/ *$//'
+    printf '\n -- %s <%s>  %s\n\n' "$name" "$email" "$stamp"
+    cat debian/changelog
+} > debian/changelog.new
+mv debian/changelog.new debian/changelog
+
+# Cargo.toml workspace version, and the workspace crates in Cargo.lock.
+sed -i "/^\[workspace.package\]/,/^\[/ s/^version = \".*\"/version = \"$cargo_version\"/" Cargo.toml
+awk -v v="$cargo_version" '
+    /^name = "umoja-/ { ours = 1; print; next }
+    ours && /^version = / { print "version = \"" v "\""; ours = 0; next }
+    { ours = 0; print }
+' Cargo.lock > Cargo.lock.new
+mv Cargo.lock.new Cargo.lock
+
+echo "Version is now v$version (Cargo $cargo_version)."
+
+if $tag; then
+    git add debian/changelog Cargo.toml Cargo.lock
+    git commit -q -m "Release v$version"
+    git tag -a "v$version" -m "Umoja v$version"
+    echo "Committed and tagged v$version. Push with: git push origin HEAD v$version"
+else
+    echo "Commit it, then tag with: git tag -a v$version -m 'Umoja v$version'"
+fi

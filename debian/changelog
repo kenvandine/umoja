@@ -1,3 +1,11 @@
+umoja-desktop (2026.46.1) stonking; urgency=medium
+
+  * Switch to vYYYY.WW.REVISION versions (ISO year and week, then a
+    counter starting at 1 each week). packaging/bump-version moves to the
+    next one.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Mon, 09 Nov 2026 02:25:43 +0000
+
 umoja-desktop (0.2.0) stonking; urgency=medium
 
   * GNOME-style window management: Alt+Tab, overview with workspace

@@ -97,6 +97,26 @@ these repository secrets: `PPA_GPG_PRIVATE_KEY`, `PPA_GPG_PASSPHRASE`,
 `PPA_SIGNER_NAME`, `PPA_SIGNER_EMAIL` (the key must be registered with your
 Launchpad account).
 
+### Versions
+
+Umoja versions are `vYYYY.WW.REVISION`: the ISO year and week of the
+release, then a counter that starts at 1 each week, for example `v2026.46.1`.
+Git tags carry the `v`; `debian/changelog` drops it (`2026.46.1`), and
+`Cargo.toml` also drops a leading zero in the week (`2027.5.1` for
+`v2027.05.1`) because Cargo versions are semver.
+
+To cut a release:
+
+```sh
+packaging/bump-version --tag "What changed in this release."
+git push origin main v2026.46.2      # the tag name it printed
+```
+
+Without `--tag` it only edits `debian/changelog`, `Cargo.toml` and
+`Cargo.lock`. The PPA job refuses a tag that doesn't match
+`debian/changelog`. Snapshots from `main` are versioned
+`<last release>+git<date>.<sha>`, so they sort above that release.
+
 ## Testing on a real machine
 
 ```sh
