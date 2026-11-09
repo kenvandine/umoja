@@ -422,9 +422,25 @@ pub fn reload() {
             },
         ));
     };
+    let ta = tiling_assistant_active();
+    // Accelerators Tiling Assistant binds itself (Super+arrows, keypad).
+    let ta_accels: Vec<(u32, u32)> = if ta {
+        SOURCES
+            .iter()
+            .filter(|(schema, _, _)| *schema == TILING_ASSISTANT)
+            .flat_map(|(schema, key, _)| gs::get_strv(schema, key))
+            .filter_map(|a| parse_accelerator(&a))
+            .collect()
+    } else {
+        Vec::new()
+    };
     for (schema, key, action) in SOURCES {
         seen_schema |= gs::settings(schema).is_some();
-        push(gs::get_strv(schema, key), *action as u32);
+        let mut accels = gs::get_strv(schema, key);
+        if ta && accels.is_empty() && TA_EMPTIED.contains(&(*schema, *key)) {
+            accels = ta_restored(schema, key, &ta_accels);
+        }
+        push(accels, *action as u32);
     }
     // switch-to-workspace-N / move-to-workspace-N
     for n in 1..=workspaces::MAX_NUMBERED {
@@ -468,7 +484,6 @@ pub fn reload() {
         custom_commands.push(command);
     }
     let overlay = gs::get_string(gs::MUTTER, "overlay-key", "Super_L");
-    let ta = tiling_assistant_active();
     let cfg = Config {
         bindings,
         overlay_keysym: keysym_from_name(&overlay),
@@ -558,6 +573,30 @@ pub fn run_custom(code: u32) {
         }
         Err(e) => tracing::warn!(command, error = %e, "custom shortcut: could not run"),
     }
+}
+
+/// Keys Tiling Assistant empties in dconf while it runs in GNOME (and leaves
+/// empty after a GNOME session that didn't disable it cleanly).
+const TA_EMPTIED: &[(&str, &str)] = &[
+    (gs::WM_KEYBINDINGS, "maximize"),
+    (gs::WM_KEYBINDINGS, "unmaximize"),
+    (gs::MUTTER_KEYBINDINGS, "toggle-tiled-left"),
+    (gs::MUTTER_KEYBINDINGS, "toggle-tiled-right"),
+];
+
+/// The schema default of a key Tiling Assistant emptied, minus what it binds
+/// itself, so e.g. unmaximize keeps Alt+F5 while Super+Down stays Tiling
+/// Assistant's restore-window (as Ubuntu documents).
+fn ta_restored(schema: &str, key: &str, ta_accels: &[(u32, u32)]) -> Vec<String> {
+    let Some(s) = gs::settings(schema) else {
+        return Vec::new();
+    };
+    s.default_value(key)
+        .and_then(|v| v.get::<Vec<String>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| parse_accelerator(a).is_some_and(|p| !ta_accels.contains(&p)))
+        .collect()
 }
 
 /// Ubuntu ships Tiling Assistant enabled through its session mode; it is
