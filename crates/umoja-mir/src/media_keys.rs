@@ -41,49 +41,29 @@ const fn key(name: &'static str, repeats: bool, defaults: &'static [&'static str
 }
 
 pub const KEYS: &[Key] = &[
-    key(
-        "volume-up",
-        true,
-        &["XF86AudioRaiseVolume", "<Ctrl>XF86AudioRaiseVolume"],
-    ),
-    key(
-        "volume-down",
-        true,
-        &["XF86AudioLowerVolume", "<Ctrl>XF86AudioLowerVolume"],
-    ),
+    key("volume-up", true, &["XF86AudioRaiseVolume", "<Ctrl>XF86AudioRaiseVolume"]),
+    key("volume-down", true, &["XF86AudioLowerVolume", "<Ctrl>XF86AudioLowerVolume"]),
     key("volume-mute", false, &["XF86AudioMute"]),
     key(
         "volume-up-quiet",
         true,
-        &[
-            "<Alt>XF86AudioRaiseVolume",
-            "<Alt><Ctrl>XF86AudioRaiseVolume",
-        ],
+        &["<Alt>XF86AudioRaiseVolume", "<Alt><Ctrl>XF86AudioRaiseVolume"],
     ),
     key(
         "volume-down-quiet",
         true,
-        &[
-            "<Alt>XF86AudioLowerVolume",
-            "<Alt><Ctrl>XF86AudioLowerVolume",
-        ],
+        &["<Alt>XF86AudioLowerVolume", "<Alt><Ctrl>XF86AudioLowerVolume"],
     ),
     key("volume-mute-quiet", false, &["<Alt>XF86AudioMute"]),
     key(
         "volume-up-precise",
         true,
-        &[
-            "<Shift>XF86AudioRaiseVolume",
-            "<Ctrl><Shift>XF86AudioRaiseVolume",
-        ],
+        &["<Shift>XF86AudioRaiseVolume", "<Ctrl><Shift>XF86AudioRaiseVolume"],
     ),
     key(
         "volume-down-precise",
         true,
-        &[
-            "<Shift>XF86AudioLowerVolume",
-            "<Ctrl><Shift>XF86AudioLowerVolume",
-        ],
+        &["<Shift>XF86AudioLowerVolume", "<Ctrl><Shift>XF86AudioLowerVolume"],
     ),
     key("mic-mute", false, &["XF86AudioMicMute"]),
     key(
@@ -203,10 +183,7 @@ mod tests {
 
     #[test]
     fn parses_media_accelerators() {
-        assert_eq!(
-            parse_accelerator("XF86AudioRaiseVolume"),
-            Some((0x1008ff13, 0))
-        );
+        assert_eq!(parse_accelerator("XF86AudioRaiseVolume"), Some((0x1008ff13, 0)));
         assert_eq!(
             parse_accelerator("<Alt><Ctrl>XF86AudioLowerVolume"),
             Some((0x1008ff11, MOD_ALT | MOD_CTRL))
