@@ -279,7 +279,7 @@ pub(crate) fn render_monitors_xml(outputs: &[MonitorConfig]) -> String {
 
 /// Seed per-panel HiDPI scales for a first session (no GNOME or Umoja
 /// layout yet), so a 4K laptop doesn't start at an unreadable 100%.
-fn default_hidpi_layout() -> Option<String> {
+pub(crate) fn default_hidpi_layout() -> Option<String> {
     let panels = umoja_common::hidpi::connected_panels();
     if panels.iter().all(|p| p.preferred_scale() == 1.0) {
         return None;

@@ -25,6 +25,10 @@ pub fn started(wayland_display: &str) {
         // threads read the environment.
         unsafe { std::env::set_var("WAYLAND_DISPLAY", wayland_display) };
     }
+    if crate::greeter::enabled() {
+        crate::greeter::launch(wayland_display);
+        return;
+    }
     // Test and nested compositors (UMOJA_NO_SESSION_TARGET) must not touch
     // the user's systemd/D-Bus environment: exporting their WAYLAND_DISPLAY
     // sends every activated app of the real session to the test display.

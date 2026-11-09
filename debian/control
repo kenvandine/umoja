@@ -68,9 +68,9 @@ Depends: ${shlibs:Depends},
          ${misc:Depends},
          debconf,
          lightdm (>= 1.30),
+         umoja-desktop (= ${binary:Version}),
          accountsservice,
          ubuntu-wallpapers
-Recommends: umoja-desktop
 Provides: lightdm-greeter
 Description: GTK4 LightDM greeter for Umoja
  A login screen for LightDM, written in Rust and GTK4, drawn over a

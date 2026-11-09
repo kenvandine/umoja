@@ -48,7 +48,7 @@ const SCREENSAVER_NAME: &str = "org.freedesktop.ScreenSaver";
 const SESSION_MANAGER_NAME: &str = "org.gnome.SessionManager";
 
 unsafe extern "C" {
-    fn umoja_idle_set_timeouts(off_seconds: i32, locked_off_seconds: i32);
+    pub(crate) fn umoja_idle_set_timeouts(off_seconds: i32, locked_off_seconds: i32);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

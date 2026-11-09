@@ -13,7 +13,7 @@ LEMONADE_ARCHES ?= x64 arm64
 LEMONADE_BASE := https://github.com/lemonade-sdk/lemonade/releases/download/v$(LEMONADE_VERSION)
 VENDOR := vendor
 
-.PHONY: all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview clean
+.PHONY: all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
 
 all: build
 
@@ -70,6 +70,13 @@ nested: build
 
 greeter-preview:
 	$(CARGO) run -p umoja-greeter -- --preview
+
+# The login screen as LightDM runs it (umoja-mir's greeter mode), nested.
+greeter-nested:
+	$(CARGO) build -p umoja-mir -p umoja-greeter
+	WAYLAND_DISPLAY=$${WAYLAND_DISPLAY:-wayland-0} \
+	  UMOJA_GREETER="$(CURDIR)/target/debug/umoja-greeter --preview" \
+	  ./target/debug/umoja-mir --platform-display-libs=mir:wayland --wayland-host=$${WAYLAND_DISPLAY:-wayland-0}
 
 clean:
 	$(CARGO) clean

@@ -28,6 +28,7 @@ sudo apt build-dep ./          # or install the Build-Depends in debian/control
 make                           # cargo build --release --workspace
 make test                      # headless unit tests
 make greeter-preview           # greeter UI with sample users, no LightDM needed
+make greeter-nested            # the same in umoja-mir's greeter mode, in a window
 make nested                    # run the compositor in a window of your session
 ```
 
@@ -77,6 +78,14 @@ Installing `umoja-greeter` on a standard Ubuntu desktop switches the
 display manager from GDM to LightDM (on first install only; it applies at
 the next boot) and selects the Umoja greeter and session. Removing the
 package switches back to GDM.
+
+The greeter runs on Wayland: LightDM starts
+`/usr/libexec/umoja-greeter-session`, which runs `umoja-mir` in greeter
+mode (no session services, keybindings or Xwayland) with `umoja-greeter`
+as its only client, so the login screen and the desktop share one
+compositor. If it ever fails to come up, switch to the X11 greeter by
+putting `greeter-session=lightdm-umoja-greeter-x11` under `[Seat:*]` in a
+file in `/etc/lightdm/lightdm.conf.d/`.
 
 ## Publishing
 
