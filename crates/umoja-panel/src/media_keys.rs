@@ -6,7 +6,7 @@
 //! anything else that wants to show one.
 
 use gio::prelude::*;
-use gtk4::glib;
+use gtk4::{glib, prelude::*};
 use umoja_common::dbus;
 
 use crate::brightness::Brightness;

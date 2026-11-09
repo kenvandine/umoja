@@ -93,6 +93,7 @@ impl Request {
 /// One monitor's OSD.
 struct Window {
     monitor: gdk::Monitor,
+    geometry: gdk::Rectangle,
     window: gtk::Window,
     pill: gtk::Box,
     icon: gtk::Image,
@@ -120,13 +121,16 @@ impl Window {
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-osd");
         window.set_keyboard_mode(KeyboardMode::None);
-        window.set_monitor(Some(monitor));
+        window.set_monitor(monitor);
         window.set_anchor(Edge::Bottom, true);
         window.set_anchor(Edge::Left, true);
         window.set_anchor(Edge::Right, true);
         window.set_exclusive_zone(-1);
-        window.set_default_size(1, SURFACE_HEIGHT);
-        window.set_size_request(-1, SURFACE_HEIGHT);
+        // Mir doesn't stretch a surface anchored to both sides, so ask for
+        // the monitor's width outright. A new geometry gets a new window.
+        let width = monitor.geometry().width().max(1);
+        window.set_default_size(width, SURFACE_HEIGHT);
+        window.set_size_request(width, SURFACE_HEIGHT);
 
         let pill = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pill.add_css_class("osd-window");
@@ -175,6 +179,7 @@ impl Window {
 
         let this = Rc::new(Self {
             monitor: monitor.clone(),
+            geometry: monitor.geometry(),
             window,
             pill,
             icon,
@@ -226,6 +231,7 @@ impl Window {
         self.clear_input();
 
         // Fade in when hidden or on the way out.
+        self.pill.set_visible(true);
         let was_shown = self.shown.replace(true);
         if !was_shown | self.hiding.replace(false) {
             self.fade_to(1.0, None);
@@ -281,6 +287,9 @@ impl Window {
                 if let Some(t) = weak.upgrade() {
                     t.hiding.set(false);
                     t.shown.set(false);
+                    // Stop drawing it at all, so no faint last frame of
+                    // the fade lingers.
+                    t.pill.set_visible(false);
                     t.label.set_visible(false);
                     t.bar.set_visible(false);
                 }
@@ -422,7 +431,7 @@ impl Osd {
             .collect();
         let mut windows = self.windows.borrow_mut();
         windows.retain(|w| {
-            let keep = monitors.contains(&w.monitor);
+            let keep = monitors.contains(&w.monitor) && w.monitor.geometry() == w.geometry;
             if !keep {
                 w.window.destroy();
             }
@@ -431,6 +440,14 @@ impl Osd {
         for m in &monitors {
             if !windows.iter().any(|w| &w.monitor == m) {
                 windows.push(Window::new(&self.app, m));
+                // Resolution or scale changes: rebuild at the new size.
+                m.connect_geometry_notify(|_| {
+                    glib::idle_add_local_once(|| {
+                        if let Some(osd) = OSD.with(|o| o.borrow().clone()) {
+                            osd.sync_monitors();
+                        }
+                    });
+                });
             }
         }
     }

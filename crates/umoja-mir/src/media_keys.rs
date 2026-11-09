@@ -6,6 +6,8 @@
 //! (`org.gnome.settings-daemon.plugins.media-keys`, both the user-editable
 //! `<name>` key and the fixed `<name>-static` one), and hands each press to
 //! umoja-panel, which changes the volume or brightness and shows the OSD.
+//! Keys the installed schema doesn't have (screen brightness, in recent
+//! GNOME) use gnome-settings-daemon's old defaults.
 //!
 //! Binding codes are `BASE + index into KEYS`, alongside the window
 //! manager's actions and the numbered workspace codes.
@@ -93,12 +95,18 @@ pub const KEYS: &[Key] = &[
 
 /// The media-key bindings, from GSettings when the schema is installed.
 pub fn bindings() -> Vec<Binding> {
-    let have_schema = gs::settings(gs::MEDIA_KEYS).is_some();
+    let schema = gs::settings(gs::MEDIA_KEYS);
     let mut out = Vec::new();
     for (i, k) in KEYS.iter().enumerate() {
-        let accels: Vec<String> = if have_schema {
+        let static_key = format!("{}-static", k.name);
+        // Newer gnome-settings-daemons dropped some keys (the screen
+        // brightness ones moved to the shell); use the defaults for those.
+        let in_schema = schema
+            .as_ref()
+            .is_some_and(|s| gs::has_key(s, k.name) || gs::has_key(s, &static_key));
+        let accels: Vec<String> = if in_schema {
             let mut v = gs::get_strv(gs::MEDIA_KEYS, k.name);
-            v.extend(gs::get_strv(gs::MEDIA_KEYS, &format!("{}-static", k.name)));
+            v.extend(gs::get_strv(gs::MEDIA_KEYS, &static_key));
             v
         } else {
             k.defaults.iter().map(|s| s.to_string()).collect()

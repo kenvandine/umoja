@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gio::prelude::*;
-use gtk4::{gdk, glib};
+use gtk4::{gdk, glib, prelude::*};
 
 use crate::osd;
 
