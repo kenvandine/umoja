@@ -200,7 +200,35 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         window.set_default_size(g.width(), g.height());
     }
     window.set_decorated(false);
-    window.fullscreen();
+    match login_and_other_monitors() {
+        Some((login, others)) if !others.is_empty() => {
+            // Like GDM: the login card on the built-in panel, the same
+            // blurred wallpaper on every other screen.
+            for mon in others {
+                let w = adw::ApplicationWindow::builder()
+                    .application(app)
+                    .css_classes(["umoja-greeter"])
+                    .build();
+                let bg = Backdrop::new(BLUR_RADIUS);
+                bg.set_wallpaper(Some(backdrop::GREETER_WALLPAPER));
+                w.set_content(Some(&bg));
+                w.set_decorated(false);
+                w.fullscreen_on_monitor(&mon);
+                // A click there shouldn't take the keyboard from the card.
+                let main = window.downgrade();
+                w.connect_is_active_notify(move |w| {
+                    if w.is_active() {
+                        if let Some(main) = main.upgrade() {
+                            main.present();
+                        }
+                    }
+                });
+                w.present();
+            }
+            window.fullscreen_on_monitor(&login);
+        }
+        _ => window.fullscreen(),
+    }
     // Name a pointer explicitly rather than inherit the bare X root
     // window's on the X11 fallback.
     window.set_cursor_from_name(Some("default"));
@@ -213,6 +241,29 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         });
     });
     window.present();
+}
+
+/// The monitor for the login card (the built-in panel if there is one,
+/// as GDM does) and the rest. Only on Wayland: the X11 fallback runs
+/// without a window manager to place windows per monitor.
+fn login_and_other_monitors() -> Option<(gtk::gdk::Monitor, Vec<gtk::gdk::Monitor>)> {
+    let display = gtk::gdk::Display::default()?;
+    if display.type_().name() != "GdkWaylandDisplay" {
+        return None;
+    }
+    let list = display.monitors();
+    let mut monitors: Vec<gtk::gdk::Monitor> = (0..list.n_items())
+        .filter_map(|i| list.item(i).and_downcast::<gtk::gdk::Monitor>())
+        .collect();
+    if monitors.is_empty() {
+        return None;
+    }
+    let builtin = monitors.iter().position(|m| {
+        m.connector()
+            .is_some_and(|c| umoja_common::hidpi::is_builtin_connector(c.as_str()))
+    });
+    let login = monitors.remove(builtin.unwrap_or(0));
+    Some((login, monitors))
 }
 
 fn session_popover(state: &Rc<State>) -> gtk::Popover {

@@ -20,7 +20,8 @@ const DESKTOP_TARGET_DPI: f64 = 110.0;
 /// A connected panel, as read from the kernel's DRM sysfs + EDID.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Panel {
-    /// Kernel connector name, e.g. `eDP-1`, `HDMI-A-1` (the names Mir uses).
+    /// Kernel connector name, e.g. `eDP-1`, `HDMI-A-1`, `DP-1` (Mir calls
+    /// that one `DisplayPort-1`).
     pub connector: String,
     pub width_px: u32,
     pub height_px: u32,

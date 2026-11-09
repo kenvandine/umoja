@@ -65,12 +65,12 @@ pub fn prepare(display_file_name: &str) {
         .join("umoja-greeter");
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join(display_file_name);
-    match crate::outputs::default_hidpi_layout() {
+    match crate::outputs::greeter_layout() {
         Some(yaml) => {
             if let Err(e) = std::fs::write(&file, yaml) {
                 tracing::warn!(error = %e, "could not write greeter display scales");
             } else {
-                tracing::info!(path = %file.display(), "seeded greeter display scales");
+                tracing::info!(path = %file.display(), "seeded greeter display layout");
             }
         }
         None => {
