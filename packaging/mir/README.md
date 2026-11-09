@@ -48,6 +48,11 @@ Umoja PPA:
   fine). A client dma-buf drawn on a GPU other than the one that imported it
   is now read back once per commit through the importing GPU and uploaded
   like a wl_shm buffer (`MIR_CROSS_GPU_CPU_COPY=0` turns this off).
+- `patches/3010_xwayland-initial-net-wm-state.patch`: `XWaylandSurface::map()`
+  queued a read of `_NET_WM_STATE` but never called the returned cookie, so
+  an X11 window's initial state was ignored. Wine/Proton games map their
+  window already fullscreen, and showed as a tiny restored window at the
+  bottom of the screen until they asked again.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

@@ -1,0 +1,24 @@
+Description: Read an X11 window's _NET_WM_STATE when it maps
+ XWaylandSurface::map() queued a read of _NET_WM_STATE but never called
+ the returned cookie, so the reply handler never ran and the window's
+ initial state was ignored. X11 windows that map fullscreen or maximized,
+ such as Wine/Proton games, were shown restored at their small pre-map
+ size (a 314x208 Unity game window at the bottom of the screen) until
+ they asked again later.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-09
+---
+--- a/src/server/frontend_xwayland/xwayland_surface.cpp
++++ b/src/server/frontend_xwayland/xwayland_surface.cpp
+@@ -476,6 +476,10 @@
+                 }
+             }
+         });
++    // Wait for the reply and run the handler: without this the initial
++    // state was never read, so X11 windows that map fullscreen or maximized
++    // (Wine/Proton games) were shown restored at their small pre-map size.
++    cookie();
+ 
+     // If we had more properties to read we would queue them all up before completing the first one
+     uint32_t const workspace = 1;
