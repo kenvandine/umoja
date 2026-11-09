@@ -1,0 +1,299 @@
+#!/bin/bash
+# umoja-agent-setup: let the AI coding agents a user already has (Claude Code,
+# Codex, Gemini CLI, OpenCode) work with Umoja. For each agent it finds it
+# links the Umoja agent skill into the agent's skills folder and registers
+# Umoja's MCP server (umoja-mcp), so the agent knows how the desktop works
+# and gets the same desktop tools, with the same Allow rules, as the overlay
+# assistant.
+#
+# It never installs an agent and never touches an entry it didn't write.
+# The session runs it with --auto at every login: each agent is set up once,
+# the first time it is seen, so an agent installed later is picked up at the
+# next login and an agent the user ran --remove for is left alone.
+
+set -uo pipefail
+
+SKILL_SRC=${UMOJA_AGENT_SKILL:-/usr/share/umoja/agents/skills/umoja}
+MCP_CMD=${UMOJA_MCP_COMMAND:-umoja-mcp}
+STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/umoja
+STATE=$STATE_DIR/agent-setup
+CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}
+AGENTS=(claude codex gemini opencode)
+
+# Login services get a short PATH; agents usually live in the user's own bin
+# folders (native installers, npm, bun, mise, snaps).
+PATH=$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/share/mise/shims:$HOME/.opencode/bin:/snap/bin
+
+usage() {
+  cat <<EOF
+Usage: umoja-agent-setup [AGENT...]          set up these agents (default: all found)
+       umoja-agent-setup --remove [AGENT...]  undo it (default: all)
+       umoja-agent-setup --status             show what is set up
+       umoja-agent-setup --auto               set up agents not seen before (run at login)
+
+Agents: ${AGENTS[*]}
+EOF
+}
+
+label() {
+  case $1 in
+    claude) echo "Claude Code" ;;
+    codex) echo "Codex" ;;
+    gemini) echo "Gemini CLI" ;;
+    opencode) echo "OpenCode" ;;
+  esac
+}
+
+home_of() {
+  case $1 in
+    claude) echo "$HOME/.claude" ;;
+    codex) echo "${CODEX_HOME:-$HOME/.codex}" ;;
+    gemini) echo "$HOME/.gemini" ;;
+    opencode) echo "$CONFIG/opencode" ;;
+  esac
+}
+
+present() {
+  command -v "$1" >/dev/null 2>&1 || [[ -d $(home_of "$1") ]]
+}
+
+skill_dir() {
+  case $1 in
+    opencode) echo "$CONFIG/opencode/skills" ;;
+    *) echo "$(home_of "$1")/skills" ;;
+  esac
+}
+
+seen() { [[ -f $STATE ]] && grep -qx "$1" "$STATE"; }
+
+mark_seen() {
+  mkdir -p "$STATE_DIR"
+  seen "$1" || echo "$1" >>"$STATE"
+}
+
+# --- skill links -------------------------------------------------------------
+
+link_skill() {
+  local dir=$1/umoja
+  if [[ -L $dir ]]; then
+    ln -sfn "$SKILL_SRC" "$dir"
+  elif [[ -e $dir ]]; then
+    echo "  skill: $dir already exists and isn't Umoja's link; left alone" >&2
+    return 1
+  else
+    mkdir -p "$1" && ln -s "$SKILL_SRC" "$dir"
+  fi
+}
+
+unlink_skill() {
+  local dir=$1/umoja
+  [[ -L $dir && $(readlink "$dir") == "$SKILL_SRC" ]] && rm -f "$dir"
+  # Don't leave behind a skills folder that only ever held our link.
+  rmdir "$1" 2>/dev/null
+  return 0
+}
+
+has_skill() {
+  [[ -L $1/umoja && $(readlink "$1/umoja") == "$SKILL_SRC" ]]
+}
+
+# --- MCP registration ------------------------------------------------------
+
+# JSON settings files (Gemini CLI, OpenCode): add or remove one entry under a
+# key, keeping everything else. A file that isn't plain JSON (OpenCode allows
+# comments) is left alone rather than rewritten without them.
+json_mcp() {
+  python3 - "$@" <<'EOF'
+import json, os, sys, tempfile
+action, path, key, name, entry = sys.argv[1:6]
+try:
+    with open(path) as f:
+        text = f.read()
+    data = json.loads(text) if text.strip() else {}
+except FileNotFoundError:
+    data = {}
+except ValueError:
+    print(f"  mcp: {path} isn't plain JSON; add the umoja server by hand", file=sys.stderr)
+    sys.exit(1)
+servers = data.get(key) or {}
+if action == "has":
+    sys.exit(0 if name in servers else 1)
+if action == "add":
+    if name in servers:
+        sys.exit(0)
+    servers[name] = json.loads(entry)
+elif action == "remove":
+    if servers.get(name) != json.loads(entry):
+        sys.exit(0)          # not ours, or changed by the user
+    del servers[name]
+if servers:
+    data[key] = servers
+else:
+    data.pop(key, None)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+if os.path.exists(path):
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+os.replace(tmp, path)
+EOF
+}
+
+gemini_entry() { printf '{"command": "%s"}' "$MCP_CMD"; }
+opencode_entry() { printf '{"type": "local", "command": ["%s"], "enabled": true}' "$MCP_CMD"; }
+codex_toml() { echo "$(home_of codex)/config.toml"; }
+
+mcp() {
+  local action=$1 agent=$2
+  case $agent in
+    claude)
+      command -v claude >/dev/null || { [[ $action == has ]] && return 1; echo "  mcp: the claude command isn't on PATH" >&2; return 1; }
+      case $action in
+        has) claude mcp get umoja >/dev/null 2>&1 ;;
+        add) claude mcp get umoja >/dev/null 2>&1 || claude mcp add --scope user umoja -- "$MCP_CMD" >/dev/null ;;
+        remove)
+          if claude mcp get umoja 2>/dev/null | grep -q "$MCP_CMD"; then
+            claude mcp remove --scope user umoja >/dev/null 2>&1
+          fi
+          return 0 ;;
+      esac ;;
+    codex)
+      local toml
+      toml=$(codex_toml)
+      case $action in
+        has) [[ -f $toml ]] && grep -q '^\[mcp_servers\.umoja\]' "$toml" ;;
+        add)
+          [[ -f $toml ]] && grep -q '^\[mcp_servers\.umoja\]' "$toml" && return 0
+          mkdir -p "$(dirname "$toml")"
+          printf '\n# Added by umoja-agent-setup\n[mcp_servers.umoja]\ncommand = "%s"\n' "$MCP_CMD" >>"$toml" ;;
+        remove)
+          [[ -f $toml ]] || return 0
+          python3 - "$toml" "$MCP_CMD" <<'EOF'
+import os, re, sys
+path, cmd = sys.argv[1:3]
+text = open(path).read()
+block = re.compile(r'\n?# Added by umoja-agent-setup\n\[mcp_servers\.umoja\]\ncommand = "' + re.escape(cmd) + r'"\n')
+new = block.sub("", text)
+if new != text:
+    if new.strip():
+        open(path, "w").write(new)
+    else:
+        os.remove(path)      # we created it
+EOF
+          ;;
+      esac ;;
+    gemini) json_mcp "$action" "$(home_of gemini)/settings.json" mcpServers umoja "$(gemini_entry)" ;;
+    opencode) json_mcp "$action" "$CONFIG/opencode/opencode.json" mcp umoja "$(opencode_entry)" ;;
+  esac
+}
+
+# --- commands ---------------------------------------------------------------
+
+setup_one() {
+  local agent=$1 ok=0
+  link_skill "$(skill_dir "$agent")" || ok=1
+  mcp add "$agent" || ok=1
+  mark_seen "$agent"
+  if ((ok == 0)); then
+    echo "$(label "$agent"): Umoja skill and tools added"
+  else
+    echo "$(label "$agent"): partly set up (see above)"
+  fi
+  return $ok
+}
+
+remove_one() {
+  local agent=$1
+  unlink_skill "$(skill_dir "$agent")"
+  mcp remove "$agent"
+  mark_seen "$agent"
+  echo "$(label "$agent"): Umoja skill and tools removed"
+}
+
+status() {
+  local agent
+  for agent in "${AGENTS[@]}"; do
+    if ! present "$agent"; then
+      printf '%-12s not installed\n' "$(label "$agent")"
+      continue
+    fi
+    local skill=no tools=no
+    has_skill "$(skill_dir "$agent")" && skill=yes
+    mcp has "$agent" 2>/dev/null && tools=yes
+    printf '%-12s skill: %-3s  tools: %s\n' "$(label "$agent")" "$skill" "$tools"
+  done
+  if has_skill "$HOME/.agents/skills"; then
+    echo "~/.agents/skills: skill linked"
+  fi
+}
+
+notify() {
+  command -v notify-send >/dev/null || return 0
+  notify-send --app-name=Umoja \
+    "Your AI apps can use Umoja" \
+    "$1 can now change settings and do things on the desktop with Umoja's tools, asking you first like the assistant does. Run umoja-agent-setup --remove to undo." \
+    2>/dev/null || true
+}
+
+pick() {
+  local agent
+  if (($# == 0)); then
+    for agent in "${AGENTS[@]}"; do present "$agent" && echo "$agent"; done
+    return
+  fi
+  for agent in "$@"; do
+    if [[ " ${AGENTS[*]} " != *" $agent "* ]]; then
+      echo "Unknown agent: $agent (known: ${AGENTS[*]})" >&2
+      exit 2
+    fi
+    echo "$agent"
+  done
+}
+
+main() {
+  local mode=setup
+  case ${1:-} in
+    -h|--help) usage; exit 0 ;;
+    --status) status; exit 0 ;;
+    --remove) mode=remove; shift ;;
+    --auto) mode=auto; shift ;;
+    -*) usage >&2; exit 2 ;;
+  esac
+
+  if [[ $mode != remove && ! -d $SKILL_SRC ]]; then
+    echo "Umoja's agent skill isn't installed at $SKILL_SRC" >&2
+    exit 1
+  fi
+
+  local agents agent rc=0 added=()
+  mapfile -t agents < <(pick "$@")
+
+  case $mode in
+    setup|auto)
+      for agent in "${agents[@]}"; do
+        [[ $mode == auto ]] && seen "$agent" && continue
+        if setup_one "$agent"; then added+=("$(label "$agent")"); else rc=1; fi
+      done
+      # The shared folder several agents read (Codex, OpenCode, Pi...).
+      if ((${#agents[@]})) && { [[ $mode == setup ]] || ((${#added[@]})); }; then
+        link_skill "$HOME/.agents/skills" || true
+      fi
+      if [[ $mode == auto ]] && ((${#added[@]})); then
+        local who
+        who=$(printf '%s, ' "${added[@]}")
+        notify "${who%, }"
+      elif [[ $mode == setup ]] && ((${#agents[@]} == 0)); then
+        echo "No AI coding agents found (looked for: ${AGENTS[*]})."
+      fi
+      ;;
+    remove)
+      for agent in "${agents[@]}"; do remove_one "$agent"; done
+      (($# == 0)) && unlink_skill "$HOME/.agents/skills"
+      ;;
+  esac
+  exit $rc
+}
+
+main "$@"

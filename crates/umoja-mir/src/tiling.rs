@@ -74,8 +74,10 @@ pub enum Action {
     ToggleSticky = 54,
     /// gnome-shell's show-screen-recording-ui (Ctrl+Shift+Alt+R).
     ScreenRecordingUi = 55,
+    /// Umoja's copy-text-hotkey: the screenshot UI in Copy Text (OCR) mode.
+    CopyTextUi = 56,
     /// The keyboard shortcuts guide (Super+/).
-    ShowShortcuts = 56,
+    ShowShortcuts = 57,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -138,7 +140,8 @@ impl Action {
             53 => ToggleAbove,
             54 => ToggleSticky,
             55 => ScreenRecordingUi,
-            56 => ShowShortcuts,
+            56 => CopyTextUi,
+            57 => ShowShortcuts,
             _ => None,
         }
     }

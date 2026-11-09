@@ -526,14 +526,20 @@ fn resolve_icon(
         (Some(_), _) if file.is_some() => file.map(Icon::File),
         (Some(n), Some(p)) => {
             let theme = gtk::gdk::Display::default().map(|d| gtk::IconTheme::for_display(&d));
-            if theme.is_some_and(|t| t.has_icon(&n)) {
+            // Symbolic icons are drawn in the panel's text colour, which
+            // wipes out colour that carries meaning: Telegram's
+            // "-mute-symbolic" plane has a grey unread dot that comes out
+            // white like the plane. When the item's own pixmap of the same
+            // icon has more than one colour, show that instead.
+            let recolour_hides_detail = n.ends_with("-symbolic") && p.multicolour;
+            if !recolour_hides_detail && theme.is_some_and(|t| t.has_icon(&n)) {
                 Some(Icon::Name(n))
             } else {
-                Some(Icon::Texture(p))
+                Some(Icon::Texture(p.texture))
             }
         }
         (Some(n), None) => Some(Icon::Name(n)),
-        (None, Some(p)) => Some(Icon::Texture(p)),
+        (None, Some(p)) => Some(Icon::Texture(p.texture)),
         (None, None) => None,
     }
 }
@@ -564,7 +570,31 @@ fn tooltip_text(v: &glib::Variant) -> Option<String> {
 
 /// Picks the smallest `a(iiay)` ARGB32 pixmap at least `size` pixels wide
 /// (or the largest one) and converts it to a texture.
-fn best_pixmap(v: &glib::Variant, size: i32) -> Option<gtk::gdk::MemoryTexture> {
+struct Pixmap {
+    texture: gtk::gdk::MemoryTexture,
+    /// Has at least two clearly different opaque colours.
+    multicolour: bool,
+}
+
+/// ARGB32 pixels; ignores faint and antialiased pixels and tiny shade
+/// differences, so a one-colour glyph never counts.
+fn is_multicolour(data: &[u8]) -> bool {
+    let mut first: Option<[u8; 3]> = None;
+    for px in data.chunks_exact(4) {
+        if px[0] < 200 {
+            continue;
+        }
+        let rgb = [px[1], px[2], px[3]];
+        match first {
+            None => first = Some(rgb),
+            Some(f) if f.iter().zip(rgb).any(|(a, b)| a.abs_diff(b) > 48) => return true,
+            Some(_) => {}
+        }
+    }
+    false
+}
+
+fn best_pixmap(v: &glib::Variant, size: i32) -> Option<Pixmap> {
     let mut pixmaps: Vec<(i32, i32, Vec<u8>)> = v
         .iter()
         .filter_map(|p| {
@@ -581,19 +611,33 @@ fn best_pixmap(v: &glib::Variant, size: i32) -> Option<gtk::gdk::MemoryTexture> 
         .or(pixmaps.last())?
         .clone();
     // SNI pixmaps are ARGB32 in network byte order: A, R, G, B per pixel.
+    let multicolour = is_multicolour(&data);
     let bytes = glib::Bytes::from_owned(data);
-    Some(gtk::gdk::MemoryTexture::new(
-        w,
-        h,
-        gtk::gdk::MemoryFormat::A8r8g8b8,
-        &bytes,
-        (w * 4) as usize,
-    ))
+    Some(Pixmap {
+        texture: gtk::gdk::MemoryTexture::new(
+            w,
+            h,
+            gtk::gdk::MemoryFormat::A8r8g8b8,
+            &bytes,
+            (w * 4) as usize,
+        ),
+        multicolour,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::split_service;
+    use super::{is_multicolour, split_service};
+
+    #[test]
+    fn multicolour_pixmaps() {
+        let white = [255u8, 255, 255, 255];
+        let soft_white = [120u8, 200, 200, 200];
+        let grey = [255u8, 0x88, 0x88, 0x88];
+        let clear = [0u8, 0, 0, 0];
+        assert!(!is_multicolour(&[white, soft_white, clear, white].concat()));
+        assert!(is_multicolour(&[white, clear, grey].concat()));
+    }
 
     #[test]
     fn service_forms() {

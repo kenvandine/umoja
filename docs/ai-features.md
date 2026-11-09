@@ -25,6 +25,7 @@ screen, as in Ubuntu. The overlay's search box also has a microphone button.
 - [Doing things on the desktop](#doing-things-on-the-desktop)
 - [Finding and removing apps](#finding-and-removing-apps)
 - [Asking about what's on screen](#asking-about-whats-on-screen)
+- [Copying text from the screen](#copying-text-from-the-screen)
 - [Clipboard history](#clipboard-history)
 - [Notifications: digest and quick replies](#notifications-digest-and-quick-replies)
 - [Troubleshooting your computer](#troubleshooting-your-computer)
@@ -33,6 +34,7 @@ screen, as in Ubuntu. The overlay's search box also has a microphone button.
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Settings reference](#settings-reference)
 - [Using Umoja's tools from other AI apps (MCP)](#using-umojas-tools-from-other-ai-apps-mcp)
+- [Using the local model from other apps](#using-the-local-model-from-other-apps)
 - [When something doesn't work](#when-something-doesnt-work)
 
 ## Asking the assistant
@@ -292,6 +294,20 @@ The assistant can also read the selection, the clipboard and the current
 window by itself when you say "this", "what I copied" or "this window"
 without attaching anything.
 
+## Copying text from the screen
+
+**Super+Ctrl+Print** opens the screenshot UI in **Copy Text** mode (the
+third button beside Screenshot and Screencast; you can also switch to it
+after pressing **Print**). Drag out an area, or pick Screen or Window, and
+click the capture button: the text in it is read with Tesseract OCR and put
+on the clipboard, and a *Text copied* notification shows the start of it.
+Nothing is saved to Pictures. This is handy for phone numbers or addresses
+in images, or an error message in a dialog you can't select.
+
+It needs the `tesseract-ocr` package (installed by default as a
+recommended package); without it the notification says how to install it.
+OCR can misread things, so check what you paste.
+
 ## Clipboard history
 
 **Super+Shift+V**, or the clipboard button beside the search entry, shows
@@ -441,11 +457,12 @@ From a terminal, `umoja-files --search "lease pdf"` searches the index.
 | **Super** | Open the overlay: search apps or ask the assistant |
 | **Super+Shift+A** | Ask about the selected text or the current window |
 | **Super+Shift+V** | Show the clipboard history |
+| **Super+Ctrl+Print** | Copy the text in a screen area |
 | **Super+J** | Start or stop Myna dictation (set in Myna Settings) |
 | **Escape** | Close the overlay |
 
-The two Umoja shortcuts can be changed with the `ask-about-screen-hotkey`
-and `clipboard-history-hotkey` keys below. Myna's shortcut is changed in
+The three Umoja shortcuts can be changed with the `ask-about-screen-hotkey`,
+`clipboard-history-hotkey` and `copy-text-hotkey` keys below. Myna's shortcut is changed in
 Myna Settings.
 
 ## Settings reference
@@ -464,6 +481,7 @@ All in the `org.umoja.shell` schema, for example
 | `file-search-embedding-model` | `'nomic-embed-text-v1-GGUF'` | Embedding model for file search; changing it rebuilds the index |
 | `ask-about-screen-hotkey` | `['<Super><Shift>a']` | Ask about the screen |
 | `clipboard-history-hotkey` | `['<Super><Shift>v']` | Clipboard history |
+| `copy-text-hotkey` | `['<Super><Control>Print']` | Copy the text in a screen area |
 | `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |
 
 The embedded Lemonade server's port and memory limits are covered in
@@ -475,11 +493,31 @@ Everything the assistant can do on the desktop comes from `umoja-mcp`, a
 [Model Context Protocol](https://modelcontextprotocol.io) server installed
 with Umoja. The overlay starts it for you. Any other MCP client, such as
 Claude Code, can use it too and gets the same tools and the same
-**Allow** rules:
+**Allow** rules.
 
-```sh
-claude mcp add umoja -- umoja-mcp
-```
+**AI coding agents are connected for you.** At login, `umoja-agent-setup`
+looks for Claude Code, Codex, Gemini CLI and OpenCode. For each one it finds
+for the first time, it:
+
+- registers `umoja-mcp` with it (`claude mcp add --scope user`, Codex's
+  `config.toml`, Gemini's `settings.json`, OpenCode's `opencode.json`), and
+- links Umoja's agent skill into its skills folder (and `~/.agents/skills`),
+  so the agent knows how Umoja is configured: GSettings rather than config
+  files, which unit to restart, where the logs are, and never to edit
+  `/usr`.
+
+A notification says which agents were connected. It never installs an
+agent, never changes an entry it didn't write, and an agent you install
+later is connected at your next login. From a terminal:
+
+- `umoja-agent-setup --status` shows what's connected.
+- `umoja-agent-setup --remove` (or `--remove claude`) undoes it, and that
+  agent is then left alone at login.
+- `umoja-agent-setup claude` connects one again.
+
+The skill itself is in `/usr/share/umoja/agents/skills/umoja`. Agents
+started this way still ask before risky actions: the **Allow** rules below
+are enforced by `umoja-mcp`, not by the agent.
 
 Other clients take a stdio server with the command `umoja-mcp` and no
 arguments. Risky tools ask for your OK through the client when it supports
@@ -501,6 +539,17 @@ settings (`list_settings`, `describe_setting`, `change_setting`,
 windows and workspaces, notifications, file search, `run_command`, and the
 read-only troubleshooting reports. The overlay adds three of its own:
 reading the selection, the clipboard history and the current window.
+
+## Using the local model from other apps
+
+Umoja's Lemonade server speaks the OpenAI API, so other apps on this
+computer can use the same local model: point them at
+`http://127.0.0.1:13345/api/v1` with any API key, and use the model name
+from `gsettings get org.umoja.shell lemonade-model` (for example
+`Qwen3-4B-Instruct-2507-GGUF`). `curl http://127.0.0.1:13345/api/v1/models`
+lists the models that are downloaded. It only listens on this computer, and
+the port can be changed in `~/.config/umoja/lemonade.env` (see
+[Embedded Lemonade](../README.md#embedded-lemonade)).
 
 ## When something doesn't work
 

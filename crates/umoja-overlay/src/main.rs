@@ -43,6 +43,7 @@ const IFACE_XML: &str = r#"
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
+    <method name="ShowCopyTextUI"/>
     <method name="ToggleShortcuts"/>
     <method name="StopScreencast"/>
     <method name="IsScreencasting">
@@ -180,6 +181,10 @@ fn export(
                     "ShowScreenRecordingUI" => {
                         methods.hide();
                         shots.toggle_screen_recording();
+                    }
+                    "ShowCopyTextUI" => {
+                        methods.hide();
+                        shots.open_copy_text();
                     }
                     "ToggleShortcuts" => {
                         if !guide.is_visible() {

@@ -80,6 +80,7 @@ pub fn dispatch(action: Action) {
         Action::ScreenshotUi => "ShowScreenshotUI",
         Action::Screenshot => "ScreenshotScreen",
         Action::ScreenRecordingUi => "ShowScreenRecordingUI",
+        Action::CopyTextUi => "ShowCopyTextUI",
         Action::ShowShortcuts => "ToggleShortcuts",
         _ => return,
     };
