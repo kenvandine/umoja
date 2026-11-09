@@ -11,6 +11,8 @@
 
 #include <miral/application.h>
 #include <miral/configuration_option.h>
+#include <miral/cursor_scale.h>
+#include <miral/cursor_theme.h>
 #include <miral/display_configuration.h>
 #include <miral/minimal_window_manager.h>
 #include <miral/output.h>
@@ -1893,6 +1895,22 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     DisplayConfiguration display_config{runner};
     PrependEventFilter natural_scroll{umoja_apply_natural_scroll};
 
+    // The pointer drawn by Mir itself (desktop, server-side cursor shapes):
+    // the GNOME cursor theme and size that umoja-session exports, like
+    // mutter. Without this Mir uses its built-in cursor. Mir loads themes at
+    // 24px and scales them by each output's scale on its own.
+    std::string cursor_themes = "Yaru:default";
+    if (auto const theme = std::getenv("XCURSOR_THEME"); theme && *theme) {
+        cursor_themes = std::string{theme} + ":" + cursor_themes;
+    }
+    CursorTheme cursor_theme{cursor_themes};
+    float cursor_scale = 1.0f;
+    if (auto const size = std::getenv("XCURSOR_SIZE")) {
+        auto const px = std::atoi(size);
+        if (px >= 8 && px <= 256) cursor_scale = px / 24.0f;
+    }
+    CursorScale cursor_size{cursor_scale};
+
     runner.add_stop_callback([] { g_stopping = true; });
     runner.add_start_callback([&runner] {
         auto display = runner.wayland_display();
@@ -1920,6 +1938,8 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
             display_config,
             display_config.layout_option(),
             natural_scroll,
+            cursor_theme,
+            cursor_size,
             extensions,
             X11Support{},
             set_window_management_policy<UmojaWindowManager>(),
@@ -1931,6 +1951,8 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         display_config,
         display_config.layout_option(),
         natural_scroll,
+        cursor_theme,
+        cursor_size,
         extensions,
         set_window_management_policy<UmojaWindowManager>(),
     }));

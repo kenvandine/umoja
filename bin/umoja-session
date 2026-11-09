@@ -17,7 +17,24 @@ fi
 # GTK picks Wayland by itself; forcing GDK_BACKEND leaks into later sessions.
 unset GDK_BACKEND
 
-SESSION_VARS="XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND"
+# The cursor theme and size, from the same settings GNOME uses. mutter
+# exports these too: Xwayland, Electron/Chromium and other apps that draw
+# their own cursor read them (without them Electron's cursor is huge), and
+# umoja-mir uses them for its own pointer.
+gs_get() {
+    command -v gsettings >/dev/null 2>&1 && gsettings get org.gnome.desktop.interface "$1" 2>/dev/null | tr -d "'"
+}
+if [ -z "${XCURSOR_THEME:-}" ]; then
+    XCURSOR_THEME=$(gs_get cursor-theme)
+    export XCURSOR_THEME="${XCURSOR_THEME:-Yaru}"
+fi
+if [ -z "${XCURSOR_SIZE:-}" ]; then
+    XCURSOR_SIZE=$(gs_get cursor-size)
+    case "$XCURSOR_SIZE" in ''|*[!0-9]*) XCURSOR_SIZE=24 ;; esac
+    export XCURSOR_SIZE
+fi
+
+SESSION_VARS="XCURSOR_THEME XCURSOR_SIZE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND"
 [ -n "${GTK_IM_MODULE:-}" ] && SESSION_VARS="$SESSION_VARS GTK_IM_MODULE QT_IM_MODULE XMODIFIERS"
 
 log() { echo "umoja-session: $*" >&2; }
