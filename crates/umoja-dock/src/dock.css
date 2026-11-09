@@ -14,6 +14,7 @@ window.umoja-dock {
    set as widget margins in apply_layout). */
 .dock-list {
   background-color: @shell_bg;
+  backdrop-filter: blur(12px);
   border: 1px solid @shell_hairline;
   border-radius: 22px;
   padding: 8px 6px;
@@ -43,6 +44,7 @@ window.umoja-dock.bottom .dock-list {
 /* Right-click menu and window list: the panel's menu card. */
 popover > contents {
   background-color: @shell_bg;
+  backdrop-filter: blur(12px);
   color: #ffffff;
   border-radius: 18px;
   border: 1px solid @shell_hairline;
