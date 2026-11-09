@@ -25,6 +25,7 @@ pub fn button() -> gtk::MenuButton {
         .child(&menu())
         .css_classes(["quick-settings-popover"])
         .build();
+    umoja_common::blur::blur_behind(&popover);
     let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     icons.add_css_class("system-status");
     let (net, vpn) = network::indicators();

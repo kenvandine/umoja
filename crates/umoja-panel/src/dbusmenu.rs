@@ -145,6 +145,7 @@ impl Menu {
         let popover = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         popover.add_css_class("tray-menu");
         popover.set_has_arrow(false);
+        umoja_common::blur::blur_behind(&popover);
         popover.set_parent(anchor);
         let menu = Rc::new(Self { proxy, popover });
 

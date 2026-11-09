@@ -21,6 +21,9 @@
 //!   predate them.
 //! * `zwp_idle_inhibit_manager_v1` — video players and browsers keep the
 //!   screen from blanking while they play (see [`crate::idle`]).
+//! * `ext_background_effect_manager_v1` — blur behind the translucent panel,
+//!   dock, menus, notification bubbles and OSD. Only in Umoja's patched Mir
+//!   (`packaging/mir/patches/3004_background-blur.patch`); skipped elsewhere.
 //!
 //! `zxdg_decoration_manager_v1` is deliberately disabled (see the shim):
 //! mutter doesn't offer it either, so apps decorate themselves exactly as
@@ -42,6 +45,7 @@ pub const ENABLED: &[&str] = &[
     "wp_fractional_scale_manager_v1",
     "wp_viewporter",
     "zwp_idle_inhibit_manager_v1",
+    "ext_background_effect_manager_v1",
 ];
 
 pub fn to_cstrings(names: &[&str]) -> Vec<CString> {

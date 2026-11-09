@@ -80,6 +80,7 @@ impl ClockButton {
         menu.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         menu.append(&calendar);
         let popover = gtk::Popover::builder().child(&menu).build();
+        umoja_common::blur::blur_behind(&popover);
         {
             let dot = dot.clone();
             let list = list.clone();

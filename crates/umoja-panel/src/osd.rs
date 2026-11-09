@@ -123,6 +123,7 @@ impl Window {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-osd");
+        umoja_common::blur::blur_behind(&window);
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_monitor(monitor);
         window.set_anchor(Edge::Bottom, true);

@@ -94,6 +94,7 @@ fn build(app: &adw::Application) {
     window.init_layer_shell();
     window.set_layer(Layer::Top);
     window.set_namespace("umoja-dock");
+    umoja_common::blur::blur_behind(&window);
     window.set_keyboard_mode(KeyboardMode::None);
 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -558,6 +559,7 @@ impl Dock {
     fn show_popover(self: &Rc<Self>, popover: &gtk::Popover, parent: &impl IsA<gtk::Widget>) {
         popover.set_position(self.menu_side());
         popover.set_parent(parent);
+        umoja_common::blur::blur_behind(popover);
         self.menu_open.set(true);
         let weak = Rc::downgrade(self);
         popover.connect_closed(move |p| {
