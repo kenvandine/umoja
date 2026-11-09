@@ -53,6 +53,11 @@ Umoja PPA:
   an X11 window's initial state was ignored. Wine/Proton games map their
   window already fullscreen, and showed as a tiny restored window at the
   bottom of the screen until they asked again.
+- `patches/3011_direct-scanout-switch.patch`: `MIR_DIRECT_SCANOUT=0` makes
+  the compositor always composite instead of handing a fullscreen client's
+  buffer straight to the display. umoja-mir sets it on hybrid laptops with
+  a screen on the discrete GPU: a fullscreen game there (buffer drawn on
+  the other GPU) showed a white screen and stalled until Alt+Tab.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

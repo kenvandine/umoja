@@ -130,6 +130,16 @@ pub fn add_quirks(args: &mut Vec<std::ffi::OsString>) {
     }
     if discrete_has_screens(Path::new("/sys/class/drm")) {
         tracing::info!("hybrid graphics: a screen is on the discrete GPU, using every GPU");
+        // A fullscreen client's buffer is drawn on the other GPU than the
+        // one driving that screen. Handing it straight to the display
+        // (direct scanout) showed a white screen and stalled the output
+        // (a fullscreen game on p16g3's NVIDIA-wired monitor), so always
+        // composite. Mir patch 3011 reads this.
+        if std::env::var_os("MIR_DIRECT_SCANOUT").is_none() {
+            // SAFETY: called from main() before Mir starts; our helper threads
+            // don't touch the environment.
+            unsafe { std::env::set_var("MIR_DIRECT_SCANOUT", "0") };
+        }
         return;
     }
     tracing::info!(

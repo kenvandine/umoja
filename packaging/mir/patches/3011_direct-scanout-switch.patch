@@ -1,0 +1,67 @@
+Description: MIR_DIRECT_SCANOUT=0 turns off direct scanout (overlay bypass)
+ When one client buffer covers an output, the compositor hands it to the
+ display directly. On Intel+NVIDIA laptops a fullscreen game on a monitor
+ wired to the NVIDIA GPU has its buffer rendered on the other GPU, and
+ scanning it out showed a white screen and stalled the output until
+ something (Alt+Tab) forced composition again. umoja-mir sets the
+ variable on hybrid machines with a screen on the discrete GPU.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-09
+---
+--- a/src/server/compositor/default_display_buffer_compositor.cpp
++++ b/src/server/compositor/default_display_buffer_compositor.cpp
+@@ -28,7 +28,9 @@
+ #include <mir/compositor/buffer_stream.h>
+ #include <mir/renderer/renderer.h>
+ #include "occlusion.h"
++#include <cstdlib>
+ #include <memory>
++#include <string>
+ 
+ #define MIR_LOG_COMPONENT "compositor"
+ #include <mir/log.h>
+@@ -36,6 +38,23 @@
+ namespace mc = mir::compositor;
+ namespace mg = mir::graphics;
+ 
++namespace
++{
++// MIR_DIRECT_SCANOUT=0 always composites, never handing a client's buffer
++// straight to the display. On hybrid laptops a fullscreen game's buffer
++// comes from another GPU than the one driving the monitor, and scanning it
++// out directly showed a white screen and stalled the output.
++bool direct_scanout_enabled()
++{
++    static bool const enabled = []
++        {
++            char const* const v = std::getenv("MIR_DIRECT_SCANOUT");
++            return !(v && std::string{v} == "0");
++        }();
++    return enabled;
++}
++}
++
+ 
+ mc::DefaultDisplayBufferCompositor::DefaultDisplayBufferCompositor(
+     mg::DisplaySink& display_sink,
+@@ -88,6 +107,10 @@
+ 
+     for (auto const& renderable : renderable_list)
+     {
++        if (!direct_scanout_enabled())
++        {
++            break;
++        }
+         auto fb = fb_adaptor->buffer_to_framebuffer(renderable->buffer());
+         if (!fb)
+         {
+@@ -117,7 +140,7 @@
+         });
+     }
+ 
+-    if (framebuffers.size() == renderable_list.size() && display_sink.overlay(framebuffers))
++    if (direct_scanout_enabled() && framebuffers.size() == renderable_list.size() && display_sink.overlay(framebuffers))
+     {
+         report->renderables_in_frame(this, renderable_list);
+         renderer->suspend();
