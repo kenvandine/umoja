@@ -240,20 +240,40 @@ fn image_data(v: &glib::Variant) -> Option<gdk::Texture> {
     if data.len() < (stride as usize) * (h as usize - 1) + (w * channels) as usize {
         return None;
     }
+    let bytes = glib::Bytes::from_owned(data);
+    // Shown at 48 px at most (x3 for HiDPI), but apps send photos and
+    // avatars of any size, kept for as long as the notification is listed.
+    if w > MAX_IMAGE || h > MAX_IMAGE {
+        let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+            &bytes,
+            gtk::gdk_pixbuf::Colorspace::Rgb,
+            alpha && channels == 4,
+            8,
+            w,
+            h,
+            stride,
+        );
+        let scale = f64::from(MAX_IMAGE) / f64::from(w.max(h));
+        let (sw, sh) = (
+            ((f64::from(w) * scale).round() as i32).max(1),
+            ((f64::from(h) * scale).round() as i32).max(1),
+        );
+        if let Some(small) = pixbuf.scale_simple(sw, sh, gtk::gdk_pixbuf::InterpType::Bilinear) {
+            #[allow(deprecated)]
+            return Some(gdk::Texture::for_pixbuf(&small));
+        }
+    }
     let format = if alpha && channels == 4 {
         gdk::MemoryFormat::R8g8b8a8
     } else {
         gdk::MemoryFormat::R8g8b8
     };
-    let tex = gdk::MemoryTexture::new(
-        w,
-        h,
-        format,
-        &glib::Bytes::from_owned(data),
-        stride as usize,
-    );
+    let tex = gdk::MemoryTexture::new(w, h, format, &bytes, stride as usize);
     Some(tex.upcast())
 }
+
+/// Largest side kept of a notification's image-data, in pixels.
+const MAX_IMAGE: i32 = 144;
 
 /// Bodies may carry a small markup subset (b, i, u, a, img). Keep what
 /// Pango accepts, drop <img>, and escape anything malformed.
