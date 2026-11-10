@@ -17,7 +17,9 @@ umoja-desktop (2026.46.5) stonking; urgency=medium
     idle local models unload after 10 minutes. Embedded Lemonade updated
     to v2026.45.3. Also: workspace slide keeps windows on their monitor,
     screenshot UI opens faster and remembers the last area, notification
-    banners no longer leave a dead click area.
+    banners no longer leave a dead click area. The panel no longer
+    crashes at logout, and the panel, dock and overlay stop restarting
+    in a loop after logout.
 
  -- Umoja Maintainers <dev@umoja.internal>  Tue, 10 Nov 2026 22:13:57 +0000
 
