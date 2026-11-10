@@ -58,6 +58,38 @@ pub fn decode_cover(path: &Path, need: (i32, i32)) -> Option<Pixbuf> {
         .ok()
 }
 
+/// Decoded pixels that can cross threads (a Pixbuf can't).
+pub struct Pixels {
+    width: i32,
+    height: i32,
+    stride: usize,
+    alpha: bool,
+    bytes: gtk4::glib::Bytes,
+}
+
+impl Pixels {
+    pub fn texture(&self) -> gdk::Texture {
+        let format = if self.alpha {
+            gdk::MemoryFormat::R8g8b8a8
+        } else {
+            gdk::MemoryFormat::R8g8b8
+        };
+        gdk::MemoryTexture::new(self.width, self.height, format, &self.bytes, self.stride).upcast()
+    }
+}
+
+/// [`decode_cover`] for a worker thread (`gio::spawn_blocking`).
+pub fn decode_cover_pixels(path: &Path, need: (i32, i32)) -> Option<Pixels> {
+    let p = decode_cover(path, need)?;
+    Some(Pixels {
+        width: p.width(),
+        height: p.height(),
+        stride: p.rowstride() as usize,
+        alpha: p.has_alpha(),
+        bytes: p.read_pixel_bytes(),
+    })
+}
+
 /// [`decode_cover`] as a texture. Main thread.
 pub fn texture_cover(path: &Path, need: (i32, i32)) -> Option<gdk::Texture> {
     #[allow(deprecated)]

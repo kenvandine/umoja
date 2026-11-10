@@ -320,7 +320,7 @@ fn grim_rgb(region: Option<(i32, i32, i32, i32)>, cursor: bool) -> Option<(i32, 
     parse_ppm(out.stdout)
 }
 
-fn rgb_pixbuf((w, h, data): (i32, i32, Vec<u8>)) -> Pixbuf {
+pub(crate) fn rgb_pixbuf((w, h, data): (i32, i32, Vec<u8>)) -> Pixbuf {
     Pixbuf::from_bytes(
         &glib::Bytes::from_owned(data),
         gtk::gdk_pixbuf::Colorspace::Rgb,
@@ -342,7 +342,7 @@ fn grim_frames() -> Option<(Pixbuf, Pixbuf)> {
 }
 
 /// A binary (P6) PPM with 8-bit samples: width, height and the RGB rows.
-fn parse_ppm(mut buf: Vec<u8>) -> Option<(i32, i32, Vec<u8>)> {
+pub(crate) fn parse_ppm(mut buf: Vec<u8>) -> Option<(i32, i32, Vec<u8>)> {
     fn field(buf: &[u8], pos: &mut usize) -> Option<usize> {
         loop {
             match buf.get(*pos)? {
