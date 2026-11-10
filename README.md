@@ -16,7 +16,7 @@ down. Press **Super+/** for a guide to every keyboard shortcut. It also adds a l
 | `crates/umoja-screensaver` | The screensaver: "umoja" drawn in Ubuntu-orange circles that fly in and out with a different effect each cycle (gather, orbit, rain, spiral, rings, bloom), inspired by Omarchy's. It starts at Settings › Power › Screen Blank and the screen blanks `org.umoja.shell screensaver-duration` (300 s) later. `umoja-screensaver` previews it; `umoja-screensaver --activate` runs the real idle path. |
 | `crates/umoja-dock` | Ubuntu Dock work-alike driven by the `dash-to-dock` GSettings keys and `favorite-apps`, with running dots from `zwlr_foreign_toplevel`. |
 | `crates/umoja-overlay` | App grid + search, Lemonade assistant with action chips, Myna dictation, the GNOME-style screenshot UI (selection, screen or window; screenshot or screencast via `wf-recorder`), and the keyboard shortcuts guide (Super+/, read live from `org.umoja.Compositor.GetShortcuts`). |
-| `crates/umoja-greeter` | LightDM greeter over a blurred copy of Ubuntu's default wallpaper (`warty-final-ubuntu.png`). |
+| `crates/umoja-greeter` | LightDM greeter over Ubuntu's default wallpaper (`warty-final-ubuntu.png`). |
 | `crates/umoja-portal` | `xdg-desktop-portal-umoja`: Settings (GNOME keys incl. `button-layout`), Screenshot, ScreenCast (stub). |
 | `crates/umoja-common` | GSettings, i18n (reuses gnome-shell/GTK/control-center translations), HiDPI rules, shared types. |
 | `data/` | Session file, GSettings schema, systemd user units, portal + LightDM config. |

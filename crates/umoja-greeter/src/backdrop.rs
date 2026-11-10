@@ -1,5 +1,5 @@
-//! Full-screen wallpaper, softly blurred and dimmed, drawn with GSK so it
-//! stays sharp-edged and cheap at any scale.
+//! Full-screen wallpaper, shown sharp and gently dimmed, drawn with GSK so
+//! it stays cheap at any scale.
 
 use gtk::gdk;
 use gtk::glib;
@@ -7,7 +7,7 @@ use gtk::graphene;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk4 as gtk;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 /// The greeter's background: Ubuntu's default wallpaper (from ubuntu-wallpapers).
 pub const GREETER_WALLPAPER: &str = "/usr/share/backgrounds/warty-final-ubuntu.png";
@@ -23,7 +23,6 @@ mod imp {
     #[derive(Default)]
     pub struct Backdrop {
         pub texture: RefCell<Option<gdk::Texture>>,
-        pub blur: Cell<f64>,
     }
 
     #[glib::object_subclass]
@@ -42,19 +41,12 @@ mod imp {
             let bounds = graphene::Rect::new(0.0, 0.0, w, h);
             snapshot.push_clip(&bounds);
             if let Some(tex) = self.texture.borrow().as_ref() {
-                // "Cover" fit, overscanned so blurred edges never show.
+                // "Cover" fit.
                 let (tw, th) = (tex.width() as f32, tex.height() as f32);
-                let blur = self.blur.get() as f32;
                 let scale = (w / tw).max(h / th);
-                let (dw, dh) = (tw * scale + blur * 4.0, th * scale + blur * 4.0);
+                let (dw, dh) = (tw * scale, th * scale);
                 let dest = graphene::Rect::new((w - dw) / 2.0, (h - dh) / 2.0, dw, dh);
-                if blur > 0.0 {
-                    snapshot.push_blur(blur as f64);
-                }
                 snapshot.append_texture(tex, &dest);
-                if blur > 0.0 {
-                    snapshot.pop();
-                }
             } else {
                 snapshot.append_color(&gdk::RGBA::new(0.17, 0.0, 0.12, 1.0), &bounds);
             }
@@ -79,9 +71,8 @@ glib::wrapper! {
 }
 
 impl Backdrop {
-    pub fn new(blur: f64) -> Self {
+    pub fn new() -> Self {
         let b: Self = glib::Object::new();
-        b.imp().blur.set(blur);
         b.set_hexpand(true);
         b.set_vexpand(true);
         b

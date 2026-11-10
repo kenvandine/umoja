@@ -1,7 +1,7 @@
 //! The login screen.
 //!
 //! Ubuntu's default wallpaper (warty-final-ubuntu.png) fills the screen,
-//! blurred and dimmed, with a large lock-screen clock in the corner, a
+//! sharp and gently dimmed, with a large lock-screen clock in the corner, a
 //! frosted-glass login card in the middle, and the other accounts as a row
 //! of avatars underneath.
 
@@ -19,7 +19,6 @@ use umoja_common::i18n;
 
 /// The session preselected for users who have never logged in.
 pub const DEFAULT_SESSION: &str = "umoja";
-const BLUR_RADIUS: f64 = 48.0;
 const FADE_IN_MS: u32 = 600;
 const FADE_OUT_MS: u32 = 450;
 
@@ -55,8 +54,8 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         .css_classes(["umoja-greeter"])
         .build();
 
-    // The login screen always shows Ubuntu's default wallpaper, blurred.
-    let bg = Backdrop::new(BLUR_RADIUS);
+    // The login screen always shows Ubuntu's default wallpaper, unblurred.
+    let bg = Backdrop::new();
     bg.set_wallpaper(Some(backdrop::GREETER_WALLPAPER));
 
     let overlay = gtk::Overlay::new();
@@ -203,7 +202,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     match login_and_other_monitors() {
         Some((login, others)) if !others.is_empty() => {
             // Like GDM: the login card on the built-in panel, the same
-            // blurred wallpaper on every other screen.
+            // wallpaper on every other screen.
             for mon in others {
                 wallpaper_on(app, &window, &mon);
             }
@@ -226,7 +225,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     window.present();
 }
 
-/// The blurred wallpaper alone on `monitor`: a background layer surface
+/// The wallpaper alone on `monitor`: a background layer surface
 /// filling the screen (a fullscreen toplevel there didn't always end up
 /// covering it), or a fullscreen window without layer shell.
 fn wallpaper_on(app: &adw::Application, main: &adw::ApplicationWindow, monitor: &gtk::gdk::Monitor) {
@@ -236,7 +235,7 @@ fn wallpaper_on(app: &adw::Application, main: &adw::ApplicationWindow, monitor: 
         .css_classes(["umoja-greeter"])
         .decorated(false)
         .build();
-    let bg = Backdrop::new(BLUR_RADIUS);
+    let bg = Backdrop::new();
     bg.set_wallpaper(Some(backdrop::GREETER_WALLPAPER));
     w.set_child(Some(&bg));
     if gtk4_layer_shell::is_supported() {

@@ -35,6 +35,8 @@ window.umoja-greeter {
   padding: 32px 32px 20px 32px;
   border-radius: 28px;
   background-color: alpha(#1a0d15, 0.42);
+  /* The wallpaper is sharp, so frost just the card (GTK >= 4.24). */
+  backdrop-filter: blur(12px);
   border: 1px solid alpha(#ffffff, 0.14);
   box-shadow: 0 24px 64px alpha(#000000, 0.45), inset 0 1px 0 alpha(#ffffff, 0.08);
 }
