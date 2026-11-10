@@ -491,6 +491,9 @@ impl Overlay {
         self.hide_serial.set(self.hide_serial.get().wrapping_add(1));
         self.end_conversation();
         self.entry.set_text("");
+        // Text may already be empty (no "changed"): rebuild the grid, which
+        // stays empty while the entry was the reply box.
+        self.refresh_results();
         self.assistant.set_visible(false);
         self.files.clear();
         self.clear_attachments();
@@ -705,7 +708,11 @@ impl Overlay {
         }
         let q = self.entry.text().to_string();
         let found = self.matches(&q);
-        let limit = if q.trim().is_empty() {
+        let limit = if q.trim().is_empty() && self.awaiting_reply.get() {
+            // The entry is the reply box under the assistant's question:
+            // no app grid under the answer.
+            0
+        } else if q.trim().is_empty() {
             usize::MAX
         } else {
             MAX_RESULTS
