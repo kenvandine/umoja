@@ -1067,7 +1067,7 @@ class Demo:
             ]).returncode == 0
             ok_gif = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-vf",
-                f"fps=12,scale={self.opts.gif_width}:-1:flags=lanczos,split[a][b];"
+                f"tpad=stop_mode=clone:stop_duration=1.5,fps=12,scale={self.opts.gif_width}:-1:flags=lanczos,split[a][b];"
                 "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
                 str(gif),
             ]).returncode == 0
