@@ -12,10 +12,12 @@
 //! usable, as with Ubuntu Dock in GNOME's overview.
 //!
 //! Windows, workspaces and actions come from umoja-mir
-//! (`org.umoja.Compositor`). Previews are cut from a screen capture taken
-//! just before the overview opens and kept per window, so windows on other
-//! workspaces show what they looked like when last seen; a window never seen
-//! uncovered shows its app icon.
+//! (`org.umoja.Compositor`). Previews are cut from screen captures and kept
+//! per window: one taken just before the overview opens, and one taken
+//! shortly after windows settle (the compositor's `WindowsChanged`), so a
+//! window that is covered when the overview opens still shows what it
+//! looked like when last uncovered, as do windows on other workspaces. Only
+//! a window never seen uncovered shows its app icon.
 //!
 //! TODO: live per-window thumbnails once Mir offers toplevel capture
 //! sources (ext-image-capture-source's foreign-toplevel source).
@@ -51,6 +53,10 @@ const THUMB_MAX: f64 = 120.0;
 const PEEK: f64 = 56.0;
 /// Space between the workspace card's edge and the window spread.
 const CARD_PAD: f64 = 24.0;
+/// Background preview capture: wait this long after the last window change
+/// (apps redraw after a raise or resize), and capture at most this often.
+const SNAP_SETTLE: Duration = Duration::from_millis(700);
+const SNAP_INTERVAL: Duration = Duration::from_secs(2);
 /// Pointer travel before a press on a window becomes a drag.
 const DRAG_THRESHOLD: f64 = 8.0;
 
@@ -190,6 +196,10 @@ pub struct Spread {
     previews: RefCell<HashMap<u64, gdk::Texture>>,
     state: RefCell<State>,
     refresh_pending: Cell<bool>,
+    /// Pending background preview capture (see `watch_windows`).
+    snap_timer: RefCell<Option<glib::SourceId>>,
+    /// When the last background capture ran (monotonic µs).
+    last_snap: Cell<i64>,
     last_scroll: Cell<i64>,
     scroll_acc: Cell<f64>,
     drag: RefCell<Option<Drag>>,
@@ -262,12 +272,15 @@ impl Spread {
             previews: RefCell::default(),
             state: RefCell::default(),
             refresh_pending: Cell::new(false),
+            snap_timer: RefCell::default(),
+            last_snap: Cell::new(0),
             last_scroll: Cell::new(0),
             scroll_acc: Cell::new(0.0),
             drag: RefCell::default(),
         });
         this.connect_signals(&content);
         this.watch_workspaces();
+        this.watch_windows();
         this
     }
 
@@ -413,6 +426,87 @@ impl Spread {
             std::mem::forget(id);
             std::mem::forget(conn);
         });
+    }
+
+    /// Keep previews fresh while the overview is closed: shortly after
+    /// windows open, move, get raised or focused, capture the screen and
+    /// update the previews of the windows that are uncovered now. Without
+    /// this a window that happened to be covered when the overview opened
+    /// (Text Editor partly behind Files) had no preview at all.
+    fn watch_windows(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+                return;
+            };
+            let w = weak.clone();
+            let id = conn.signal_subscribe(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                Some(dbus::COMPOSITOR_INTERFACE),
+                Some("WindowsChanged"),
+                Some(dbus::COMPOSITOR_OBJECT_PATH),
+                None,
+                gio::DBusSignalFlags::NONE,
+                move |_, _, _, _, _, _| {
+                    if let Some(s) = w.upgrade() {
+                        s.queue_snapshot();
+                    }
+                },
+            );
+            std::mem::forget(id);
+            std::mem::forget(conn);
+        });
+    }
+
+    /// (Re)start the countdown to a background capture: SNAP_SETTLE after
+    /// the last change, and no sooner than SNAP_INTERVAL after the last one.
+    fn queue_snapshot(self: &Rc<Self>) {
+        if let Some(t) = self.snap_timer.take() {
+            t.remove();
+        }
+        let since = glib::monotonic_time() - self.last_snap.get();
+        let wait = SNAP_SETTLE
+            .max(SNAP_INTERVAL.saturating_sub(Duration::from_micros(since.max(0) as u64)));
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(wait, move || {
+            let Some(s) = weak.upgrade() else { return };
+            s.snap_timer.take();
+            glib::spawn_future_local(async move { s.snapshot().await });
+        });
+        self.snap_timer.replace(Some(id));
+    }
+
+    async fn snapshot(self: &Rc<Self>) {
+        if self.opening.get() || self.is_visible() || self.own_window_shown() {
+            return;
+        }
+        if !screen_shows_desktop().await {
+            return;
+        }
+        self.last_snap.set(glib::monotonic_time());
+        let state = fetch_state().await;
+        let here = state
+            .windows
+            .iter()
+            .any(|w| w.flags & FLAG_CURRENT_WORKSPACE != 0 && w.flags & FLAG_MINIMIZED == 0);
+        if !here {
+            return;
+        }
+        let frame = capture().await;
+        // Something of ours may have come up meanwhile (Super pressed).
+        if self.opening.get() || self.is_visible() || self.own_window_shown() {
+            return;
+        }
+        self.remember_previews(&state, frame.as_ref());
+    }
+
+    /// Is any of this process's windows (assistant, screenshot UI, tile
+    /// preview, shortcuts...) on screen? It would be in the capture.
+    fn own_window_shown(&self) -> bool {
+        self.window
+            .application()
+            .map(|app| app.windows().iter().any(|w| w.is_visible()))
+            .unwrap_or(false)
     }
 
     pub fn is_visible(&self) -> bool {
@@ -1019,6 +1113,49 @@ impl Spread {
             }
         }
     }
+}
+
+/// Is the plain desktop on screen: not blanked and not locked? Otherwise a
+/// capture would show those instead of the windows. (umoja-mir also sends
+/// no WindowsChanged while the screensaver shows.)
+async fn screen_shows_desktop() -> bool {
+    let Ok(session) = gio::bus_get_future(gio::BusType::Session).await else {
+        return false;
+    };
+    let blanked = session.call_future(
+        Some("org.freedesktop.ScreenSaver"),
+        "/org/freedesktop/ScreenSaver",
+        "org.freedesktop.ScreenSaver",
+        "GetActive",
+        None,
+        Some(glib::VariantTy::new("(b)").unwrap()),
+        gio::DBusCallFlags::NO_AUTO_START,
+        1000,
+    );
+    let locked = async {
+        let system = gio::bus_get_future(gio::BusType::System).await.ok()?;
+        system
+            .call_future(
+                Some("org.freedesktop.login1"),
+                "/org/freedesktop/login1/session/auto",
+                "org.freedesktop.DBus.Properties",
+                "Get",
+                Some(&("org.freedesktop.login1.Session", "LockedHint").to_variant()),
+                Some(glib::VariantTy::new("(v)").unwrap()),
+                gio::DBusCallFlags::NONE,
+                1000,
+            )
+            .await
+            .ok()
+            .and_then(|v| v.child_value(0).as_variant())
+            .and_then(|v| v.get::<bool>())
+    };
+    let (blanked, locked) = futures_util::join!(blanked, locked);
+    let yes = |r: Result<glib::Variant, glib::Error>| {
+        matches!(r.ok().and_then(|v| v.get::<(bool,)>()), Some((true,)))
+    };
+    // No ScreenSaver service (test compositor) counts as on.
+    !yes(blanked) && locked != Some(true)
 }
 
 /// Top-left of the whole monitor layout, which is (0, 0) of a grim capture.

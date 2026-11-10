@@ -569,6 +569,12 @@ pub extern "C" fn umoja_workspaces_changed(current: usize, count: usize) {
     })
 }
 
+/// Something about the windows changed (see `umoja_shim.h`).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_windows_changed() {
+    guard("windows_changed", (), shell::windows_changed)
+}
+
 /// Mir dimmed, blanked or woke the screen (`UMOJA_IDLE_*`).
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_idle_state(state: u32) {

@@ -229,6 +229,9 @@ bool umoja_raise_tile_group(void);
 void umoja_workspace_switched(size_t current, size_t count);
 // The current workspace or the number of workspaces may have changed.
 void umoja_workspaces_changed(size_t current, size_t count);
+// A window opened, closed, moved, resized, was raised or changed state.
+// Cheap: only bumps a counter; Rust coalesces bursts into WindowsChanged.
+void umoja_windows_changed(void);
 bool umoja_is_tile_action(uint32_t action);
 
 // Implemented by the shim, called from Rust's D-Bus thread. Each takes the

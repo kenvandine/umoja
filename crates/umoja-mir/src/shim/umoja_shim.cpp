@@ -207,6 +207,7 @@ public:
         mru.insert(mru.begin(), info.window());
         update_workspace_membership(info.window());
         relayout_workspaces();
+        umoja_windows_changed();
     }
 
     void advise_delete_window(WindowInfo const& info) override {
@@ -230,12 +231,14 @@ public:
         umoja_switcher_window_closed(window_id(w));
         if (all_windows.erase(w)) relayout_workspaces(w);
         MinimalWindowManager::advise_delete_window(info);
+        umoja_windows_changed();
     }
 
     void advise_focus_gained(WindowInfo const& info) override {
         MinimalWindowManager::advise_focus_gained(info);
         Window const w = info.window();
         if (!all_windows.count(w)) return;
+        umoja_windows_changed();
         erase(mru, w);
         mru.insert(mru.begin(), w);
         update_fullscreen_layer(w, info.state(), true);
@@ -258,6 +261,7 @@ public:
 
     void advise_state_change(WindowInfo const& info, MirWindowState state) override {
         MinimalWindowManager::advise_state_change(info, state);
+        umoja_windows_changed();
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: state of %s -> %d\n", describe(info).c_str(), int(state));
         update_fullscreen_layer(info.window(), state, info.window() == tools.active_window());
@@ -319,6 +323,7 @@ public:
             erase(stacking, w);
             stacking.push_back(w);
         }
+        umoja_windows_changed();
     }
 
     // ---- input ------------------------------------------------------------
@@ -535,6 +540,7 @@ public:
 
     void advise_resize(WindowInfo const& info, geom::Size const& size) override {
         MinimalWindowManager::advise_resize(info, size);
+        umoja_windows_changed();
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: resize of %s -> %dx%d\n", describe(info).c_str(),
                          size.width.as_int(), size.height.as_int());
@@ -560,6 +566,7 @@ public:
 
     void advise_move_to(WindowInfo const& info, geom::Point top_left) override {
         MinimalWindowManager::advise_move_to(info, top_left);
+        umoja_windows_changed();
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: move of %s -> %d,%d\n", describe(info).c_str(),
                          top_left.x.as_int(), top_left.y.as_int());

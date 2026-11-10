@@ -718,6 +718,45 @@ impl Compositor {
         current: u32,
         count: u32,
     ) -> zbus::Result<()>;
+
+    /// Emitted (at most every 250 ms) after windows opened, closed, moved,
+    /// were resized, raised or focused, or changed state. Carries nothing:
+    /// call GetWindows for the new picture. The overview uses it to keep
+    /// previews of uncovered windows fresh.
+    #[zbus(signal)]
+    async fn windows_changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+/// Bumped by the shim on every window change; one task turns it into
+/// WindowsChanged signals, coalescing bursts (a drag moves the window on
+/// every pointer motion).
+static WINDOWS: LazyLock<tokio::sync::watch::Sender<u64>> =
+    LazyLock::new(|| tokio::sync::watch::channel(0).0);
+
+/// Called from the shim (under the WM lock): only bumps a counter.
+pub fn windows_changed() {
+    WINDOWS.send_modify(|n| *n = n.wrapping_add(1));
+}
+
+fn emit_windows(conn: zbus::Connection) {
+    let mut rx = WINDOWS.subscribe();
+    crate::session::RUNTIME.spawn(async move {
+        while rx.changed().await.is_ok() {
+            // Let the burst settle, then send one signal for all of it.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            rx.borrow_and_update();
+            if crate::idle::desktop_hidden() {
+                continue;
+            }
+            let emitted = match zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                Ok(e) => Compositor::windows_changed(&e).await,
+                Err(e) => Err(e),
+            };
+            if let Err(e) = emitted {
+                tracing::debug!(error = %e, "WindowsChanged not sent");
+            }
+        }
+    });
 }
 
 /// The latest (current, count). One task emits WorkspacesChanged from it,
@@ -787,6 +826,7 @@ pub fn start() {
             Ok(conn) => {
                 crate::session::keep_name(conn.clone(), BUS_NAME);
                 emit_workspaces(conn.clone());
+                emit_windows(conn.clone());
                 let _ = CONNECTION.set(conn.clone());
                 std::mem::forget(conn);
             }

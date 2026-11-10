@@ -433,6 +433,13 @@ fn on_screensaver_exit(expected: bool) {
 
 /// `umoja-screensaver --activate`: start it now, as idling would. The
 /// screen blanks screensaver-duration seconds after the last input.
+/// Is something other than the desktop on screen: blanked, locked, or the
+/// screensaver showing? The overview doesn't capture window previews then.
+pub fn desktop_hidden() -> bool {
+    let s = state();
+    s.blanked || s.locked || matches!(s.stage, Stage::Showing { .. })
+}
+
 pub fn activate_screensaver() -> bool {
     let mut st = state();
     if st.locked || !crate::screensaver::available() {
