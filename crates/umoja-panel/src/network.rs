@@ -61,6 +61,8 @@ pub struct WifiDevice {
     pub state: u32,
     pub ssid: Option<String>,
     pub strength: u8,
+    /// The access point it is connected to (D-Bus path).
+    pub ap: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -232,6 +234,11 @@ pub struct Network {
     profiles: RefCell<HashMap<String, Option<String>>>,
     listeners: RefCell<Vec<Listener>>,
     pending: Cell<bool>,
+    /// A refresh is running on a worker thread / another was asked for meanwhile.
+    in_flight: Cell<bool>,
+    again: Cell<bool>,
+    /// The Wi-Fi network list is open, so every access point's changes matter.
+    list_open: Cell<bool>,
 }
 
 thread_local! {
@@ -250,6 +257,9 @@ impl Network {
             profiles: RefCell::default(),
             listeners: RefCell::default(),
             pending: Cell::new(false),
+            in_flight: Cell::new(false),
+            again: Cell::new(false),
+            list_open: Cell::new(false),
         });
         let Some(conn) = net.conn.clone() else {
             return net;
@@ -265,8 +275,10 @@ impl Network {
             None,
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, _| {
-                if let Some(n) = weak.upgrade() {
+            move |_, _, path, _, _, _| {
+                if let Some(n) = weak.upgrade()
+                    && n.matters(path)
+                {
                     n.schedule_refresh();
                 }
             },
@@ -349,6 +361,21 @@ impl Network {
         self.listeners.borrow_mut().push(Box::new(f));
     }
 
+    /// Access points report their signal strength over and over while NM
+    /// scans; only the connected one matters, unless the list is open.
+    fn matters(&self, path: &str) -> bool {
+        if !path.starts_with("/org/freedesktop/NetworkManager/AccessPoint/") || self.list_open.get() {
+            return true;
+        }
+        let state = self.state.borrow();
+        state.wifi.as_ref().and_then(|w| w.ap.as_deref()) == Some(path)
+    }
+
+    /// The Wi-Fi list in Quick Settings opened or closed.
+    pub fn set_list_open(&self, open: bool) {
+        self.list_open.set(open);
+    }
+
     /// NM sends bursts of signals (one per property per object); coalesce.
     fn schedule_refresh(self: &Rc<Self>) {
         if self.pending.replace(true) {
@@ -363,12 +390,39 @@ impl Network {
         });
     }
 
-    fn refresh(&self) {
-        let state = self
-            .conn
-            .as_ref()
-            .map(|c| read_state(c, &mut self.profiles.borrow_mut()))
-            .unwrap_or_default();
+    /// Re-read NetworkManager's state on a worker thread: it takes a
+    /// dozen or more blocking D-Bus calls, which used to run on the panel's
+    /// main thread (with NM busy, the clock and menus froze meanwhile).
+    fn refresh(self: &Rc<Self>) {
+        let Some(conn) = self.conn.clone() else {
+            self.publish(NetState::default());
+            return;
+        };
+        if self.in_flight.replace(true) {
+            self.again.set(true);
+            return;
+        }
+        let mut profiles = self.profiles.take();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let read = gio::spawn_blocking(move || {
+                let state = read_state(&conn, &mut profiles);
+                (state, profiles)
+            })
+            .await;
+            let Some(n) = weak.upgrade() else { return };
+            n.in_flight.set(false);
+            if let Ok((state, profiles)) = read {
+                n.profiles.replace(profiles);
+                n.publish(state);
+            }
+            if n.again.replace(false) {
+                n.refresh();
+            }
+        });
+    }
+
+    fn publish(&self, state: NetState) {
         *self.state.borrow_mut() = state;
         let state = self.state.borrow();
         for l in self.listeners.borrow().iter() {
@@ -399,14 +453,23 @@ impl Network {
 
     /// Visible networks, one per SSID (strongest first), plus the saved
     /// connection for each SSID that has one.
-    pub fn access_points(&self) -> (Vec<AccessPoint>, HashMap<String, String>) {
-        let (Some(c), Some(w)) = (&self.conn, self.state.borrow().wifi.clone()) else {
+    /// Visible networks and saved profiles, read on a worker thread.
+    pub async fn access_points(&self) -> (Vec<AccessPoint>, HashMap<String, String>) {
+        let (Some(c), Some(w)) = (self.conn.clone(), self.state.borrow().wifi.clone()) else {
             return Default::default();
         };
+        gio::spawn_blocking(move || read_access_points(&c, &w.path))
+            .await
+            .unwrap_or_default()
+    }
+}
+
+fn read_access_points(c: &gio::DBusConnection, wifi_path: &str) -> (Vec<AccessPoint>, HashMap<String, String>) {
+    {
         let paths = c
             .call_sync(
                 Some(NM),
-                &w.path,
+                wifi_path,
                 WIRELESS,
                 "GetAllAccessPoints",
                 None,
@@ -450,7 +513,9 @@ impl Network {
         aps.sort_by(|a, b| b.strength.cmp(&a.strength).then(a.ssid.cmp(&b.ssid)));
         (aps, saved_wifi(c))
     }
+}
 
+impl Network {
     /// Connect the way gnome-shell does: reuse a saved profile, create one
     /// for open networks, and hand secured new networks to Settings, which
     /// asks for the password.
@@ -645,10 +710,8 @@ fn read_state(c: &gio::DBusConnection, profiles: &mut HashMap<String, Option<Str
                     state,
                     ..Default::default()
                 };
-                if let Some(ap) = bus::get_all(c, NM, &path, WIRELESS)
-                    .and_then(|wl| wl.obj("ActiveAccessPoint"))
-                    .and_then(|ap| bus::get_all(c, NM, &ap, ACCESS_POINT))
-                {
+                w.ap = bus::get_all(c, NM, &path, WIRELESS).and_then(|wl| wl.obj("ActiveAccessPoint"));
+                if let Some(ap) = w.ap.as_deref().and_then(|ap| bus::get_all(c, NM, ap, ACCESS_POINT)) {
                     w.strength = ap.u8("Strength").unwrap_or(0);
                     w.ssid = Some(String::from_utf8_lossy(&ap.bytes("Ssid")).into_owned())
                         .filter(|s| !s.is_empty());
@@ -839,6 +902,7 @@ pub fn wifi_tile(tile: impl Fn(&str, &str) -> gtk::ToggleButton) -> (gtk::Box, g
         let revealer = revealer.clone();
         move |b| {
             let open = b.is_active();
+            Network::get().set_list_open(open);
             if open {
                 let net = Network::get();
                 net.request_scan();
@@ -855,59 +919,70 @@ fn list_of(revealer: &gtk::Revealer) -> gtk::Box {
 }
 
 fn fill_networks(list: &gtk::Box, s: &NetState) {
-    while let Some(child) = list.first_child() {
-        list.remove(&child);
-    }
-    let header = gtk::Label::builder()
-        .label(i18n::shell("Wi-Fi"))
-        .xalign(0.0)
-        .css_classes(["heading", "network-list-header"])
-        .build();
-    list.append(&header);
-
-    let net = Network::get();
-    let (aps, saved) = net.access_points();
+    // The access points are read on a worker thread; the list is rebuilt
+    // when they arrive, and only from the newest request.
+    thread_local!(static SERIAL: Cell<u64> = const { Cell::new(0) });
+    let serial = SERIAL.with(|c| {
+        c.set(c.get() + 1);
+        c.get()
+    });
+    let list = list.clone();
     let current = s
         .wifi
         .as_ref()
         .filter(|w| w.state == DEV_ACTIVATED)
         .and_then(|w| w.ssid.clone());
-    for ap in aps.into_iter().take(8) {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        row.append(&gtk::Image::from_icon_name(&signal_icon(ap.strength)));
-        row.append(
-            &gtk::Label::builder()
-                .label(&ap.ssid)
-                .xalign(0.0)
-                .hexpand(true)
-                .max_width_chars(1)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .build(),
-        );
-        if current.as_deref() == Some(ap.ssid.as_str()) {
-            row.append(&gtk::Image::from_icon_name("object-select-symbolic"));
-        } else if ap.secure {
-            row.append(&gtk::Image::from_icon_name(
-                "network-wireless-encrypted-symbolic",
-            ));
+    glib::spawn_future_local(async move {
+        let (aps, saved) = Network::get().access_points().await;
+        if SERIAL.with(Cell::get) != serial {
+            return;
         }
-        let button = gtk::Button::builder()
-            .child(&row)
+        while let Some(child) = list.first_child() {
+            list.remove(&child);
+        }
+        let header = gtk::Label::builder()
+            .label(i18n::shell("Wi-Fi"))
+            .xalign(0.0)
+            .css_classes(["heading", "network-list-header"])
+            .build();
+        list.append(&header);
+        for ap in aps.into_iter().take(8) {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(&gtk::Image::from_icon_name(&signal_icon(ap.strength)));
+            row.append(
+                &gtk::Label::builder()
+                    .label(&ap.ssid)
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .max_width_chars(1)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .build(),
+            );
+            if current.as_deref() == Some(ap.ssid.as_str()) {
+                row.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+            } else if ap.secure {
+                row.append(&gtk::Image::from_icon_name(
+                    "network-wireless-encrypted-symbolic",
+                ));
+            }
+            let button = gtk::Button::builder()
+                .child(&row)
+                .css_classes(["flat", "network-row"])
+                .build();
+            let profile = saved.get(&ap.ssid).cloned();
+            button.connect_clicked(move |_| Network::get().connect_to(&ap, profile.as_deref()));
+            list.append(&button);
+        }
+        let all = gtk::Button::builder()
+            .label(i18n::shell("All Networks"))
             .css_classes(["flat", "network-row"])
             .build();
-        let profile = saved.get(&ap.ssid).cloned();
-        button.connect_clicked(move |_| Network::get().connect_to(&ap, profile.as_deref()));
-        list.append(&button);
-    }
-    let all = gtk::Button::builder()
-        .label(i18n::shell("All Networks"))
-        .css_classes(["flat", "network-row"])
-        .build();
-    if let Some(l) = all.child().and_downcast::<gtk::Label>() {
-        l.set_xalign(0.0);
-    }
-    all.connect_clicked(|_| crate::quick_settings::open_settings("wifi"));
-    list.append(&all);
+        if let Some(l) = all.child().and_downcast::<gtk::Label>() {
+            l.set_xalign(0.0);
+        }
+        all.connect_clicked(|_| crate::quick_settings::open_settings("wifi"));
+        list.append(&all);
+    });
 }
 
 /// Wired tile, shown only when there is an Ethernet device.
@@ -1111,6 +1186,7 @@ mod tests {
             state,
             ssid: Some("home".into()),
             strength,
+            ap: None,
         })
     }
 
