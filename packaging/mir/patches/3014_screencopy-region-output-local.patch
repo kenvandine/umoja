@@ -1,0 +1,27 @@
+Description: wlr-screencopy: take capture_output_region's region as output-local
+ The protocol gives the region of capture_output_region in the output's
+ logical coordinate space (0,0 is the output's top left), and clients such
+ as wf-recorder subtract the output's position before sending it. Mir
+ clipped the region against the output's extents in layout coordinates, so
+ on any output not at the layout's origin the region was shifted back by
+ the output's position and mostly clipped away: recording a 3440x1440
+ monitor placed right of a 1920 px wide one gave a 1520x1440 video of its
+ left part. Move the region onto the output before clipping.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-10
+---
+--- a/src/server/frontend_wayland/wlr_screencopy_v1.cpp
++++ b/src/server/frontend_wayland/wlr_screencopy_v1.cpp
+@@ -393,7 +393,10 @@
+ {
+     auto const& output_config = OutputGlobal::from_or_throw(output).current_config();
+     auto const extents = output_config.extents();
+-    auto const intersection = intersection_of({{x, y}, {width, height}}, extents);
++    // The region is in the output's own logical coordinates (its top left
++    // is 0,0), not the layout's: move it onto the output before clipping.
++    auto const region = geom::Rectangle{extents.top_left + geom::Displacement{x, y}, {width, height}};
++    auto const intersection = intersection_of(region, extents);
+     auto const buffer_size = translate_and_scale(intersection, extents, {{}, extents.size}).size;
+     new WlrScreencopyFrameV1{frame, this, ctx, {output, intersection, buffer_size, output_config.transformation(), overlay_cursor == 1}};
+ }

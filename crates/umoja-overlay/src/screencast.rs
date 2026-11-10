@@ -10,6 +10,7 @@
 
 use gio::prelude::*;
 use gtk::glib;
+use gtk::prelude::MonitorExt;
 use gtk4 as gtk;
 use libadwaita as adw;
 use std::cell::RefCell;
@@ -33,33 +34,65 @@ pub fn screencast_path() -> PathBuf {
     ))
 }
 
-/// The wf-recorder command line for `region` (logical layout pixels).
-/// 4:2:0 video needs even sizes, so the region is trimmed by at most a pixel.
-pub fn recorder_args(path: &Path, region: (i32, i32, i32, i32)) -> Vec<String> {
+/// What to record: a whole monitor, by its output name, or a region of the
+/// layout (logical pixels).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    Output(String),
+    Region(i32, i32, i32, i32),
+}
+
+/// A whole monitor is recorded by output name (`-o`), at its full pixel
+/// size, rather than as a region: Mir before umoja13 read a screencopy
+/// region as layout coordinates instead of output-local ones, so a region
+/// on any monitor but the leftmost came out cropped.
+pub fn target_for(region: (i32, i32, i32, i32)) -> Target {
     let (x, y, w, h) = region;
-    let (w, h) = ((w & !1).max(2), (h & !1).max(2));
-    [
-        "wf-recorder",
-        "-y",
-        "-g",
-        &format!("{x},{y} {w}x{h}"),
-        "-c",
-        "libvpx",
-        "-x",
-        "yuv420p",
-        // Real-time VP8 so a laptop keeps up at HiDPI sizes.
-        "-p",
-        "deadline=realtime",
-        "-p",
-        "cpu-used=8",
-        "-p",
-        "b=8M",
-        "-f",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .chain(std::iter::once(path.to_string_lossy().into_owned()))
-    .collect()
+    umoja_common::monitors::all()
+        .into_iter()
+        .find(|m| {
+            let g = m.geometry();
+            (g.x(), g.y(), g.width(), g.height()) == (x, y, w, h)
+        })
+        .and_then(|m| m.connector())
+        .map(|c| Target::Output(c.to_string()))
+        .unwrap_or(Target::Region(x, y, w, h))
+}
+
+/// The wf-recorder command line for `target`.
+/// 4:2:0 video needs even sizes, so a region is trimmed by at most a pixel.
+pub fn recorder_args(path: &Path, target: &Target) -> Vec<String> {
+    let what = match target {
+        Target::Output(name) => ["-o".to_string(), name.clone()],
+        Target::Region(x, y, w, h) => {
+            let (w, h) = ((w & !1).max(2), (h & !1).max(2));
+            ["-g".to_string(), format!("{x},{y} {w}x{h}")]
+        }
+    };
+    ["wf-recorder", "-y"]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(what)
+        .chain(
+            [
+                "-c",
+                "libvpx",
+                "-x",
+                "yuv420p",
+                // Real-time VP8 so a laptop keeps up at HiDPI sizes.
+                "-p",
+                "deadline=realtime",
+                "-p",
+                "cpu-used=8",
+                "-p",
+                "b=8M",
+                "-f",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        )
+        .chain(std::iter::once(path.to_string_lossy().into_owned()))
+        .collect()
 }
 
 struct Running {
@@ -122,7 +155,8 @@ impl Recorder {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let args = recorder_args(&path, region);
+        let target = target_for(region);
+        let args = recorder_args(&path, &target);
         let argv: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsStr::new).collect();
         let proc = match gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDIN_PIPE) {
             Ok(p) => p,
@@ -134,7 +168,7 @@ impl Recorder {
                 return;
             }
         };
-        tracing::info!(path = %path.display(), ?region, "screencast started");
+        tracing::info!(path = %path.display(), ?target, "screencast started");
         *self.running.borrow_mut() = Some(Running {
             proc: proc.clone(),
             stopping: false,
@@ -205,10 +239,20 @@ mod tests {
 
     #[test]
     fn args_use_even_region() {
-        let a = recorder_args(Path::new("/tmp/x.webm"), (10, 20, 301, 199));
+        let a = recorder_args(Path::new("/tmp/x.webm"), &Target::Region(10, 20, 301, 199));
         let g = a.iter().position(|s| s == "-g").unwrap();
         assert_eq!(a[g + 1], "10,20 300x198");
+        assert!(!a.contains(&"-o".to_string()));
         assert_eq!(a.last().unwrap(), "/tmp/x.webm");
         assert_eq!(a[0], "wf-recorder");
+    }
+
+    #[test]
+    fn args_name_a_whole_output() {
+        let a = recorder_args(Path::new("/tmp/x.webm"), &Target::Output("DP-2".into()));
+        let o = a.iter().position(|s| s == "-o").unwrap();
+        assert_eq!(a[o + 1], "DP-2");
+        assert!(!a.contains(&"-g".to_string()));
+        assert_eq!(a.last().unwrap(), "/tmp/x.webm");
     }
 }

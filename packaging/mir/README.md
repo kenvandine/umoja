@@ -71,6 +71,11 @@ Umoja PPA:
   clamped and clients got events at a negative surface position. A click
   with the pointer pushed into the top bar's corners missed the system menu
   and Activities.
+- `patches/3014_screencopy-region-output-local.patch`: `wlr-screencopy`'s
+  `capture_output_region` region is output-local (wf-recorder subtracts the
+  output's position), but Mir clipped it against the output in layout
+  coordinates, so recording a region on a monitor right of another came out
+  cropped to the left part of that monitor.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

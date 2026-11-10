@@ -29,4 +29,5 @@ dch --append "Drop a surface's pending explicit-sync commit when the surface is 
 dch --append "Take control of our own logind session (XDG_SESSION_ID), so a compositor restarted while another VT is active resumes when switched back."
 dch --append "Honour wl_surface.offset and buffer scale for client cursor hotspots, and keep a hidden cursor surface's role, so GTK terminal cursors line up and come back after hiding."
 dch --append "Confine the pointer when it is pushed just past the top or left screen edge, so clicks in the top bar's corners reach it."
+dch --append "wlr-screencopy: read a capture_output_region region as output-local, as the protocol says, so recording part of a monitor not at the layout origin is not cropped."
 echo "$PWD"
