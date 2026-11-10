@@ -227,6 +227,15 @@ impl Bubbles {
         true
     }
 
+    /// The clock menu opened over them: every bubble goes, critical ones
+    /// too (they stay in the message list until dismissed there).
+    pub fn hide_all(&self) {
+        let ids: Vec<u32> = self.items.borrow().keys().copied().collect();
+        for id in ids {
+            self.remove(id);
+        }
+    }
+
     /// Do Not Disturb was switched on: only critical bubbles stay.
     pub fn hide_all_but_critical(&self) {
         let ids: Vec<u32> = self

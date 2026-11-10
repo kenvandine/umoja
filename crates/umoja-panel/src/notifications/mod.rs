@@ -201,6 +201,10 @@ pub struct Center {
     unseen: RefCell<HashSet<u32>>,
     reply_listeners: RefCell<Vec<ReplyListener>>,
     handlers: RefCell<HashMap<u32, ActionHandler>>,
+    /// The clock menu is open. Banners sit on a layer above it, right over
+    /// the message list, so they'd cover (and take the clicks of) the rows
+    /// beneath. As gnome-shell's bannerBlocked, none show meanwhile.
+    banners_blocked: Cell<bool>,
 }
 
 impl Center {
@@ -216,6 +220,7 @@ impl Center {
             unseen: RefCell::default(),
             reply_listeners: RefCell::default(),
             handlers: RefCell::default(),
+            banners_blocked: Cell::new(false),
         });
         if let Some(s) = &center.settings {
             let weak = Rc::downgrade(&center);
@@ -401,6 +406,15 @@ impl Center {
         false
     }
 
+    /// The clock menu opened (true) or closed. Everything a banner shows is
+    /// in the menu's list too, so the banners just go.
+    pub fn block_banners(&self, blocked: bool) {
+        self.banners_blocked.set(blocked);
+        if blocked {
+            self.bubbles.hide_all();
+        }
+    }
+
     /// Do Not Disturb is "show-banners = false", as in GNOME.
     pub fn banners_enabled(&self) -> bool {
         self.settings
@@ -466,8 +480,9 @@ impl Center {
         // bubble up again for every percent.
         let quiet_update =
             existing.is_some() && note.value.is_some() && !self.bubbles.contains(note.id);
-        let show_banner =
-            !quiet_update && (critical || (self.banners_enabled() && policy.show_banners));
+        let show_banner = !quiet_update
+            && !self.banners_blocked.get()
+            && (critical || (self.banners_enabled() && policy.show_banners));
         if show_banner {
             self.bubbles.show(&note);
         }

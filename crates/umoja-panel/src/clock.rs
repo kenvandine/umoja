@@ -87,7 +87,13 @@ impl ClockButton {
         {
             let dot = dot.clone();
             let list = list.clone();
+            let center = Rc::downgrade(center);
             popover.connect_show(move |p| {
+                // Banners float above the menu, over the message list: a
+                // click on a row's close button landed on the banner.
+                if let Some(c) = center.upgrade() {
+                    c.block_banners(true);
+                }
                 dot.set_visible(false);
                 // Like gnome-shell's date menu, take the keyboard while open
                 // (the quick-reply field needs it).
@@ -100,7 +106,11 @@ impl ClockButton {
         }
         {
             let list = list.clone();
+            let center = Rc::downgrade(center);
             popover.connect_hide(move |p| {
+                if let Some(c) = center.upgrade() {
+                    c.block_banners(false);
+                }
                 crate::notifications::want_keyboard(p, false);
                 list.closed();
             });
