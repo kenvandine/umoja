@@ -64,6 +64,8 @@ pub fn recorder_args(path: &Path, region: (i32, i32, i32, i32)) -> Vec<String> {
 
 struct Running {
     proc: gio::Subprocess,
+    /// Stop was asked for; wf-recorder is still finishing the file.
+    stopping: bool,
 }
 
 pub struct Recorder {
@@ -133,23 +135,41 @@ impl Recorder {
             }
         };
         tracing::info!(path = %path.display(), ?region, "screencast started");
-        *self.running.borrow_mut() = Some(Running { proc: proc.clone() });
+        *self.running.borrow_mut() = Some(Running {
+            proc: proc.clone(),
+            stopping: false,
+        });
         self.emit(true);
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let _ = proc.wait_future().await;
             let Some(rec) = weak.upgrade() else { return };
-            rec.running.borrow_mut().take();
-            rec.emit(false);
+            let stopping = rec.running.borrow_mut().take().is_some_and(|r| r.stopping);
+            if !stopping {
+                rec.emit(false);
+            }
             rec.finished(&path, proc.is_successful());
         });
     }
 
     /// Stop the recording; wf-recorder writes the file out on SIGINT.
+    ///
+    /// Like gnome-shell, the indicator goes at once: wf-recorder can take
+    /// seconds to exit (it drains its encode queue, and waits for one more
+    /// damaged frame from the compositor), and the click looked ignored
+    /// until it did. The "Screencast recorded" notification still waits for
+    /// the finished file.
     pub fn stop(&self) {
-        if let Some(r) = self.running.borrow().as_ref() {
-            r.proc.send_signal(libc::SIGINT);
-        }
+        let proc = {
+            let mut running = self.running.borrow_mut();
+            let Some(r) = running.as_mut().filter(|r| !r.stopping) else {
+                return;
+            };
+            r.stopping = true;
+            r.proc.clone()
+        };
+        self.emit(false);
+        proc.send_signal(libc::SIGINT);
     }
 
     fn finished(&self, path: &Path, ok: bool) {

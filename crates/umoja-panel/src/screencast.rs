@@ -33,14 +33,23 @@ pub fn indicator() -> gtk::Button {
         .tooltip_text(i18n::shell("Stop Screencast"))
         .visible(false)
         .build();
-    button.connect_clicked(|_| stop());
+    button.connect_clicked(|b| {
+        // Hide before asking, so the click shows at once, as in gnome-shell.
+        b.set_visible(false);
+        stop(b.downgrade());
+    });
     watch(&button, &label);
     button
 }
 
-fn stop() {
+fn stop(button: glib::WeakRef<gtk::Button>) {
     gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
-        let Ok(conn) = conn else { return };
+        let Ok(conn) = conn else {
+            if let Some(b) = button.upgrade() {
+                b.set_visible(true);
+            }
+            return;
+        };
         conn.call(
             Some(dbus::OVERLAY_BUS_NAME),
             dbus::OVERLAY_OBJECT_PATH,
@@ -51,9 +60,13 @@ fn stop() {
             gio::DBusCallFlags::NONE,
             1000,
             gio::Cancellable::NONE,
-            |res| {
+            move |res| {
                 if let Err(e) = res {
                     tracing::warn!(error = %e, "could not stop the screencast");
+                    // Still recording: bring the button back.
+                    if let Some(b) = button.upgrade() {
+                        b.set_visible(true);
+                    }
                 }
             },
         );
