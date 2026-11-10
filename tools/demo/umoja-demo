@@ -1031,10 +1031,15 @@ class Demo:
         H = int(round(W * h / w / 2) * 2)
         work = self.raw_dir / "trailer"
         work.mkdir(parents=True, exist_ok=True)
+        # Ubuntu Sans is "UbuntuSans[wdth,wght].ttf": brackets and commas
+        # break ffmpeg's filter syntax, so use a copy with a plain name.
+        plain = work / ("font" + Path(font).suffix)
+        shutil.copy(font, plain)
+        font = str(plain)
         fit = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p")
         enc = ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"]
-        ff = font.replace(":", "\\:")
+        ff = font.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         segs = []
         # Title card.
         (work / "t1.txt").write_text("Umoja")
@@ -1162,7 +1167,47 @@ class Demo:
 
     # ---- main ---------------------------------------------------------
 
+    def trailer_only(self):
+        """Rebuild videos/trailer.mp4 from an earlier run's clips and captions."""
+        import re
+        readme = self.out / "README.md"
+        if not readme.exists():
+            sys.exit(f"no {readme}: run the tour first")
+        self.ffmpeg = bool(shutil.which("ffmpeg"))
+        _conn, self.area = self.monitor()
+        pat = re.compile(r"^\[!\[(?P<cap>.*)\]\((?P<gif>[^)]*)\)\]\((?P<mp4>[^)]*\.mp4)\)$")
+        for line in readme.read_text().splitlines():
+            m = pat.match(line.strip())
+            if not m:
+                continue
+            mp4 = self.out / m["mp4"]
+            if mp4.name == "trailer.mp4" or not mp4.exists():
+                continue
+            name = mp4.stem
+            scene = next((s for s in TRAILER if name == s or name.startswith(s + "-")), name)
+            self.videos.setdefault(scene, []).append((self.out / m["gif"], mp4, m["cap"]))
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        self.make_trailer()
+        shutil.rmtree(self.raw_dir, ignore_errors=True)
+        if not self.trailer:
+            log("! no trailer made")
+            return 1
+        log(f"wrote {self.trailer}")
+        text = readme.read_text()
+        link = f"**[Watch the trailer]({self.rel(self.trailer)})**"
+        if link not in text:
+            head, _, rest = text.partition("\n\n")
+            head2, _, rest2 = rest.partition("\n\n")
+            readme.write_text(f"{head}\n\n{head2}\n\n{link} (all the clips below in one video, real time).\n\n{rest2}")
+        manifest = self.out / ".umoja-demo-files"
+        if manifest.exists() and "videos/trailer.mp4" not in manifest.read_text():
+            with manifest.open("a") as f:
+                f.write("videos/trailer.mp4\n")
+        return 0
+
     def run(self):
+        if self.opts.trailer_only:
+            return self.trailer_only()
         self.preflight()
         def picked(s, names):
             return s in names or (s.startswith("ai-") and "assistant" in names)
@@ -1240,6 +1285,8 @@ def main():
     p.add_argument("--no-typing", action="store_true", help="don't type questions out letter by letter")
     p.add_argument("--app", default="VLC", help="app for the \"I need ...\" install ask (default VLC; never installed)")
     p.add_argument("--no-trailer", action="store_true", help="don't stitch the clips into videos/trailer.mp4")
+    p.add_argument("--trailer-only", action="store_true",
+                   help="just rebuild videos/trailer.mp4 from the clips of an earlier run in --out")
     p.add_argument("--effect", help="screensaver effect to show (see umoja-screensaver --list-effects)")
     p.add_argument("--output", help="monitor connector to capture, e.g. eDP-1 (default: primary)")
     p.add_argument("--no-video", action="store_true", help="stills only")

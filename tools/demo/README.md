@@ -92,6 +92,7 @@ change). A rerun replaces only the files the previous run wrote.
 --no-typing           put the question in at once instead of typing it
 --app VLC             the app for "I need ..." (never installed)
 --no-trailer          skip videos/trailer.mp4
+--trailer-only        rebuild videos/trailer.mp4 from the last run in --out
 --effect rain         screensaver effect (umoja-screensaver --list-effects)
 --output eDP-1        monitor to capture (default: the primary one)
 --no-video            stills only
