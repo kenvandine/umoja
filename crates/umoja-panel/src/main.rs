@@ -12,6 +12,7 @@ mod bus;
 mod clock;
 mod crash_watch;
 mod dbusmenu;
+mod event_sound;
 mod fade;
 mod launch;
 mod lock;

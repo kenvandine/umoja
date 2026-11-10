@@ -45,8 +45,6 @@ pub struct Volume {
     last_key: Cell<Option<std::time::Instant>>,
     /// The OSD label for the current device.
     label: RefCell<Option<String>>,
-    /// The volume-change click, so a held key doesn't stack them.
-    feedback: RefCell<Option<gio::Subprocess>>,
 }
 
 thread_local! {
@@ -72,7 +70,6 @@ impl Volume {
             listeners: RefCell::default(),
             last_key: Cell::default(),
             label: RefCell::default(),
-            feedback: RefCell::default(),
         });
         // Start following the sound server. Deferred: Sound::start reaches
         // back here once it has levels.
@@ -239,35 +236,26 @@ impl Volume {
         if !gs::get_bool("org.gnome.desktop.sound", "event-sounds", true) {
             return;
         }
-        if self.feedback.borrow().as_ref().is_some_and(|p| p.identifier().is_some()) {
+        // A held key mustn't stack clicks.
+        if crate::event_sound::playing(FEEDBACK_ID) {
             return;
         }
         let theme = gs::get_string("org.gnome.desktop.sound", "theme-name", "freedesktop");
-        let Some(file) = [theme.as_str(), "Yaru", "freedesktop"].iter().find_map(|t| {
-            ["oga", "ogg", "wav"].iter().find_map(|ext| {
-                let p = format!("/usr/share/sounds/{t}/stereo/audio-volume-change.{ext}");
-                std::path::Path::new(&p).exists().then_some(p)
-            })
-        }) else {
-            return;
-        };
         crate::mpris::any_playing(move |playing| {
             if !playing {
-                Volume::get().feedback.replace(play_file(&file));
+                crate::event_sound::play(
+                    FEEDBACK_ID,
+                    "audio-volume-change",
+                    "volume changed through key press",
+                    &theme,
+                );
             }
         });
     }
 }
 
-fn play_file(file: &str) -> Option<gio::Subprocess> {
-    let argv: [&std::ffi::OsStr; 4] = [
-        "pw-play".as_ref(),
-        "--media-role=Event".as_ref(),
-        "--volume=1.0".as_ref(),
-        file.as_ref(),
-    ];
-    gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDERR_SILENCE).ok()
-}
+/// libcanberra id for the volume-change click.
+const FEEDBACK_ID: u32 = 1;
 
 /// The microphone icon: gnome-shell's microphone-sensitivity levels.
 pub fn mic_icon(s: &VolumeState) -> &'static str {
