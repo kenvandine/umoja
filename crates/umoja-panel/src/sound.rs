@@ -1,19 +1,32 @@
-//! Sound devices and recording streams, followed live through
-//! `pw-dump --monitor`: the output and input device lists in Quick
-//! Settings, the default of each, and whether any app is recording (which
-//! is when gnome-shell shows the microphone slider and top bar icon).
+//! Sound devices, levels and recording streams through the PulseAudio
+//! client API (served by pipewire-pulse), as gnome-shell's libgvc follows
+//! them: the output and input device lists in Quick Settings, the default
+//! of each with its volume and mute, and whether any app is recording
+//! (which is when gnome-shell shows the microphone slider and top bar
+//! icon). Changes arrive as subscription events on the panel's GLib main
+//! loop; nothing is spawned or polled.
 
 use gtk::glib;
 use gtk4 as gtk;
-use serde_json::Value;
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use libpulse_binding as pulse;
+use libpulse_glib_binding::Mainloop;
+use pulse::callbacks::ListResult;
+use pulse::context::introspect::{SinkInfo, SourceInfo, SourceOutputInfo};
+use pulse::context::subscribe::InterestMaskSet;
+use pulse::context::{Context, FlagSet, State};
+use pulse::proplist::Proplist;
+use pulse::volume::{ChannelVolumes, Volume as PaVolume};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
+
+use crate::volume::VolumeState;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Device {
-    /// PipeWire node id, for `wpctl set-default`.
+    /// PulseAudio sink / source index.
     pub id: u32,
+    /// Sink / source name, what the server's default refers to.
     pub name: String,
     pub description: String,
     /// What tells this device apart: the port ("Headphones", "HDMI /
@@ -29,18 +42,18 @@ pub struct Device {
 pub struct SoundState {
     pub outputs: Vec<Device>,
     pub inputs: Vec<Device>,
-    /// node.name of the default sink / source.
+    /// Name of the default sink / source.
     pub default_output: Option<String>,
     pub default_input: Option<String>,
     /// An app has a capture stream open, as gnome-shell's
     /// InputStreamSlider._maybeShowInput checks.
     pub recording: bool,
-    /// Level and mute of the default sink / source, as `wpctl get-volume`
-    /// reports them, from the node's Props (None until pw-dump sent them).
-    pub output_volume: Option<crate::volume::VolumeState>,
-    pub input_volume: Option<crate::volume::VolumeState>,
-    /// The OSD label for the default sink (see `volume::device_label`).
+    /// Level and mute of the default sink / source.
+    pub output_volume: Option<VolumeState>,
+    pub input_volume: Option<VolumeState>,
+    /// The OSD labels for the default sink / source (see `osd_label`).
     pub output_label: Option<String>,
+    pub input_label: Option<String>,
 }
 
 impl SoundState {
@@ -60,36 +73,154 @@ impl SoundState {
 /// gnome-shell skips these: they only "record" to show input levels.
 const SKIPPED_APPS: [&str; 2] = ["org.gnome.VolumeControl", "org.PulseAudio.pavucontrol"];
 
-fn props(obj: &Value) -> Option<&serde_json::Map<String, Value>> {
-    obj.pointer("/info/props").and_then(Value::as_object)
+/// A sink or source as the server reported it.
+#[derive(Debug, Clone, Default)]
+struct Node {
+    index: u32,
+    name: String,
+    description: String,
+    card: Option<u32>,
+    form_factor: String,
+    profile: Option<String>,
+    volume: ChannelVolumes,
+    muted: bool,
 }
 
-fn prop<'a>(p: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
-    p.get(key).and_then(Value::as_str)
+impl Node {
+    fn new(
+        index: u32,
+        name: Option<&str>,
+        description: Option<&str>,
+        card: Option<u32>,
+        props: &Proplist,
+        volume: ChannelVolumes,
+        muted: bool,
+    ) -> Self {
+        let name = name.unwrap_or_default().to_string();
+        Self {
+            index,
+            description: description
+                .map(str::to_string)
+                .or_else(|| props.get_str("device.nick"))
+                .unwrap_or_else(|| name.clone()),
+            name,
+            card,
+            form_factor: props.get_str("device.form-factor").unwrap_or_default(),
+            profile: props.get_str("device.profile.description"),
+            volume,
+            muted,
+        }
+    }
+
+    fn from_sink(i: &SinkInfo) -> Self {
+        Self::new(
+            i.index,
+            i.name.as_deref(),
+            i.description.as_deref(),
+            i.card,
+            &i.proplist,
+            i.volume,
+            i.mute,
+        )
+    }
+
+    fn from_source(i: &SourceInfo) -> Self {
+        Self::new(
+            i.index,
+            i.name.as_deref(),
+            i.description.as_deref(),
+            i.card,
+            &i.proplist,
+            i.volume,
+            i.mute,
+        )
+    }
+
+    /// gnome-shell's slider value: the loudest channel, as libgvc reads
+    /// it, relative to 100%.
+    fn level(&self) -> VolumeState {
+        let v = if self.volume.len() > 0 {
+            self.volume.max().0
+        } else {
+            0
+        };
+        VolumeState {
+            available: true,
+            volume: (v as f64 / PaVolume::NORMAL.0 as f64 * 100.0).round() / 100.0,
+            muted: self.muted,
+        }
+    }
 }
 
-/// PipeWire props hold booleans as either JSON bools or strings.
-fn prop_true(p: &serde_json::Map<String, Value>, key: &str) -> bool {
-    match p.get(key) {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => s == "true" || s == "1",
-        _ => false,
+/// Everything one refresh reads from the server.
+#[derive(Debug, Clone, Default)]
+struct Snapshot {
+    default_sink: Option<String>,
+    default_source: Option<String>,
+    sinks: Vec<Node>,
+    /// Not monitors of sinks: those aren't microphones.
+    sources: Vec<Node>,
+    /// Card index → its description.
+    cards: HashMap<u32, String>,
+    recording: bool,
+}
+
+impl Snapshot {
+    fn default_node(&self, input: bool) -> Option<&Node> {
+        let (list, name) = if input {
+            (&self.sources, &self.default_source)
+        } else {
+            (&self.sinks, &self.default_sink)
+        };
+        list.iter().find(|n| Some(&n.name) == name.as_ref())
+    }
+
+    fn state(&self) -> SoundState {
+        let device = |n: &Node, input: bool| {
+            let card = n
+                .card
+                .and_then(|c| self.cards.get(&c))
+                .map(String::as_str)
+                .unwrap_or("");
+            let (port, card) = split_name(&n.description, card, n.profile.as_deref());
+            Device {
+                id: n.index,
+                name: n.name.clone(),
+                description: n.description.clone(),
+                port,
+                card,
+                icon: icon_for(input, &n.name, &n.form_factor),
+            }
+        };
+        let mut outputs: Vec<Device> = self.sinks.iter().map(|n| device(n, false)).collect();
+        let mut inputs: Vec<Device> = self.sources.iter().map(|n| device(n, true)).collect();
+        for list in [&mut outputs, &mut inputs] {
+            // Group a card's ports together.
+            let key = |d: &Device| {
+                let group = if d.card.is_empty() { &d.port } else { &d.card };
+                (group.clone(), d.port.clone(), d.id)
+            };
+            list.sort_by_key(key);
+        }
+        let out = self.default_node(false);
+        let inp = self.default_node(true);
+        SoundState {
+            outputs,
+            inputs,
+            default_output: self.default_sink.clone(),
+            default_input: self.default_source.clone(),
+            recording: self.recording,
+            output_volume: out.map(Node::level),
+            input_volume: inp.map(Node::level),
+            output_label: out.and_then(osd_label),
+            input_label: inp.and_then(osd_label),
+        }
     }
 }
 
 /// The icon gnome-shell would show for the device's port.
-fn icon_for(
-    input: bool,
-    node: &serde_json::Map<String, Value>,
-    device: Option<&serde_json::Map<String, Value>>,
-) -> &'static str {
-    let get = |k: &str| {
-        prop(node, k)
-            .or_else(|| device.and_then(|d| prop(d, k)))
-            .unwrap_or("")
-    };
-    let name = get("node.name");
-    match get("device.form-factor") {
+fn icon_for(input: bool, name: &str, form_factor: &str) -> &'static str {
+    match form_factor {
         "headphone" => return "audio-headphones-symbolic",
         "headset" | "hands-free" => return "audio-headset-symbolic",
         "webcam" => return "camera-web-symbolic",
@@ -105,149 +236,34 @@ fn icon_for(
     }
 }
 
-/// The node.name in a default-metadata value: `{"name": "..."}`, either
-/// already parsed or still as a JSON string.
-fn meta_name(v: &Value) -> Option<String> {
-    match v {
-        Value::Object(o) => o.get("name").and_then(Value::as_str).map(str::to_string),
-        Value::String(s) => serde_json::from_str::<Value>(s)
-            .ok()
-            .and_then(|v| meta_name(&v)),
-        _ => None,
-    }
+/// gnome-settings-daemon labels the OSD with the device name, except for
+/// built-in speakers and microphones.
+fn osd_label(n: &Node) -> Option<String> {
+    let internal = n.form_factor == "internal"
+        || (n.form_factor.is_empty()
+            && (n.name.starts_with("alsa_output.pci-") || n.name.starts_with("alsa_input.pci-"))
+            && !n.name.contains("hdmi"));
+    (!internal).then(|| n.description.clone())
 }
 
-/// The PipeWire graph as pw-dump reports it, by object id.
-#[derive(Default)]
-pub struct Graph {
-    objects: BTreeMap<u64, Value>,
-    /// The "default" metadata, key → value, merged across updates.
-    defaults: BTreeMap<String, Value>,
+/// Whether a capture stream is an app recording, not a level meter (libgvc
+/// drops "peaks" streams; gnome-shell skips the volume-control apps) or the
+/// internal half of a loopback / echo-cancel.
+fn is_recording(prop: impl Fn(&str) -> Option<String>, resample_method: Option<&str>) -> bool {
+    if resample_method == Some("peaks") {
+        return false;
+    }
+    let truthy = |k: &str| prop(k).is_some_and(|v| v == "true" || v == "1");
+    let app = prop("application.id")
+        .or_else(|| prop("pipewire.access.portal.app_id"))
+        .unwrap_or_default();
+    !(truthy("stream.monitor")
+        || prop("node.link-group").is_some()
+        || SKIPPED_APPS.contains(&app.as_str()))
 }
 
-impl Graph {
-    /// One batch from pw-dump: an array of objects. An object without a
-    /// "type" (`{"id": N, "info": null}`) is a removal.
-    pub fn apply(&mut self, batch: Value) {
-        let Value::Array(items) = batch else { return };
-        for obj in items {
-            let Some(id) = obj.get("id").and_then(Value::as_u64) else {
-                continue;
-            };
-            if obj.get("type").is_none() {
-                if self
-                    .objects
-                    .remove(&id)
-                    .is_some_and(|o| is_default_meta(&o))
-                {
-                    self.defaults.clear();
-                }
-                continue;
-            }
-            if is_default_meta(&obj)
-                && let Some(entries) = obj.get("metadata").and_then(Value::as_array)
-            {
-                for e in entries {
-                    if e.get("subject").and_then(Value::as_u64).unwrap_or(0) != 0 {
-                        continue;
-                    }
-                    let Some(key) = e.get("key").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    match e.get("value") {
-                        Some(Value::Null) | None => {
-                            self.defaults.remove(key);
-                        }
-                        Some(v) => {
-                            self.defaults.insert(key.to_string(), v.clone());
-                        }
-                    }
-                }
-            }
-            self.objects.insert(id, obj);
-        }
-    }
-
-    pub fn state(&self) -> SoundState {
-        let mut s = SoundState {
-            default_output: self.defaults.get("default.audio.sink").and_then(meta_name),
-            default_input: self
-                .defaults
-                .get("default.audio.source")
-                .and_then(meta_name),
-            ..Default::default()
-        };
-        for (id, obj) in &self.objects {
-            if obj.get("type").and_then(Value::as_str) != Some("PipeWire:Interface:Node") {
-                continue;
-            }
-            let Some(p) = props(obj) else { continue };
-            let class = prop(p, "media.class").unwrap_or("");
-            match class {
-                "Audio/Sink" | "Audio/Source" | "Audio/Duplex" => {
-                    let input = class == "Audio/Source";
-                    let device = p
-                        .get("device.id")
-                        .and_then(|d| d.as_u64().or_else(|| d.as_str()?.parse().ok()))
-                        .and_then(|d| self.objects.get(&d))
-                        .and_then(props);
-                    let name = prop(p, "node.name").unwrap_or("").to_string();
-                    let description = prop(p, "node.description")
-                        .or_else(|| prop(p, "node.nick"))
-                        .unwrap_or(&name)
-                        .to_string();
-                    let card_name = device
-                        .and_then(|d| prop(d, "device.description").or_else(|| prop(d, "device.nick")))
-                        .unwrap_or("");
-                    let (port, card) =
-                        split_name(&description, card_name, prop(p, "device.profile.description"));
-                    if !input && s.default_output.as_deref() == Some(name.as_str()) {
-                        s.output_volume = node_volume(obj);
-                        s.output_label = node_label(p);
-                    }
-                    if input && s.default_input.as_deref() == Some(name.as_str()) {
-                        s.input_volume = node_volume(obj);
-                    }
-                    let dev = Device {
-                        id: *id as u32,
-                        icon: icon_for(input, p, device),
-                        name,
-                        description,
-                        port,
-                        card,
-                    };
-                    if input {
-                        s.inputs.push(dev);
-                    } else {
-                        s.outputs.push(dev);
-                    }
-                }
-                "Stream/Input/Audio" => {
-                    let app = prop(p, "application.id")
-                        .or_else(|| prop(p, "pipewire.access.portal.app_id"))
-                        .unwrap_or("");
-                    // Peak meters (pavucontrol, Settings) and the internal
-                    // half of loopbacks / echo-cancel aren't apps recording.
-                    let internal = prop_true(p, "stream.monitor")
-                        || p.contains_key("node.link-group")
-                        || SKIPPED_APPS.contains(&app);
-                    if !internal {
-                        s.recording = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        for list in [&mut s.outputs, &mut s.inputs] {
-            // Group a card's ports together.
-            let key = |d: &Device| {
-                let group = if d.card.is_empty() { &d.port } else { &d.card };
-                (group.clone(), d.port.clone(), d.id)
-            };
-            list.sort_by_key(key);
-        }
-        s
-    }
+fn recording_stream(o: &SourceOutputInfo) -> bool {
+    is_recording(|k| o.proplist.get_str(k), o.resample_method.as_deref())
 }
 
 /// Split PipeWire's "<card> <port>" node description the way gnome-shell
@@ -272,7 +288,11 @@ pub fn split_name(description: &str, card: &str, profile: Option<&str>) -> (Stri
         Some(rest) if !card.is_empty() => (rest.trim().to_string(), card),
         _ => match profile.map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) if desc != p => {
-                let c = desc.strip_suffix(p).map(str::trim).unwrap_or(&desc).to_string();
+                let c = desc
+                    .strip_suffix(p)
+                    .map(str::trim)
+                    .unwrap_or(&desc)
+                    .to_string();
                 (p.to_string(), if c == desc { String::new() } else { c })
             }
             _ => (desc.clone(), String::new()),
@@ -290,61 +310,28 @@ pub fn split_name(description: &str, card: &str, profile: Option<&str>) -> (Stri
     (port, card)
 }
 
-/// `wpctl get-volume` for a node: the mean of its Props channelVolumes on
-/// WirePlumber's cubic scale, rounded to whole percent as wpctl prints it.
-fn node_volume(obj: &Value) -> Option<crate::volume::VolumeState> {
-    let props = obj.pointer("/info/params/Props")?.as_array()?;
-    let main = props.iter().find(|p| p.get("channelVolumes").is_some())?;
-    let channels: Vec<f64> = main
-        .get("channelVolumes")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_f64)
-        .collect();
-    if channels.is_empty() {
-        return None;
-    }
-    let linear = channels.iter().sum::<f64>() / channels.len() as f64;
-    let volume = (linear.max(0.0).cbrt() * 100.0).round() / 100.0;
-    Some(crate::volume::VolumeState {
-        available: true,
-        volume,
-        muted: main.get("mute").and_then(Value::as_bool).unwrap_or(false),
-    })
-}
-
-/// `volume::device_label` from a node's own properties.
-fn node_label(p: &serde_json::Map<String, Value>) -> Option<String> {
-    let description = prop(p, "node.description")?;
-    let name = prop(p, "node.name").unwrap_or("");
-    let form = prop(p, "device.form-factor").unwrap_or("");
-    let internal = form == "internal"
-        || (form.is_empty()
-            && (name.starts_with("alsa_output.pci-") || name.starts_with("alsa_input.pci-"))
-            && !name.contains("hdmi"));
-    (!internal).then(|| description.to_string())
-}
-
-fn is_default_meta(obj: &Value) -> bool {
-    obj.get("type").and_then(Value::as_str) == Some("PipeWire:Interface:Metadata")
-        && obj.pointer("/props/metadata.name").and_then(Value::as_str) == Some("default")
-}
-
 type Listener = Box<dyn Fn(&SoundState)>;
 
 pub struct Sound {
     state: RefCell<SoundState>,
     listeners: RefCell<Vec<Listener>>,
+    /// The connection; replaced when the server goes away and comes back.
+    mainloop: RefCell<Option<Mainloop>>,
+    context: RefCell<Option<Context>>,
+    /// The last snapshot, for each default device's channel volumes (a
+    /// new level scales them, keeping the balance, as libgvc does).
+    snapshot: RefCell<Snapshot>,
+    pending: Cell<bool>,
+    in_flight: Cell<bool>,
+    again: Cell<bool>,
 }
 
 thread_local! {
     static SOUND: Rc<Sound> = Sound::start();
 }
 
-enum Msg {
-    Reset,
-    Batch(Value),
-}
+/// How long to wait before reconnecting after the server went away.
+const RECONNECT: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Sound {
     pub fn get() -> Rc<Self> {
@@ -355,32 +342,193 @@ impl Sound {
         let sound = Rc::new(Self {
             state: RefCell::default(),
             listeners: RefCell::default(),
+            mainloop: RefCell::default(),
+            context: RefCell::default(),
+            snapshot: RefCell::default(),
+            pending: Cell::new(false),
+            in_flight: Cell::new(false),
+            again: Cell::new(false),
         });
-        let (tx, rx) = async_channel::unbounded();
-        std::thread::Builder::new()
-            .name("pw-dump".into())
-            .spawn(move || monitor(tx))
-            .ok();
-        let weak = Rc::downgrade(&sound);
-        glib::spawn_future_local(async move {
-            let mut graph = Graph::default();
-            while let Ok(msg) = rx.recv().await {
-                match msg {
-                    Msg::Reset => graph = Graph::default(),
-                    Msg::Batch(b) => graph.apply(b),
+        sound.connect();
+        sound
+    }
+
+    fn connect(self: &Rc<Self>) {
+        let Some(mainloop) = Mainloop::new(None) else {
+            tracing::warn!("no PulseAudio GLib main loop; no sound controls");
+            return;
+        };
+        let mut props = Proplist::new().expect("proplist");
+        let _ = props.set_str(pulse::proplist::properties::APPLICATION_NAME, "Umoja Panel");
+        let _ = props.set_str(
+            pulse::proplist::properties::APPLICATION_ID,
+            "org.umoja.Panel",
+        );
+        let Some(mut ctx) = Context::new_with_proplist(&mainloop, "Umoja Panel", &props) else {
+            tracing::warn!("could not create a PulseAudio context");
+            return;
+        };
+        // Callbacks can run inside our own calls into the context (the
+        // state changes during connect()), so they only schedule work.
+        let weak = Rc::downgrade(self);
+        ctx.set_state_callback(Some(Box::new(move || {
+            let weak = weak.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.state_changed();
                 }
-                // Coalesce a burst (the initial dump, a device appearing).
-                while let Ok(msg) = rx.try_recv() {
-                    match msg {
-                        Msg::Reset => graph = Graph::default(),
-                        Msg::Batch(b) => graph.apply(b),
+            });
+        })));
+        let weak = Rc::downgrade(self);
+        ctx.set_subscribe_callback(Some(Box::new(move |_, _, _| {
+            if let Some(s) = weak.upgrade() {
+                s.schedule_refresh();
+            }
+        })));
+        // NOFAIL: wait for pipewire-pulse to appear instead of failing.
+        if let Err(e) = ctx.connect(None, FlagSet::NOFAIL | FlagSet::NOAUTOSPAWN, None) {
+            tracing::warn!(error = %e, "could not connect to the sound server");
+        }
+        self.mainloop.replace(Some(mainloop));
+        self.context.replace(Some(ctx));
+    }
+
+    fn state_changed(self: &Rc<Self>) {
+        let state = self.context.borrow().as_ref().map(Context::get_state);
+        match state {
+            Some(State::Ready) => {
+                if let Some(ctx) = self.context.borrow_mut().as_mut() {
+                    ctx.subscribe(
+                        InterestMaskSet::SINK
+                            | InterestMaskSet::SOURCE
+                            | InterestMaskSet::SOURCE_OUTPUT
+                            | InterestMaskSet::CARD
+                            | InterestMaskSet::SERVER,
+                        |_| {},
+                    );
+                }
+                self.refresh();
+            }
+            Some(State::Failed | State::Terminated) => {
+                tracing::info!("sound server went away; reconnecting");
+                // Drop the old connection outside its own callback.
+                let old = (self.context.take(), self.mainloop.take());
+                glib::idle_add_local_once(move || drop(old));
+                self.in_flight.set(false);
+                self.publish(Snapshot::default());
+                let weak = Rc::downgrade(self);
+                glib::timeout_add_local_once(RECONNECT, move || {
+                    if let Some(s) = weak.upgrade() {
+                        s.connect();
                     }
-                }
-                let Some(sound) = weak.upgrade() else { break };
-                sound.update(graph.state());
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Events come in bursts (one per changed object); coalesce them.
+    fn schedule_refresh(self: &Rc<Self>) {
+        if self.pending.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(30), move || {
+            if let Some(s) = weak.upgrade() {
+                s.pending.set(false);
+                s.refresh();
             }
         });
-        sound
+    }
+
+    /// Read the server info, sinks, sources, cards and capture streams,
+    /// and publish once all have arrived.
+    fn refresh(self: &Rc<Self>) {
+        if self.in_flight.replace(true) {
+            self.again.set(true);
+            return;
+        }
+        let ctx = self.context.borrow();
+        let Some(ctx) = ctx.as_ref().filter(|c| c.get_state() == State::Ready) else {
+            self.in_flight.set(false);
+            return;
+        };
+        let snap = Rc::new(RefCell::new(Snapshot::default()));
+        let left = Rc::new(Cell::new(5u8));
+        let done = {
+            let (weak, snap, left) = (Rc::downgrade(self), snap.clone(), left.clone());
+            Rc::new(move || {
+                left.set(left.get() - 1);
+                if left.get() > 0 {
+                    return;
+                }
+                let Some(s) = weak.upgrade() else { return };
+                s.in_flight.set(false);
+                s.publish(snap.take());
+                if s.again.replace(false) {
+                    s.refresh();
+                }
+            })
+        };
+        let intro = ctx.introspect();
+        {
+            let (snap, done) = (snap.clone(), done.clone());
+            intro.get_server_info(move |i| {
+                let mut s = snap.borrow_mut();
+                s.default_sink = i.default_sink_name.as_ref().map(|n| n.to_string());
+                s.default_source = i.default_source_name.as_ref().map(|n| n.to_string());
+                drop(s);
+                done();
+            });
+        }
+        {
+            let (snap, done) = (snap.clone(), done.clone());
+            intro.get_sink_info_list(move |r| match r {
+                ListResult::Item(i) => snap.borrow_mut().sinks.push(Node::from_sink(i)),
+                _ => done(),
+            });
+        }
+        {
+            let (snap, done) = (snap.clone(), done.clone());
+            intro.get_source_info_list(move |r| match r {
+                ListResult::Item(i) if i.monitor_of_sink.is_none() => {
+                    snap.borrow_mut().sources.push(Node::from_source(i))
+                }
+                ListResult::Item(_) => {}
+                _ => done(),
+            });
+        }
+        {
+            let (snap, done) = (snap.clone(), done.clone());
+            intro.get_card_info_list(move |r| match r {
+                ListResult::Item(i) => {
+                    let name = i
+                        .proplist
+                        .get_str("device.description")
+                        .or_else(|| i.proplist.get_str("device.nick"))
+                        .unwrap_or_default();
+                    snap.borrow_mut().cards.insert(i.index, name);
+                }
+                _ => done(),
+            });
+        }
+        {
+            let (snap, done) = (snap.clone(), done.clone());
+            intro.get_source_output_info_list(move |r| match r {
+                ListResult::Item(o) => {
+                    if recording_stream(o) {
+                        snap.borrow_mut().recording = true;
+                    }
+                }
+                _ => done(),
+            });
+        }
+    }
+
+    fn publish(&self, snap: Snapshot) {
+        let state = snap.state();
+        self.snapshot.replace(snap);
+        self.update(state);
     }
 
     pub fn state(&self) -> SoundState {
@@ -397,20 +545,10 @@ impl Sound {
         if old == s {
             return;
         }
-        // Volume levels come from the same stream; without them (a
-        // PipeWire that sends no Props) ask wpctl once instead.
-        match s.output_volume {
-            Some(v) => crate::volume::Volume::get().from_graph(v, s.output_label.clone()),
-            None if old.default_output != s.default_output => crate::volume::Volume::get().poll(),
-            None => {}
-        }
-        match s.input_volume {
-            Some(v) => crate::volume::Volume::mic().from_graph(v, None),
-            None if old.default_input != s.default_input || old.recording != s.recording => {
-                crate::volume::Volume::mic().poll()
-            }
-            None => {}
-        }
+        crate::volume::Volume::get()
+            .from_server(s.output_volume.unwrap_or_default(), s.output_label.clone());
+        crate::volume::Volume::mic()
+            .from_server(s.input_volume.unwrap_or_default(), s.input_label.clone());
         for l in self.listeners.borrow().iter() {
             l(&s);
         }
@@ -431,161 +569,152 @@ impl Sound {
         for l in self.listeners.borrow().iter() {
             l(&s);
         }
-        let id = dev.id.to_string();
-        let argv: [&std::ffi::OsStr; 3] = ["wpctl".as_ref(), "set-default".as_ref(), id.as_ref()];
-        match gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDERR_SILENCE) {
-            Ok(p) => p.wait_async(gio::Cancellable::NONE, move |_| {
-                let v = if input {
-                    crate::volume::Volume::mic()
-                } else {
-                    crate::volume::Volume::get()
-                };
-                v.poll();
-            }),
-            Err(e) => tracing::warn!(error = %e, "could not run wpctl set-default"),
+        if let Some(ctx) = self.context.borrow_mut().as_mut() {
+            if input {
+                ctx.set_default_source(&dev.name, |_| {});
+            } else {
+                ctx.set_default_sink(&dev.name, |_| {});
+            }
+        }
+    }
+
+    /// Set the default device's level (1.0 = 100%), scaling its channels
+    /// together so the balance stays.
+    pub fn set_volume(&self, input: bool, level: f64) {
+        let target = (level.max(0.0) * PaVolume::NORMAL.0 as f64).round() as u32;
+        let mut cv = self
+            .snapshot
+            .borrow()
+            .default_node(input)
+            .map(|n| n.volume)
+            .filter(|v| v.len() > 0)
+            .unwrap_or_else(|| {
+                let mut v = ChannelVolumes::default();
+                v.set(2, PaVolume::NORMAL);
+                v
+            });
+        if cv.max().0 == 0 {
+            let n = cv.len();
+            cv.set(n, PaVolume(target));
+        } else {
+            cv.scale(PaVolume(target));
+        }
+        // Remember it, so quick successive steps scale the newest value.
+        if let Some(n) = self.snapshot.borrow_mut().default_node_mut(input) {
+            n.volume = cv;
+        }
+        let ctx = self.context.borrow();
+        let Some(ctx) = ctx.as_ref() else { return };
+        let mut intro = ctx.introspect();
+        if input {
+            intro.set_source_volume_by_name(DEFAULT_SOURCE, &cv, None);
+        } else {
+            intro.set_sink_volume_by_name(DEFAULT_SINK, &cv, None);
+        }
+    }
+
+    pub fn set_mute(&self, input: bool, muted: bool) {
+        let ctx = self.context.borrow();
+        let Some(ctx) = ctx.as_ref() else { return };
+        let mut intro = ctx.introspect();
+        if input {
+            intro.set_source_mute_by_name(DEFAULT_SOURCE, muted, None);
+        } else {
+            intro.set_sink_mute_by_name(DEFAULT_SINK, muted, None);
         }
     }
 }
 
-/// Runs `pw-dump --monitor` (restarting it with PipeWire) and forwards
-/// each JSON batch it prints.
-fn monitor(tx: async_channel::Sender<Msg>) {
-    use std::os::unix::process::CommandExt;
-    let mut warned = false;
-    loop {
-        let mut cmd = std::process::Command::new("pw-dump");
-        cmd.args(["--monitor", "--no-colors"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        // Don't outlive the panel.
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
-            });
-        }
-        match cmd.spawn() {
-            Ok(mut child) => {
-                warned = false;
-                if let Some(out) = child.stdout.take() {
-                    let reader = std::io::BufReader::new(out);
-                    for v in serde_json::Deserializer::from_reader(reader).into_iter::<Value>() {
-                        let Ok(v) = v else { break };
-                        if tx.send_blocking(Msg::Batch(v)).is_err() {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            return;
-                        }
-                    }
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                if tx.send_blocking(Msg::Reset).is_err() {
-                    return;
-                }
-            }
-            Err(e) => {
-                if !warned {
-                    tracing::warn!(error = %e, "could not run pw-dump; no sound device list");
-                    warned = true;
-                }
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_secs(3));
+/// The server's names for whatever is the default right now.
+const DEFAULT_SINK: &str = "@DEFAULT_SINK@";
+const DEFAULT_SOURCE: &str = "@DEFAULT_SOURCE@";
+
+impl Snapshot {
+    fn default_node_mut(&mut self, input: bool) -> Option<&mut Node> {
+        let (list, name) = if input {
+            (&mut self.sources, &self.default_source)
+        } else {
+            (&mut self.sinks, &self.default_sink)
+        };
+        list.iter_mut().find(|n| Some(&n.name) == name.as_ref())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn sample() -> Value {
-        json!([
-            {"id": 40, "type": "PipeWire:Interface:Device", "info": {"props": {
-                "device.description": "Ryzen HD Audio Controller"}}},
-            {"id": 52, "type": "PipeWire:Interface:Node", "info": {"props": {
-                "media.class": "Audio/Sink", "device.id": 40,
-                "node.name": "alsa_output.pci-0000_c4_00.6.analog-stereo",
-                "node.description": "Ryzen HD Audio Controller Speaker"}}},
-            {"id": 53, "type": "PipeWire:Interface:Node", "info": {"props": {
-                "media.class": "Audio/Source", "device.id": 40,
-                "node.name": "alsa_input.pci-0000_c4_00.6.analog-stereo",
-                "node.description": "Ryzen HD Audio Controller Digital Microphone"}}},
-            {"id": 60, "type": "PipeWire:Interface:Node", "info": {"props": {
-                "media.class": "Audio/Sink",
-                "node.name": "bluez_output.AA_BB.1",
-                "node.description": "WH-1000XM4", "device.form-factor": "headphone"}}},
-            {"id": 30, "type": "PipeWire:Interface:Metadata",
-             "props": {"metadata.name": "default"},
-             "metadata": [
-                {"subject": 0, "key": "default.audio.sink", "type": "Spa:String:JSON",
-                 "value": {"name": "bluez_output.AA_BB.1"}},
-                {"subject": 0, "key": "default.audio.source", "type": "Spa:String:JSON",
-                 "value": "{\"name\":\"alsa_input.pci-0000_c4_00.6.analog-stereo\"}"}
-             ]}
-        ])
+    fn node(index: u32, name: &str, description: &str, card: Option<u32>, form: &str) -> Node {
+        let mut volume = ChannelVolumes::default();
+        volume.set(2, PaVolume::NORMAL);
+        Node {
+            index,
+            name: name.into(),
+            description: description.into(),
+            card,
+            form_factor: form.into(),
+            profile: None,
+            volume,
+            muted: false,
+        }
     }
 
-    #[test]
-    fn default_sink_volume_from_props() {
-        let mut g = Graph::default();
-        g.apply(json!([
-            {"id": 52, "type": "PipeWire:Interface:Node",
-             "info": {"props": {"media.class": "Audio/Sink",
-                "node.name": "alsa_output.usb-headset", "node.description": "USB Headset",
-                "device.form-factor": "headset"},
-              "params": {"Props": [{"mute": true, "channelVolumes": [0.125, 0.125]}]}}},
-            {"id": 30, "type": "PipeWire:Interface:Metadata",
-             "props": {"metadata.name": "default"},
-             "metadata": [{"subject": 0, "key": "default.audio.sink",
-                "value": {"name": "alsa_output.usb-headset"}}]}
-        ]));
-        let s = g.state();
-        let v = s.output_volume.unwrap();
-        assert!((v.volume - 0.5).abs() < 1e-9, "cube root of 0.125");
-        assert!(v.muted && v.available);
-        assert_eq!(s.output_label.as_deref(), Some("USB Headset"));
-        assert!(s.input_volume.is_none());
+    fn sample() -> Snapshot {
+        Snapshot {
+            default_sink: Some("bluez_output.AA_BB.1".into()),
+            default_source: Some("alsa_input.pci-0000_c4_00.6.analog-stereo".into()),
+            sinks: vec![
+                node(
+                    52,
+                    "alsa_output.pci-0000_c4_00.6.analog-stereo",
+                    "Ryzen HD Audio Controller Speaker",
+                    Some(40),
+                    "",
+                ),
+                node(60, "bluez_output.AA_BB.1", "WH-1000XM4", None, "headphone"),
+            ],
+            sources: vec![node(
+                53,
+                "alsa_input.pci-0000_c4_00.6.analog-stereo",
+                "Ryzen HD Audio Controller Digital Microphone",
+                Some(40),
+                "",
+            )],
+            cards: HashMap::from([(40, "Ryzen HD Audio Controller".to_string())]),
+            recording: false,
+        }
     }
 
     #[test]
     fn lists_devices_and_defaults() {
-        let mut g = Graph::default();
-        g.apply(sample());
-        let s = g.state();
+        let s = sample().state();
         assert_eq!(s.outputs.len(), 2);
-        assert_eq!(
-            s.outputs[0].description,
-            "Ryzen HD Audio Controller Speaker"
-        );
+        assert_eq!(s.outputs[0].port, "Speaker");
+        assert_eq!(s.outputs[0].card, "Ryzen HD Audio Controller");
         assert_eq!(s.outputs[0].icon, "audio-speakers-symbolic");
         assert_eq!(s.outputs[1].icon, "audio-headphones-symbolic");
         assert_eq!(s.inputs.len(), 1);
         assert_eq!(s.inputs[0].icon, "audio-input-microphone-symbolic");
         assert_eq!(s.default_output.as_deref(), Some("bluez_output.AA_BB.1"));
-        assert_eq!(
-            s.default_input.as_deref(),
-            Some("alsa_input.pci-0000_c4_00.6.analog-stereo")
-        );
-        assert!(!s.recording);
+        // The headphones are named on the OSD; the built-in mic isn't.
+        assert_eq!(s.output_label.as_deref(), Some("WH-1000XM4"));
+        assert_eq!(s.input_label, None);
+    }
 
-        // Unplugging the headphones moves the default back.
-        g.apply(json!([
-            {"id": 60, "info": null},
-            {"id": 30, "type": "PipeWire:Interface:Metadata",
-             "props": {"metadata.name": "default"},
-             "metadata": [{"subject": 0, "key": "default.audio.sink",
-                "value": {"name": "alsa_output.pci-0000_c4_00.6.analog-stereo"}}]}
-        ]));
-        let s = g.state();
-        assert_eq!(s.outputs.len(), 1);
-        assert_eq!(
-            s.default_output.as_deref(),
-            Some("alsa_output.pci-0000_c4_00.6.analog-stereo")
-        );
-        assert!(s.default_input.is_some(), "metadata updates merge");
+    #[test]
+    fn level_is_loudest_channel_of_normal() {
+        let mut snap = sample();
+        let mut cv = ChannelVolumes::default();
+        cv.set(2, PaVolume(PaVolume::NORMAL.0 / 4));
+        cv.get_mut()[1] = PaVolume(PaVolume::NORMAL.0 / 2);
+        snap.sinks[1].volume = cv;
+        snap.sinks[1].muted = true;
+        let v = snap.state().output_volume.unwrap();
+        assert!((v.volume - 0.5).abs() < 1e-9);
+        assert!(v.muted && v.available);
+        // No default device: no level.
+        snap.default_sink = Some("gone".into());
+        assert!(snap.state().output_volume.is_none());
     }
 
     #[test]
@@ -599,9 +728,16 @@ mod tests {
             sp(&format!("{ace} HDMI / DisplayPort 1 Output"), ace, None),
             ("HDMI / DisplayPort 1 Output".into(), ace.into())
         );
-        assert_eq!(sp(&format!("{ace} Headphones"), ace, None), ("Headphones".into(), ace.into()));
         assert_eq!(
-            sp("Creative Pebble Pro Analog Stereo", "Creative Pebble Pro", None),
+            sp(&format!("{ace} Headphones"), ace, None),
+            ("Headphones".into(), ace.into())
+        );
+        assert_eq!(
+            sp(
+                "Creative Pebble Pro Analog Stereo",
+                "Creative Pebble Pro",
+                None
+            ),
             ("Analog Stereo".into(), "Creative Pebble Pro".into())
         );
         assert_eq!(
@@ -610,7 +746,10 @@ mod tests {
                 "GB205 High Definition Audio Controller",
                 None
             ),
-            ("CR340HD".into(), "GB205 High Definition Audio Controller".into())
+            (
+                "CR340HD".into(),
+                "GB205 High Definition Audio Controller".into()
+            )
         );
         // No device object: fall back to the profile description.
         assert_eq!(
@@ -618,32 +757,39 @@ mod tests {
             ("Analog Stereo".into(), "USB Audio".into())
         );
         // One-profile devices are just their name.
-        assert_eq!(sp("WH-1000XM4", "WH-1000XM4", None), ("WH-1000XM4".into(), String::new()));
-        assert_eq!(sp("WH-1000XM4", "", None), ("WH-1000XM4".into(), String::new()));
+        assert_eq!(
+            sp("WH-1000XM4", "WH-1000XM4", None),
+            ("WH-1000XM4".into(), String::new())
+        );
+        assert_eq!(
+            sp("WH-1000XM4", "", None),
+            ("WH-1000XM4".into(), String::new())
+        );
     }
 
     #[test]
     fn recording_ignores_meters_and_loopbacks() {
-        let stream = |id: u64, extra: Value| {
-            let mut props = json!({"media.class": "Stream/Input/Audio"});
-            props
-                .as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().unwrap().clone());
-            json!([{"id": id, "type": "PipeWire:Interface:Node", "info": {"props": props}}])
+        let props = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == k)
+                    .map(|(_, v)| v.to_string())
+            }
         };
-        let mut g = Graph::default();
-        g.apply(sample());
-        g.apply(stream(
-            70,
-            json!({"application.id": "org.PulseAudio.pavucontrol"}),
+        assert!(!is_recording(
+            props(&[("application.id", "org.PulseAudio.pavucontrol")]),
+            None
         ));
-        g.apply(stream(71, json!({"stream.monitor": "true"})));
-        g.apply(stream(72, json!({"node.link-group": "echo-cancel-1"})));
-        assert!(!g.state().recording);
-        g.apply(stream(73, json!({"application.name": "Firefox"})));
-        assert!(g.state().recording);
-        g.apply(json!([{"id": 73, "info": null}]));
-        assert!(!g.state().recording);
+        assert!(!is_recording(props(&[("stream.monitor", "true")]), None));
+        assert!(!is_recording(
+            props(&[("node.link-group", "echo-cancel-1")]),
+            None
+        ));
+        assert!(!is_recording(props(&[]), Some("peaks")));
+        assert!(is_recording(
+            props(&[("application.name", "Firefox")]),
+            Some("speex-float-1")
+        ));
     }
 }

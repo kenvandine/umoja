@@ -1,15 +1,12 @@
-//! Output and input volume. Levels come live from `pw-dump --monitor` (see
-//! `sound.rs`, which already follows the PipeWire graph); changes go through
-//! WirePlumber's `wpctl`. Only when the graph carries no levels does this
-//! fall back to polling `wpctl get-volume`.
+//! Output and input volume, through the PulseAudio client API (see
+//! `sound.rs`, which follows the server): levels arrive as events and
+//! changes go back as introspection calls, as gnome-shell's libgvc does.
 
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-
-const POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct VolumeState {
@@ -35,41 +32,26 @@ impl VolumeState {
     }
 }
 
-/// Parses "Volume: 0.45" or "Volume: 0.45 [MUTED]".
-pub fn parse_wpctl(out: &str) -> Option<VolumeState> {
-    let mut words = out.split_whitespace();
-    if words.next()? != "Volume:" {
-        return None;
-    }
-    let volume = words.next()?.parse().ok()?;
-    Some(VolumeState {
-        available: true,
-        volume,
-        muted: out.contains("[MUTED]"),
-    })
-}
-
 type Listener = Box<dyn Fn(&VolumeState)>;
 
 pub struct Volume {
-    /// `@DEFAULT_AUDIO_SINK@` or `@DEFAULT_AUDIO_SOURCE@`.
-    target: &'static str,
+    /// The default source (microphone) rather than the default sink.
+    input: bool,
     state: Cell<VolumeState>,
     listeners: RefCell<Vec<Listener>>,
     /// When a media key last set the volume. While keys are coming in we
-    /// trust our own value, since wpctl may not have applied the last one.
+    /// trust our own value, since the server may not have applied the last
+    /// one yet.
     last_key: Cell<Option<std::time::Instant>>,
-    /// The OSD label for the current sink, looked up once per burst.
+    /// The OSD label for the current device.
     label: RefCell<Option<String>>,
     /// The volume-change click, so a held key doesn't stack them.
     feedback: RefCell<Option<gio::Subprocess>>,
-    /// Levels arrive from the PipeWire graph, so no polling is needed.
-    live: Cell<bool>,
 }
 
 thread_local! {
-    static VOLUME: Rc<Volume> = Volume::start(SINK);
-    static MIC: Rc<Volume> = Volume::start(SOURCE);
+    static VOLUME: Rc<Volume> = Volume::start(false);
+    static MIC: Rc<Volume> = Volume::start(true);
 }
 
 impl Volume {
@@ -83,37 +65,27 @@ impl Volume {
         MIC.with(Rc::clone)
     }
 
-    fn start(target: &'static str) -> Rc<Self> {
+    fn start(input: bool) -> Rc<Self> {
         let v = Rc::new(Self {
-            target,
+            input,
             state: Cell::default(),
             listeners: RefCell::default(),
             last_key: Cell::default(),
             label: RefCell::default(),
             feedback: RefCell::default(),
-            live: Cell::new(false),
         });
-        v.poll();
-        // Start following the graph; poll only until it reports levels.
-        let _ = crate::sound::Sound::get();
-        let weak = Rc::downgrade(&v);
-        glib::timeout_add_local(POLL, move || match weak.upgrade() {
-            Some(v) if !v.live.get() => {
-                v.poll();
-                glib::ControlFlow::Continue
-            }
-            _ => glib::ControlFlow::Break,
+        // Start following the sound server. Deferred: Sound::start reaches
+        // back here once it has levels.
+        glib::idle_add_local_once(|| {
+            let _ = crate::sound::Sound::get();
         });
         v
     }
 
-    /// The level and mute the PipeWire graph reports for this device, and
-    /// (for the output) its OSD label.
-    pub fn from_graph(&self, s: VolumeState, label: Option<String>) {
-        self.live.set(true);
-        if self.target == SINK {
-            self.label.replace(label);
-        }
+    /// The level and mute the sound server reports for this device, and
+    /// its OSD label.
+    pub fn from_server(&self, s: VolumeState, label: Option<String>) {
+        self.label.replace(label);
         // While keys are coming in our own value wins (see `key`).
         if self.last_key.get().is_some_and(|t| t.elapsed() < KEY_BURST) {
             return;
@@ -138,54 +110,28 @@ impl Volume {
         self.state.get()
     }
 
-    /// Read the volume now, e.g. after the default device changed.
-    pub fn poll(self: &Rc<Self>) {
-        let Ok(proc) = gio::Subprocess::newv(
-            &[
-                "wpctl".as_ref(),
-                "get-volume".as_ref(),
-                self.target.as_ref(),
-            ],
-            gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE,
-        ) else {
-            self.update(VolumeState::default());
-            return;
-        };
-        let weak = Rc::downgrade(self);
-        proc.communicate_utf8_async(None, gio::Cancellable::NONE, move |res| {
-            let Some(v) = weak.upgrade() else { return };
-            let state = res
-                .ok()
-                .and_then(|(out, _)| out)
-                .and_then(|out| parse_wpctl(&out))
-                .unwrap_or_default();
-            v.update(state);
-        });
-    }
-
     pub fn set_volume(&self, volume: f64) {
         let mut s = self.state.get();
         s.volume = volume;
         s.muted = false;
         self.update(s);
-        let vol = format!("{volume:.2}");
-        spawn(&["wpctl", "set-mute", self.target, "0"]);
-        spawn(&["wpctl", "set-volume", self.target, &vol]);
+        let sound = crate::sound::Sound::get();
+        sound.set_mute(self.input, false);
+        sound.set_volume(self.input, volume);
     }
 
     pub fn toggle_mute(&self) {
         let mut s = self.state.get();
         s.muted = !s.muted;
         self.update(s);
-        spawn(&["wpctl", "set-mute", self.target, "toggle"]);
+        crate::sound::Sound::get().set_mute(self.input, s.muted);
     }
 }
 
-pub const SINK: &str = "@DEFAULT_AUDIO_SINK@";
-pub const SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
 /// gnome-settings-daemon's VOLUME_STEP_PRECISE (Shift+volume keys).
 const STEP_PRECISE: f64 = 0.02;
-/// How long after a key press our own idea of the volume wins over wpctl.
+/// How long after a key press our own idea of the volume wins over the
+/// server's.
 const KEY_BURST: std::time::Duration = std::time::Duration::from_millis(800);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,55 +178,10 @@ pub fn max_volume() -> f64 {
     }
 }
 
-/// `wpctl get-volume`, synchronously: a key press needs the current value.
-fn read_now(target: &str) -> Option<VolumeState> {
-    let out = std::process::Command::new("wpctl")
-        .args(["get-volume", target])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    parse_wpctl(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// gnome-settings-daemon labels the OSD with the device name, except for
-/// built-in speakers. From `wpctl inspect`'s node properties.
-pub fn device_label(inspect: &str) -> Option<String> {
-    let prop = |key: &str| {
-        inspect.lines().find_map(|l| {
-            let l = l.trim_start().trim_start_matches('*').trim();
-            let rest = l.strip_prefix(key)?.trim_start().strip_prefix('=')?;
-            Some(rest.trim().trim_matches('"').to_string())
-        })
-    };
-    let description = prop("node.description")?;
-    let name = prop("node.name").unwrap_or_default();
-    let form = prop("device.form-factor").unwrap_or_default();
-    let internal = form == "internal"
-        || (form.is_empty()
-            && (name.starts_with("alsa_output.pci-") || name.starts_with("alsa_input.pci-"))
-            && !name.contains("hdmi"));
-    (!internal).then_some(description)
-}
-
-fn read_label(target: &str) -> Option<String> {
-    let out = std::process::Command::new("wpctl")
-        .args(["inspect", target])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    device_label(&String::from_utf8_lossy(&out.stdout))
-}
-
 impl Volume {
     /// A volume key: change the default output and show the OSD.
     pub fn key(&self, key: Key, quiet: bool, precise: bool) {
-        let in_burst = self.last_key.get().is_some_and(|t| t.elapsed() < KEY_BURST);
-        let old = if in_burst || self.live.get() {
-            self.state.get()
-        } else {
-            self.label.replace(read_label(SINK));
-            read_now(SINK).unwrap_or_else(|| self.state.get())
-        };
+        let old = self.state.get();
         if !old.available {
             return;
         }
@@ -294,11 +195,12 @@ impl Volume {
         };
         let max = max_volume();
         let (new, changed) = apply_key(old, key, step, max);
+        let sound = crate::sound::Sound::get();
         if new.muted != old.muted {
-            spawn(&["wpctl", "set-mute", SINK, if new.muted { "1" } else { "0" }]);
+            sound.set_mute(false, new.muted);
         }
         if (new.volume - old.volume).abs() > 1e-6 {
-            spawn(&["wpctl", "set-volume", SINK, &format!("{:.2}", new.volume)]);
+            sound.set_volume(false, new.volume);
         }
         self.update(new);
         let level = if new.muted { 0.0 } else { new.volume };
@@ -315,19 +217,17 @@ impl Volume {
     /// The microphone mute key.
     pub fn toggle_mic_mute(&self) {
         let mic = Volume::mic();
-        let old = if mic.live.get() {
-            Some(mic.state()).filter(|s| s.available)
-        } else {
-            read_now(SOURCE)
-        };
-        let Some(old) = old else { return };
+        let old = mic.state();
+        if !old.available {
+            return;
+        }
         let muted = !old.muted;
-        spawn(&["wpctl", "set-mute", SOURCE, if muted { "1" } else { "0" }]);
+        crate::sound::Sound::get().set_mute(true, muted);
         mic.update(VolumeState { muted, ..old });
         let level = if muted { 0.0 } else { old.volume };
         crate::osd::show(
             crate::osd::Request::icon(crate::osd::volume_icon(true, muted, level))
-                .label(read_label(SOURCE))
+                .label(mic.label.borrow().clone())
                 .level(level, max_volume()),
         );
     }
@@ -367,14 +267,6 @@ fn play_file(file: &str) -> Option<gio::Subprocess> {
         file.as_ref(),
     ];
     gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDERR_SILENCE).ok()
-}
-
-/// GSubprocess reaps the child for us, unlike a dropped std::process::Child.
-fn spawn(argv: &[&str]) {
-    let argv: Vec<&std::ffi::OsStr> = argv.iter().map(|a| a.as_ref()).collect();
-    if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDERR_SILENCE) {
-        tracing::warn!(error = %e, "could not run wpctl");
-    }
 }
 
 /// The microphone icon: gnome-shell's microphone-sensitivity levels.
@@ -420,14 +312,6 @@ pub fn mic_indicator() -> gtk::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_wpctl() {
-        let s = parse_wpctl("Volume: 0.45\n").unwrap();
-        assert!(!s.muted && (s.volume - 0.45).abs() < 1e-9);
-        assert!(parse_wpctl("Volume: 0.45 [MUTED]").unwrap().muted);
-        assert_eq!(parse_wpctl("nope"), None);
-    }
 
     #[test]
     fn icons() {
@@ -485,20 +369,5 @@ mod tests {
             apply_key(s(0.5, false), Key::Mute, 0.06, 1.0).0,
             s(0.5, true)
         );
-    }
-
-    #[test]
-    fn labels_external_devices_only() {
-        let speaker = r#"id 52, type PipeWire:Interface:Node
-    node.description = "Ryzen HD Audio Controller Speaker"
-  * node.name = "alsa_output.pci-0000_c4_00.6.analog-stereo""#;
-        assert_eq!(device_label(speaker), None);
-        let bt = r#"  * node.description = "WH-1000XM4"
-  * node.name = "bluez_output.AA_BB.1"
-    device.form-factor = "headphone""#;
-        assert_eq!(device_label(bt).as_deref(), Some("WH-1000XM4"));
-        let usb = r#"  * node.description = "USB Audio"
-  * node.name = "alsa_output.usb-Foo-00.analog-stereo""#;
-        assert_eq!(device_label(usb).as_deref(), Some("USB Audio"));
     }
 }
