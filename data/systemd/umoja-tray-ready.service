@@ -1,14 +1,17 @@
 [Unit]
 Description=Wait for the Umoja tray before starting autostart apps
 Documentation=https://github.com/kenvandine/umoja
-# Autostart apps (app-*@autostart.service) are After=graphical-session.target.
-# Holding that target until umoja-panel owns org.kde.StatusNotifierWatcher
-# means tray apps find the tray when they start. Electron/Chromium apps
-# (Claude Desktop, Discord...) look for the watcher once and never retry,
-# so started before the panel they had no tray icon at all.
+# Autostart apps (app-*@autostart.service) are ordered after us by
+# app-.service.d/umoja-tray-ready.conf, so they start once umoja-panel owns
+# org.kde.StatusNotifierWatcher. Electron/Chromium apps (Claude Desktop,
+# Discord...) look for the watcher once and never retry, so started before
+# the panel they had no tray icon at all.
+# Don't hold graphical-session.target: the portals are ordered after it, and
+# the panel's GTK start-up waits on the portal (host Registry), so that
+# deadlocked until the 25s D-Bus timeout.
 PartOf=umoja-session.target
 After=umoja-session.target umoja-panel.service
-Before=graphical-session.target
+Before=xdg-desktop-autostart.target
 
 [Service]
 Type=oneshot
