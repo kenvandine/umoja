@@ -83,9 +83,12 @@ impl Backdrop {
     }
 
     pub fn set_wallpaper(&self, path: Option<&str>) {
-        let texture = path
-            .and_then(|p| gdk::Texture::from_filename(p).ok())
-            .or_else(|| gdk::Texture::from_filename(FALLBACK_WALLPAPER).ok());
+        // It is shown heavily blurred, so a quarter of the screen's size
+        // looks the same as the full image at a sixteenth of the memory.
+        let (w, h) = umoja_common::wallpaper::largest_monitor_pixels().unwrap_or((3840, 2160));
+        let need = ((w / 4).max(1), (h / 4).max(1));
+        let load = |p: &str| umoja_common::wallpaper::texture_cover(std::path::Path::new(p), need);
+        let texture = path.and_then(load).or_else(|| load(FALLBACK_WALLPAPER));
         *self.imp().texture.borrow_mut() = texture;
         self.queue_draw();
     }

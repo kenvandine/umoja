@@ -23,6 +23,8 @@ pub mod monitors;
 pub mod screen;
 pub mod terminal;
 pub mod types;
+#[cfg(feature = "monitors")]
+pub mod wallpaper;
 
 /// Initialise `tracing` for a component. Honours `RUST_LOG`, defaulting to `info`.
 pub fn init_logging(component: &str) {
