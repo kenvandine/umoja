@@ -58,6 +58,13 @@ Umoja PPA:
   buffer straight to the display. umoja-mir sets it on hybrid laptops with
   a screen on the discrete GPU: a fullscreen game there (buffer drawn on
   the other GPU) showed a white screen and stalled until Alt+Tab.
+- `patches/3012_cursor-surface-offset-and-hidden-role.patch`: cursors that
+  clients draw themselves. GTK switches cursor images with `wl_surface.offset`
+  instead of a new `set_cursor`; Mir ignored it, so the terminal's I-beam was
+  drawn at the arrow's hotspot and selections didn't line up. The hotspot is
+  now also converted to buffer pixels on scaled outputs. And hiding the
+  pointer (VTE does on typing and paste) dropped the cursor surface's role,
+  so the pointer stayed invisible until it left the window.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds
