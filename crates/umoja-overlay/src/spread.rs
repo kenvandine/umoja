@@ -1237,7 +1237,10 @@ fn crop(frame: &Pixbuf, w: &Win, (ox, oy, layout_w): (i32, i32, i32)) -> Option<
     if cw < 8 || ch < 8 {
         return None;
     }
-    let sub = frame.new_subpixbuf(x, y, cw, ch);
+    // A copy, not the subpixbuf itself: a subpixbuf shares (and keeps
+    // alive) the whole screen frame, so previews taken at different times
+    // pinned a full frame each.
+    let sub = frame.new_subpixbuf(x, y, cw, ch).copy()?;
     #[allow(deprecated)]
     Some(gdk::Texture::for_pixbuf(&sub))
 }
