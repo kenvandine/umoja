@@ -74,8 +74,10 @@ impl Wallpaper {
         let Some(display) = gdk::Display::default() else {
             return;
         };
+        // Decoded at the largest monitor's size, not the image's (often 4K+).
+        let need = umoja_common::wallpaper::largest_monitor_pixels().unwrap_or((3840, 2160));
         let texture = gs::wallpaper_path(gs::prefers_dark())
-            .and_then(|p| gdk::Texture::from_filename(&p).ok());
+            .and_then(|p| umoja_common::wallpaper::texture_cover(&p, need));
         if texture.is_none() {
             tracing::warn!("no usable wallpaper; showing primary-color");
         }
