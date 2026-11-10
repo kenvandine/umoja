@@ -31,6 +31,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -1289,7 +1290,10 @@ private:
             std::vector<Window> leaving, arriving;
             tools.for_each_window_in_workspace(workspaces[current], [&](Window const& w) { leaving.push_back(w); });
             tools.for_each_window_in_workspace(workspaces[index], [&](Window const& w) { arriving.push_back(w); });
-            int const dist = (index > current ? 1 : -1) * primary_output().size.width.as_int();
+            // In monitor widths: every monitor slides its own windows by its
+            // own width, clipped to itself, as gnome-shell's per-monitor
+            // WorkspaceAnimation groups do. Nothing crosses onto a neighbour.
+            double const dist = index > current ? 1.0 : -1.0;
             current = index;
             // Drop focus before anything is hidden: hiding the active window
             // makes Mir pass focus on, possibly to a window that is already
@@ -1299,11 +1303,19 @@ private:
             for (auto const& w : leaving) {
                 if (in_workspace(w, workspaces[index])) continue;
                 if (!animate || !showing(w)) hide(w);
-                else slide.items.push_back({w, w.top_left(), 0, -dist, true});
+                else slide.items.push_back(slide_item(w, 0, -dist, true));
             }
             for (auto const& w : arriving) {
-                unhide(w);
-                if (animate && w != pinned && showing(w)) slide.items.push_back({w, w.top_left(), dist, 0, false});
+                if (animate && w != pinned && will_show(w)) {
+                    // Off to the side (and clipped) before it is unhidden, so
+                    // it never shows for a frame at its real position.
+                    auto it = slide_item(w, dist, 0, false);
+                    place_at(it, it.from);
+                    unhide(w);
+                    slide.items.push_back(it);
+                } else {
+                    unhide(w);
+                }
             }
             focus_current_workspace();
             start_slide(std::move(slide), SLIDE_MS);
@@ -1317,14 +1329,25 @@ private:
         return st != mir_window_state_hidden && st != mir_window_state_minimized;
     }
 
+    // Whether the window is on screen once unhide() has run.
+    bool will_show(Window const& w) {
+        auto const it = hidden_states.find(w);
+        if (it == hidden_states.end()) return showing(w);
+        return it->second != mir_window_state_hidden && it->second != mir_window_state_minimized;
+    }
+
     // ---- workspace slide ---------------------------------------------------
 
-    // A window sliding from offset `from` to `to` (pixels, horizontal) off
-    // its real position `base`, hidden at the end if it left the workspace.
+    // A window sliding from offset `from` to `to` (in widths of its
+    // monitor, horizontal) off its real position `base`, hidden at the end
+    // if it left the workspace. While it slides it is clipped to `monitor`,
+    // so it never shows on the monitor next door (Mir draws a window on
+    // every output it overlaps).
     struct SlideItem {
         Window window;
         geom::Point base;
-        int from, to;
+        geom::Rectangle monitor;
+        double from, to;
         bool hide_after;
     };
     struct Slide {
@@ -1360,8 +1383,21 @@ private:
         tools.modify_window(tools.info_for(w), spec);
     }
 
-    void place_at(SlideItem const& it, int offset) {
-        place(it.window, geom::Point{it.base.x.as_int() + offset, it.base.y.as_int()});
+    void place_at(SlideItem const& it, double offset) {
+        int const px = static_cast<int>(std::lround(offset * it.monitor.size.width.as_int()));
+        place(it.window, geom::Point{it.base.x.as_int() + px, it.base.y.as_int()});
+    }
+
+    // The window's slide on the monitor it is on, clip set.
+    SlideItem slide_item(Window const& w, double from, double to, bool hide_after) {
+        SlideItem it{w, w.top_left(), output_at(centre_of(w)), from, to, hide_after};
+        tools.info_for(w).clip_area(mir::optional_value<geom::Rectangle>{it.monitor});
+        return it;
+    }
+
+    void unclip(Window const& w) {
+        if (!all_windows.count(w)) return;
+        tools.info_for(w).clip_area(mir::optional_value<geom::Rectangle>{});
     }
 
     void start_slide(Slide slide, double ms) {
@@ -1385,7 +1421,7 @@ private:
         double const e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
         animating = true;
         guarded("slide", [&] {
-            for (auto const& it : slide->items) place_at(it, static_cast<int>(it.from + (it.to - it.from) * e));
+            for (auto const& it : slide->items) place_at(it, it.from + (it.to - it.from) * e);
         });
         animating = false;
         return true;
@@ -1405,6 +1441,7 @@ private:
                                                     [&](auto const& it) { return it.hide_after && it.window == active; });
             if (active_leaving) tools.select_active_window(Window{});
             for (auto const& it : done.items) {
+                unclip(it.window);
                 place(it.window, it.base);
                 if (it.hide_after && all_windows.count(it.window) && !in_workspace(it.window, workspaces[current]))
                     hide(it.window);
@@ -1440,29 +1477,33 @@ private:
 
     struct Swipe {
         std::vector<SlideItem> here, left, right;
-        int width = 0;
         double progress = 0;
     };
     std::optional<Swipe> swipe;
 
-    void collect(size_t index, std::vector<SlideItem>& out, int base_offset) {
+    // `base_offset` in monitor widths (-1 left neighbour, 1 right).
+    void collect(size_t index, std::vector<SlideItem>& out, double base_offset) {
         std::vector<Window> ws;
         tools.for_each_window_in_workspace(workspaces[index], [&](Window const& w) { ws.push_back(w); });
         for (auto const& w : ws) {
             if (index != current && in_workspace(w, workspaces[current])) continue;
-            if (index != current) unhide(w);
-            if (!showing(w)) continue;
-            out.push_back({w, w.top_left(), base_offset, base_offset, index != current});
+            if (!will_show(w)) continue;
+            auto it = slide_item(w, base_offset, base_offset, index != current);
+            // Neighbours go off to the side before they are unhidden.
+            if (index != current) {
+                place_at(it, base_offset);
+                unhide(w);
+            }
+            out.push_back(it);
         }
     }
 
     void place_swipe(double p) {
-        int const off = static_cast<int>(-p * swipe->width);
         animating = true;
         guarded("swipe", [&] {
-            for (auto const& it : swipe->here) place_at(it, off);
-            for (auto const& it : swipe->left) place_at(it, -swipe->width + off);
-            for (auto const& it : swipe->right) place_at(it, swipe->width + off);
+            for (auto const& it : swipe->here) place_at(it, -p);
+            for (auto const& it : swipe->left) place_at(it, -1.0 - p);
+            for (auto const& it : swipe->right) place_at(it, 1.0 - p);
         });
         animating = false;
     }
@@ -1479,14 +1520,12 @@ public:
     void workspace_swipe_begin() {
         if (swipe) return;
         finish_slide();
-        Swipe s;
-        s.width = primary_output().size.width.as_int();
-        swipe = std::move(s);
+        swipe = Swipe{};
         applying = true;
         guarded("swipe begin", [&] {
             collect(current, swipe->here, 0);
-            if (current > 0) collect(current - 1, swipe->left, -swipe->width);
-            if (current + 1 < workspaces.size()) collect(current + 1, swipe->right, swipe->width);
+            if (current > 0) collect(current - 1, swipe->left, -1.0);
+            if (current + 1 < workspaces.size()) collect(current + 1, swipe->right, 1.0);
             place_swipe(0);
         });
         applying = false;
@@ -1513,14 +1552,13 @@ public:
         swipe.reset();
         if (dir > 0 && current + 1 >= workspaces.size()) dir = 0;
         if (dir < 0 && current == 0) dir = 0;
-        int const w = s.width;
-        int const now = static_cast<int>(-s.progress * w);
-        int const goal = -dir * w;
+        double const now = -s.progress;
+        double const goal = -dir;
         applying = true;
         guarded("swipe end", [&] {
             current = static_cast<size_t>(static_cast<long>(current) + dir);
             Slide slide;
-            auto add = [&](std::vector<SlideItem> const& items, int base) {
+            auto add = [&](std::vector<SlideItem> const& items, double base) {
                 for (auto it : items) {
                     it.from = base + now;
                     it.to = base + goal;
@@ -1529,12 +1567,12 @@ public:
                 }
             };
             add(s.here, 0);
-            add(s.left, -w);
-            add(s.right, w);
+            add(s.left, -1.0);
+            add(s.right, 1.0);
             if (dir != 0) tools.select_active_window(Window{});
             focus_current_workspace();
             // The rest of the way at the slide's pace.
-            double const left_to_go = std::abs(goal - now) / static_cast<double>(std::max(w, 1));
+            double const left_to_go = std::abs(goal - now);
             start_slide(std::move(slide), std::max(120.0, SLIDE_MS * left_to_go));
         });
         applying = false;
