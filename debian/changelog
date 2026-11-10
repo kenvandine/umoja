@@ -1,3 +1,26 @@
+umoja-desktop (2026.46.5) stonking; urgency=medium
+
+  * Screen recording records the whole monitor on multi-monitor setups
+    (needs Mir 2.28.0-4umoja13). Clicks pushed into the top screen edge
+    and corners reach the top bar's buttons (Mir umoja12). Terminal
+    cursor hotspot and pointer that vanished after paste fixed (Mir
+    umoja11). XDG autostart apps start at login like GNOME, after the
+    tray is up so their icons show. Log Out asks for confirmation like
+    GNOME. The clock follows the locale's 12/24-hour format unless
+    clock-format is set. Sound in Quick Settings follows PulseAudio, with
+    output/input device pickers and a microphone slider; power off,
+    restart and log out go over D-Bus like GNOME. Compact shell sizing
+    and a slicker overview, a restyled layout picker, blur behind every
+    see-through shell surface and the Power Off dialog; the greeter shows
+    the wallpaper sharp with a frosted login card. Lower memory and CPU
+    use across the panel, dock, overview, notifications and lock screen;
+    idle local models unload after 10 minutes. Embedded Lemonade updated
+    to v2026.45.3. Also: workspace slide keeps windows on their monitor,
+    screenshot UI opens faster and remembers the last area, notification
+    banners no longer leave a dead click area.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Tue, 10 Nov 2026 22:13:57 +0000
+
 umoja-desktop (2026.46.4) stonking; urgency=medium
 
   * Games and X11 apps: Xwayland now runs in the Umoja session (Steam,
