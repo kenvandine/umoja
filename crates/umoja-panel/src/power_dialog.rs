@@ -27,16 +27,17 @@ enum Kind {
 /// What a button (or the countdown running out) does.
 #[derive(Clone, Copy)]
 enum Action {
-    Run(&'static [&'static str]),
+    /// A logind Manager method: "PowerOff" or "Reboot".
+    Logind(&'static str),
     LogOut,
 }
 
 impl Action {
     fn perform(self) {
         match self {
-            Action::Run(argv) => {
-                tracing::info!(cmd = ?argv, "end session confirmed");
-                crate::quick_settings::run(argv);
+            Action::Logind(method) => {
+                tracing::info!(method, "end session confirmed");
+                crate::login::manager_call(method);
             }
             Action::LogOut => {
                 tracing::info!("log out confirmed");
@@ -46,8 +47,9 @@ impl Action {
     }
 }
 
-const POWER_OFF: Action = Action::Run(&["systemctl", "poweroff"]);
-const REBOOT: Action = Action::Run(&["systemctl", "reboot"]);
+// What gnome-session does: ask logind directly over D-Bus.
+const POWER_OFF: Action = Action::Logind("PowerOff");
+const REBOOT: Action = Action::Logind("Reboot");
 
 /// The user's full name, when they have one (gnome-shell names them in the
 /// Log Out countdown).

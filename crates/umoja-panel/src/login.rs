@@ -87,9 +87,18 @@ pub fn terminate_session() {
         }
         None => {
             tracing::warn!("no login session found; stopping the Umoja session instead");
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "stop", "umoja-session.target"])
-                .status();
+            // systemd's user manager, over D-Bus (what `systemctl --user
+            // stop` calls).
+            if let Ok(user) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
+                bus::call(
+                    &user,
+                    "org.freedesktop.systemd1",
+                    "/org/freedesktop/systemd1",
+                    "org.freedesktop.systemd1.Manager",
+                    "StopUnit",
+                    Some(("umoja-session.target", "replace").to_variant()),
+                );
+            }
         }
     }
 }
@@ -124,4 +133,15 @@ pub fn watch(f: impl Fn(&str, &glib::Variant) + 'static) {
         gio::DBusSignalFlags::NONE,
         move |_, _, _, _, signal, params| f(signal, params),
     );
+}
+
+/// org.freedesktop.login1.Manager.PowerOff / Reboot, interactive so polkit
+/// can ask (the panel's own agent answers) when other users are logged in
+/// or something holds a shutdown inhibitor.
+pub fn manager_call(method: &str) {
+    let Some(conn) = bus::system_bus() else {
+        tracing::warn!(method, "no system bus; cannot reach logind");
+        return;
+    };
+    bus::call(&conn, LOGIN1, LOGIN1_PATH, MANAGER, method, Some((true,).to_variant()));
 }

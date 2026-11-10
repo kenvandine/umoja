@@ -778,10 +778,3 @@ pub fn open_settings(panel: &str) {
     };
     crate::launch::spawn_app("org.gnome.Settings", &argv, token.as_deref());
 }
-
-pub fn run(argv: &[&str]) {
-    let argv: Vec<&std::ffi::OsStr> = argv.iter().map(|a| a.as_ref()).collect();
-    if let Err(e) = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
-        tracing::warn!(cmd = ?argv[0], error = %e, "could not run");
-    }
-}
