@@ -20,10 +20,11 @@ use embed::{EmbedError, Embedder};
 use index::{Entry, Index, Vector};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
-use umoja_common::{dbus, gsettings as gs};
+use umoja_common::{dbus, gsettings as gs, lemonade};
 
 /// Files read and embedded per batch.
 const BATCH: usize = 16;
@@ -34,6 +35,8 @@ const SNIPPET_CHARS: usize = 1000;
 /// for most text; denser chunks are halved on retry.
 const CHUNK_CHARS: usize = 800;
 /// Don't retry a failed model download more often than this.
+/// The embedding model is unloaded after this long without a search or pass.
+const EMBED_IDLE: Duration = Duration::from_secs(120);
 const PULL_RETRY: Duration = Duration::from_secs(6 * 3600);
 
 #[derive(Debug, Clone, Default)]
@@ -47,6 +50,8 @@ struct Shared {
     status: Mutex<Status>,
     embedder: Embedder,
     wake: Notify,
+    /// Bumped on every use of the embedding model; see `release_model`.
+    embed_uses: AtomicU64,
 }
 
 impl Shared {
@@ -62,8 +67,9 @@ impl Shared {
         self.status.lock().unwrap().semantic
     }
 
-    async fn search(&self, query: &str, limit: usize) -> Vec<index::Hit> {
+    async fn search(self: &Arc<Self>, query: &str, limit: usize) -> Vec<index::Hit> {
         let qvec = if self.semantic() {
+            self.release_model();
             match self.embedder.query(query).await {
                 Ok(mut v) => {
                     index::normalize(&mut v);
@@ -79,6 +85,32 @@ impl Shared {
         };
         let idx = self.index.read().unwrap();
         idx.search(query, qvec.as_deref(), limit.clamp(1, 50))
+    }
+
+    /// Unload the embedding model from Lemonade once it has been idle for
+    /// [`EMBED_IDLE`] (and no pass is indexing): it holds a few hundred MB
+    /// of GPU memory, and the next search or pass loads it again in a moment.
+    fn release_model(self: &Arc<Self>) {
+        let mine = self.embed_uses.fetch_add(1, Ordering::SeqCst) + 1;
+        let shared = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(EMBED_IDLE).await;
+            if shared.embed_uses.load(Ordering::SeqCst) != mine
+                || shared.status.lock().unwrap().state == "indexing"
+            {
+                return;
+            }
+            let model = shared.embedder.model.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                lemonade::unload_model(Some(&model)).map(|ok| (ok, model))
+            })
+            .await;
+            match done {
+                Ok(Ok((true, model))) => tracing::info!(model, "unloaded the idle embedding model"),
+                Ok(Err(e)) => tracing::debug!(error = %e, "could not unload the embedding model"),
+                _ => {}
+            }
+        });
     }
 
     fn save(&self) {
@@ -149,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         }),
         embedder: Embedder::new(model),
         wake: Notify::new(),
+        embed_uses: AtomicU64::new(0),
     });
 
     match args.first().map(String::as_str) {
@@ -306,6 +339,9 @@ async fn cycle(
         if !power::current().on_mains() {
             shared.set_state("paused-on-battery");
             shared.save();
+            if semantic {
+                shared.release_model();
+            }
             return;
         }
         let processed = process(shared, batch, semantic).await;
@@ -340,6 +376,9 @@ async fn cycle(
     }
     shared.save();
     shared.set_state("idle");
+    if semantic {
+        shared.release_model();
+    }
 }
 
 /// Replace the file list with what's on disk, keeping unchanged entries.
