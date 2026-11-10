@@ -108,16 +108,19 @@ fn menu() -> gtk::Box {
         night_light_tile().upcast(),
         kbd.upcast(),
     ];
+    // A hidden tile must not leave a hole, so filter it out of the grid.
+    // Hiding its FlowBoxChild instead only worked while every tile's state
+    // was known when the menu was built: network and Bluetooth state now
+    // arrive a moment later, and a FlowBoxChild shown again stayed missing.
+    flow.set_filter_func(|child| child.child().is_some_and(|t| t.is_visible()));
     for t in tiles {
         flow.append(&t);
-        // A hidden tile must not leave a hole: hide its FlowBoxChild too.
-        let sync = |w: &gtk::Widget| {
-            if let Some(p) = w.parent() {
-                p.set_visible(w.is_visible());
+        let weak = flow.downgrade();
+        t.connect_visible_notify(move |_| {
+            if let Some(flow) = weak.upgrade() {
+                flow.invalidate_filter();
             }
-        };
-        sync(&t);
-        t.connect_visible_notify(sync);
+        });
     }
     root.append(&flow);
     root.append(&networks);
