@@ -1,0 +1,205 @@
+Description: Fix client cursors: honour wl_surface.offset, scale the hotspot, keep the role while hidden
+ Three problems with cursors a client draws itself (GTK terminals showed all
+ of them):
+ .
+ 1. GTK changes its cursor image by attaching the new buffer to the same
+    cursor surface and moving the hotspot with wl_surface.offset, without a
+    new wl_pointer.set_cursor. Mir ignored the offset, so after switching
+    from the arrow to the I-beam the image was still placed by the arrow's
+    hotspot and text selection didn't start under the visible cursor.
+ 2. The hotspot is in surface coordinates but was applied to the image in
+    buffer pixels, so on a scaled output the image sat off the pointer.
+ 3. When the client hid the pointer (VTE hides it on typing and paste) by
+    committing a NULL buffer, the cursor object that owned the surface's
+    role was replaced and cleared the role, and the hidden cursor never took
+    it. The client's next commit, bringing the pointer back without another
+    set_cursor, then went nowhere: the pointer stayed hidden until it left
+    and re-entered the window. Upstream main has the same fix for this part.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-10
+---
+diff --git a/src/server/frontend_wayland/wl_pointer.cpp b/src/server/frontend_wayland/wl_pointer.cpp
+index 4fd8444..4586da0 100644
+--- a/src/server/frontend_wayland/wl_pointer.cpp
++++ b/src/server/frontend_wayland/wl_pointer.cpp
+@@ -37,6 +37,7 @@
+ #include <linux/input-event-codes.h>
+ #include <boost/throw_exception.hpp>
+ #include <string.h> // memcpy
++#include <cmath>
+ 
+ namespace mf = mir::frontend;
+ namespace ms = mir::scene;
+@@ -416,7 +417,7 @@ struct CursorSurfaceRole : mf::NullWlSurfaceRole
+     void commit(mir::frontend::WlSurfaceState const& state) override
+     {
+         NullWlSurfaceRole::commit(state);
+-        commit_handler->on_commit(&surface.value());
++        commit_handler->on_commit(&surface.value(), state.buffer_offset.value_or(geom::Displacement{}));
+     }
+ };
+ 
+@@ -492,16 +493,26 @@ void mf::WlPointer::set_cursor(
+     }
+ }
+ 
+-void mf::WlPointer::on_commit(WlSurface* surface)
++void mf::WlPointer::on_commit(WlSurface* surface, geom::Displacement buffer_offset)
+ {
+     // We need an explicit conversion before calling make_unique
+     // (the compiler should elide this variable)
+     CommitHandler* const commit_handler = this;
+ 
++    // wl_surface.offset moves the buffer relative to the hotspot. GTK changes
++    // the cursor image this way (attach + offset + commit, no new set_cursor),
++    // so ignoring it left e.g. the text cursor drawn at the arrow's hotspot.
++    cursor_hotspot = cursor_hotspot - buffer_offset;
++
+     if (!surface->buffer_size())
+     {
+-        // No buffer: We should be unmapping the cursor
+-
++        // No buffer: We should be unmapping the cursor.
++        // The old cursor clears the surface's role when it goes, so drop it
++        // first and let the hidden cursor take the role: otherwise the
++        // client's next commit (showing the pointer again without another
++        // set_cursor, as GTK does) never reaches us and the pointer stays
++        // hidden until it leaves and re-enters the surface.
++        cursor.reset();
+         cursor = std::make_unique<WlHiddenCursor>(surface, commit_handler);
+         if (surface_under_cursor)
+             cursor->apply_to(&surface_under_cursor.value());
+@@ -581,21 +592,37 @@ auto WlSurfaceCursor::cursor_surface() const -> std::optional<mf::WlSurface*>
+ 
+ void WlSurfaceCursor::apply_latest_buffer()
+ {
+-    if (auto const surface = surface_under_cursor.lock())
++    if (auto const target = surface_under_cursor.lock())
+     {
+         if (stream->has_submitted_buffer())
+         {
+-            /* TODO: We are obviously discarding any scaling information from the surface here;
+-             * we should take it into account when rendering the cursor
++            auto const buffer = stream->next_submission_for_compositor(this)->claim_buffer();
++
++            /* The image is drawn at buffer size (the scale is still dropped), but the
++             * client gives the hotspot in surface coordinates. Convert it to buffer
++             * pixels, or on a scaled output (buffer_scale 2, or a fractional scale
++             * through wp_viewport) the image sits off the real pointer position and
++             * e.g. a text selection doesn't start under the I-beam.
+              */
+-            auto const cursor_image = std::make_shared<BufferCursorImage>(
+-                stream->next_submission_for_compositor(this)->claim_buffer(),
+-                hotspot);
+-            surface->set_cursor_image(cursor_image);
++            auto image_hotspot = hotspot;
++            if (surface)
++            {
++                if (auto const logical = surface.value().buffer_size();
++                    logical && logical->width.as_int() > 0 && logical->height.as_int() > 0)
++                {
++                    auto const pixels = buffer->size();
++                    image_hotspot = geom::Displacement{
++                        static_cast<int>(std::lround(hotspot.dx.as_int() * double(pixels.width.as_int()) / logical->width.as_int())),
++                        static_cast<int>(std::lround(hotspot.dy.as_int() * double(pixels.height.as_int()) / logical->height.as_int()))};
++                }
++            }
++
++            auto const cursor_image = std::make_shared<BufferCursorImage>(buffer, image_hotspot);
++            target->set_cursor_image(cursor_image);
+         }
+         else
+         {
+-            surface->set_cursor_image(nullptr);
++            target->set_cursor_image(nullptr);
+         }
+     }
+ }
+@@ -603,6 +630,8 @@ void WlSurfaceCursor::apply_latest_buffer()
+ WlHiddenCursor::WlHiddenCursor(mf::WlSurface* surface, mf::CommitHandler* commit_handler) :
+     surface_role{surface, std::move(commit_handler)}
+ {
++    if (surface)
++        surface->set_role(&surface_role);
+ }
+ 
+ void WlHiddenCursor::apply_to(mf::WlSurface* surface)
+diff --git a/src/server/frontend_wayland/wl_pointer.h b/src/server/frontend_wayland/wl_pointer.h
+index 86c7a07..5e30605 100644
+--- a/src/server/frontend_wayland/wl_pointer.h
++++ b/src/server/frontend_wayland/wl_pointer.h
+@@ -51,7 +51,8 @@ class WlSurface;
+ class CommitHandler
+ {
+ public:
+-    virtual void on_commit(WlSurface* surface) = 0;
++    /// buffer_offset is the committed wl_surface.offset (zero if none)
++    virtual void on_commit(WlSurface* surface, geometry::Displacement buffer_offset) = 0;
+ 
+ protected:
+     CommitHandler() = default;
+@@ -94,7 +95,7 @@ private:
+     /// Sends a frame event only if needed, leaves needs_frame false
+     void maybe_frame();
+     /// The cursor surface has committed
+-    void on_commit(WlSurface* surface) override;
++    void on_commit(WlSurface* surface, geometry::Displacement buffer_offset) override;
+ 
+     /// Wayland request handlers
+     ///@{
+diff --git a/src/server/frontend_wayland/wl_surface.cpp b/src/server/frontend_wayland/wl_surface.cpp
+index 3acd2b2..0775edb 100644
+--- a/src/server/frontend_wayland/wl_surface.cpp
++++ b/src/server/frontend_wayland/wl_surface.cpp
+@@ -89,6 +89,10 @@ void mf::WlSurfaceState::update_from(WlSurfaceState const& source)
+     if (source.offset)
+         offset = source.offset;
+ 
++    // Cached commits (synchronized subsurfaces) each move the buffer again
++    if (source.buffer_offset)
++        buffer_offset = buffer_offset.value_or(geom::Displacement{}) + source.buffer_offset.value();
++
+     if (source.input_shape)
+         input_shape = source.input_shape;
+ 
+@@ -395,7 +399,8 @@ void mf::WlSurface::attach(std::optional<wl_resource*> const& buffer, int32_t x,
+ {
+     if (x != 0 || y != 0)
+     {
+-        mir::log_warning("Client requested unimplemented non-zero attach offset. Rendering will be incorrect.");
++        // Only the cursor role honours this (it moves the hotspot)
++        pending.buffer_offset = geom::Displacement{x, y};
+     }
+ 
+     pending.buffer = mw::make_weak(buffer ? ResourceLifetimeTracker::from(buffer.value()) : nullptr);
+@@ -831,10 +836,10 @@ void mf::WlSurface::set_buffer_scale(int32_t scale)
+ 
+ void mir::frontend::WlSurface::offset(int32_t x, int32_t y)
+ {
+-    if (x != 0 || y != 0)
+-    {
+-        mir::log_warning("Client requested unimplemented non-zero offset. Rendering will be incorrect.");
+-    }
++    // Only the cursor role honours this: GTK moves the hotspot with
++    // wl_surface.offset when it changes the cursor image instead of calling
++    // wl_pointer.set_cursor again.
++    pending.buffer_offset = geom::Displacement{x, y};
+ }
+ 
+ auto mf::WlSurface::confine_pointer_state() const -> MirPointerConfinementState
+diff --git a/src/server/frontend_wayland/wl_surface.h b/src/server/frontend_wayland/wl_surface.h
+index c1f0c22..5746229 100644
+--- a/src/server/frontend_wayland/wl_surface.h
++++ b/src/server/frontend_wayland/wl_surface.h
+@@ -89,6 +89,10 @@ struct WlSurfaceState
+     shell::SurfaceSpecification surface_spec;
+     std::optional<float> scale;
+     std::optional<geometry::Displacement> offset;
++    /// wl_surface.offset (or wl_surface.attach x, y before version 5): where
++    /// the new buffer's top left corner goes relative to the old one. Only the
++    /// cursor role uses it, to move the hotspot.
++    std::optional<geometry::Displacement> buffer_offset;
+     std::optional<std::optional<std::vector<geometry::Rectangle>>> input_shape;
+     std::optional<geometry::Rectangles> opaque_region;
+     std::optional<MirOrientation> orientation;
