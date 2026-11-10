@@ -42,6 +42,10 @@ pub struct Overlay {
     window: adw::ApplicationWindow,
     entry: gtk::SearchEntry,
     grid: gtk::FlowBox,
+    /// App tiles by desktop id, built once and reused: rebuilding hundreds
+    /// of tiles on every open and keystroke made GTK render most icons again
+    /// (its icon cache keeps only a few dozen unused ones).
+    tiles: RefCell<HashMap<String, gtk::FlowBoxChild>>,
     ask_button: gtk::Button,
     answer: gtk::Label,
     /// One line per tool call ("✓ Turn on Dark Style").
@@ -336,6 +340,7 @@ impl Overlay {
             window,
             entry,
             grid,
+            tiles: RefCell::default(),
             ask_button,
             answer,
             steps,
@@ -469,6 +474,7 @@ impl Overlay {
         self.app_monitor.connect_changed(move |_| {
             if let Some(o) = weak.upgrade() {
                 *o.apps.borrow_mut() = load_apps();
+                o.tiles.borrow_mut().clear();
                 o.refresh_results();
             }
         });
@@ -718,7 +724,7 @@ impl Overlay {
             MAX_RESULTS
         };
         for app in found.iter().take(limit) {
-            self.grid.append(&self.app_tile(app));
+            self.grid.append(&self.cached_tile(app));
         }
         let attached = !self.attachments.borrow().is_empty();
         let replying = self.awaiting_reply.get();
@@ -744,6 +750,20 @@ impl Overlay {
         }
         self.files.update(&q);
         self.refresh_clipboard();
+    }
+
+    fn cached_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::FlowBoxChild {
+        let key = app
+            .id()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{}\0{}", app.display_name(), app.executable().display()));
+        if let Some(tile) = self.tiles.borrow().get(&key) {
+            return tile.clone();
+        }
+        let child = gtk::FlowBoxChild::new();
+        child.set_child(Some(&self.app_tile(app)));
+        self.tiles.borrow_mut().insert(key, child.clone());
+        child
     }
 
     fn app_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::Widget {
