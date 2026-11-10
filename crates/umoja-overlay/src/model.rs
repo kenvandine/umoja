@@ -63,8 +63,8 @@ enum PullEvent {
 /// Parses lemond's pull stream (same format in v11.9 and v2026.45). Its
 /// progress events are per file (`file_index` of `total_files`), arrive
 /// by the hundred thousand, and start each file with a bogus tiny
-/// `bytes_total` (a redirect body) that briefly reads 100%. The final `complete` event has every field
-/// zeroed. So: keep the largest `bytes_total` seen for each file, ignore
+/// `bytes_total` (a redirect body) that briefly reads 100%. The final
+/// `complete` event has every field zeroed. So: keep the largest `bytes_total` seen for each file, ignore
 /// readings against smaller totals, and add the files up against
 /// `total_download_size`.
 #[derive(Default)]
