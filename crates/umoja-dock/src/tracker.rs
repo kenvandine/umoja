@@ -6,7 +6,8 @@
 
 use async_channel::{Receiver, Sender};
 use std::collections::HashMap;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::Arc;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_registry, wl_seat::WlSeat};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
@@ -41,7 +42,32 @@ pub enum Command {
 
 pub struct Tracker {
     pub events: Receiver<Event>,
-    pub commands: Sender<Command>,
+    pub commands: Commands,
+}
+
+/// Sends commands to the tracker thread and wakes it, so it can sleep in
+/// poll() until the compositor or the dock has something for it (it used to
+/// wake every 50 ms to look for commands).
+#[derive(Clone)]
+pub struct Commands {
+    tx: Sender<Command>,
+    wake: Arc<OwnedFd>,
+}
+
+impl Commands {
+    pub fn try_send(&self, cmd: Command) {
+        if self.tx.try_send(cmd).is_ok() {
+            let one: u64 = 1;
+            // SAFETY: an eventfd takes 8-byte writes from a valid buffer.
+            unsafe {
+                libc::write(
+                    self.wake.as_raw_fd(),
+                    (&one as *const u64).cast(),
+                    std::mem::size_of::<u64>(),
+                )
+            };
+        }
+    }
 }
 
 struct State {
@@ -69,6 +95,14 @@ pub fn start() -> Option<Tracker> {
         return None;
     }
     let seat = globals.bind::<WlSeat, _, _>(&qh, 1..=7, ()).ok();
+    // SAFETY: plain syscall; the fd is owned from here on.
+    let wake = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+    if wake < 0 {
+        tracing::warn!("no eventfd; running dots disabled");
+        return None;
+    }
+    let wake = Arc::new(unsafe { OwnedFd::from_raw_fd(wake) });
+    let thread_wake = wake.clone();
     let mut state = State {
         seat,
         handles: HashMap::new(),
@@ -87,14 +121,34 @@ pub fn start() -> Option<Tracker> {
                     break;
                 }
                 if let Some(guard) = queue.prepare_read() {
-                    let mut fd = libc::pollfd {
-                        fd: guard.connection_fd().as_raw_fd(),
-                        events: libc::POLLIN,
-                        revents: 0,
-                    };
-                    // Short timeout so queued commands are applied promptly.
-                    let ready = unsafe { libc::poll(&mut fd, 1, 50) };
+                    let mut fds = [
+                        libc::pollfd {
+                            fd: guard.connection_fd().as_raw_fd(),
+                            events: libc::POLLIN,
+                            revents: 0,
+                        },
+                        libc::pollfd {
+                            fd: thread_wake.as_raw_fd(),
+                            events: libc::POLLIN,
+                            revents: 0,
+                        },
+                    ];
+                    // Sleep until the compositor sends events or the dock
+                    // queues a command.
+                    let ready = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+                    if fds[1].revents & libc::POLLIN != 0 {
+                        let mut n: u64 = 0;
+                        // SAFETY: reading the 8-byte counter clears it.
+                        unsafe {
+                            libc::read(
+                                thread_wake.as_raw_fd(),
+                                (&mut n as *mut u64).cast(),
+                                std::mem::size_of::<u64>(),
+                            )
+                        };
+                    }
                     if ready > 0
+                        && fds[0].revents & libc::POLLIN != 0
                         && let Err(e) = guard.read()
                     {
                         tracing::warn!(error = %e, "tracker read failed");
@@ -116,7 +170,7 @@ pub fn start() -> Option<Tracker> {
 
     Some(Tracker {
         events: ev_rx,
-        commands: cmd_tx,
+        commands: Commands { tx: cmd_tx, wake },
     })
 }
 

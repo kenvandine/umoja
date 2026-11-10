@@ -6,7 +6,7 @@ use crate::tracker::{Command, WindowInfo};
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-pub fn popover(windows: &[WindowInfo], commands: async_channel::Sender<Command>) -> gtk::Popover {
+pub fn popover(windows: &[WindowInfo], commands: crate::tracker::Commands) -> gtk::Popover {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let popover = gtk::Popover::builder()
         .child(&list)
