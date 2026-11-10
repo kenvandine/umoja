@@ -10,6 +10,17 @@ struct Running {
     id: u64,
 }
 
+unsafe extern "C" {
+    fn umoja_cursor_set_hidden(hidden: bool);
+}
+
+/// The pointer stays hidden for as long as the screensaver runs (see
+/// `HideableCursor` in the shim: the screensaver can't hide it itself).
+fn hide_cursor(hidden: bool) {
+    // SAFETY: thread-safe shim call taking a plain bool.
+    unsafe { umoja_cursor_set_hidden(hidden) };
+}
+
 static CHILD: Mutex<Option<Running>> = Mutex::new(None);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -61,6 +72,7 @@ pub fn start(on_exit: impl FnOnce(bool) + Send + 'static) -> bool {
         id,
     });
     tracing::info!(pid, "screensaver started");
+    hide_cursor(true);
     RUNTIME.spawn(async move {
         let status = proc.wait().await;
         let expected = {
@@ -75,6 +87,7 @@ pub fn start(on_exit: impl FnOnce(bool) + Send + 'static) -> bool {
         };
         if !expected {
             tracing::warn!(?status, "screensaver exited by itself");
+            hide_cursor(false);
         }
         on_exit(expected);
     });
@@ -87,5 +100,6 @@ pub fn stop() {
         // SAFETY: plain kill(2) on the pid of a child we spawned and
         // haven't reaped yet (the wait task reaps it).
         unsafe { libc::kill(r.pid, libc::SIGTERM) };
+        hide_cursor(false);
     }
 }

@@ -14,6 +14,7 @@
 
 #include "umoja_shim.h"
 
+#include <mir/graphics/cursor.h>
 #include <mir/server.h>
 #include <mir/scene/session_lock.h>
 #include <mir/shell/idle_handler.h>
@@ -59,9 +60,78 @@ void apply(std::shared_ptr<mir::shell::IdleHandler> const& handler) {
     handler->set_display_off_timeout_when_locked(seconds(g_locked_off));
 }
 
+// Mir's pointer, wrapped so it can be hidden while the screensaver shows.
+// The screensaver asks for no cursor itself, but a client only gets to set
+// the pointer image after wl_pointer.enter, and Mir sends that on the first
+// motion, which also dismisses the screensaver. So the compositor hides it.
+// Mir keeps calling show() as the image under the pointer changes; while
+// hidden those only update the image to bring back afterwards.
+struct HideableCursor : mir::graphics::Cursor {
+    explicit HideableCursor(std::shared_ptr<mir::graphics::Cursor> wrapped)
+        : wrapped{std::move(wrapped)} {}
+
+    void show(std::shared_ptr<mir::graphics::CursorImage> const& image) override {
+        std::lock_guard lock{mutex};
+        last = image;
+        if (!forced_hidden) wrapped->show(image);
+    }
+    void hide() override {
+        std::lock_guard lock{mutex};
+        last.reset();
+        wrapped->hide();
+    }
+    void move_to(mir::geometry::Point position) override { wrapped->move_to(position); }
+    void scale(float new_scale) override { wrapped->scale(new_scale); }
+    auto renderable() -> std::shared_ptr<mir::graphics::Renderable> override {
+        return wrapped->renderable();
+    }
+    auto needs_compositing() const -> bool override { return wrapped->needs_compositing(); }
+
+    void set_forced_hidden(bool hidden) {
+        std::lock_guard lock{mutex};
+        if (hidden == forced_hidden) return;
+        forced_hidden = hidden;
+        if (hidden) {
+            wrapped->hide();
+        } else if (last) {
+            wrapped->show(last);
+        }
+    }
+
+    std::shared_ptr<mir::graphics::Cursor> const wrapped;
+    std::mutex mutex;
+    std::shared_ptr<mir::graphics::CursorImage> last;
+    bool forced_hidden = false;
+};
+
+std::mutex g_cursor_mutex;
+std::weak_ptr<HideableCursor> g_cursor;
+bool g_cursor_hidden = false;
+
 } // namespace
 
+extern "C" void umoja_cursor_set_hidden(bool hidden) {
+    std::lock_guard lock{g_cursor_mutex};
+    g_cursor_hidden = hidden;
+    if (auto const cursor = g_cursor.lock()) {
+        try {
+            cursor->set_forced_hidden(hidden);
+        } catch (std::exception const& e) {
+            std::fprintf(stderr, "umoja-mir: %s the pointer failed: %s\n",
+                         hidden ? "hiding" : "showing", e.what());
+        }
+    }
+}
+
 void umoja_idle_setup(mir::Server& server) {
+    server.wrap_cursor([](std::shared_ptr<mir::graphics::Cursor> const& wrapped)
+                           -> std::shared_ptr<mir::graphics::Cursor> {
+        auto const cursor = std::make_shared<HideableCursor>(wrapped);
+        std::lock_guard lock{g_cursor_mutex};
+        g_cursor = cursor;
+        if (g_cursor_hidden) cursor->set_forced_hidden(true);
+        return cursor;
+    });
     server.add_init_callback([&server] {
         auto const handler = server.the_idle_handler();
         handler->register_interest(g_observer);
