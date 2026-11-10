@@ -44,6 +44,14 @@ try:
 except (ImportError, ValueError):
     sys.exit("umoja-demo needs PyGObject: sudo apt install python3-gi")
 
+try:  # GLib 2.86 moved DesktopAppInfo to GioUnix
+    gi.require_version("GioUnix", "2.0")
+    from gi.repository import GioUnix
+
+    DesktopAppInfo = GioUnix.DesktopAppInfo
+except (ImportError, ValueError, AttributeError):
+    DesktopAppInfo = Gio.DesktopAppInfo
+
 OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
 PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
 COMPOSITOR = ("org.umoja.Compositor", "/org/umoja/Compositor", "org.umoja.Compositor")
@@ -406,7 +414,7 @@ class Demo:
         found = []
         for desktop_id in APP_CANDIDATES:
             try:
-                info = Gio.DesktopAppInfo.new(desktop_id)
+                info = DesktopAppInfo.new(desktop_id)
             except TypeError:
                 info = None
             if info:
