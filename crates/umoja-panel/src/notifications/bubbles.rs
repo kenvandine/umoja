@@ -347,11 +347,14 @@ impl Bubbles {
         }
         bubble.add_controller(click);
 
-        // Hovering keeps the bubble up, like GNOME banners.
+        // Hovering keeps the bubble up, like GNOME banners. Only a real
+        // pointer move counts: a bubble that appears under a resting
+        // pointer gets an enter but no motion, and pausing on that left
+        // it up for good (the pointer never moves, so no leave comes).
         let motion = gtk::EventControllerMotion::new();
         {
             let center = self.center.clone();
-            motion.connect_enter(move |_, _, _| {
+            motion.connect_motion(move |_, _, _| {
                 if let Some(c) = center.upgrade() {
                     if let Some(b) = c.bubbles.items.borrow_mut().get_mut(&id) {
                         if let Some(t) = b.timer.take() {
