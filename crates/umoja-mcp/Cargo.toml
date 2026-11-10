@@ -23,3 +23,5 @@ serde_json.workspace = true
 tracing.workspace = true
 async-channel.workspace = true
 tracing-subscriber.workspace = true
+# The PulseAudio client API (pipewire-pulse), as the panel and gnome-shell use.
+libpulse-binding = "2.28"

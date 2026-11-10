@@ -454,46 +454,44 @@ fn volume_summary(a: &Value) -> String {
     }
 }
 
-/// `wpctl get-volume`: "Volume: 0.45 [MUTED]".
-pub fn parse_volume(out: &str) -> Option<(u32, bool)> {
-    let v: f64 = out.split_whitespace().nth(1)?.parse().ok()?;
-    Some(((v * 100.0).round() as u32, out.contains("[MUTED]")))
+/// The new level for `level` (absolute) or `change` (10% steps, as the
+/// old `wpctl set-volume 10%+` did), kept within 0–100%.
+pub fn volume_target(current: u32, level: Option<u64>, change: Option<&str>) -> Option<u32> {
+    match (level, change) {
+        (Some(l), _) => Some(l.min(100) as u32),
+        (None, Some("down" | "lower" | "decrease")) => Some(current.saturating_sub(10)),
+        (None, Some(_)) => Some((current + 10).min(100.max(current))),
+        _ => None,
+    }
 }
 
 async fn set_volume(a: Value) -> Outcome {
-    if !have("wpctl") {
-        return err("wpctl (WirePlumber) is not installed");
-    }
     let mic = is_mic(&a);
-    let target = if mic { "@DEFAULT_AUDIO_SOURCE@" } else { "@DEFAULT_AUDIO_SINK@" };
     let level = arg_u64(&a, "level").map(|l| l.min(100));
     let change = arg_str(&a, "change").map(str::to_lowercase);
     let mute = arg_bool(&a, "mute");
-    let step = match (level, change.as_deref()) {
-        (Some(l), _) => Some(format!("{l}%")),
-        (None, Some("down" | "lower" | "decrease")) => Some("10%-".into()),
-        (None, Some(_)) => Some("10%+".into()),
-        _ => None,
-    };
-    if let Some(m) = mute {
-        let (ok, out) = cmd(&["wpctl", "set-mute", target, if m { "1" } else { "0" }]).await;
-        if !ok {
-            return err(out);
+    let change2 = change.clone();
+    let res = blocking(move || -> Result<(u32, bool), String> {
+        let mut c = crate::pulse::Client::connect()?;
+        let dev = c.default_device(mic)?;
+        if let Some(m) = mute {
+            c.set_mute(mic, m)?;
         }
-    }
-    if let Some(step) = step {
-        // Changing the level unmutes, as the volume keys do.
-        if mute.is_none() {
-            cmd(&["wpctl", "set-mute", target, "0"]).await;
+        if let Some(pct) = volume_target(dev.percent(), level, change2.as_deref()) {
+            // Changing the level unmutes, as the volume keys do.
+            if mute.is_none() && dev.muted {
+                c.set_mute(mic, false)?;
+            }
+            c.set_volume(mic, &crate::pulse::scaled(dev.volume, pct))?;
         }
-        let (ok, out) = cmd(&["wpctl", "set-volume", "-l", "1.0", target, &step]).await;
-        if !ok {
-            return err(out);
-        }
-    }
-    let (_, out) = cmd(&["wpctl", "get-volume", target]).await;
-    let Some((pct, muted)) = parse_volume(&out) else {
-        return err(format!("couldn't read the volume: {out}"));
+        let now = c.default_device(mic)?;
+        Ok((now.percent(), now.muted))
+    })
+    .await
+    .unwrap_or_else(Err);
+    let (pct, muted) = match res {
+        Ok(v) => v,
+        Err(e) => return err(e),
     };
     let icon = match (mic, muted, pct) {
         (true, true, _) => "microphone-sensitivity-muted-symbolic",
@@ -512,93 +510,56 @@ async fn set_volume(a: Value) -> Outcome {
 
 // ---- sound devices ----------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct AudioNode {
-    pub id: u32,
-    pub name: String,
-    pub default: bool,
-    pub input: bool,
-}
-
-/// The Audio Sinks and Sources from `wpctl status`.
-pub fn parse_wpctl_status(text: &str) -> Vec<AudioNode> {
-    let mut out = Vec::new();
-    let mut in_audio = false;
-    let mut section: Option<bool> = None; // Some(input?)
-    for line in text.lines() {
-        let t = line.trim_start_matches(|c: char| " │├└─".contains(c)).trim_end();
-        if !line.starts_with(' ') && !line.starts_with('│') && !t.is_empty() {
-            in_audio = t == "Audio";
-            section = None;
-            continue;
-        }
-        if !in_audio {
-            continue;
-        }
-        if t.ends_with(':') {
-            section = match t {
-                "Sinks:" => Some(false),
-                "Sources:" => Some(true),
-                _ => None,
-            };
-            continue;
-        }
-        let Some(input) = section else { continue };
-        let (default, rest) = match t.strip_prefix('*') {
-            Some(r) => (true, r.trim_start()),
-            None => (false, t),
-        };
-        let Some((id, name)) = rest.split_once(". ") else { continue };
-        let Ok(id) = id.trim().parse() else { continue };
-        let name = name.split(" [").next().unwrap_or(name).trim().to_string();
-        out.push(AudioNode { id, name, default, input });
-    }
-    out
-}
-
-async fn set_audio_device(a: Value) -> Outcome {
-    if !have("wpctl") {
-        return err("wpctl (WirePlumber) is not installed");
-    }
-    let input = matches!(arg_str(&a, "kind"), Some("input")) || is_mic(&json!({"device": arg_str(&a, "kind").unwrap_or("")}));
-    let (ok, status) = cmd(&["wpctl", "status"]).await;
-    if !ok {
-        return err(status);
-    }
-    let nodes: Vec<AudioNode> = parse_wpctl_status(&status).into_iter().filter(|n| n.input == input).collect();
-    let list = || {
-        nodes
-            .iter()
-            .map(|n| format!("- {}{}", n.name, if n.default { " (in use)" } else { "" }))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let Some(want) = arg_str(&a, "device").map(str::to_lowercase) else {
-        return Outcome::ok(format!("{} devices:\n{}", if input { "Input" } else { "Output" }, list()));
-    };
+/// The device `want` names: its description, all its words, or a
+/// headphones / speakers / TV alias.
+pub fn find_device<'a>(devices: &'a [crate::pulse::Device], want: &str) -> Option<&'a crate::pulse::Device> {
+    let want = want.to_lowercase();
     let words: Vec<&str> = want.split_whitespace().collect();
-    let hit = nodes
+    let name = |d: &crate::pulse::Device| d.description.to_lowercase();
+    devices
         .iter()
-        .find(|n| n.name.to_lowercase().contains(&want))
-        .or_else(|| nodes.iter().find(|n| words.iter().all(|w| n.name.to_lowercase().contains(w))))
+        .find(|d| name(d).contains(&want))
+        .or_else(|| devices.iter().find(|d| words.iter().all(|w| name(d).contains(w))))
         .or_else(|| {
-            // "headphones"/"speakers" on the built-in card are ports, not nodes.
+            // "headphones"/"speakers" on the built-in card are ports, not devices.
             let alias = match want.as_str() {
                 w if w.contains("headphone") || w.contains("headset") => &["headphone", "headset", "usb", "bluetooth"][..],
                 w if w.contains("speaker") || w.contains("built") => &["built-in", "speaker", "analog"][..],
                 w if w.contains("tv") || w.contains("monitor") => &["hdmi", "displayport"][..],
                 _ => &[][..],
             };
-            nodes.iter().find(|n| alias.iter().any(|w| n.name.to_lowercase().contains(w)))
-        });
-    let Some(node) = hit else {
-        return err(format!("no sound device matches “{want}”. Devices:\n{}", list()));
-    };
-    let (ok, out) = cmd(&["wpctl", "set-default", &node.id.to_string()]).await;
-    if !ok {
-        return err(out);
+            devices.iter().find(|d| alias.iter().any(|w| name(d).contains(w)))
+        })
+}
+
+async fn set_audio_device(a: Value) -> Outcome {
+    let input = matches!(arg_str(&a, "kind"), Some("input")) || is_mic(&json!({"device": arg_str(&a, "kind").unwrap_or("")}));
+    let want = arg_str(&a, "device").map(str::to_string);
+    let res = blocking(move || -> Result<String, String> {
+        let mut c = crate::pulse::Client::connect()?;
+        let devices = c.devices(input)?;
+        let list = || {
+            devices
+                .iter()
+                .map(|d| format!("- {}{}", d.description, if d.default { " (in use)" } else { "" }))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let Some(want) = want else {
+            return Ok(format!("{} devices:\n{}", if input { "Input" } else { "Output" }, list()));
+        };
+        let Some(dev) = find_device(&devices, &want) else {
+            return Err(format!("no sound device matches “{want}”. Devices:\n{}", list()));
+        };
+        c.set_default(input, &dev.name)?;
+        Ok(format!("Now using {} for {}", dev.description, if input { "the microphone" } else { "sound" }))
+    })
+    .await
+    .unwrap_or_else(Err);
+    match res {
+        Ok(m) => Outcome::ok(m),
+        Err(e) => err(e),
     }
-    Outcome::ok(format!("Now using {} for {}", node.name, if input { "the microphone" } else { "sound" }))
 }
 
 // ---- brightness -------------------------------------------------------------------
@@ -1683,23 +1644,31 @@ mod tests {
 
     #[test]
     fn volume_parsing_and_summaries() {
-        assert_eq!(parse_volume("Volume: 0.45\n"), Some((45, false)));
-        assert_eq!(parse_volume("Volume: 0.30 [MUTED]"), Some((30, true)));
-        assert_eq!(parse_volume("nope"), None);
+        assert_eq!(volume_target(45, Some(130), None), Some(100));
+        assert_eq!(volume_target(45, None, Some("down")), Some(35));
+        assert_eq!(volume_target(5, None, Some("down")), Some(0));
+        assert_eq!(volume_target(95, None, Some("up")), Some(100));
+        assert_eq!(volume_target(45, None, None), None);
         assert_eq!(volume_summary(&json!({"level": 30})), "Set the volume to 30%");
         assert_eq!(volume_summary(&json!({"mute": true, "device": "microphone"})), "Mute the microphone");
         assert_eq!(volume_summary(&json!({"change": "down"})), "Turn the volume down");
     }
 
     #[test]
-    fn wpctl_status() {
-        let s = "PipeWire 'pipewire-0' [1.4.7, ken@umoja, cookie:1]\n └─ Clients:\n        33. WirePlumber\n\nAudio\n ├─ Devices:\n │      44. Built-in Audio                      [alsa]\n │  \n ├─ Sinks:\n │  *   47. Built-in Audio Analog Stereo        [vol: 0.40]\n │      61. Jabra Evolve2 65                    [vol: 1.00]\n │  \n ├─ Sources:\n │  *   48. Built-in Audio Digital Microphone   [vol: 0.55]\n │  \n ├─ Filters:\n │  \n └─ Streams:\n        70. Firefox\n\nVideo\n ├─ Devices:\n ├─ Sinks:\n │      90. Not audio\n";
-        let n = parse_wpctl_status(s);
-        assert_eq!(n.len(), 3, "{n:?}");
-        assert_eq!(n[0], AudioNode { id: 47, name: "Built-in Audio Analog Stereo".into(), default: true, input: false });
-        assert_eq!(n[1].name, "Jabra Evolve2 65");
-        assert!(!n[1].default);
-        assert!(n[2].input && n[2].default);
+    fn finds_sound_devices() {
+        let dev = |d: &str| crate::pulse::Device {
+            name: d.into(),
+            description: d.into(),
+            default: false,
+            input: false,
+            volume: Default::default(),
+            muted: false,
+        };
+        let devs = [dev("Built-in Audio Analog Stereo"), dev("Jabra Evolve2 65"), dev("HDA NVidia HDMI 1")];
+        assert_eq!(find_device(&devs, "jabra").unwrap().name, "Jabra Evolve2 65");
+        assert_eq!(find_device(&devs, "headphones").map(|d| d.name.as_str()), None);
+        assert_eq!(find_device(&devs, "speakers").unwrap().name, "Built-in Audio Analog Stereo");
+        assert_eq!(find_device(&devs, "the tv").unwrap().name, "HDA NVidia HDMI 1");
     }
 
     #[test]

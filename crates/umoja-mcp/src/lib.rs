@@ -21,6 +21,7 @@ pub mod desktop;
 pub mod diagnostics;
 pub mod files;
 pub mod notifications;
+pub mod pulse;
 pub mod server;
 pub mod settings;
 pub mod tool;

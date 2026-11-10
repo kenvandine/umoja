@@ -2416,6 +2416,7 @@ dependencies = [
  "async-channel",
  "gio",
  "glib",
+ "libpulse-binding",
  "serde",
  "serde_json",
  "tracing",
