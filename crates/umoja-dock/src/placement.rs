@@ -93,16 +93,22 @@ impl Docks {
             let windows = docks.shared.windows.clone();
             glib::spawn_future_local(async move {
                 while let Ok(ev) = t.events.recv().await {
-                    match ev {
+                    // Only what the buttons show needs a rebuild: which apps
+                    // have windows, and which is focused. A title change (a
+                    // terminal running a command, a browser tab) doesn't.
+                    let rebuild = match ev {
                         Event::Changed(info) => {
-                            windows.borrow_mut().insert(info.id, info);
+                            let old = windows.borrow_mut().insert(info.id, info.clone());
+                            old.is_none_or(|o| {
+                                o.app_id != info.app_id
+                                    || o.activated != info.activated
+                                    || o.minimized != info.minimized
+                            })
                         }
-                        Event::Closed(id) => {
-                            windows.borrow_mut().remove(&id);
-                        }
-                    }
-                    for d in all() {
-                        d.rebuild();
+                        Event::Closed(id) => windows.borrow_mut().remove(&id).is_some(),
+                    };
+                    if rebuild {
+                        queue_rebuild();
                     }
                     // A new window lands on its monitor's dock promptly.
                     refresh_homes();
@@ -162,6 +168,21 @@ impl Docks {
             self.docks.borrow_mut().push((m, dock));
         }
     }
+}
+
+/// Rebuild every dock once the current burst of events is handled (a focus
+/// change alone sends two: one window loses it, another gains it).
+fn queue_rebuild() {
+    thread_local!(static QUEUED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if QUEUED.with(|q| q.replace(true)) {
+        return;
+    }
+    glib::idle_add_local_once(|| {
+        QUEUED.with(|q| q.set(false));
+        for d in all() {
+            d.rebuild();
+        }
+    });
 }
 
 fn all() -> Vec<Rc<Dock>> {

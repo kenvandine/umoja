@@ -412,19 +412,26 @@ impl Dock {
         let app_c = app.clone();
         let wins_c = wins.clone();
         let weak = Rc::downgrade(self);
-        button.connect_clicked(move |b| match (wins_c.as_slice(), &commands) {
-            ([], _) | (_, None) => launcher::launch(&app_c),
-            // Ubuntu Dock "focus-or-previews": click a focused single window to minimize it.
-            ([w], Some(tx)) => {
-                let _ = tx.try_send(if w.activated {
-                    Command::Minimize(w.id)
-                } else {
-                    Command::Activate(w.id)
-                });
-            }
-            (many, Some(tx)) => {
-                if let Some(d) = weak.upgrade() {
-                    d.show_popover(&previews::popover(many, tx.clone()), b);
+        button.connect_clicked(move |b| {
+            // Titles change without a rebuild: use the windows as they are now.
+            let wins = match weak.upgrade() {
+                Some(d) => d.fresh(&wins_c),
+                None => wins_c.clone(),
+            };
+            match (wins.as_slice(), &commands) {
+                ([], _) | (_, None) => launcher::launch(&app_c),
+                // Ubuntu Dock "focus-or-previews": click a focused single window to minimize it.
+                ([w], Some(tx)) => {
+                    let _ = tx.try_send(if w.activated {
+                        Command::Minimize(w.id)
+                    } else {
+                        Command::Activate(w.id)
+                    });
+                }
+                (many, Some(tx)) => {
+                    if let Some(d) = weak.upgrade() {
+                        d.show_popover(&previews::popover(many, tx.clone()), b);
+                    }
                 }
             }
         });
@@ -436,10 +443,17 @@ impl Dock {
             let (Some(d), Some(widget)) = (weak.upgrade(), g.widget()) else {
                 return;
             };
-            d.show_popover(&d.context_menu(&app_m, pinned, &wins), &widget);
+            d.show_popover(&d.context_menu(&app_m, pinned, &d.fresh(&wins)), &widget);
         });
         button.add_controller(menu_click);
         overlay.upcast()
+    }
+
+    /// `wins` as the tracker knows them now (titles and focus may have
+    /// changed since the button was built; closed windows drop out).
+    fn fresh(&self, wins: &[WindowInfo]) -> Vec<WindowInfo> {
+        let now = self.windows.borrow();
+        wins.iter().filter_map(|w| now.get(&w.id).cloned()).collect()
     }
 
     /// Unread count (top corner) and progress bar (across the bottom of

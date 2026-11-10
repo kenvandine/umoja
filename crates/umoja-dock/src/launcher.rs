@@ -4,10 +4,38 @@ use gio::prelude::*;
 use gtk::gdk;
 use gtk::prelude::*;
 use gtk4 as gtk;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Find the desktop entry for a running window's app-id.
 pub fn app_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
-    umoja_common::apps::app_for_window(app_id)
+    cached(&format!("window:{app_id}"), || umoja_common::apps::app_for_window(app_id))
+}
+
+thread_local! {
+    /// Desktop-file lookups by window app id and by favorite id. A window
+    /// with no direct match (Chrome's alias, Electron apps, games) made
+    /// `app_for_window` read every .desktop file on the system, and the
+    /// dock looked each window up on every rebuild.
+    static CACHE: RefCell<HashMap<String, Option<gio::DesktopAppInfo>>> = {
+        // Installing or removing apps starts over.
+        let monitor = gio::AppInfoMonitor::get();
+        monitor.connect_changed(|_| CACHE.with(|c| c.borrow_mut().clear()));
+        std::mem::forget(monitor);
+        RefCell::default()
+    };
+}
+
+fn cached(
+    key: &str,
+    lookup: impl FnOnce() -> Option<gio::DesktopAppInfo>,
+) -> Option<gio::DesktopAppInfo> {
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(key).cloned()) {
+        return hit;
+    }
+    let found = lookup();
+    CACHE.with(|c| c.borrow_mut().insert(key.to_string(), found.clone()));
+    found
 }
 
 /// Desktop id without the `.desktop` suffix, used as the dock's key.
@@ -42,6 +70,6 @@ pub fn launch_action(info: &gio::DesktopAppInfo, action: &str) {
 pub fn favorites() -> Vec<gio::DesktopAppInfo> {
     umoja_common::apps::favorites()
         .iter()
-        .filter_map(|id| gio::DesktopAppInfo::new(id))
+        .filter_map(|id| cached(&format!("id:{id}"), || gio::DesktopAppInfo::new(id)))
         .collect()
 }
