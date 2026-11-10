@@ -24,14 +24,75 @@ window.umoja-panel button {
   margin: 4px 2px;
   font-weight: bold;
 }
-window.umoja-panel button:hover {
+/* Fitts's law, as gnome-shell: each of the bar's own buttons (not their
+   menus') is a plain rectangle that fills the bar from top to bottom and
+   meets its neighbours, and the outer ones reach the screen's edges, so a
+   click with the pointer pushed against the top or into a corner still
+   lands. The pill you see is the button's child. (Not a transparent border
+   around the pill: GTK hit-tests the rounded border box, which leaves the
+   corners dead.) main.rs and sni.rs drop the boxes' spacing too. The bar
+   is a GtkCenterBox, whose CSS name is box. */
+window.umoja-panel > box > button,
+window.umoja-panel > box > menubutton > button,
+window.umoja-panel > box > box > button,
+window.umoja-panel > box > box > menubutton > button,
+window.umoja-panel > box > box > box > button {
+  margin: 0;
+  padding: 4px;
+  min-height: 0;
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  outline: none;
+}
+window.umoja-panel > box > button:first-child {
+  padding-left: 2px;
+}
+window.umoja-panel > box > box:last-child > menubutton:last-child > button {
+  padding-right: 2px;
+}
+window.umoja-panel > box > button > *,
+window.umoja-panel > box > menubutton > button > *,
+window.umoja-panel > box > box > button > *,
+window.umoja-panel > box > box > menubutton > button > *,
+window.umoja-panel > box > box > box > button > * {
+  border-radius: 999px;
+  padding: 0 12px;
+  min-height: 24px;
+  transition: background-color 150ms ease-out;
+}
+window.umoja-panel > box > button:hover > *,
+window.umoja-panel > box > menubutton > button:hover > *,
+window.umoja-panel > box > box > button:hover > *,
+window.umoja-panel > box > box > menubutton > button:hover > *,
+window.umoja-panel > box > box > box > button:hover > * {
   background-color: alpha(#ffffff, 0.15);
 }
 /* The button whose menu is open stays lit, like gnome-shell's. */
-window.umoja-panel menubutton > button:checked {
+window.umoja-panel > box > button:checked,
+window.umoja-panel > box > menubutton > button:checked,
+window.umoja-panel > box > box > button:checked,
+window.umoja-panel > box > box > menubutton > button:checked,
+window.umoja-panel > box > box > box > button:checked {
+  background: none;
+}
+window.umoja-panel > box > button:checked > *,
+window.umoja-panel > box > menubutton > button:checked > *,
+window.umoja-panel > box > box > button:checked > *,
+window.umoja-panel > box > box > menubutton > button:checked > *,
+window.umoja-panel > box > box > box > button:checked > * {
   background-color: alpha(#ffffff, 0.20);
 }
-window.umoja-panel .tray-item {
+window.umoja-panel > box > button:focus-visible > *,
+window.umoja-panel > box > menubutton > button:focus-visible > *,
+window.umoja-panel > box > box > button:focus-visible > *,
+window.umoja-panel > box > box > menubutton > button:focus-visible > *,
+window.umoja-panel > box > box > box > button:focus-visible > * {
+  box-shadow: inset 0 0 0 2px alpha(@accent_color, 0.5);
+}
+window.umoja-panel > box > box > box > button.tray-item > * {
   padding: 0 6px;
 }
 /* AppIndicator OverlayIcon emblem (e.g. unread mail) and the dot shown for
@@ -589,7 +650,7 @@ window.umoja-curtain {
   background-color: #000000;
 }
 /* Myna dictation: GNOME Shell's privacy-indicator orange while recording. */
-window.umoja-panel button.myna-indicator {
+window.umoja-panel > box > box > button.myna-indicator > * {
   padding: 0 8px;
 }
 window.umoja-panel button.myna-indicator.recording {
@@ -597,13 +658,12 @@ window.umoja-panel button.myna-indicator.recording {
 }
 
 /* gnome-shell's .screen-recording-indicator while recording. */
-window.umoja-panel button.screencast-indicator {
+window.umoja-panel > box > box > button.screencast-indicator > * {
   padding: 0 10px;
-  border-radius: 999px;
   background-color: #c01c28;
   color: #ffffff;
 }
-window.umoja-panel button.screencast-indicator:hover {
+window.umoja-panel > box > box > button.screencast-indicator:hover > * {
   background-color: #d4313d;
 }
 

@@ -115,7 +115,9 @@ fn build(app: &adw::Application) {
     let clock = clock::ClockButton::new(&center).widget();
     bar.set_center_widget(Some(&clock));
 
-    let end = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // No spacing: the buttons' transparent borders (panel.css) fill the gaps,
+    // so a click between two items still hits one of them.
+    let end = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     // gnome-shell's screen recording indicator comes first on the right.
     end.append(&screencast::indicator());
     // Myna's recording indicator, left of the tray like GNOME's privacy

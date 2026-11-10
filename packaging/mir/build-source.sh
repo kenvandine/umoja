@@ -28,4 +28,5 @@ dch --append "Blur the background behind surfaces that ask for it (ext-backgroun
 dch --append "Drop a surface's pending explicit-sync commit when the surface is destroyed (use-after-free that hung the Wayland thread)."
 dch --append "Take control of our own logind session (XDG_SESSION_ID), so a compositor restarted while another VT is active resumes when switched back."
 dch --append "Honour wl_surface.offset and buffer scale for client cursor hotspots, and keep a hidden cursor surface's role, so GTK terminal cursors line up and come back after hiding."
+dch --append "Confine the pointer when it is pushed just past the top or left screen edge, so clicks in the top bar's corners reach it."
 echo "$PWD"

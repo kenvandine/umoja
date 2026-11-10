@@ -1,0 +1,34 @@
+Description: Confine the pointer at the top and left screen edges too
+ SeatInputDeviceTracker::confine_pointer() turned the float cursor position
+ into an integer Point, which truncates towards zero. A position between -1
+ and 0 (relative motion pushing past the top or left edge leaves it there
+ often) became 0, looked inside the screen and was never clamped. Clients
+ then got pointer events at a negative surface position: a click with the
+ pointer pushed into the top-right corner missed the top bar's system menu,
+ and the top-left corner missed the Activities button. Round down instead.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-10
+---
+--- a/src/server/input/seat_input_device_tracker.cpp
++++ b/src/server/input/seat_input_device_tracker.cpp
+@@ -32,6 +32,7 @@
+ #include <linux/input.h>
+ 
+ #include <stdexcept>
++#include <cmath>
+ #include <algorithm>
+ #include <tuple>
+ #include <numeric>
+@@ -237,7 +238,10 @@
+ 
+ void mi::SeatInputDeviceTracker::confine_pointer()
+ {
+-    mir::geometry::Point const old{cursor_x, cursor_y};
++    // Round down, not towards zero: a position just above or left of the
++    // origin (-0.5, say) must count as outside, or it is never confined and
++    // a click at the very top or left edge lands outside every surface.
++    mir::geometry::Point const old{std::floor(cursor_x), std::floor(cursor_y)};
+     auto confined = old;
+     confine_function(confined);
+     if (confined.x != old.x) cursor_x = confined.x.round_to<float>();

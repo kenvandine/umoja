@@ -66,7 +66,7 @@ pub struct Tray {
 impl Tray {
     pub fn start() -> Rc<Self> {
         let tray = Rc::new(Self {
-            container: gtk::Box::new(gtk::Orientation::Horizontal, 2),
+            container: gtk::Box::new(gtk::Orientation::Horizontal, 0),
             items: RefCell::default(),
             connection: RefCell::default(),
         });

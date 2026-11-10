@@ -65,6 +65,12 @@ Umoja PPA:
   now also converted to buffer pixels on scaled outputs. And hiding the
   pointer (VTE does on typing and paste) dropped the cursor surface's role,
   so the pointer stayed invisible until it left the window.
+- `patches/3013_confine-pointer-fractional-edge.patch`: the pointer was
+  confined to the screens after rounding its position towards zero, so a
+  position between -1 and 0 (pushed past the top or left edge) was never
+  clamped and clients got events at a negative surface position. A click
+  with the pointer pushed into the top bar's corners missed the system menu
+  and Activities.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds
