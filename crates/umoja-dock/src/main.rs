@@ -87,7 +87,7 @@ struct Dock {
     monitor: gtk::gdk::Monitor,
     /// Which monitors each window is on (see placement::Homes).
     homes: Rc<placement::Homes>,
-    commands: Option<async_channel::Sender<Command>>,
+    commands: Option<tracker::Commands>,
     /// A menu or window list is open. Rebuilding would destroy the button it
     /// hangs off (and close it), so rebuilds wait until it closes.
     menu_open: Cell<bool>,
@@ -133,7 +133,7 @@ fn build(app: &adw::Application) {
 struct Shared {
     windows: Rc<RefCell<BTreeMap<WindowId, WindowInfo>>>,
     homes: Rc<placement::Homes>,
-    commands: Option<async_channel::Sender<Command>>,
+    commands: Option<tracker::Commands>,
     entries: Rc<launcher_entry::Entries>,
 }
 
