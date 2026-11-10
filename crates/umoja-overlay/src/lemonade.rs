@@ -192,6 +192,9 @@ impl LemonadeClient {
                 .flatten()
         };
         let token = token.map(|t| backend::clean_key(&t));
+        if !self.backend.cloud {
+            lemonade::idle::note_chat_use(&self.model);
+        }
         if self.backend.cloud {
             let shape = token.as_deref().map(backend::key_shape);
             tracing::info!(url = %self.endpoint, key = ?shape, "cloud chat request");
@@ -346,6 +349,8 @@ impl LemonadeClient {
         if self.backend.cloud {
             backend::strip_local_only_fields(&mut messages);
         }
+        // The idle-unload countdown starts when the answer ends, however it ends.
+        let _used = (!self.backend.cloud).then(|| UseMark(self.model.clone()));
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -416,6 +421,15 @@ impl LemonadeClient {
                 ))
                 .await;
         }
+    }
+}
+
+/// Marks the local chat model as used when dropped (see `lemonade::idle`).
+struct UseMark(String);
+
+impl Drop for UseMark {
+    fn drop(&mut self) {
+        lemonade::idle::note_chat_use(&self.0);
     }
 }
 

@@ -336,7 +336,13 @@ fn stream(
         max_tokens,
     };
     let body = serde_json::to_vec(&request).unwrap_or_default();
-    RUNTIME.spawn(async move { run(body, tx).await });
+    let model = request.model.clone();
+    RUNTIME.spawn(async move {
+        lemonade::idle::note_chat_use(&model);
+        run(body, tx).await;
+        // The idle-unload countdown starts when the answer ends.
+        lemonade::idle::note_chat_use(&model);
+    });
     rx
 }
 

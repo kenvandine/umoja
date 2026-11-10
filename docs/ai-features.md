@@ -99,6 +99,11 @@ for something else (a game, a big build, a virtual machine). It loads again
 by itself with your next question, which then takes a few seconds longer.
 You can also ask the assistant to "free up the AI model's memory".
 
+The model also unloads by itself after 10 minutes without a question,
+including questions from notification digests and quick replies. Change the
+wait with `gsettings set org.umoja.shell assistant-idle-unload <minutes>`
+(0 keeps it loaded).
+
 Models are stored in `~/.cache/umoja/lemonade`.
 
 ## Using a cloud model
