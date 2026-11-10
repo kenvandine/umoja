@@ -19,25 +19,28 @@ is open). The full tour takes about three minutes.
 
 ## What it shows
 
+The assistant scenes come first, while viewers are still watching; the
+classic desktop tour follows.
+
 | Scene | How it is driven | Output |
 | --- | --- | --- |
 | `desktop` | opens up to three apps (Files, Text Editor, Calculator...), drags two into a floating layout, sends the third to the next workspace | `images/desktop.png` |
+| `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
 | `tiling` | `org.umoja.Compositor.DragWindow`: drags one window to the left edge and one to the right (halves), one to the top-right corner (quarter), then both back out | `images/tiling-halves.png`, `images/tiling-quarter.png`, `videos/tiling.*` |
+| `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back straight after) | `images/ai-settings.png`, `videos/ai-settings.*` |
+| `ai-install` | "I need VLC" (`--app`): stops at the "Allow the assistant to do this?" dialog and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
+| `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow dialog and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
+| `notifications` | clears the notification list (keep it with `--keep-notifications`), then three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
+| `ai-reply` | "Draft a reply to Priya..." on the demo notification: opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
+| `ai-summary` | "Summarize my recent notifications..." | `images/ai-summary.png`, `videos/ai-summary.*` |
+| `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
 | `app-grid` | `org.umoja.Overlay.Show` | `images/app-grid.png` |
 | `overview` | `Overlay.ToggleOverview`, `ShiftOverview` up/down | `images/overview.png`, `videos/overview.*` |
 | `workspaces` | `org.umoja.Compositor.SwitchWorkspace` there and back | `images/workspace-2.png`, `videos/workspaces.*` |
 | `quick-settings` | `org.umoja.Panel.OpenMenu("quick-settings")` | `images/quick-settings.png` |
-| `notifications` | clears the notification list (keep it with `--keep-notifications`), then three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
 | `shortcuts` | `Overlay.ToggleShortcuts` (Super+/) | `images/shortcuts.png` |
 | `screenshot-ui` | `Overlay.ShowScreenshotUI` / `HideScreenshotUI` | `images/screenshot-ui.png` |
 | `screensaver` | `umoja-screensaver` preview for 7 s | `images/screensaver.png`, `videos/screensaver.*` |
-| `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
-| `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back at the end) | `images/ai-settings.png`, `videos/ai-settings.*` |
-| `ai-install` | "I need VLC" (`--app`): stops at the "Allow the assistant to do this?" dialog and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
-| `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow dialog and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
-| `ai-reply` | "Draft a reply to Priya..." on the demo notification: opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
-| `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
-| `ai-summary` | "Summarize my recent notifications..." | `images/ai-summary.png`, `videos/ai-summary.*` |
 
 The assistant uses whatever backend you've set up (local or cloud;
 `--local` forces the local model). Each question is typed into the search

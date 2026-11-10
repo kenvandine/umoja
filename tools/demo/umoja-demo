@@ -125,18 +125,20 @@ DEMO_NOTIFICATIONS = [
 # Night Light, toggled by the settings ask and put back afterwards.
 NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
 
+# The assistant comes first, while viewers are still watching; the classic
+# desktop tour follows. ("assistant" in --only/--skip means all ai-* scenes.)
+# ai-reply and ai-summary need the notifications scene before them.
 SCENES = [
-    "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings",
-    "notifications", "shortcuts", "screenshot-ui", "screensaver",
-    # The assistant, one ask per scene ("assistant" in --only/--skip means all).
-    "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-reply",
-    "ai-troubleshoot", "ai-summary",
+    "desktop", "ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates",
+    "notifications", "ai-reply", "ai-summary", "ai-troubleshoot",
+    "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
+    "screenshot-ui", "screensaver",
 ]
 AI_SCENES = [s for s in SCENES if s.startswith("ai-")]
 
 # The trailer: these clips in this order, each with its caption.
-TRAILER = ["ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates", "notifications",
-           "ai-reply", "ai-summary", "overview", "workspaces", "ai-troubleshoot", "screensaver"]
+TRAILER = ["ai-tiling", "ai-settings", "ai-install", "ai-updates", "notifications", "ai-reply",
+           "ai-summary", "ai-troubleshoot", "tiling", "overview", "workspaces", "screensaver"]
 
 
 class Stop(Exception):
@@ -670,15 +672,7 @@ class Demo:
                               GLib.Variant("(tu)", (self.terminal, self.start_workspace)), quiet=True)
             time.sleep(0.5)
             self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.terminal,)), quiet=True)
-        if self.night_light is not None:
-            nl = settings(NIGHT_LIGHT[0])
-            nl.set_boolean(NIGHT_LIGHT[1], self.night_light)
-            Gio.Settings.sync()
-        if self.dark is not None:
-            s = settings("org.gnome.desktop.interface")
-            s.set_string("color-scheme", self.dark[0])
-            s.set_string("gtk-theme", self.dark[1])
-            Gio.Settings.sync()
+        self.restore_style()
         if self.banners is False:
             s = settings("org.gnome.desktop.notifications")
             s.set_boolean("show-banners", False)
@@ -1061,6 +1055,21 @@ class Demo:
         q = "Switch to dark style and turn on Night Light"
         self.ask("ai-settings", q, "Settings in plain words: dark style and Night Light, done in one ask.",
                  expect_steps=2)
+        # The rest of the tour in the usual style, without Night Light's tint.
+        self.restore_style()
+        self.wait(1.5)
+
+    def restore_style(self):
+        """Put style and Night Light back as they were before ai-settings."""
+        if self.night_light is not None:
+            nl = settings(NIGHT_LIGHT[0])
+            nl.set_boolean(NIGHT_LIGHT[1], self.night_light)
+            Gio.Settings.sync()
+        if self.dark is not None:
+            s = settings("org.gnome.desktop.interface")
+            s.set_string("color-scheme", self.dark[0])
+            s.set_string("gtk-theme", self.dark[1])
+            Gio.Settings.sync()
 
     def scene_ai_install(self):
         self.ask("ai-install", f"I need {self.opts.app}",
