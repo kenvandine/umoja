@@ -9,7 +9,7 @@ sudo apt install ffmpeg          # optional: GIFs + MP4s (otherwise clips stay .
 tools/demo/umoja-demo            # from a terminal inside your Umoja session
 ```
 
-It minimizes the terminal you started it from (and brings it back at the
+Park the mouse pointer in a corner first: the clips show it. It minimizes the terminal you started it from (and brings it back at the
 end), and keeps every window floating, never maximized or full screen, so the
 wallpaper shows. Keep your hands off the keyboard and mouse once the countdown ends (a real
 pointer move ends the screensaver preview early, and clicks land on whatever
@@ -30,11 +30,11 @@ is open). The full tour takes about three minutes.
 | `screenshot-ui` | `Overlay.ShowScreenshotUI` / `HideScreenshotUI` | `images/screenshot-ui.png` |
 | `screensaver` | `umoja-screensaver` preview for 7 s | `images/screensaver.png`, `videos/screensaver.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
-| `ai-settings` | "Switch to dark style and turn on Night Light" (both put back at the end) | `images/ai-settings.png`, `images/ai-settings-after.png`, `videos/ai-settings.*` |
+| `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back at the end) | `images/ai-settings.png`, `images/ai-settings-after.png`, `videos/ai-settings.*` |
 | `ai-install` | "I need VLC" (`--app`): stops at the "Allow the assistant to do this?" dialog and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
 | `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow dialog and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
 | `ai-reply` | "Draft a reply to Priya..." on the demo notification: opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
-| `ai-troubleshoot` | "Why is my computer running slow?" (answered from a live system report) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
+| `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
 | `ai-summary` | "Summarize my recent notifications..." | `images/ai-summary.png`, `videos/ai-summary.*` |
 
 The assistant uses whatever backend you've set up (local or cloud;
@@ -97,6 +97,7 @@ change). A rerun replaces only the files the previous run wrote.
 --output eDP-1        monitor to capture (default: the primary one)
 --no-video            stills only
 --no-apps             don't open any apps
+--no-demo-folder      don't create ~/Umoja Tour (a tidy folder Files and Text Editor show)
 --keep-terminal       don't minimize the terminal the tour runs in
 --pace 1.5            stretch every pause (slow machine, slow model)
 --dry-run             print the steps without touching the desktop

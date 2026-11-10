@@ -28,6 +28,12 @@ pub fn button() -> gtk::MenuButton {
         .build();
     crate::menu_gap::below_bar(&popover);
     umoja_common::blur::blur_behind(&popover);
+    // Take the keyboard while open, like the date menu and gnome-shell's
+    // Quick Settings (arrow keys, Escape). Without it a menu opened over
+    // D-Bus (org.umoja.Panel.OpenMenu: the top-edge swipe, tools/demo)
+    // had no grab and closed again at once.
+    popover.connect_show(|p| crate::notifications::want_keyboard(p, true));
+    popover.connect_hide(|p| crate::notifications::want_keyboard(p, false));
     let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     icons.add_css_class("system-status");
     let (net, vpn) = network::indicators();
