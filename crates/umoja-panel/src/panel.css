@@ -495,25 +495,36 @@ window.umoja-quick-reply {
   color: alpha(currentColor, 0.5);
 }
 
-/* ---- PolicyKit authentication dialog, like gnome-shell's modal ---- */
-window.umoja-polkit {
+/* ---- Modal dialogs: PolicyKit authentication and Power Off ----
+   Like gnome-shell's modal dialogs (endSessionDialog, polkit's auth
+   dialog), drawn as our dark shell card over a dimmed screen. The card is
+   see-through, so like every shell surface with text on it, it blurs what
+   is behind it (backdrop-filter; see umoja_common::blur). */
+window.umoja-polkit,
+window.umoja-end-session {
   background-color: transparent;
 }
-.umoja-polkit .polkit-backdrop {
+.umoja-polkit .polkit-backdrop,
+.umoja-end-session .end-session-backdrop {
   background-color: alpha(#000000, 0.45);
 }
-.umoja-polkit .polkit-card {
+.umoja-polkit .polkit-card,
+.umoja-end-session .end-session-card {
   padding: 28px 32px 24px 32px;
   border-radius: 24px;
-  background-color: @dialog_bg_color;
-  color: @dialog_fg_color;
-  box-shadow: 0 8px 32px alpha(#000000, 0.35), 0 0 0 1px alpha(#000000, 0.06);
+  background-color: @shell_bg;
+  backdrop-filter: blur(12px);
+  color: #ffffff;
+  border: 1px solid @shell_hairline;
+  box-shadow: 0 10px 28px alpha(#000000, 0.30);
 }
-.umoja-polkit .polkit-title {
+.umoja-polkit .polkit-title,
+.umoja-end-session .end-session-title {
   font-size: 20px;
   font-weight: 800;
 }
-.umoja-polkit .polkit-body {
+.umoja-polkit .polkit-body,
+.umoja-end-session .end-session-body {
   opacity: 0.85;
 }
 .umoja-polkit .polkit-user {
@@ -523,37 +534,14 @@ window.umoja-polkit {
   border-radius: 999px;
   min-height: 40px;
   padding: 0 12px;
+  color: #ffffff;
+  background-color: @shell_fill;
 }
-.umoja-polkit .polkit-message {
-  color: @error_color;
-}
+.umoja-polkit .polkit-message,
 .umoja-polkit .polkit-message:backdrop {
   color: @error_color;
 }
-
-/* Power Off confirmation: gnome-shell's end-session dialog, drawn as
-   one of our dark shell cards. */
-window.umoja-end-session {
-  background-color: transparent;
-}
-.umoja-end-session .end-session-backdrop {
-  background-color: alpha(#000000, 0.45);
-}
-.umoja-end-session .end-session-card {
-  padding: 28px 32px 24px 32px;
-  border-radius: 24px;
-  background-color: @shell_bg;
-  color: #ffffff;
-  border: 1px solid @shell_hairline;
-  box-shadow: 0 10px 28px alpha(#000000, 0.30);
-}
-.umoja-end-session .end-session-title {
-  font-size: 20px;
-  font-weight: 800;
-}
-.umoja-end-session .end-session-body {
-  opacity: 0.85;
-}
+.umoja-polkit button.pill,
 .umoja-end-session button.pill {
   color: #ffffff;
   background-color: @shell_fill;
@@ -561,18 +549,26 @@ window.umoja-end-session {
   font-weight: 700;
   box-shadow: none;
 }
+.umoja-polkit button.pill:hover,
 .umoja-end-session button.pill:hover {
   background-color: @shell_fill_hover;
 }
+.umoja-polkit button.pill:active,
 .umoja-end-session button.pill:active {
   background-color: @shell_fill_active;
 }
+.umoja-polkit button.pill.suggested-action,
 .umoja-end-session button.pill.suggested-action {
   color: @accent_fg_color;
   background-color: @accent_bg_color;
 }
+.umoja-polkit button.pill.suggested-action:hover,
 .umoja-end-session button.pill.suggested-action:hover {
   background-color: mix(@accent_bg_color, #ffffff, 0.1);
+}
+.umoja-polkit button.pill.suggested-action:disabled {
+  background-color: alpha(currentColor, 0.1);
+  color: alpha(#ffffff, 0.5);
 }
 
 /* GNOME 45+ workspace indicator in the Activities button. */
@@ -636,4 +632,12 @@ window.umoja-osd {
 .osd-window:dir(rtl) .osd-level {
   margin-right: 0;
   margin-left: 6px;
+}
+
+/* Tooltips (tray icons, Quick Settings): the shell card, blurred behind. */
+tooltip.background {
+  background-color: @shell_bg;
+  backdrop-filter: blur(12px);
+  color: #ffffff;
+  border: 1px solid @shell_hairline;
 }

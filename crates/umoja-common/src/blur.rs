@@ -1,7 +1,9 @@
 //! Compositor blur behind shell surfaces (`ext-background-effect-v1`).
 //!
-//! The panel, its menus, notification bubbles and the OSD, and the dock and
-//! its menus are slightly translucent. [`blur_behind`] asks the compositor
+//! The panel, its menus, notification bubbles and the OSD, the Power Off
+//! and PolicyKit dialogs, Alt+Tab, and the dock and its menus are slightly
+//! translucent. Design rule: any shell surface that shows text on a
+//! see-through background blurs what is behind it. [`blur_behind`] asks the compositor
 //! to blur whatever is behind such a window or popover, so it reads as
 //! frosted glass. umoja-mir's patched Mir does the blurring (see
 //! `packaging/mir/patches/3004_background-blur.patch`): it blurs only where

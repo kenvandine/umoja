@@ -613,6 +613,8 @@ impl Switcher {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_namespace("umoja-switcher");
+        // The see-through list blurs what is behind it, like the bubbles.
+        umoja_common::blur::blur_behind(&window);
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_exclusive_zone(-1);
         let list = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -822,6 +824,7 @@ impl WorkspacePopup {
         window.set_exclusive_zone(0);
         window.set_anchor(Edge::Bottom, true);
         window.set_margin(Edge::Bottom, 120);
+        umoja_common::blur::blur_behind(&window);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("workspace-switcher");
         window.set_child(Some(&row));

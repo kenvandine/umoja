@@ -125,3 +125,11 @@ progressbar.dock-progress > trough > progress {
   background-color: alpha(@accent_bg_color, 0.30);
   animation: dock-urgent 0.8s ease-in-out 6 alternate;
 }
+
+/* App-name tooltips: the shell card, blurred behind like the bubbles. */
+tooltip.background {
+  background-color: @shell_bg;
+  backdrop-filter: blur(12px);
+  color: #ffffff;
+  border: 1px solid @shell_hairline;
+}

@@ -174,9 +174,13 @@ window.umoja-chrome {
 .switcher-popup {
   margin: 0;
 }
+/* The shell's see-through card, so it blurs what is behind it like the
+   notification bubbles (every shell surface with text does). */
 .switcher-list {
-  background-color: #2e2e32;
+  background-color: rgba(22, 22, 24, 0.66);
+  backdrop-filter: blur(12px);
   color: #ffffff;
+  border: 1px solid alpha(#ffffff, 0.08);
   border-radius: 24px;
   padding: 12px;
   box-shadow: 0 2px 12px alpha(#000000, 0.45);
@@ -294,7 +298,9 @@ window.umoja-spread entry {
 
 /* Workspace switcher popup, after gnome-shell's .workspace-switcher. */
 .workspace-switcher {
-  background-color: alpha(#2e2e32, 0.95);
+  background-color: rgba(22, 22, 24, 0.66);
+  backdrop-filter: blur(12px);
+  border: 1px solid alpha(#ffffff, 0.08);
   border-radius: 999px;
   padding: 12px;
 }

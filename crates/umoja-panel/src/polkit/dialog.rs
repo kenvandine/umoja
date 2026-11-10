@@ -50,6 +50,8 @@ impl Dialog {
         }
         window.set_exclusive_zone(-1);
         window.set_keyboard_mode(KeyboardMode::Exclusive);
+        // The card is see-through: blur what is behind it, like the bubbles.
+        umoja_common::blur::blur_behind(&window);
 
         let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
