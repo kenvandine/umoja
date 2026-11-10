@@ -56,6 +56,14 @@ fn main() -> glib::ExitCode {
     // Map nothing while the screen is blanked: Mir has no active output
     // then (see umoja_common::screen).
     app.connect_activate(|app| {
+        // Own org.kde.StatusNotifierWatcher straight away, before waiting
+        // for the screen and monitors (that took ~11s after a compositor
+        // restart). Electron apps (Claude Desktop, Fluxer, Discord) look for
+        // the watcher once when they start and never retry, and autostart
+        // apps start as soon as umoja-tray-ready.service sees the name.
+        TRAY.with(|t| {
+            t.get_or_init(sni::Tray::start);
+        });
         let a = app.clone();
         umoja_common::screen::when_on(app, move || build(&a));
     });
@@ -81,6 +89,8 @@ thread_local! {
     static NOTIFICATIONS: std::cell::OnceCell<std::rc::Rc<notifications::Center>> =
         const { std::cell::OnceCell::new() };
     static MYNA: std::cell::OnceCell<std::rc::Rc<myna::Myna>> =
+        const { std::cell::OnceCell::new() };
+    static TRAY: std::cell::OnceCell<std::rc::Rc<sni::Tray>> =
         const { std::cell::OnceCell::new() };
 }
 
@@ -124,7 +134,7 @@ fn build(app: &adw::Application) {
     // Myna's recording indicator, left of the tray like GNOME's privacy
     // indicators; the same object hosts Myna's HUD pill.
     end.append(&MYNA.with(|m| m.get_or_init(myna::Myna::start).widget()));
-    end.append(&sni::Tray::start().widget());
+    end.append(&TRAY.with(|t| t.get_or_init(sni::Tray::start).widget()));
     let quick = quick_settings::button();
     end.append(&quick);
     if let Some(calendar) = clock.downcast_ref::<gtk::MenuButton>() {

@@ -1,7 +1,11 @@
 [Unit]
 Description=Portal service (Umoja implementation)
 PartOf=graphical-session.target
-After=graphical-session.target
+# umoja-session.target Wants= us; without an explicit order between us it
+# would be ordered After= us by default, while we are after
+# graphical-session.target, which is after it: systemd broke that loop by
+# dropping this portal at login.
+After=graphical-session.target umoja-session.target
 
 [Service]
 Type=dbus
