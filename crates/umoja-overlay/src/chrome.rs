@@ -88,22 +88,10 @@ fn chrome_window(app: &adw::Application, layer: Layer, namespace: &str) -> gtk::
     window.set_namespace(namespace);
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_exclusive_zone(-1);
-    // GtkWindow puts the input region back to the whole surface whenever it
-    // is allocated a new size (the picker grows and moves on each drag), so
-    // an empty region set once on realize didn't last: a picker surface
-    // left over at the top of a monitor then swallowed clicks meant for the
-    // windows under it (Chrome's tabs and title bar). Clear it after every
-    // paint, as the notification bubbles do.
     window.connect_realize(|w| {
-        let clear = |w: &gtk::ApplicationWindow| {
-            if let Some(s) = w.surface() {
-                s.set_input_region(&gtk::cairo::Region::create());
-            }
-        };
-        clear(w);
-        let Some(clock) = w.frame_clock() else { return };
-        let w = w.clone();
-        clock.connect_after_paint(move |_| clear(&w));
+        if let Some(s) = w.surface() {
+            s.set_input_region(&gtk::cairo::Region::create());
+        }
     });
     window
 }
