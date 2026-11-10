@@ -34,6 +34,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -96,6 +98,65 @@ bool is_app_window(WindowInfo const& info) {
         return false;
     }
     return info.depth_layer() == mir_depth_layer_application && !info.parent();
+}
+
+// The app id the shell (Alt+Tab, overview) looks up a .desktop file by.
+//
+// info.application_id() is the client's raw app id. For a snap that often
+// names no desktop file: Electron snaps report their package.json
+// desktopName ("com.Mattermost.Desktop"), while snapd installs the entry as
+// mattermost-desktop_mattermost-desktop.desktop, so Alt+Tab drew no icon.
+// Mir's foreign-toplevel (what the dock sees) already maps snap clients to
+// their desktop file by AppArmor label; do the same here, so both agree.
+std::string snap_desktop_id(pid_t pid) {
+    if (pid <= 0) return {};
+    std::string label;
+    for (char const* attr : {"/attr/apparmor/current", "/attr/current"}) {
+        std::ifstream in{"/proc/" + std::to_string(pid) + attr};
+        if (in && std::getline(in, label) && !label.empty()) break;
+        label.clear();
+    }
+    // "snap.<instance>.<app> (enforce)"; hooks are snap.<instance>.hook.<name>.
+    label = label.substr(0, label.find(' '));
+    if (label.rfind("snap.", 0) != 0) return {};
+    std::string const rest = label.substr(5);
+    auto const dot = rest.find('.');
+    if (dot == std::string::npos || rest.find('.', dot + 1) != std::string::npos) return {};
+    std::string const instance = rest.substr(0, dot);
+    std::string const app = rest.substr(dot + 1);
+    if (instance.empty() || app.empty()) return {};
+
+    std::filesystem::path const dir{"/var/lib/snapd/desktop/applications"};
+    std::error_code ec;
+    std::string const id = instance + "_" + app;
+    if (std::filesystem::exists(dir / (id + ".desktop"), ec)) return id;
+    // The desktop file is named after the snap's meta/gui file, which need
+    // not match the app name: find the one whose X-SnapAppName is this app.
+    std::string const prefix = instance + "_";
+    for (auto const& entry : std::filesystem::directory_iterator{dir, ec}) {
+        std::string const name = entry.path().filename().string();
+        if (name.rfind(prefix, 0) != 0 || entry.path().extension() != ".desktop") continue;
+        std::ifstream in{entry.path()};
+        for (std::string line; std::getline(in, line);) {
+            if (line == "X-SnapAppName=" + app) return entry.path().stem().string();
+            if (line.rfind("[Desktop Action", 0) == 0) break;
+        }
+    }
+    return {};
+}
+
+std::string shell_app_id(WindowInfo const& info) {
+    // Looked up once per client (keyed with the raw id too, so a reused pid
+    // is unlikely to inherit a stale answer): the label doesn't change.
+    static std::map<std::pair<pid_t, std::string>, std::string> cache;
+    pid_t const pid = miral::pid_of(info.window().application());
+    auto const key = std::make_pair(pid, info.application_id());
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        if (cache.size() > 256) cache.clear();
+        it = cache.emplace(key, snap_desktop_id(pid)).first;
+    }
+    return it->second.empty() ? info.application_id() : it->second;
 }
 
 // Window-management tracing, for debugging how apps (Wine games, ...) ask
@@ -621,7 +682,7 @@ public:
         auto const& order = by_mru ? mru : stacking;
         for (auto const& w : order) {
             auto const& info = tools.info_for(w);
-            std::string const app = info.application_id();
+            std::string const app = shell_app_id(info);
             std::string const title = info.name();
             uint32_t flags = 0;
             if (w == active) flags |= UMOJA_WINDOW_FOCUSED;
@@ -880,7 +941,7 @@ private:
         std::vector<UmojaSwitchWindow> entries;
         for (auto const& w : list) {
             auto const& info = tools.info_for(w);
-            strings.push_back(info.application_id());
+            strings.push_back(shell_app_id(info));
             strings.push_back(info.name());
         }
         for (size_t i = 0; i < list.size(); ++i)
