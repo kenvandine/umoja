@@ -2,6 +2,6 @@
   "ctx_size": 16384,
   "max_loaded_models": 1,
   "llamacpp": {
-    "args": "--parallel 1"
+    "args": "--parallel 1 -fa on -ctk q8_0 -ctv q8_0"
   }
 }
