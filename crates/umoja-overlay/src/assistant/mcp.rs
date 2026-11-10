@@ -305,11 +305,13 @@ thread_local! {
 /// the overlay's own tools.
 pub async fn shared() -> Option<Rc<McpClient>> {
     if let Some(c) = SHARED.with(|s| s.borrow().clone()).filter(|c| c.is_alive()) {
+        stop_when_idle();
         return Some(c);
     }
     match McpClient::start(&[]).await {
         Ok(c) => {
             SHARED.with(|s| *s.borrow_mut() = Some(c.clone()));
+            stop_when_idle();
             Some(c)
         }
         Err(e) => {
@@ -317,4 +319,37 @@ pub async fn shared() -> Option<Rc<McpClient>> {
             None
         }
     }
+}
+
+/// The server is stopped after this long without a question (it starts
+/// again with the next one, in well under a second).
+const IDLE_STOP: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// (Re)arm the idle stop: once nothing has asked for the server for
+/// [`IDLE_STOP`] and no answer still holds it, let it go.
+fn stop_when_idle() {
+    thread_local! {
+        static TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
+    }
+    TIMER.with(|t| {
+        if let Some(old) = t.borrow_mut().take() {
+            old.remove();
+        }
+        let id = glib::timeout_add_local_once(IDLE_STOP, || {
+            TIMER.with(|t| t.borrow_mut().take());
+            let idle = SHARED.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .is_some_and(|c| Rc::strong_count(c) == 1 && c.pending.borrow().is_empty())
+            });
+            if idle {
+                tracing::info!("stopping the idle umoja-mcp");
+                // Dropping the last reference stops the process.
+                SHARED.with(|s| s.borrow_mut().take());
+            } else {
+                stop_when_idle();
+            }
+        });
+        *t.borrow_mut() = Some(id);
+    });
 }
