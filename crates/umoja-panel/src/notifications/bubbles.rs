@@ -83,6 +83,7 @@ impl Bubbles {
                 let Some(clock) = w.frame_clock() else { return };
                 let w = w.clone();
                 let column = column.clone();
+                let last = std::cell::Cell::new(None::<(i32, i32, i32, i32)>);
                 clock.connect_after_paint(move |_| {
                     let Some(surface) = w.surface() else { return };
                     let rect = column
@@ -96,7 +97,18 @@ impl Bubbles {
                             )
                         })
                         .unwrap_or_else(|| gtk::cairo::RectangleInt::new(0, 0, 0, 0));
+                    let key = (rect.x(), rect.y(), rect.width(), rect.height());
+                    if last.replace(Some(key)) == Some(key) {
+                        return;
+                    }
                     surface.set_input_region(&gtk::cairo::Region::create_rectangle(&rect));
+                    // GTK only sends the new region with the next commit, and
+                    // after the last bubble goes nothing else draws: the
+                    // surface kept the old bubble's input region, an
+                    // invisible patch under the top bar that ate clicks
+                    // (Chrome's tabs and titlebar beneath it). One more frame
+                    // commits it.
+                    w.queue_draw();
                 });
             });
         }
