@@ -584,6 +584,7 @@ impl Overlay {
         self.generation.set(self.generation.get() + 1);
         // A question still waiting for Allow is declined, so the dialog
         // can't come back (and be allowed) on a later, unrelated question.
+        let had_dialog = self.confirm_dialog.borrow().is_some();
         if let Some(d) = self.confirm_dialog.take() {
             d.force_close();
         }
@@ -619,10 +620,20 @@ impl Overlay {
             let id2 = id.clone();
             let c2 = clock.clone();
             let w = self.window.clone();
+            // Its close animation, even after force_close().
+            let settled_at = glib::monotonic_time() + if had_dialog { 400_000 } else { 0 };
             *id.borrow_mut() = Some(clock.connect_after_paint(move |_| {
                 paints.set(paints.get() + 1);
-                if paints.get() < 2 {
-                    w.queue_draw();
+                // An Allow dialog closed above fades out over a few frames:
+                // keep painting until it is gone, or its last frame is the
+                // one left behind.
+                if paints.get() < 2
+                    || w.visible_dialog().is_some()
+                    || glib::monotonic_time() < settled_at
+                {
+                    // Not from inside the paint itself.
+                    let w = w.clone();
+                    glib::idle_add_local_once(move || w.queue_draw());
                     return;
                 }
                 if let Some(h) = id2.borrow_mut().take() {
@@ -633,7 +644,8 @@ impl Overlay {
             self.window.queue_draw();
         }
         // In case no frame comes (the surface isn't being drawn).
-        glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || finish());
+        let wait = if had_dialog { 700 } else { 200 };
+        glib::timeout_add_local_once(std::time::Duration::from_millis(wait), move || finish());
     }
 
     pub fn toggle(self: &Rc<Self>) {

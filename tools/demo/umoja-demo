@@ -1181,7 +1181,11 @@ class Demo:
         font = str(plain)
         fit = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p")
-        enc = ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"]
+        # One frame rate and time base for every segment: concat -c copy
+        # keeps each file's timestamps, and the title card (1/30 time base)
+        # played for two frames among clips with another one.
+        enc = ["-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+               "-pix_fmt", "yuv420p", "-video_track_timescale", "15360"]
         ff = font.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         segs = []
         # Title card.
