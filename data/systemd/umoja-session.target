@@ -20,6 +20,10 @@ Before=graphical-session.target
 # X-GNOME-Autostart-enabled, X-GNOME-Autostart-Phase and X-systemd-skip.
 # Snap apps are started by /etc/xdg/autostart/snap-userd-autostart.desktop.
 # The units are PartOf=graphical-session.target, so they stop at logout.
+# A target is ordered After= everything it Wants unless told otherwise, and
+# the autostart units are After=graphical-session.target, which is after
+# us: that loop made systemd drop the autostart job. Order it after us.
 Wants=xdg-desktop-autostart.target
+Before=xdg-desktop-autostart.target
 Wants=umoja-panel.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service
 StopWhenUnneeded=no
