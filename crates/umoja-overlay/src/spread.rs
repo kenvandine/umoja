@@ -208,6 +208,8 @@ pub struct Spread {
     snap_timer: RefCell<Option<glib::SourceId>>,
     /// When the last background capture ran (monotonic µs).
     last_snap: Cell<i64>,
+    /// The windows on screen at the last background capture (`layout_key`).
+    last_snap_layout: RefCell<Vec<(u64, i32, i32, i32, i32)>>,
     last_scroll: Cell<i64>,
     scroll_acc: Cell<f64>,
     drag: RefCell<Option<Drag>>,
@@ -283,6 +285,7 @@ impl Spread {
             refresh_pending: Cell::new(false),
             snap_timer: RefCell::default(),
             last_snap: Cell::new(0),
+            last_snap_layout: RefCell::default(),
             last_scroll: Cell::new(0),
             scroll_acc: Cell::new(0.0),
             drag: RefCell::default(),
@@ -537,10 +540,24 @@ impl Spread {
         if !here {
             return;
         }
+        // Focus moved between windows, or a window on another workspace
+        // changed: what is on screen is what the last capture saw, and every
+        // window it could see already has a preview. Capturing again costs
+        // the compositor a full-screen render for nothing.
+        let layout = layout_key(&state);
+        if *self.last_snap_layout.borrow() == layout && {
+            let previews = self.previews.borrow();
+            uncovered(&state).all(|w| previews.contains_key(&w.id))
+        } {
+            return;
+        }
         let frame = capture(SNAP_SCALE).await;
         // Something of ours may have come up meanwhile (Super pressed).
         if self.opening.get() || self.is_visible() || self.own_window_shown() {
             return;
+        }
+        if frame.is_some() {
+            *self.last_snap_layout.borrow_mut() = layout;
         }
         self.remember_previews(&state, frame.as_ref());
     }
@@ -651,16 +668,7 @@ impl Spread {
         previews.retain(|id, _| state.windows.iter().any(|w| w.id == *id));
         let Some(frame) = frame else { return };
         let origin = layout_origin();
-        let here: Vec<&Win> = state
-            .windows
-            .iter()
-            .filter(|w| w.flags & FLAG_CURRENT_WORKSPACE != 0 && w.flags & FLAG_MINIMIZED == 0)
-            .collect();
-        for (i, w) in here.iter().enumerate() {
-            let covered = here[i + 1..].iter().any(|o| o.intersects(w));
-            if covered {
-                continue;
-            }
+        for w in uncovered(state) {
             if let Some(t) = crop(frame, w, origin) {
                 previews.insert(w.id, t);
             }
@@ -1321,6 +1329,32 @@ pub async fn fetch_windows() -> Vec<Win> {
             },
         })
         .collect()
+}
+
+/// The windows a background capture would see, bottom to top, with where
+/// they are: the uncovered ones get a preview from it.
+fn layout_key(state: &State) -> Vec<(u64, i32, i32, i32, i32)> {
+    state
+        .windows
+        .iter()
+        .filter(|w| w.flags & FLAG_CURRENT_WORKSPACE != 0 && w.flags & FLAG_MINIMIZED == 0)
+        .map(|w| (w.id, w.x, w.y, w.w, w.h))
+        .collect()
+}
+
+/// Windows on the current workspace that no window above overlaps: a
+/// screen capture shows all of them.
+fn uncovered(state: &State) -> impl Iterator<Item = &Win> {
+    let here: Vec<&Win> = state
+        .windows
+        .iter()
+        .filter(|w| w.flags & FLAG_CURRENT_WORKSPACE != 0 && w.flags & FLAG_MINIMIZED == 0)
+        .collect();
+    let open: Vec<&Win> = (0..here.len())
+        .filter(|&i| !here[i + 1..].iter().any(|o| o.intersects(here[i])))
+        .map(|i| here[i])
+        .collect();
+    open.into_iter()
 }
 
 async fn fetch_state() -> State {

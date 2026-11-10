@@ -31,4 +31,5 @@ dch --append "Honour wl_surface.offset and buffer scale for client cursor hotspo
 dch --append "Confine the pointer when it is pushed just past the top or left screen edge, so clicks in the top bar's corners reach it."
 dch --append "wlr-screencopy: read a capture_output_region region as output-local, as the protocol says, so recording part of a monitor not at the layout origin is not cropped."
 dch --append "Reuse the cross-GPU CPU copy buffers instead of allocating one per frame, and log the copy volume in Umoja's window debug mode."
+dch --append "Screencopy: keep a renderer per capture size, so capturing monitors of different sizes in turn does not rebuild the GL renderer every time."
 echo "$PWD"

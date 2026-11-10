@@ -80,6 +80,11 @@ Umoja PPA:
   output's position), but Mir clipped it against the output in layout
   coordinates, so recording a region on a monitor right of another came out
   cropped to the left part of that monitor.
+- `patches/3015_screencopy-renderer-per-size.patch`: the screen shooter
+  kept one GL renderer, for the last capture's size, so grim capturing two
+  monitors of different sizes built two new renderers (shaders, blur
+  targets) for every screenshot. The overview's background preview refresh
+  did that every 10 seconds. It now keeps one renderer per size (up to 4).
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

@@ -1,0 +1,102 @@
+Description: Keep a screencopy renderer per capture size
+ BasicScreenShooter kept one Renderer, for the size of the last capture.
+ grim and similar wlr-screencopy clients capture each output in turn, so
+ with two monitors of different sizes every screenshot built two new GL
+ renderers (shader compiles, blur targets) and threw them away again. The
+ Umoja overview refreshes its window previews this way in the background,
+ which rebuilt a pair of renderers every 10 seconds. Keep up to four, one
+ per size, most recently used first.
+Author: Umoja
+Forwarded: no
+
+diff --git src/server/compositor/basic_screen_shooter.h src/server/compositor/basic_screen_shooter.h
+--- a/src/server/compositor/basic_screen_shooter.h
++++ b/src/server/compositor/basic_screen_shooter.h
+@@ -24,6 +24,7 @@
+ #include <mir/time/clock.h>
+ 
+ #include <mutex>
++#include <vector>
+ #include <glm/glm.hpp>
+ 
+ namespace mir
+@@ -96,13 +97,17 @@
+         std::shared_ptr<renderer::RendererFactory> const renderer_factory;
+ 
+         /* The Renderer instantiation is tied to a particular output size, and
+-         * requires enough setup to make it worth keeping around as a consumer
+-         * is likely to be taking screenshots of consistent size
++         * requires enough setup to make it worth keeping around. A consumer
++         * capturing every output in turn (as grim does)
++         * alternates between sizes, so keep one per size, most recent first.
+          */
+-        std::unique_ptr<renderer::Renderer> current_renderer;
+-        geometry::Size last_rendered_size;
+-
+-        std::unique_ptr<graphics::DisplaySink> offscreen_sink;
++        struct SizedRenderer
++        {
++            geometry::Size size;
++            std::unique_ptr<renderer::Renderer> renderer;
++            std::unique_ptr<graphics::DisplaySink> sink;
++        };
++        std::vector<SizedRenderer> renderers;
+         std::shared_ptr<OneShotBufferDisplayProvider> const output;
+         std::shared_ptr<mir::graphics::GLConfig> config;
+         std::shared_ptr<graphics::OutputFilter> const output_filter;
+diff --git src/server/compositor/basic_screen_shooter.cpp src/server/compositor/basic_screen_shooter.cpp
+--- a/src/server/compositor/basic_screen_shooter.cpp
++++ b/src/server/compositor/basic_screen_shooter.cpp
+@@ -30,6 +30,8 @@
+ #include <mir/graphics/display_sink.h>
+ #include <mir/graphics/output_filter.h>
+ 
++#include <algorithm>
++
+ namespace mc = mir::compositor;
+ namespace mr = mir::renderer;
+ namespace mg = mir::graphics;
+@@ -165,7 +167,6 @@
+       clock{clock},
+       render_provider{std::move(render_provider)},
+       renderer_factory{std::move(renderer_factory)},
+-      last_rendered_size{0, 0},
+       output{std::make_shared<OneShotBufferDisplayProvider>()},
+       config{config},
+       output_filter{output_filter},
+@@ -222,15 +223,29 @@
+         BOOST_THROW_EXCEPTION((std::runtime_error{"Attempt to capture to a zero-sized buffer"}));
+     }
+     output->set_next_buffer(std::move(buffer));
+-    if (buffer_size != last_rendered_size)
++
++    // One Renderer per size, so capturing each output in turn doesn't build
++    // (compile shaders, set up blur targets for) a new Renderer every time.
++    std::size_t constexpr max_renderers = 4;
++    auto const found = std::find_if(
++        renderers.begin(), renderers.end(), [&](auto const& r) { return r.size == buffer_size; });
++    if (found != renderers.end())
++    {
++        std::rotate(renderers.begin(), found, found + 1);
++    }
++    else
+     {
+         // We need to build a new Renderer, at the new size
+-        offscreen_sink = std::make_unique<OffscreenDisplaySink>(output, buffer_size);
+-        auto gl_surface = render_provider->surface_for_sink(*offscreen_sink, *config);
+-        current_renderer = renderer_factory->create_renderer_for(std::move(gl_surface), render_provider);
+-        last_rendered_size = buffer_size;
++        if (renderers.size() >= max_renderers)
++        {
++            renderers.pop_back();
++        }
++        auto sink = std::make_unique<OffscreenDisplaySink>(output, buffer_size);
++        auto gl_surface = render_provider->surface_for_sink(*sink, *config);
++        auto renderer = renderer_factory->create_renderer_for(std::move(gl_surface), render_provider);
++        renderers.insert(renderers.begin(), SizedRenderer{buffer_size, std::move(renderer), std::move(sink)});
+     }
+-    return *current_renderer;
++    return *renderers.front().renderer;
+ }
+ 
+ auto mc::BasicScreenShooter::select_provider(
