@@ -225,7 +225,8 @@ impl Center {
         {
             let qr = quick_reply::QuickReply::new(app.upcast_ref(), Rc::downgrade(&center));
             let q = qr.clone();
-            center.connect_reply_requested(move |id| q.show(id));
+            // Id 0 (never a notification's) closes it: close_reply().
+            center.connect_reply_requested(move |id| if id == 0 { q.close() } else { q.show(id) });
             center.connect_changed(move || qr.sync());
         }
         server::own_name(center.clone());
@@ -347,6 +348,13 @@ impl Center {
         self.bubbles.remove(id);
         for l in self.reply_listeners.borrow().iter() {
             l(id);
+        }
+    }
+
+    /// Close the quick-reply window if it is open, sending nothing.
+    pub fn close_reply(&self) {
+        for l in self.reply_listeners.borrow().iter() {
+            l(0);
         }
     }
 

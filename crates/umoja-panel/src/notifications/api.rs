@@ -45,6 +45,8 @@ const XML: &str = r#"
     <method name="OpenReply">
       <arg type="u" name="id" direction="in"/>
     </method>
+    <!-- Close the quick-reply window without sending (tools/demo). -->
+    <method name="CloseReply"/>
     <method name="MarkSeen"/>
   </interface>
 </node>"#;
@@ -144,6 +146,10 @@ pub fn own_name(center: Rc<Center>) {
                         if let Some((id,)) = params.get::<(u32,)>() {
                             c.request_reply(id);
                         }
+                        invocation.return_value(None);
+                    }
+                    "CloseReply" => {
+                        c.close_reply();
                         invocation.return_value(None);
                     }
                     "MarkSeen" => {

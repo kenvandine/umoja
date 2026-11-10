@@ -55,6 +55,7 @@ except (ImportError, ValueError, AttributeError):
 OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
 PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
 COMPOSITOR = ("org.umoja.Compositor", "/org/umoja/Compositor", "org.umoja.Compositor")
+NOTIFICATIONS = ("org.umoja.Notifications", "/org/umoja/Notifications", "org.umoja.Notifications")
 NOTIFY = (
     "org.freedesktop.Notifications",
     "/org/freedesktop/Notifications",
@@ -134,8 +135,8 @@ SCENES = [
 AI_SCENES = [s for s in SCENES if s.startswith("ai-")]
 
 # The trailer: these clips in this order, each with its caption.
-TRAILER = ["ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates", "ai-reply",
-           "overview", "workspaces", "notifications", "ai-troubleshoot", "screensaver"]
+TRAILER = ["ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates", "notifications",
+           "ai-reply", "ai-summary", "overview", "workspaces", "ai-troubleshoot", "screensaver"]
 
 
 class Stop(Exception):
@@ -553,11 +554,23 @@ class Demo:
         if not self.can_drag():
             return
         x, y, w, h = self.area
-        # Title-bar grab points, as fractions of the monitor.
-        spots = [(0.27, 0.16), (0.73, 0.30), (0.50, 0.24)]
-        for wid, (fx, fy) in zip(self.opened, spots):
-            self.spots[wid] = (x + int(w * fx), y + int(h * fy))
-            self.drag(wid, *self.spots[wid], ms=450)
+        sizes = {r[0]: (r[5], r[6]) for r in self.windows()}
+        # The first window near the left (clear of the dock), the second
+        # against the right edge, so they overlap as little as the screen
+        # allows; the third (sent to another workspace) in the middle.
+        # Points are where the title bar is grabbed: its middle.
+        for i, wid in enumerate(self.opened[:3]):
+            ww, _wh = sizes.get(wid, (w // 2, h // 2))
+            if i == 0:
+                gx = x + 90 + ww // 2
+                gy = y + int(h * 0.10)
+            elif i == 1:
+                gx = x + w - 30 - ww // 2
+                gy = y + int(h * 0.22)
+            else:
+                gx, gy = x + w // 2, y + int(h * 0.18)
+            self.spots[wid] = (gx, gy)
+            self.drag(wid, gx, gy, ms=450)
 
     def find_terminal(self):
         """The window we were started from: focused when the tour begins."""
@@ -611,6 +624,7 @@ class Demo:
         self.bus.call(OVERLAY, "Hide", quiet=True)
         if self.bus.has_method(OVERLAY, "HideScreenshotUI"):
             self.bus.call(OVERLAY, "HideScreenshotUI", quiet=True)
+        self.bus.call(NOTIFICATIONS, "CloseReply", quiet=True)
         for nid in self.notes:
             self.bus.call(NOTIFY, "CloseNotification", GLib.Variant("(u)", (nid,)), quiet=True)
         for wid in self.opened:
@@ -667,12 +681,13 @@ class Demo:
         self.drag(b, x + w - 3, y + 3)
         self.wait(0.8)
         self.shot("tiling-quarter", "Drag to a corner for a quarter; tiled windows resize together.")
-        # Drag them back out: they get their own size back.
+        self.wait(0.8)
+        # The clip ends on the tiles; dragging back out isn't recorded.
+        self.recorder.stop("Drag-to-tile: halves at the screen edges, quarters in the corners.")
         for wid in (b, a):
             spot = self.spots.get(wid) or (x + w // 2, y + h // 3)
             self.drag(wid, *spot)
         self.wait(0.8)
-        self.recorder.stop("Drag-to-tile: halves at the sides, quarters in the corners, drag out to float again.")
 
     def scene_app_grid(self):
         self.bus.call(OVERLAY, "Show")
@@ -909,10 +924,13 @@ class Demo:
                 answer, steps = result
                 self.wait(settle)
                 self.shot(name, caption)
+                # Stop on the result (the answer, the dialog), not on the
+                # desktop after the overlay closes.
+                self.wait(1.0)
+                self.recorder.stop(caption)
                 if not keep_open:
                     self.bus.call(OVERLAY, "Hide")
                     self.wait(0.8)
-                self.recorder.stop(caption)
                 for st in steps:
                     log(f"       {st}")
                 if answer:
@@ -1020,8 +1038,8 @@ class Demo:
                     "the screenshots tonight",
                     "Drafting a reply to a notification. Nothing is sent until you press Send.",
                     settle=2.5, step_has="reply field") is not None:
-            # It opened the date menu at the reply field; close it again.
-            self.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("calendar",)), quiet=True)
+            # Close the reply window without sending.
+            self.bus.call(NOTIFICATIONS, "CloseReply", quiet=True)
             self.wait(1.0)
 
     def scene_ai_troubleshoot(self):
@@ -1034,7 +1052,7 @@ class Demo:
         if not self.notes and not self.dry:
             log("  needs the notifications scene first, skipping")
             return
-        self.ask("ai-summary", "Summarize my recent notifications, including the ones I've already seen",
+        self.ask("ai-summary", "Summarize all my notifications",
                  "A digest of the notifications that came in.", expect=("priya", "review", "update"))
 
     def scene_ai_custom(self):
