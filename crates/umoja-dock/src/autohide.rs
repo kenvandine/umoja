@@ -18,9 +18,8 @@
 //! * stays up while one of its menus is open or it has the keyboard
 //!   (Ctrl+Alt+Tab).
 //!
-//! Window geometry comes from umoja-mir's `org.umoja.Compositor.GetWindows`,
-//! polled while intellihide needs it (foreign-toplevel has no geometry, and
-//! moving or resizing a window sends no event the dock could follow).
+//! Window geometry comes from umoja-mir's `org.umoja.Compositor.GetWindows`
+//! (foreign-toplevel has no geometry), read again on each `WindowsChanged`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -43,8 +42,6 @@ const HIDDEN_SIZE: i32 = 2;
 /// (0.2 s by default, so 0.35 s): a fade that quick reads fine, a slide
 /// that quick looks like a jump.
 const SLIDE_SLOWER: f64 = 1.75;
-/// How often intellihide looks at window positions.
-const POLL: Duration = Duration::from_millis(250);
 /// How long a push keeps the dock up if the pointer never enters it.
 const PUSH_GRACE: Duration = Duration::from_millis(1500);
 
@@ -125,6 +122,8 @@ pub struct Hide {
     progress: Cell<f64>,
     polling: Cell<bool>,
     in_flight: Cell<bool>,
+    /// Windows changed while a GetWindows was in flight.
+    again: Cell<bool>,
     /// Size of the shown dock (across the edge, along it), for the hidden
     /// strip and the intellihide hit box.
     extent: Cell<(i32, i32)>,
@@ -451,35 +450,46 @@ impl Dock {
         });
     }
 
+    /// Follow window positions for intellihide: look now, then again on
+    /// each WindowsChanged / WorkspacesChanged from umoja-mir (it sends one
+    /// for every open, close, move, resize, raise and focus change). This
+    /// used to poll GetWindows four times a second.
     fn start_polling(self: &Rc<Self>) {
-        if self.hide.polling.replace(true) {
+        if !self.hide.polling.replace(true) {
+            let weak = Rc::downgrade(self);
+            crate::placement::on_windows_changed(move || {
+                if let Some(d) = weak.upgrade() {
+                    d.check_overlap();
+                }
+            });
+        }
+        self.check_overlap();
+    }
+
+    fn check_overlap(self: &Rc<Self>) {
+        let cfg = *self.config.borrow();
+        if cfg.fixed || !cfg.hide.intellihide {
+            return;
+        }
+        if self.hide.in_flight.replace(true) {
+            // A reply is on its way; look once more after it.
+            self.hide.again.set(true);
             return;
         }
         let weak = Rc::downgrade(self);
-        glib::timeout_add_local(POLL, move || {
-            let Some(d) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            let cfg = *d.config.borrow();
-            if cfg.fixed || !cfg.hide.intellihide {
-                d.hide.polling.set(false);
-                return glib::ControlFlow::Break;
+        glib::spawn_future_local(async move {
+            let windows = fetch_windows().await;
+            let Some(d) = weak.upgrade() else { return };
+            d.hide.in_flight.set(false);
+            if d.hide.again.replace(false) {
+                d.check_overlap();
             }
-            if !d.hide.in_flight.replace(true) {
-                let weak = Rc::downgrade(&d);
-                glib::spawn_future_local(async move {
-                    let windows = fetch_windows().await;
-                    let Some(d) = weak.upgrade() else { return };
-                    d.hide.in_flight.set(false);
-                    let Some(windows) = windows else { return };
-                    let overlapped = d.covered_by(&windows);
-                    if overlapped != d.hide.overlapped.replace(overlapped) {
-                        tracing::debug!(overlapped, "intellihide");
-                        d.update_visibility();
-                    }
-                });
+            let Some(windows) = windows else { return };
+            let overlapped = d.covered_by(&windows);
+            if overlapped != d.hide.overlapped.replace(overlapped) {
+                tracing::debug!(overlapped, "intellihide");
+                d.update_visibility();
             }
-            glib::ControlFlow::Continue
         });
     }
 

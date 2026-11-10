@@ -19,6 +19,7 @@
 
 use crate::{Dock, Shared, launcher_entry, new_dock, tracker};
 use gtk::gdk;
+use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -129,10 +130,8 @@ impl Docks {
 
         monitors::connect_changed(sync);
         docks.sync_now();
-        glib::timeout_add_local(HOMES_POLL, || {
-            refresh_homes();
-            glib::ControlFlow::Continue
-        });
+        // Windows dragged to another monitor move to its dock.
+        on_windows_changed(refresh_homes);
     }
 
     /// Add and remove docks to match the monitors and settings.
@@ -255,9 +254,32 @@ fn pick(
     vec![by_name.or(by_index).unwrap_or(primary)]
 }
 
-/// How often window positions are re-read while isolate-monitors is on
-/// (GetWindows has no change signal; windows get dragged between monitors).
-const HOMES_POLL: std::time::Duration = std::time::Duration::from_millis(1000);
+/// Call `f` on every org.umoja.Compositor WindowsChanged and
+/// WorkspacesChanged (umoja-mir coalesces them to one per 250 ms): windows
+/// opened, closed, moved, resized, raised, focused, or a workspace switch.
+pub fn on_windows_changed(f: impl Fn() + 'static) {
+    let f = Rc::new(f);
+    glib::spawn_future_local(async move {
+        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+            return;
+        };
+        for member in ["WindowsChanged", "WorkspacesChanged"] {
+            let f = f.clone();
+            #[allow(deprecated)]
+            let id = conn.signal_subscribe(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                Some(dbus::COMPOSITOR_INTERFACE),
+                Some(member),
+                Some(dbus::COMPOSITOR_OBJECT_PATH),
+                None,
+                gio::DBusSignalFlags::NONE,
+                move |_, _, _, _, _, _| f(),
+            );
+            // Lives as long as the dock (the process).
+            std::mem::forget(id);
+        }
+    });
+}
 
 /// Which monitors (connectors) each window is on, for isolate-monitors.
 /// A window with no entry yet shows on every dock.
