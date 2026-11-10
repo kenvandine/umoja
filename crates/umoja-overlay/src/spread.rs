@@ -26,7 +26,7 @@ use crate::texpane::TexPane;
 use crate::view::Overlay;
 use adw::prelude::*;
 use gio::prelude::*;
-use gtk::gdk_pixbuf::{Pixbuf, PixbufLoader};
+use gtk::gdk_pixbuf::Pixbuf;
 use gtk::{gdk, glib};
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -57,6 +57,11 @@ const CARD_PAD: f64 = 24.0;
 /// (apps redraw after a raise or resize), and capture at most this often.
 const SNAP_SETTLE: Duration = Duration::from_millis(700);
 const SNAP_INTERVAL: Duration = Duration::from_secs(2);
+/// Capture scale (of the logical layout) when the overview opens: previews
+/// are shown scaled down, so logical size is already sharp.
+const OPEN_SCALE: f64 = 1.0;
+/// Capture scale for the background preview refresh.
+const SNAP_SCALE: f64 = 1.0;
 /// Pointer travel before a press on a window becomes a drag.
 const DRAG_THRESHOLD: f64 = 8.0;
 
@@ -193,6 +198,8 @@ pub struct Spread {
     overlay: Weak<Overlay>,
     opening: Cell<bool>,
     wallpaper: RefCell<Option<gdk::Texture>>,
+    /// The file `wallpaper` was decoded from, to notice a new one.
+    wallpaper_path: RefCell<Option<std::path::PathBuf>>,
     previews: RefCell<HashMap<u64, gdk::Texture>>,
     state: RefCell<State>,
     refresh_pending: Cell<bool>,
@@ -269,6 +276,7 @@ impl Spread {
             overlay: Rc::downgrade(overlay),
             opening: Cell::new(false),
             wallpaper: RefCell::default(),
+            wallpaper_path: RefCell::default(),
             previews: RefCell::default(),
             state: RefCell::default(),
             refresh_pending: Cell::new(false),
@@ -281,7 +289,43 @@ impl Spread {
         this.connect_signals(&content);
         this.watch_workspaces();
         this.watch_windows();
+        // Decode the wallpaper now, so the first Super press doesn't wait.
+        this.load_wallpaper();
         this
+    }
+
+    /// Keep a downscaled copy of the current wallpaper, decoded off the
+    /// main thread. Opening the overview used to decode the full-size image
+    /// (about 180 ms for 3840x2160) every time before it could show.
+    fn load_wallpaper(self: &Rc<Self>) {
+        let path = gs::wallpaper_path(gs::prefers_dark());
+        if *self.wallpaper_path.borrow() == path {
+            return;
+        }
+        self.wallpaper_path.replace(path.clone());
+        let Some(path) = path else {
+            self.wallpaper.replace(None);
+            return;
+        };
+        // Cards are smaller than the monitor: half its pixels is plenty.
+        let (w, h) = umoja_common::wallpaper::largest_monitor_pixels().unwrap_or((3840, 2160));
+        let need = ((w / 2).max(1), (h / 2).max(1));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let p = path.clone();
+            let pixels = gio::spawn_blocking(move || umoja_common::wallpaper::decode_cover_pixels(&p, need))
+                .await
+                .ok()
+                .flatten();
+            let Some(s) = weak.upgrade() else { return };
+            if s.wallpaper_path.borrow().as_deref() != Some(path.as_path()) {
+                return; // a newer wallpaper is on its way
+            }
+            s.wallpaper.replace(pixels.map(|p| p.texture()));
+            if s.is_visible() {
+                s.populate();
+            }
+        });
     }
 
     fn connect_signals(self: &Rc<Self>, content: &gtk::Box) {
@@ -492,7 +536,7 @@ impl Spread {
         if !here {
             return;
         }
-        let frame = capture().await;
+        let frame = capture(SNAP_SCALE).await;
         // Something of ours may have come up meanwhile (Super pressed).
         if self.opening.get() || self.is_visible() || self.own_window_shown() {
             return;
@@ -536,11 +580,10 @@ impl Spread {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             // Capture before mapping so the overview isn't in the picture.
-            let (state, frame) = futures_util::join!(fetch_state(), capture());
+            let (state, frame) = futures_util::join!(fetch_state(), capture(OPEN_SCALE));
             let Some(s) = weak.upgrade() else { return };
             s.opening.set(false);
-            *s.wallpaper.borrow_mut() = gs::wallpaper_path(gs::prefers_dark())
-                .and_then(|p| gdk::Texture::from_filename(&p).ok());
+            s.load_wallpaper();
             s.remember_previews(&state, frame.as_ref());
             *s.state.borrow_mut() = state;
             s.populate();
@@ -1199,10 +1242,21 @@ fn crop(frame: &Pixbuf, w: &Win, (ox, oy, layout_w): (i32, i32, i32)) -> Option<
     Some(gdk::Texture::for_pixbuf(&sub))
 }
 
-/// Grab the screen through grim (zwlr_screencopy), as PPM for speed.
-async fn capture() -> Option<Pixbuf> {
+/// Grab the screen through grim (zwlr_screencopy), as PPM for speed, at
+/// `scale` times the logical layout size (grim's default is the largest
+/// output scale, tens of megapixels with a HiDPI laptop and an ultrawide).
+/// The frame is parsed off the main thread.
+async fn capture(scale: f64) -> Option<Pixbuf> {
+    let scale = format!("{scale}");
     let proc = gio::Subprocess::newv(
-        &["grim".as_ref(), "-t".as_ref(), "ppm".as_ref(), "-".as_ref()],
+        &[
+            "grim".as_ref(),
+            "-s".as_ref(),
+            scale.as_ref(),
+            "-t".as_ref(),
+            "ppm".as_ref(),
+            "-".as_ref(),
+        ],
         gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE,
     )
     .ok()?;
@@ -1217,10 +1271,11 @@ async fn capture() -> Option<Pixbuf> {
         }
     };
     let bytes = stdout?;
-    let loader = PixbufLoader::new();
-    loader.write(&bytes).ok()?;
-    loader.close().ok()?;
-    loader.pixbuf()
+    let rgb = gio::spawn_blocking(move || crate::screenshot::parse_ppm(bytes.to_vec()))
+        .await
+        .ok()
+        .flatten()?;
+    Some(crate::screenshot::rgb_pixbuf(rgb))
 }
 
 pub async fn fetch_windows() -> Vec<Win> {
