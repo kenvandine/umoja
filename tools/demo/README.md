@@ -27,7 +27,7 @@ is open). The full tour takes about three minutes.
 | `overview` | `Overlay.ToggleOverview`, `ShiftOverview` up/down | `images/overview.png`, `videos/overview.*` |
 | `workspaces` | `org.umoja.Compositor.SwitchWorkspace` there and back | `images/workspace-2.png`, `videos/workspaces.*` |
 | `quick-settings` | `org.umoja.Panel.OpenMenu("quick-settings")` | `images/quick-settings.png` |
-| `notifications` | three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
+| `notifications` | clears the notification list (keep it with `--keep-notifications`), then three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
 | `shortcuts` | `Overlay.ToggleShortcuts` (Super+/) | `images/shortcuts.png` |
 | `screenshot-ui` | `Overlay.ShowScreenshotUI` / `HideScreenshotUI` | `images/screenshot-ui.png` |
 | `screensaver` | `umoja-screensaver` preview for 7 s | `images/screensaver.png`, `videos/screensaver.*` |

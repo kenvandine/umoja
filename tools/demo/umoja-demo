@@ -779,7 +779,23 @@ class Demo:
         if res:
             self.notes.append(res[0])
 
+    def clear_notifications(self):
+        """Start from an empty notification list, so the date menu, its
+        digest and the assistant's summary show only the tour's three
+        (--keep-notifications leaves the list alone)."""
+        if self.opts.keep_notifications:
+            return
+        res = self.bus.call(NOTIFICATIONS, "GetNotifications", None, "(a(ussssx))", quiet=True)
+        rows = res[0] if res else []
+        if rows:
+            log(f"  clearing {len(rows)} earlier notification(s) from the list")
+        for row in rows:
+            self.bus.call(NOTIFY, "CloseNotification", GLib.Variant("(u)", (row[0],)), quiet=True)
+        if rows:
+            self.wait(0.8)
+
     def scene_notifications(self):
+        self.clear_notifications()
         self.recorder.start("notifications")
         for i, n in enumerate(DEMO_NOTIFICATIONS):
             self.notify(*n)
@@ -1415,6 +1431,8 @@ def main():
                    help=f"don't create ~/{DEMO_DIR_NAME} for Files and Text Editor to show")
     p.add_argument("--keep-terminal", action="store_true",
                    help="don't minimize the terminal the tour was started from")
+    p.add_argument("--keep-notifications", action="store_true",
+                   help="don't clear the notification list before the notifications scene")
     p.add_argument("--hidpi", action="store_true", help="full-resolution stills (default: logical size)")
     p.add_argument("--gif-width", type=int, default=960, help="GIF width in pixels (default 960)")
     p.add_argument("--pace", type=float, default=1.0, help="multiply every pause by this (e.g. 1.5 on a slow machine)")
