@@ -845,7 +845,9 @@ class Demo:
             self.saver = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.wait(3.5)
         self.shot("screensaver", "The screensaver: \"umoja\" drawn in glowing dots, a new effect each cycle.")
-        self.wait(3.5)
+        self.wait(2.0)
+        # End the clip on the screensaver, not the desktop after it.
+        self.recorder.stop("Screensaver preview (umoja-screensaver).")
         if self.saver:
             self.saver.terminate()
             try:
@@ -854,7 +856,6 @@ class Demo:
                 self.saver.kill()
             self.saver = None
         self.wait(0.8)
-        self.recorder.stop("Screensaver preview (umoja-screensaver).")
 
     # ---- assistant ----------------------------------------------------
 
@@ -1101,8 +1102,7 @@ class Demo:
         if not self.notes and not self.dry:
             log("  needs the notifications scene first, skipping")
             return
-        if self.ask("ai-reply", "Open a reply to Priya's notification with drafts saying I'll send "
-                    "the screenshots tonight",
+        if self.ask("ai-reply", "Open a reply to Priya's notification with a few drafts",
                     "Drafting a reply to a notification. Nothing is sent until you press Send.",
                     settle=2.5, step_has="reply field") is not None:
             # Close the reply window without sending.

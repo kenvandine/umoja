@@ -31,7 +31,7 @@ classic desktop tour follows.
 | `ai-install` | "I need VLC" (`--app`): stops at the "Allow the assistant to do this?" dialog and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
 | `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow dialog and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
 | `notifications` | clears the notification list (keep it with `--keep-notifications`), then three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
-| `ai-reply` | "Draft a reply to Priya..." on the demo notification: opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
+| `ai-reply` | "Open a reply to Priya's notification with a few drafts": opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
 | `ai-summary` | "Summarize my recent notifications..." | `images/ai-summary.png`, `videos/ai-summary.*` |
 | `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
 | `app-grid` | `org.umoja.Overlay.Show` | `images/app-grid.png` |
