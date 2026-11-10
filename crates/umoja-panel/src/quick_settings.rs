@@ -85,11 +85,9 @@ fn menu() -> gtk::Box {
     root.append(&stream_slider(false));
     root.append(&stream_slider(true));
 
-    let flow = gtk::FlowBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .homogeneous(true)
-        .min_children_per_line(2)
-        .max_children_per_line(2)
+    let grid = gtk::Grid::builder()
+        .column_homogeneous(true)
+        .row_homogeneous(true)
         .row_spacing(8)
         .column_spacing(8)
         .build();
@@ -108,21 +106,33 @@ fn menu() -> gtk::Box {
         night_light_tile().upcast(),
         kbd.upcast(),
     ];
-    // A hidden tile must not leave a hole, so filter it out of the grid.
-    // Hiding its FlowBoxChild instead only worked while every tile's state
-    // was known when the menu was built: network and Bluetooth state now
-    // arrive a moment later, and a FlowBoxChild shown again stayed missing.
-    flow.set_filter_func(|child| child.child().is_some_and(|t| t.is_visible()));
-    for t in tiles {
-        flow.append(&t);
-        let weak = flow.downgrade();
-        t.connect_visible_notify(move |_| {
-            if let Some(flow) = weak.upgrade() {
-                flow.invalidate_filter();
+    // Two tiles a row, hidden ones left out so they leave no hole. Network
+    // and Bluetooth tiles appear a moment after start-up (their state is
+    // read off the main thread) and on hotplug, so lay the grid out again
+    // whenever a tile is shown or hidden. A FlowBox did this badly: hiding
+    // a FlowBoxChild (or filtering it) also hid the tile inside, and it
+    // never came back.
+    let tiles = Rc::new(tiles);
+    let layout = {
+        let (grid, tiles) = (grid.clone(), tiles.clone());
+        move || {
+            for t in tiles.iter() {
+                if t.parent().is_some() {
+                    grid.remove(t);
+                }
             }
-        });
+            for (i, t) in tiles.iter().filter(|t| t.is_visible()).enumerate() {
+                grid.attach(t, (i % 2) as i32, (i / 2) as i32, 1, 1);
+            }
+        }
+    };
+    layout();
+    let layout = Rc::new(layout);
+    for t in tiles.iter() {
+        let layout = layout.clone();
+        t.connect_visible_notify(move |_| layout());
     }
-    root.append(&flow);
+    root.append(&grid);
     root.append(&networks);
     root.append(&vpns);
     root.append(&bt_devices);
