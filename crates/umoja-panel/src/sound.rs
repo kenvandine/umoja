@@ -316,8 +316,9 @@ pub struct Sound {
     state: RefCell<SoundState>,
     listeners: RefCell<Vec<Listener>>,
     /// The connection; replaced when the server goes away and comes back.
-    mainloop: RefCell<Option<Mainloop>>,
+    /// The context must go before its main loop (see Drop).
     context: RefCell<Option<Context>>,
+    mainloop: RefCell<Option<Mainloop>>,
     /// The last snapshot, for each default device's channel volumes (a
     /// new level scales them, keeping the balance, as libgvc does).
     snapshot: RefCell<Snapshot>,
@@ -342,8 +343,8 @@ impl Sound {
         let sound = Rc::new(Self {
             state: RefCell::default(),
             listeners: RefCell::default(),
-            mainloop: RefCell::default(),
             context: RefCell::default(),
+            mainloop: RefCell::default(),
             snapshot: RefCell::default(),
             pending: Cell::new(false),
             in_flight: Cell::new(false),
@@ -622,6 +623,21 @@ impl Sound {
         } else {
             intro.set_sink_mute_by_name(DEFAULT_SINK, muted, None);
         }
+    }
+}
+
+impl Drop for Sound {
+    /// Disconnect and free the context while its GLib main loop still
+    /// exists: freeing the loop first left the context's I/O sources
+    /// behind, and libpulse aborted the panel on exit (glib_io_free:
+    /// assertion failed: (!e->dead)).
+    fn drop(&mut self) {
+        if let Some(mut ctx) = self.context.take() {
+            ctx.set_state_callback(None);
+            ctx.set_subscribe_callback(None);
+            ctx.disconnect();
+        }
+        self.mainloop.take();
     }
 }
 

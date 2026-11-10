@@ -56,8 +56,9 @@ pub fn scaled(mut v: ChannelVolumes, pct: u32) -> ChannelVolumes {
 }
 
 pub struct Client {
-    mainloop: Mainloop,
+    // Declared first so it's freed before its main loop.
     context: Context,
+    mainloop: Mainloop,
 }
 
 impl Client {
@@ -84,7 +85,7 @@ impl Client {
                 return Err("the sound server connection broke".into());
             }
         }
-        Ok(Self { mainloop, context })
+        Ok(Self { context, mainloop })
     }
 
     fn wait<F: ?Sized>(&mut self, op: Operation<F>) -> Result<(), String> {
