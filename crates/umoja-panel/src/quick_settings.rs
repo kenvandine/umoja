@@ -626,14 +626,29 @@ fn stream_slider(input: bool) -> gtk::Box {
                 for dev in list {
                     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                     row.append(&gtk::Image::from_icon_name(dev.icon));
-                    row.append(
-                        &gtk::Label::builder()
-                            .label(&dev.description)
+                    // Port over card, like a tile's title and subtitle.
+                    // max-width-chars 1 keeps a long name from widening
+                    // the panel: it takes the width there is and ends in "…".
+                    let text = gtk::Box::builder()
+                        .orientation(gtk::Orientation::Vertical)
+                        .valign(gtk::Align::Center)
+                        .hexpand(true)
+                        .build();
+                    let label = |s: &str, class: &str| {
+                        gtk::Label::builder()
+                            .label(s)
                             .xalign(0.0)
-                            .hexpand(true)
+                            .max_width_chars(1)
                             .ellipsize(gtk::pango::EllipsizeMode::End)
-                            .build(),
-                    );
+                            .css_classes([class])
+                            .tooltip_text(&dev.description)
+                            .build()
+                    };
+                    text.append(&label(&dev.port, "device-port"));
+                    if !dev.card.is_empty() {
+                        text.append(&label(&dev.card, "tile-subtitle"));
+                    }
+                    row.append(&text);
                     let check = gtk::Image::from_icon_name("object-select-symbolic");
                     row.append(&check);
                     let button = gtk::Button::builder()

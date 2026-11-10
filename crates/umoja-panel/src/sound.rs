@@ -16,6 +16,12 @@ pub struct Device {
     pub id: u32,
     pub name: String,
     pub description: String,
+    /// What tells this device apart: the port ("Headphones", "HDMI /
+    /// DisplayPort 1 Output") or the monitor's name for HDMI.
+    pub port: String,
+    /// The sound card ("800 Series Chipset Family Audio..."), empty when
+    /// the port already is the whole name (a Bluetooth headset).
+    pub card: String,
     pub icon: &'static str,
 }
 
@@ -184,11 +190,18 @@ impl Graph {
                         .or_else(|| prop(p, "node.nick"))
                         .unwrap_or(&name)
                         .to_string();
+                    let card_name = device
+                        .and_then(|d| prop(d, "device.description").or_else(|| prop(d, "device.nick")))
+                        .unwrap_or("");
+                    let (port, card) =
+                        split_name(&description, card_name, prop(p, "device.profile.description"));
                     let dev = Device {
                         id: *id as u32,
                         icon: icon_for(input, p, device),
                         name,
                         description,
+                        port,
+                        card,
                     };
                     if input {
                         s.inputs.push(dev);
@@ -213,10 +226,55 @@ impl Graph {
             }
         }
         for list in [&mut s.outputs, &mut s.inputs] {
-            list.sort_by(|a, b| a.description.cmp(&b.description).then(a.id.cmp(&b.id)));
+            // Group a card's ports together.
+            let key = |d: &Device| {
+                let group = if d.card.is_empty() { &d.port } else { &d.card };
+                (group.clone(), d.port.clone(), d.id)
+            };
+            list.sort_by_key(key);
         }
         s
     }
+}
+
+/// Split PipeWire's "<card> <port>" node description the way gnome-shell
+/// labels devices: the port (what differs between them) first, the card
+/// apart. An HDMI output's monitor name ("... [CR340HD]") is the port.
+pub fn split_name(description: &str, card: &str, profile: Option<&str>) -> (String, String) {
+    let mut desc = description.trim().to_string();
+    let mut card = card.trim().to_string();
+    let mut monitor = None;
+    for s in [&mut desc, &mut card] {
+        if let Some(open) = s.rfind(" [")
+            && s.ends_with(']')
+        {
+            let name = s[open + 2..s.len() - 1].trim().to_string();
+            s.truncate(open);
+            if !name.is_empty() {
+                monitor = Some(name);
+            }
+        }
+    }
+    let (mut port, mut card) = match desc.strip_prefix(card.as_str()) {
+        Some(rest) if !card.is_empty() => (rest.trim().to_string(), card),
+        _ => match profile.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) if desc != p => {
+                let c = desc.strip_suffix(p).map(str::trim).unwrap_or(&desc).to_string();
+                (p.to_string(), if c == desc { String::new() } else { c })
+            }
+            _ => (desc.clone(), String::new()),
+        },
+    };
+    if let Some(m) = monitor {
+        port = m;
+    }
+    if port.is_empty() {
+        port = std::mem::take(&mut card);
+    }
+    if port == card {
+        card.clear();
+    }
+    (port, card)
 }
 
 fn is_default_meta(obj: &Value) -> bool {
@@ -452,6 +510,40 @@ mod tests {
             Some("alsa_output.pci-0000_c4_00.6.analog-stereo")
         );
         assert!(s.default_input.is_some(), "metadata updates merge");
+    }
+
+    #[test]
+    fn splits_port_from_card() {
+        let ace = "800 Series Chipset Family Audio Context Engine (ACE)";
+        let sp = |d: &str, c: &str, p: Option<&str>| {
+            let (a, b) = split_name(d, c, p);
+            (a, b)
+        };
+        assert_eq!(
+            sp(&format!("{ace} HDMI / DisplayPort 1 Output"), ace, None),
+            ("HDMI / DisplayPort 1 Output".into(), ace.into())
+        );
+        assert_eq!(sp(&format!("{ace} Headphones"), ace, None), ("Headphones".into(), ace.into()));
+        assert_eq!(
+            sp("Creative Pebble Pro Analog Stereo", "Creative Pebble Pro", None),
+            ("Analog Stereo".into(), "Creative Pebble Pro".into())
+        );
+        assert_eq!(
+            sp(
+                "GB205 High Definition Audio Controller Digital Stereo (HDMI) [CR340HD]",
+                "GB205 High Definition Audio Controller",
+                None
+            ),
+            ("CR340HD".into(), "GB205 High Definition Audio Controller".into())
+        );
+        // No device object: fall back to the profile description.
+        assert_eq!(
+            sp("USB Audio Analog Stereo", "", Some("Analog Stereo")),
+            ("Analog Stereo".into(), "USB Audio".into())
+        );
+        // One-profile devices are just their name.
+        assert_eq!(sp("WH-1000XM4", "WH-1000XM4", None), ("WH-1000XM4".into(), String::new()));
+        assert_eq!(sp("WH-1000XM4", "", None), ("WH-1000XM4".into(), String::new()));
     }
 
     #[test]

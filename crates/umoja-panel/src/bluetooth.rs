@@ -335,6 +335,7 @@ fn fill_devices(list: &gtk::Box, s: &BtState) {
                 .label(&d.name)
                 .xalign(0.0)
                 .hexpand(true)
+                .max_width_chars(1)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .build(),
         );

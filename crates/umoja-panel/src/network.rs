@@ -880,6 +880,7 @@ fn fill_networks(list: &gtk::Box, s: &NetState) {
                 .label(&ap.ssid)
                 .xalign(0.0)
                 .hexpand(true)
+                .max_width_chars(1)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .build(),
         );
@@ -1035,6 +1036,7 @@ fn fill_vpns(list: &gtk::Box, s: &NetState) {
                 .label(&vpn.id)
                 .xalign(0.0)
                 .hexpand(true)
+                .max_width_chars(1)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .build(),
         );
