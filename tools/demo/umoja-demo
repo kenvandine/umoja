@@ -235,7 +235,10 @@ class Recorder:
             return
         self.path = self.demo.raw_dir / f"{name}.webm"
         cmd = [
-            "wf-recorder", "-y", "-c", "libvpx", "-x", "yuv420p",
+            # -D: a frame every refresh, not only on damage. Damage-only
+            # capture held back the last change (ai-reply ended before
+            # its drafts showed).
+            "wf-recorder", "-y", "-D", "-c", "libvpx", "-x", "yuv420p",
             "-p", "deadline=realtime", "-p", "cpu-used=8", "-p", "b=16M",
             "-f", str(self.path),
         ]
@@ -783,12 +786,13 @@ class Demo:
             self.wait(1.0)
             if i == len(DEMO_NOTIFICATIONS) - 1:
                 self.shot("notifications", "Notifications behave like GNOME's and look like Unity's notify-osd bubbles.")
-        self.wait(2.0)
-        self.recorder.stop("Notification bubbles stacking up.")
-        # Let the bubbles go (the default timeout keeps them in the list; an
-        # explicit one removed them), then give the date menu's digest
-        # ("Summarizing...") time to come in.
-        self.wait(5.0)
+        # Keep recording until every bubble has faded (4 s + 30 ms a
+        # character, so about 6.5 s) and a bit more: stopping the recorder
+        # just as a bubble fades leaves its last frame frozen on screen.
+        self.wait(7.5)
+        self.recorder.stop("Notification bubbles stack up, then fade on their own.")
+        # Give the date menu's digest ("Summarizing...") time to come in.
+        self.wait(1.0)
         self.open_menu("calendar")
         self.wait(6.0 if self.ready else 2.0)
         self.shot("calendar", "The date menu keeps the notification list next to the calendar.")
