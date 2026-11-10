@@ -60,6 +60,23 @@ impl BtState {
 }
 
 /// Builds the state from `GetManagedObjects` output.
+/// A PropertiesChanged that only carries signal readings (RSSI, adverts),
+/// which BlueZ sends for every nearby device while scanning and which
+/// nothing in the panel shows.
+fn only_radio_noise(params: &glib::Variant) -> bool {
+    const NOISE: [&str; 4] = ["RSSI", "TxPower", "ManufacturerData", "ServiceData"];
+    let Some((_, changed, invalidated)) = params.get::<(String, glib::VariantDict, Vec<String>)>() else {
+        return false;
+    };
+    let changed = changed.end();
+    let keys: Vec<String> = changed
+        .iter()
+        .filter_map(|e| e.child_value(0).str().map(String::from))
+        .chain(invalidated)
+        .collect();
+    !keys.is_empty() && keys.iter().all(|k| NOISE.contains(&k.as_str()))
+}
+
 fn parse_objects(v: &glib::Variant) -> BtState {
     let mut s = BtState::default();
     for entry in v.iter() {
@@ -98,6 +115,9 @@ pub struct Bluetooth {
     state: RefCell<BtState>,
     listeners: RefCell<Vec<Listener>>,
     pending: Cell<bool>,
+    /// A read is running on a worker thread / another was asked for meanwhile.
+    in_flight: Cell<bool>,
+    again: Cell<bool>,
 }
 
 thread_local! {
@@ -115,6 +135,8 @@ impl Bluetooth {
             state: RefCell::default(),
             listeners: RefCell::default(),
             pending: Cell::new(false),
+            in_flight: Cell::new(false),
+            again: Cell::new(false),
         });
         let Some(conn) = bt.conn.clone() else {
             return bt;
@@ -129,7 +151,10 @@ impl Bluetooth {
             None,
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, _| {
+            move |_, _, _, _, member, params| {
+                if member == "PropertiesChanged" && only_radio_noise(params) {
+                    return;
+                }
                 if let Some(b) = weak.upgrade() {
                     b.schedule_refresh();
                 }
@@ -173,12 +198,21 @@ impl Bluetooth {
         });
     }
 
-    fn refresh(&self) {
-        let state = self
-            .conn
-            .as_ref()
-            .and_then(|c| {
-                c.call_sync(
+    /// Re-read BlueZ's objects on a worker thread, so a slow bluetoothd
+    /// never stalls the panel.
+    fn refresh(self: &Rc<Self>) {
+        let Some(conn) = self.conn.clone() else {
+            self.publish(BtState::default());
+            return;
+        };
+        if self.in_flight.replace(true) {
+            self.again.set(true);
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let read = gio::spawn_blocking(move || {
+                conn.call_sync(
                     Some(BLUEZ),
                     "/",
                     "org.freedesktop.DBus.ObjectManager",
@@ -190,9 +224,22 @@ impl Bluetooth {
                     gio::Cancellable::NONE,
                 )
                 .ok()
+                .map(|v| parse_objects(&v.child_value(0)))
+                .unwrap_or_default()
             })
-            .map(|v| parse_objects(&v.child_value(0)))
-            .unwrap_or_default();
+            .await;
+            let Some(b) = weak.upgrade() else { return };
+            b.in_flight.set(false);
+            if let Ok(state) = read {
+                b.publish(state);
+            }
+            if b.again.replace(false) {
+                b.refresh();
+            }
+        });
+    }
+
+    fn publish(&self, state: BtState) {
         if *self.state.borrow() == state {
             return;
         }
