@@ -14,6 +14,11 @@ use std::path::Path;
 /// The largest monitor, in device pixels: what a full-screen wallpaper
 /// needs. `None` before any monitor is known.
 pub fn largest_monitor_pixels() -> Option<(i32, i32)> {
+    largest_monitor().map(|(w, h, _)| (w, h))
+}
+
+/// The largest monitor: device pixels and its scale.
+pub fn largest_monitor() -> Option<(i32, i32, f64)> {
     let display = gdk::Display::default()?;
     let monitors = display.monitors();
     (0..monitors.n_items())
@@ -24,9 +29,10 @@ pub fn largest_monitor_pixels() -> Option<(i32, i32)> {
             (
                 (f64::from(g.width()) * s).ceil() as i32,
                 (f64::from(g.height()) * s).ceil() as i32,
+                s,
             )
         })
-        .max_by_key(|(w, h)| i64::from(*w) * i64::from(*h))
+        .max_by_key(|(w, h, _)| i64::from(*w) * i64::from(*h))
 }
 
 /// The size an image of `image` pixels is scaled to so that it still covers
@@ -96,9 +102,83 @@ pub fn texture_cover(path: &Path, need: (i32, i32)) -> Option<gdk::Texture> {
     decode_cover(path, need).map(|p| gdk::Texture::for_pixbuf(&p))
 }
 
+/// [`decode_cover`], blurred once on the CPU (a Gaussian of `sigma` image
+/// pixels, as three box blurs) so the lock screen can draw it plainly
+/// instead of having GSK blur a full-screen texture on every frame it
+/// redraws (its clock ticks every second).
+pub fn texture_cover_blurred(path: &Path, need: (i32, i32), sigma: f64) -> Option<gdk::Texture> {
+    let p = decode_cover(path, need)?;
+    let (w, h, stride) = (p.width() as usize, p.height() as usize, p.rowstride() as usize);
+    let channels = p.n_channels() as usize;
+    let mut data = p.read_pixel_bytes().to_vec();
+    blur(&mut data, w, h, stride, channels, sigma);
+    let format = if p.has_alpha() {
+        gdk::MemoryFormat::R8g8b8a8
+    } else {
+        gdk::MemoryFormat::R8g8b8
+    };
+    let bytes = gtk4::glib::Bytes::from_owned(data);
+    Some(gdk::MemoryTexture::new(w as i32, h as i32, format, &bytes, stride).upcast())
+}
+
+/// Approximate a Gaussian blur of `sigma` pixels with three box blurs,
+/// horizontally then vertically, clamping at the edges.
+pub fn blur(data: &mut [u8], w: usize, h: usize, stride: usize, channels: usize, sigma: f64) {
+    if sigma < 0.5 || w == 0 || h == 0 {
+        return;
+    }
+    // Box width for three passes: sqrt(12 sigma^2 / 3 + 1).
+    let radius = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as usize;
+    let mut line = vec![0u8; w.max(h) * channels];
+    for _ in 0..3 {
+        for y in 0..h {
+            let row = y * stride;
+            box_pass(data, row, channels, w, channels, radius, &mut line);
+        }
+        for x in 0..w {
+            box_pass(data, x * channels, stride, h, channels, radius, &mut line);
+        }
+    }
+}
+
+/// One box blur along a line of `len` pixels starting at `start`, `step`
+/// bytes apart.
+fn box_pass(data: &mut [u8], start: usize, step: usize, len: usize, channels: usize, radius: usize, line: &mut [u8]) {
+    for i in 0..len {
+        line[i * channels..(i + 1) * channels]
+            .copy_from_slice(&data[start + i * step..start + i * step + channels]);
+    }
+    let window = (2 * radius + 1) as u32;
+    for c in 0..channels {
+        let at = |i: isize| -> u32 { u32::from(line[(i.clamp(0, len as isize - 1) as usize) * channels + c]) };
+        let mut sum: u32 = (-(radius as isize)..=radius as isize).map(at).sum();
+        for i in 0..len {
+            data[start + i * step + c] = ((sum + window / 2) / window) as u8;
+            sum += at(i as isize + radius as isize + 1);
+            sum -= at(i as isize - radius as isize);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blur_keeps_flat_colour_and_spreads_a_dot() {
+        let (w, h) = (16, 8);
+        let mut flat = vec![200u8; w * h * 3];
+        blur(&mut flat, w, h, w * 3, 3, 3.0);
+        assert!(flat.iter().all(|&v| v == 200));
+
+        let mut dot = vec![0u8; w * h * 3];
+        dot[(4 * w + 8) * 3] = 255;
+        blur(&mut dot, w, h, w * 3, 3, 2.0);
+        let centre = dot[(4 * w + 8) * 3];
+        assert!(centre > 0 && centre < 255);
+        assert!(dot[(4 * w + 10) * 3] > 0);
+        assert_eq!(dot[(4 * w + 8) * 3 + 1], 0, "channels stay apart");
+    }
 
     #[test]
     fn cover_keeps_aspect_and_never_grows() {

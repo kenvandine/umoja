@@ -19,6 +19,8 @@ mod imp {
     pub struct Backdrop {
         pub texture: RefCell<Option<gdk::Texture>>,
         pub blur: Cell<f64>,
+        /// `texture` is already blurred.
+        pub preblurred: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -39,7 +41,7 @@ mod imp {
             if let Some(tex) = self.texture.borrow().as_ref() {
                 // "Cover" fit, overscanned so blurred edges never show.
                 let (tw, th) = (tex.width() as f32, tex.height() as f32);
-                let blur = self.blur.get() as f32;
+                let blur = if self.preblurred.get() { 0.0 } else { self.blur.get() as f32 };
                 let scale = (w / tw).max(h / th);
                 let (dw, dh) = (tw * scale + blur * 4.0, th * scale + blur * 4.0);
                 let dest = graphene::Rect::new((w - dw) / 2.0, (h - dh) / 2.0, dw, dh);
@@ -84,11 +86,16 @@ impl Backdrop {
 
     pub fn set_wallpaper(&self, path: Option<&str>) {
         // It is shown heavily blurred, so a quarter of the screen's size
-        // looks the same as the full image at a sixteenth of the memory.
-        let (w, h) = umoja_common::wallpaper::largest_monitor_pixels().unwrap_or((3840, 2160));
+        // looks the same as the full image at a sixteenth of the memory. It
+        // is blurred once here, not by GSK on every frame (the clock ticks
+        // every second): GSK's blur radius is two sigmas, in logical pixels,
+        // and the image has scale/4 pixels per logical pixel.
+        let (w, h, scale) = umoja_common::wallpaper::largest_monitor().unwrap_or((3840, 2160, 2.0));
         let need = ((w / 4).max(1), (h / 4).max(1));
-        let load = |p: &str| umoja_common::wallpaper::texture_cover(std::path::Path::new(p), need);
+        let sigma = self.imp().blur.get() / 2.0 * scale / 4.0;
+        let load = |p: &str| umoja_common::wallpaper::texture_cover_blurred(std::path::Path::new(p), need, sigma);
         let texture = path.and_then(load).or_else(|| load(FALLBACK_WALLPAPER));
+        self.imp().preblurred.set(texture.is_some());
         *self.imp().texture.borrow_mut() = texture;
         self.queue_draw();
     }
