@@ -2,6 +2,9 @@
 Description=Umoja top panel
 PartOf=umoja-session.target
 After=umoja-session.target
+# Only while the session is up: after logout a crash-restart found no
+# display and looped ("Failed to open display") until the next login.
+Requisite=umoja-session.target
 # Lots of fast restarts are expected while a crash loop is being fixed;
 # never give up on the shell.
 StartLimitIntervalSec=0
