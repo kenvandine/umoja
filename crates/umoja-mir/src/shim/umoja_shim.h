@@ -266,6 +266,9 @@ enum {
 void umoja_idle_state(uint32_t state);
 // Any input event (Mir's input thread); cheap unless the screensaver is up.
 void umoja_input_activity(void);
+// Hide Mir's pointer (while the screensaver shows) or bring it back; any
+// thread, idle.cpp.
+void umoja_cursor_set_hidden(bool hidden);
 
 // Touch gestures (gestures.rs). `action`: 0 up, 1 down, 2 moved.
 typedef struct {
