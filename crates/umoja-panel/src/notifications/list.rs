@@ -729,7 +729,11 @@ fn relative_time(t: &glib::DateTime) -> String {
         return format!("{} min", secs / 60);
     }
     let fmt = if now.ymd() == t.ymd() {
-        "%H:%M"
+        if umoja_common::clock::twelve_hour() {
+            "%-l:%M %p"
+        } else {
+            "%H:%M"
+        }
     } else if secs < 7 * 24 * 3600 {
         "%a"
     } else {

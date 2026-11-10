@@ -10,6 +10,7 @@ authors.workspace = true
 gio.workspace = true
 glib.workspace = true
 gettext-rs.workspace = true
+libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

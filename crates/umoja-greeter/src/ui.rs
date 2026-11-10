@@ -595,11 +595,9 @@ fn tick(time: &gtk::Label, date: &gtk::Label) {
             let Ok(now) = glib::DateTime::now_local() else {
                 return;
             };
-            let twelve = umoja_common::gsettings::get_string(
-                "org.gnome.desktop.interface",
-                "clock-format",
-                "24h",
-            ) == "12h";
+            // The greeter user has no dconf settings of its own, so
+            // this is the system locale's 12/24-hour choice.
+            let twelve = umoja_common::clock::twelve_hour();
             if let Ok(t) = now.format(if twelve { "%-l:%M" } else { "%H:%M" }) {
                 time.set_text(&t);
             }

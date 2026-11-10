@@ -1,4 +1,5 @@
 //! Clock and calendar, honouring `org.gnome.desktop.interface` clock keys.
+//! 12/24-hour time follows the locale unless `clock-format` is set.
 
 use gio::prelude::*;
 use gtk::glib;
@@ -23,7 +24,7 @@ struct Format {
 impl Format {
     fn load() -> Self {
         Self {
-            twelve_hour: gs::get_string(gs::DESKTOP_INTERFACE, "clock-format", "24h") == "12h",
+            twelve_hour: umoja_common::clock::twelve_hour(),
             seconds: gs::get_bool(gs::DESKTOP_INTERFACE, "clock-show-seconds", false),
             date: gs::get_bool(gs::DESKTOP_INTERFACE, "clock-show-date", true),
             weekday: gs::get_bool(gs::DESKTOP_INTERFACE, "clock-show-weekday", false),

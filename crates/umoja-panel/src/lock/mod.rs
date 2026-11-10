@@ -250,7 +250,7 @@ fn clock() -> gtk::Box {
         let Ok(now) = glib::DateTime::now_local() else {
             return;
         };
-        let twelve = gs::get_string(gs::DESKTOP_INTERFACE, "clock-format", "24h") == "12h";
+        let twelve = umoja_common::clock::twelve_hour();
         let t = now.format(if twelve { "%l:%M" } else { "%H:%M" });
         if let Ok(t) = t {
             time.set_label(t.trim());

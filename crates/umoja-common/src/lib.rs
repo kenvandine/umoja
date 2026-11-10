@@ -11,6 +11,7 @@ pub mod apps;
 pub mod assistant_backend;
 #[cfg(feature = "blur")]
 pub mod blur;
+pub mod clock;
 pub mod crashes;
 pub mod dbus;
 pub mod diagnostics;
