@@ -33,7 +33,14 @@ pub fn button() -> gtk::MenuButton {
     // D-Bus (org.umoja.Panel.OpenMenu: the top-edge swipe, tools/demo)
     // had no grab and closed again at once.
     popover.connect_show(|p| crate::notifications::want_keyboard(p, true));
-    popover.connect_hide(|p| crate::notifications::want_keyboard(p, false));
+    popover.connect_hide(|p| {
+        crate::notifications::want_keyboard(p, false);
+        // Like gnome-shell, a tile's menu (Wi-Fi networks, Keyboard
+        // Backlight...) doesn't stay expanded for the next time.
+        if let Some(child) = p.child() {
+            collapse_tile_menus(&child);
+        }
+    });
     let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     icons.add_css_class("system-status");
     let (net, vpn) = network::indicators();
@@ -53,6 +60,20 @@ pub fn button() -> gtk::MenuButton {
         .popover(&popover)
         .css_classes(["flat", "quick-settings-button"])
         .build()
+}
+
+/// Close every tile arrow under `w`, which hides the menus they reveal.
+fn collapse_tile_menus(w: &gtk::Widget) {
+    if w.has_css_class("tile-arrow")
+        && let Some(arrow) = w.downcast_ref::<gtk::ToggleButton>()
+    {
+        arrow.set_active(false);
+    }
+    let mut child = w.first_child();
+    while let Some(c) = child {
+        collapse_tile_menus(&c);
+        child = c.next_sibling();
+    }
 }
 
 fn menu() -> gtk::Box {
