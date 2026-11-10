@@ -4,6 +4,7 @@
 //! key), panel (Activities) and dock (Show Apps) can toggle it.
 
 mod assistant;
+mod canvas;
 mod chrome;
 mod clipboard;
 mod clipwatch;
