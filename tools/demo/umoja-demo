@@ -115,7 +115,7 @@ DEMO_NOTIFICATIONS = [
     ("Calendar", "x-office-calendar", "Design review in 10 minutes",
      "Umoja style refresh, Room 3 / video call"),
     ("Mail", "mail-unread", "Priya Shah",
-     "Can you send me the screenshots for the release notes before Friday?"),
+     "Can you send me the screenshots for the release notes?"),
     ("Software", "system-software-update", "Updates installed",
      "umoja and 4 other packages were updated."),
 ]
@@ -972,6 +972,7 @@ class Demo:
                 if not keep_open:
                     self.bus.call(OVERLAY, "Hide")
                     self.wait(0.8)
+                    self.scrub_overlay()
                 for st in steps:
                     log(f"       {st}")
                 if answer:
@@ -982,6 +983,18 @@ class Demo:
             self.wait(1.5)
         log(f"  ! no good answer after {tries} tries, leaving {name} out")
         return None
+
+    def scrub_overlay(self):
+        """Open and close the empty overlay once, off camera. Stopping the
+        recorder can hold up the overlay's last paint (a compositor
+        quirk), and a frame left over from this answer then flashes at
+        the start of the next clip."""
+        if self.dry:
+            return
+        self.bus.call(OVERLAY, "Show", quiet=True)
+        self.wait(0.8)
+        self.bus.call(OVERLAY, "Hide", quiet=True)
+        self.wait(0.8)
 
     def check_answer(self, expect, confirm, expect_steps=0, step_has=None):
         """(answer, steps) when the answer is good, else None (logged)."""
