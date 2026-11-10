@@ -12,5 +12,14 @@ Requires=basic.target
 # compositor restart.
 BindsTo=graphical-session.target
 Before=graphical-session.target
+# xdg-desktop-autostart.target runs the user's autostart apps the way GNOME
+# does: systemd-xdg-autostart-generator turns ~/.config/autostart and
+# /etc/xdg/autostart entries into app-*@autostart.service units (each in its
+# own cgroup under app.slice), honouring Hidden, OnlyShowIn/NotShowIn against
+# XDG_CURRENT_DESKTOP (Umoja:ubuntu:GNOME, so GNOME entries run), TryExec,
+# X-GNOME-Autostart-enabled, X-GNOME-Autostart-Phase and X-systemd-skip.
+# Snap apps are started by /etc/xdg/autostart/snap-userd-autostart.desktop.
+# The units are PartOf=graphical-session.target, so they stop at logout.
+Wants=xdg-desktop-autostart.target
 Wants=umoja-panel.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service
 StopWhenUnneeded=no

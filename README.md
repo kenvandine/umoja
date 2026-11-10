@@ -58,7 +58,16 @@ Anything in `~/.config/umoja/lemonade/config.json` overrides these defaults.
 
 If the compositor crashes during a session, `umoja-session` restarts it in
 place (up to 3 times in 10 minutes) instead of logging you out. Open apps
-are lost, but the panel, dock, overlay and Lemonade come back.
+are lost, but the panel, dock, overlay and Lemonade come back, along with
+your autostart apps.
+
+Apps set to start at login (`~/.config/autostart`, `/etc/xdg/autostart`,
+and snaps through `snap userd --autostart`) start the way they do in GNOME:
+`umoja-session.target` pulls in systemd's `xdg-desktop-autostart.target`,
+so each one runs as its own `app-*@autostart.service` and follows the same
+`OnlyShowIn`/`NotShowIn`, `Hidden`, `TryExec` and
+`X-GNOME-Autostart-enabled` rules. `journalctl --user -u 'app-*@autostart.service'`
+shows what started.
 
 ## AI features
 

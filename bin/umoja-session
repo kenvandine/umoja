@@ -47,6 +47,13 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd $SESSION_VARS
 fi
 
+# The XDG autostart generator only runs when the user manager starts or
+# reloads, and with lingering (or a second login) that manager outlives the
+# last session, so an app switched to "start at login" since then would be
+# missed. Re-run the generators now, before
+# umoja-session.target pulls in xdg-desktop-autostart.target.
+systemctl --user daemon-reload || log "systemctl --user daemon-reload failed; autostart entries may be stale"
+
 # Stop the shell services when the compositor exits, however it exits, and
 # take our variables back out of the user manager, which outlives this
 # session and would otherwise hand them to the next login (e.g. GNOME).
