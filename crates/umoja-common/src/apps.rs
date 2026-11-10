@@ -6,7 +6,8 @@ use gio::prelude::*;
 ///
 /// Tries, in order: `<app_id>.desktop`, the lower-cased id, the last
 /// reverse-DNS component, and finally any entry whose `StartupWMClass`
-/// matches (this is how Ubuntu Dock matches Electron and X11 apps).
+/// matches (this is how Ubuntu Dock matches Electron and X11 apps), the
+/// app-id itself or, for an Electron `Name.Desktop` id, its `Name`.
 ///
 /// A hidden (`NoDisplay=true`) match gives way to a visible entry for the
 /// same app: Chrome's app-id is `com.google.Chrome`, whose desktop file is a
@@ -52,10 +53,28 @@ fn lookup(app_id: &str) -> Option<gio::DesktopAppInfo> {
             return Some(info);
         }
     }
-    all_entries().into_iter().find(|d| {
-        d.startup_wm_class()
-            .is_some_and(|c| c.eq_ignore_ascii_case(app_id))
-    })
+    let entries = all_entries();
+    let by_class = |class: &str| {
+        entries.iter().find(|d| {
+            d.startup_wm_class()
+                .is_some_and(|c| c.eq_ignore_ascii_case(class))
+        })
+    };
+    by_class(app_id)
+        .or_else(|| electron_class(app_id).and_then(by_class))
+        .cloned()
+}
+
+/// The X11 class an Electron app keeps in `StartupWMClass` when its Wayland
+/// app-id comes from `desktopName` instead: Mattermost's windows say
+/// `Mattermost.Desktop` while its snap's desktop file has
+/// `StartupWMClass=Mattermost` (upstream's own builds say
+/// `com.Mattermost.Desktop`). Only for ids ending in `.Desktop`, so
+/// reverse-DNS ids like `org.gnome.Foo` never match a class named `org`.
+fn electron_class(app_id: &str) -> Option<&str> {
+    let (prefix, last) = app_id.rsplit_once('.')?;
+    let name = prefix.rsplit('.').next()?;
+    (!name.is_empty() && last.eq_ignore_ascii_case("desktop")).then_some(name)
 }
 
 fn all_entries() -> Vec<gio::DesktopAppInfo> {
@@ -202,7 +221,16 @@ pub fn can_open_new_window(info: &gio::DesktopAppInfo) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::with_favorite;
+    use super::{electron_class, with_favorite};
+
+    #[test]
+    fn electron_class_from_desktop_name_ids() {
+        assert_eq!(electron_class("Mattermost.Desktop"), Some("Mattermost"));
+        assert_eq!(electron_class("com.Mattermost.Desktop"), Some("Mattermost"));
+        assert_eq!(electron_class("org.gnome.Nautilus"), None);
+        assert_eq!(electron_class("firefox_firefox"), None);
+        assert_eq!(electron_class(".desktop"), None);
+    }
 
     #[test]
     fn pin_appends_once_and_unpin_removes() {
