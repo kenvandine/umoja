@@ -94,9 +94,11 @@ DEMO_NOTIFICATIONS = [
      "umoja and 4 other packages were updated."),
 ]
 
+# Questions that land on a dedicated tool, so the small local model answers
+# them reliably. Dark style is put back afterwards. ({style} -> on/off.)
 DEFAULT_QUESTIONS = [
-    "Which apps are open right now, and on which workspace?",
-    "What did I miss in my notifications?",
+    "Turn {style} dark style",
+    "Summarize my recent notifications, including the ones I've already seen",
 ]
 
 SCENES = [
@@ -258,6 +260,9 @@ class Demo:
         self.output = None
         self.area = None  # (x, y, w, h) of the captured monitor, layout pixels
         self.terminal = None  # the window we were started from, minimized
+        self.terminal_name = ""
+        self.dark = None  # (color-scheme, gtk-theme) before the dark style ask
+        self.ready = False  # the local model is loaded
         self.spots = {}  # window id -> where its title bar sits when floating
         self.names = {}  # window id -> app name, for the assistant
         self.shots = {}  # scene -> [(file, caption)]
@@ -341,6 +346,9 @@ class Demo:
         if self.opts.output:
             self.output = self.opts.output
         log(f"capturing monitor {self.output or '(all)'}; writing to {self.out}")
+        if not self.dry and not self.bus.has_method(COMPOSITOR, "DragWindow"):
+            log("note: the running compositor has no DragWindow, so there's no tiling scene and "
+                "the windows can't be laid out. If you just installed newer debs, log out and back in.")
 
     def monitor(self):
         """(connector, (x, y, w, h)) of the primary monitor, in layout pixels."""
@@ -474,19 +482,33 @@ class Demo:
             self.spots[wid] = (x + int(w * fx), y + int(h * fy))
             self.drag(wid, *self.spots[wid], ms=450)
 
-    def minimize_terminal(self):
-        """Get the terminal that started us out of the shots."""
-        if self.opts.keep_terminal:
+    def find_terminal(self):
+        """The window we were started from: focused when the tour begins."""
+        if self.opts.keep_terminal or self.dry:
             return
         focused = [w for w in self.windows() if w[7] & F_FOCUSED]
-        if self.dry:
-            log("  minimize the focused window (this terminal)")
-            return
         if focused:
             self.terminal = focused[0][0]
-            log(f"  minimize {focused[0][1] or focused[0][2]} (restored at the end)")
-            self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.terminal, MINIMIZE)))
-            self.wait(0.8)
+            self.terminal_name = focused[0][1] or focused[0][2]
+
+    def hide_terminal(self):
+        """Get the terminal out of every shot, the overview included: send it
+        to its own workspace past the demo's ones, then minimize it."""
+        if self.opts.keep_terminal:
+            return
+        if self.dry:
+            log("  move this terminal to a spare workspace and minimize it")
+            return
+        if self.terminal is None:
+            return
+        log(f"  hide {self.terminal_name} (restored at the end)")
+        _cur, count = self.workspaces()
+        if self.bus.has_method(COMPOSITOR, "SendWindowToWorkspace") and count > 1:
+            self.bus.call(COMPOSITOR, "SendWindowToWorkspace",
+                          GLib.Variant("(tu)", (self.terminal, count - 1)))
+            self.wait(0.4)
+        self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.terminal, MINIMIZE)))
+        self.wait(0.8)
 
     def wait_for_window(self, known, timeout=10):
         end = time.monotonic() + timeout
@@ -520,8 +542,16 @@ class Demo:
             self.bus.call(COMPOSITOR, "ShowWorkspace",
                           GLib.Variant("(u)", (self.start_workspace,)), quiet=True)
         if self.terminal is not None:
+            if self.start_workspace is not None:
+                self.bus.call(COMPOSITOR, "SendWindowToWorkspace",
+                              GLib.Variant("(tu)", (self.terminal, self.start_workspace)), quiet=True)
             time.sleep(0.5)
             self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.terminal,)), quiet=True)
+        if self.dark is not None:
+            s = settings("org.gnome.desktop.interface")
+            s.set_string("color-scheme", self.dark[0])
+            s.set_string("gtk-theme", self.dark[1])
+            Gio.Settings.sync()
         if self.banners is False:
             s = settings("org.gnome.desktop.notifications")
             s.set_boolean("show-banners", False)
@@ -595,9 +625,18 @@ class Demo:
         self.wait(1.5)
         self.recorder.stop("Workspaces slide like GNOME's, with a popup showing where you are.")
 
+    def open_menu(self, menu):
+        """Open a top bar menu. A focus change just after (a window settling
+        from the previous scene) can close a popover as it opens, and
+        OpenMenu leaves an open one alone, so asking again is safe."""
+        for _ in range(2):
+            self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", (menu,)))
+            self.wait(0.7)
+
     def scene_quick_settings(self):
-        self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("quick-settings",)))
-        self.wait(1.2)
+        self.wait(1.0)  # let the workspace switch settle first
+        self.open_menu("quick-settings")
+        self.wait(0.8)
         self.shot("quick-settings", "Quick Settings: network, Bluetooth, power mode, VPN, keyboard backlight and more.")
         self.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("quick-settings",)))
         self.wait(0.8)
@@ -605,7 +644,7 @@ class Demo:
     def notify(self, app, icon, summary, body):
         res = self.bus.call(
             NOTIFY, "Notify",
-            GLib.Variant("(susssasa{sv}i)", (app, 0, icon, summary, body, [], {}, 8000)),
+            GLib.Variant("(susssasa{sv}i)", (app, 0, icon, summary, body, [], {}, 4000)),
             "(u)",
         )
         if res:
@@ -620,8 +659,11 @@ class Demo:
                 self.shot("notifications", "Notifications behave like GNOME's and look like Unity's notify-osd bubbles.")
         self.wait(2.0)
         self.recorder.stop("Notification bubbles stacking up.")
-        self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("calendar",)))
-        self.wait(1.2)
+        # Let the bubbles time out so they don't cover the menu, then give the
+        # date menu's digest ("Summarizing...") time to come in.
+        self.wait(3.5)
+        self.open_menu("calendar")
+        self.wait(6.0 if self.ready else 2.0)
         self.shot("calendar", "The date menu keeps the notification list next to the calendar.")
         self.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("calendar",)))
         self.wait(0.8)
@@ -732,9 +774,14 @@ class Demo:
                 self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (w[0], TILE_RESTORE)))
 
     def scene_assistant(self):
-        if not self.warm_model():
+        if not self.ready:
+            log("  the local model isn't ready, skipping")
             return
-        questions = self.opts.ask or DEFAULT_QUESTIONS
+        iface = settings("org.gnome.desktop.interface")
+        is_dark = bool(iface) and iface.get_string("color-scheme") == "prefer-dark"
+        if iface and not self.opts.ask:
+            self.dark = (iface.get_string("color-scheme"), iface.get_string("gtk-theme"))
+        questions = [q.format(style="off" if is_dark else "on") for q in (self.opts.ask or DEFAULT_QUESTIONS)]
         tile_q = None if self.opts.ask else self.tiling_question()
         if tile_q:
             self.check_screen()
@@ -759,10 +806,10 @@ class Demo:
             self.bus.call(OVERLAY, "Ask", GLib.Variant("(s)", (q,)))
             self.wait(self.opts.answer_wait)
             self.shot(f"assistant-{i}", f"Asking the local assistant: “{q}”")
-            if i == 1:
-                self.recorder.stop(f"The assistant answering “{q}” on the local model, using desktop tools.")
             self.bus.call(OVERLAY, "Hide")
             self.wait(1.0)
+            if i == 1:
+                self.recorder.stop(f"The assistant answering “{q}” on the local model, using desktop tools.")
 
     # ---- output -------------------------------------------------------
 
@@ -893,9 +940,11 @@ class Demo:
             self.notifications_on()
             self.start_workspace = self.workspaces()[0] if not self.dry else None
             self.bus.call(OVERLAY, "Hide", quiet=True)
-            self.minimize_terminal()
+            self.find_terminal()
             log("opening apps")
             self.open_apps()
+            self.hide_terminal()
+            self.ready = self.warm_model() if "assistant" in scenes else False
             for s in scenes:
                 self.scene = s
                 log(f"scene: {s}")

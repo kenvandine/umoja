@@ -466,6 +466,34 @@ struct Win {
     app_id: String,
     title: String,
     flags: u32,
+    /// The app's names from its .desktop file ("Files" for
+    /// org.gnome.Nautilus), so "put Files on the left" finds it.
+    names: Vec<String>,
+}
+
+/// Name and GenericName of the app whose id is `app_id`.
+fn app_names(app_id: &str) -> Vec<String> {
+    use gio::prelude::AppInfoExt;
+    if app_id.is_empty() {
+        return Vec::new();
+    }
+    let id = if app_id.ends_with(".desktop") { app_id.to_string() } else { format!("{app_id}.desktop") };
+    let Some(info) = gio::DesktopAppInfo::new(&id) else {
+        return Vec::new();
+    };
+    let mut names = vec![info.name().to_string()];
+    if let Some(g) = info.generic_name() {
+        names.push(g.to_string());
+    }
+    names
+}
+
+/// Lowercase, without spaces, dashes or dots: "Text Editor" ~ "texteditor".
+fn squash(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '-' | '_' | '.'))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 const FOCUSED: u32 = 1;
@@ -543,6 +571,7 @@ async fn windows() -> Result<Vec<Win>, String> {
         .into_iter()
         .map(|(id, app_id, title, _, _, _, _, flags)| Win {
             id,
+            names: app_names(&app_id),
             app_id,
             title,
             flags,
@@ -572,7 +601,10 @@ fn describe_window(w: &Win) -> String {
         state.push("on another workspace");
     }
     let app = w.app_id.trim_end_matches(".desktop");
-    let mut s = format!("{}. {} — {}", short_id(w.id), app, w.title);
+    let mut s = match w.names.first() {
+        Some(name) => format!("{}. {name} ({app}) — {}", short_id(w.id), w.title),
+        None => format!("{}. {} — {}", short_id(w.id), app, w.title),
+    };
     if !state.is_empty() {
         s.push_str(&format!(" ({})", state.join(", ")));
     }
@@ -612,9 +644,13 @@ fn pick_window<'a>(wins: &'a [Win], a: &Value) -> Option<&'a Win> {
         return wins.iter().find(|w| w.id == id);
     }
     let q = want.to_lowercase();
+    let sq = squash(want);
     // MRU order, so "the terminal" means the one used last.
     wins.iter()
         .find(|w| w.app_id.to_lowercase().contains(&q))
+        .or_else(|| wins.iter().find(|w| w.names.iter().any(|n| n.eq_ignore_ascii_case(want))))
+        .or_else(|| wins.iter().find(|w| !sq.is_empty() && squash(&w.app_id).contains(&sq)))
+        .or_else(|| wins.iter().find(|w| w.names.iter().any(|n| squash(n).contains(&sq))))
         .or_else(|| wins.iter().find(|w| w.title.to_lowercase().contains(&q)))
 }
 
@@ -959,8 +995,10 @@ mod tests {
     #[test]
     fn window_picking() {
         let wins = vec![
-            Win { id: 900, app_id: "org.gnome.Ptyxis".into(), title: "ken@umoja: ~".into(), flags: CURRENT_WORKSPACE },
-            Win { id: 901, app_id: "firefox".into(), title: "Ubuntu — Mozilla Firefox".into(), flags: FOCUSED | CURRENT_WORKSPACE },
+            Win { id: 900, app_id: "org.gnome.Ptyxis".into(), title: "ken@umoja: ~".into(), flags: CURRENT_WORKSPACE, names: vec!["Terminal".into()] },
+            Win { id: 901, app_id: "firefox".into(), title: "Ubuntu — Mozilla Firefox".into(), flags: FOCUSED | CURRENT_WORKSPACE, names: vec![] },
+            Win { id: 902, app_id: "org.gnome.Nautilus".into(), title: "Home".into(), flags: CURRENT_WORKSPACE, names: vec!["Files".into()] },
+            Win { id: 903, app_id: "org.gnome.TextEditor".into(), title: "New Document".into(), flags: CURRENT_WORKSPACE, names: vec!["Text Editor".into()] },
         ];
         assert_eq!(pick_window(&wins, &json!({})).unwrap().id, 901);
         assert_eq!(pick_window(&wins, &json!({"window": "ptyxis"})).unwrap().id, 900);
@@ -969,6 +1007,10 @@ mod tests {
         assert_eq!(pick_window(&wins, &json!({"window": n})).unwrap().id, 900);
         assert_eq!(pick_window(&wins, &json!({"window": format!("#{n}")})).unwrap().id, 900);
         assert!(pick_window(&wins, &json!({"window": "gimp"})).is_none());
+        // By the app's display name, and with spacing that differs from the id.
+        assert_eq!(pick_window(&wins, &json!({"window": "Files"})).unwrap().id, 902);
+        assert_eq!(pick_window(&wins, &json!({"window": "text editor"})).unwrap().id, 903);
+        assert_eq!(pick_window(&wins, &json!({"window": "terminal"})).unwrap().id, 900);
         assert!(describe_window(&wins[1]).contains("(focused)"));
     }
 
