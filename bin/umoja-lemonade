@@ -31,6 +31,8 @@ export HF_HOME="$CACHE/huggingface"
 # compositor's next command submission was rejected (-ENOMEM), which Mesa
 # turns into abort() for a non-robust GL context. Our defaults cap the
 # context at 16k and keep one request and one model per type in flight.
+# The KV cache is stored as q8_0 (flash attention on), half the size of the
+# f16 default: about 1.2 GB less for Qwen3-4B at 16k.
 # They are only defaults: ~/.config/umoja/lemonade/config.json still wins.
 DEFAULTS=${UMOJA_LEMONADE_DEFAULTS:-/usr/share/umoja/lemonade/defaults.json}
 if [ -z "${LEMONADE_DEFAULTS_PATH:-}" ] && [ -r "$DEFAULTS" ]; then
