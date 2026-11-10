@@ -670,6 +670,10 @@ public:
         if (w) guarded("tile", [&] { apply_to(w, action, false); });
     }
 
+    void move_pointer(int32_t x, int32_t y) {
+        guarded("move pointer", [&] { tools.move_cursor_to(geom::PointF{float(x), float(y)}); });
+    }
+
     // org.umoja.Compositor.DragWindow: a title-bar drag driven by points
     // instead of the pointer, through the same drag-to-snap path (tile
     // preview, layout picker, drop). Phase 0 grabs the window's title bar
@@ -1992,6 +1996,12 @@ extern "C" bool umoja_wm_script_drag(uint64_t id, uint32_t phase, int32_t x, int
     bool ok = false;
     with_wm("scripted drag", [&] { ok = g_wm->script_drag(g_wm->find(id), phase, x, y, out_x, out_y); });
     return ok;
+}
+
+// org.umoja.Compositor.MovePointer: put the pointer somewhere out of the
+// way (tools/demo parks it so it isn't over what a clip shows).
+extern "C" void umoja_wm_move_pointer(int32_t x, int32_t y) {
+    with_wm("move pointer", [&] { g_wm->move_pointer(x, y); });
 }
 
 extern "C" void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count) {

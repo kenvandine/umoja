@@ -468,6 +468,7 @@ unsafe extern "C" {
     fn umoja_wm_close(id: u64);
     fn umoja_wm_switcher_pick(index: u32);
     fn umoja_wm_tile(id: u64, action: u32);
+    fn umoja_wm_move_pointer(x: i32, y: i32);
     fn umoja_wm_script_drag(
         id: u64,
         phase: u32,
@@ -630,6 +631,13 @@ impl Compositor {
         tokio::task::spawn_blocking(move || scripted_drag(id, x, y, duration_ms))
             .await
             .unwrap_or(false)
+    }
+
+    /// Put the pointer at (x, y) in layout pixels, out of the way of
+    /// whatever is being shown (tools/demo). It is a warp: no motion or
+    /// button events reach any client.
+    async fn move_pointer(&self, x: i32, y: i32) {
+        let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_move_pointer(x, y) }).await;
     }
 
     /// (current, count): the active workspace (0-based) and how many exist.

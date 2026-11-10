@@ -260,7 +260,9 @@ class Recorder:
         if self.demo.dry:
             log("  rec  stop")
         else:
-            time.sleep(0.5)
+            # wf-recorder drops the last second or so when stopped: keep
+            # rolling so the clip really ends on the result.
+            time.sleep(2.0)
             self.proc.send_signal(signal.SIGINT)  # finishes the file
             try:
                 self.proc.wait(timeout=15)
@@ -297,6 +299,7 @@ class Demo:
         self.raw_dir = self.out / ".raw"
         self.video = not opts.no_video
         self.output = None
+        self.can_park = None
         self.area = None  # (x, y, w, h) of the captured monitor, layout pixels
         self.terminal = None  # the window we were started from, minimized
         self.terminal_name = ""
@@ -549,6 +552,28 @@ class Demo:
         # The dock slides away or back when windows touch it: let it finish.
         self.wait(1.2)
 
+    def park_pointer(self):
+        """Warp the pointer to the right screen edge, where almost all of
+        it is off screen and it hovers nothing (no tooltips in the shots).
+        A warp, not input: no clicks or motion reach any app."""
+        if self.can_park is None:
+            self.can_park = self.bus.has_method(COMPOSITOR, "MovePointer")
+        if not self.can_park:
+            return
+        x, y, w, h = self.area
+        self.bus.call(COMPOSITOR, "MovePointer",
+                      GLib.Variant("(ii)", (x + w - 1, y + int(h * 0.75))), quiet=True)
+
+    def editor_to_front(self):
+        """Text Editor in front of Files: its text is the more interesting."""
+        editor = next((wid for wid, n in self.names.items()
+                       if wid in self.opened[:2] and "Text" in (n or "")), None)
+        if editor is None and len(self.opened) >= 2:
+            editor = self.opened[1]
+        if editor is not None and not self.dry:
+            self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (editor,)), quiet=True)
+            self.wait(0.4)
+
     def arrange_floating(self):
         """Two windows floating, overlapping a little, with desktop around them."""
         if not self.can_drag():
@@ -571,6 +596,7 @@ class Demo:
                 gx, gy = x + w // 2, y + int(h * 0.18)
             self.spots[wid] = (gx, gy)
             self.drag(wid, gx, gy, ms=450)
+        self.editor_to_front()
 
     def find_terminal(self):
         """The window we were started from: focused when the tour begins."""
@@ -684,9 +710,10 @@ class Demo:
         self.wait(0.8)
         # The clip ends on the tiles; dragging back out isn't recorded.
         self.recorder.stop("Drag-to-tile: halves at the screen edges, quarters in the corners.")
-        for wid in (b, a):
+        for wid in (a, b):
             spot = self.spots.get(wid) or (x + w // 2, y + h // 3)
             self.drag(wid, *spot)
+        self.editor_to_front()
         self.wait(0.8)
 
     def scene_app_grid(self):
@@ -988,6 +1015,7 @@ class Demo:
         self.wait(0.5)
         self.untile_demo_windows()
         self.wait(1.0)
+        self.editor_to_front()
 
     def scene_ai_settings(self):
         iface = settings("org.gnome.desktop.interface")
@@ -1011,11 +1039,8 @@ class Demo:
         Gio.Settings.sync()
         self.wait(1.5)
         q = "Switch to dark style and turn on Night Light"
-        if self.ask("ai-settings", q, "Settings in plain words: dark style and Night Light, done in one ask.",
-                    keep_open=True, expect_steps=2) is not None:
-            self.bus.call(OVERLAY, "Hide")
-            self.wait(1.2)
-            self.shot("ai-settings-after", "The whole desktop after that one sentence.")
+        self.ask("ai-settings", q, "Settings in plain words: dark style and Night Light, done in one ask.",
+                 expect_steps=2)
 
     def scene_ai_install(self):
         self.ask("ai-install", f"I need {self.opts.app}",
@@ -1306,8 +1331,8 @@ class Demo:
             scenes = [s for s in scenes if not s.startswith("ai-")] + ["ai-custom"]
         if not self.dry:
             self.check_screen()
-            log("Park the mouse pointer in the bottom-right corner (it shows in the clips), then keep")
-            log(f"your hands off the keyboard and mouse: the tour starts in {self.opts.countdown} s.")
+            log("Keep your hands off the keyboard and mouse (the tour moves the pointer out of the")
+            log(f"way itself on new enough umoja): it starts in {self.opts.countdown} s.")
             for n in range(self.opts.countdown, 0, -1):
                 print(f"  {n}...", flush=True)
                 time.sleep(1)
@@ -1328,6 +1353,7 @@ class Demo:
                 self.scene = s
                 log(f"scene: {s}")
                 self.check_screen()
+                self.park_pointer()
                 getattr(self, "scene_" + s.replace("-", "_"))()
         except Stop as e:
             stopped = str(e)

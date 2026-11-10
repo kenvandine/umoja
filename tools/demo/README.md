@@ -9,7 +9,9 @@ sudo apt install ffmpeg          # optional: GIFs + MP4s (otherwise clips stay .
 tools/demo/umoja-demo            # from a terminal inside your Umoja session
 ```
 
-Park the mouse pointer in a corner first: the clips show it. It minimizes the terminal you started it from (and brings it back at the
+Before each scene it moves the pointer to the right screen edge, out of the
+shots (needs the compositor's `MovePointer`; with an older build, park the
+pointer in a corner yourself). It minimizes the terminal you started it from (and brings it back at the
 end), and keeps every window floating, never maximized or full screen, so the
 wallpaper shows. Keep your hands off the keyboard and mouse once the countdown ends (a real
 pointer move ends the screensaver preview early, and clicks land on whatever
@@ -30,7 +32,7 @@ is open). The full tour takes about three minutes.
 | `screenshot-ui` | `Overlay.ShowScreenshotUI` / `HideScreenshotUI` | `images/screenshot-ui.png` |
 | `screensaver` | `umoja-screensaver` preview for 7 s | `images/screensaver.png`, `videos/screensaver.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
-| `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back at the end) | `images/ai-settings.png`, `images/ai-settings-after.png`, `videos/ai-settings.*` |
+| `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back at the end) | `images/ai-settings.png`, `videos/ai-settings.*` |
 | `ai-install` | "I need VLC" (`--app`): stops at the "Allow the assistant to do this?" dialog and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
 | `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow dialog and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
 | `ai-reply` | "Draft a reply to Priya..." on the demo notification: opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
@@ -71,7 +73,8 @@ change). A rerun replaces only the files the previous run wrote.
 - No keyboard or mouse input is injected; everything goes over D-Bus. The
   tiling drags are done by the compositor itself (`DragWindow` runs the same
   drag-to-snap code as a title-bar drag and ignores the real pointer while it
-  runs).
+  runs). `MovePointer` warps the pointer without sending any motion or
+  clicks to apps.
 - It holds an `org.freedesktop.ScreenSaver` idle inhibitor while it runs.
 - Before every step it checks that the screen is not blanked
   (`ScreenSaver.GetActive`) or locked (logind `LockedHint`). If it is, the
@@ -106,4 +109,4 @@ change). A rerun replaces only the files the previous run wrote.
 Two scenes need a newer build than the one you may have installed: the
 screenshot UI scene needs the overlay's `HideScreenshotUI` (2026.46.4+), and
 the tiling scene and floating layout need the compositor's `DragWindow`
-(after 2026.46.4). Without them those steps are skipped.
+and parking the pointer needs `MovePointer` (both after 2026.46.4). Without them those steps are skipped.

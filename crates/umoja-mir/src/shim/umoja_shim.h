@@ -238,6 +238,7 @@ void umoja_wm_activate(uint64_t id);
 void umoja_wm_close(uint64_t id);
 void umoja_wm_switcher_pick(uint32_t index);
 void umoja_wm_tile(uint64_t id, uint32_t action);
+void umoja_wm_move_pointer(int32_t x, int32_t y);
 // DragWindow: phase 0 grabs `id` by its title bar (grab point out), 1 moves
 // the grab point to (x, y), 2 drops it (snapping like a real drag).
 bool umoja_wm_script_drag(uint64_t id, uint32_t phase, int32_t x, int32_t y, int32_t* out_x, int32_t* out_y);
