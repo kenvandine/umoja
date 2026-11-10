@@ -851,13 +851,11 @@ impl ScreenshotUi {
         }
         *self.surfaces.borrow_mut() = surfaces;
         *self.frame.borrow_mut() = Some((plain, cursor));
-        // gnome-shell starts with a centred default selection.
-        self.sel.set(Sel {
-            x: main.x + main.w * 0.25,
-            y: main.y + main.h * 0.25,
-            w: main.w * 0.5,
-            h: main.h * 0.5,
-        });
+        // Like gnome-shell, keep the last selection while it still fits the
+        // monitors, else start with a centred default one.
+        let monitor_rects: Vec<Sel> = self.surfaces.borrow().iter().map(|s| s.rect).collect();
+        self.sel
+            .set(initial_selection(self.sel.get(), &monitor_rects, main));
         self.load_windows();
         // The assistant wants a picture, and only one recording runs at a time.
         let can_cast = self.ask.borrow().is_none() && !self.recorder.is_recording();
@@ -1181,6 +1179,47 @@ fn activate_window(id: u64) {
     });
 }
 
+/// The selection to open with: the previous one if it is still on screen
+/// (inside the monitors' bounding box and over at least one monitor, so a
+/// monitor change doesn't leave it somewhere unreachable), else gnome-shell's
+/// default of half the primary monitor, centred.
+fn initial_selection(previous: Sel, monitors: &[Sel], primary: Sel) -> Sel {
+    let bounds = monitors.iter().copied().reduce(|a, b| {
+        let x = a.x.min(b.x);
+        let y = a.y.min(b.y);
+        Sel {
+            x,
+            y,
+            w: (a.x + a.w).max(b.x + b.w) - x,
+            h: (a.y + a.h).max(b.y + b.h) - y,
+        }
+    });
+    let overlaps = |m: &Sel| {
+        previous.x < m.x + m.w
+            && m.x < previous.x + previous.w
+            && previous.y < m.y + m.h
+            && m.y < previous.y + previous.h
+    };
+    let fits = bounds.is_some_and(|b| {
+        previous.w >= 1.0
+            && previous.h >= 1.0
+            && previous.x >= b.x
+            && previous.y >= b.y
+            && previous.x + previous.w <= b.x + b.w
+            && previous.y + previous.h <= b.y + b.h
+    }) && monitors.iter().any(overlaps);
+    if fits {
+        previous
+    } else {
+        Sel {
+            x: primary.x + primary.w * 0.25,
+            y: primary.y + primary.h * 0.25,
+            w: primary.w * 0.5,
+            h: primary.h * 0.5,
+        }
+    }
+}
+
 fn rounded(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     use std::f64::consts::{FRAC_PI_2, PI};
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
@@ -1410,6 +1449,48 @@ mod tests {
             h: 100.0,
         };
         assert_eq!(edge.to_pixels(1.0, 1920, 1080), (1900, 1000, 20, 80));
+    }
+
+    #[test]
+    fn selection_is_remembered_while_on_screen() {
+        let left = Sel {
+            x: 0.0,
+            y: 0.0,
+            w: 1920.0,
+            h: 1080.0,
+        };
+        let right = Sel {
+            x: 1920.0,
+            y: 0.0,
+            w: 1280.0,
+            h: 720.0,
+        };
+        let default = Sel {
+            x: 480.0,
+            y: 270.0,
+            w: 960.0,
+            h: 540.0,
+        };
+        // First open: nothing yet.
+        assert_eq!(initial_selection(Sel::default(), &[left], left), default);
+        // A previous selection that still fits is kept, even across monitors.
+        let prev = Sel {
+            x: 1800.0,
+            y: 100.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        assert_eq!(initial_selection(prev, &[left, right], left), prev);
+        // The right monitor was unplugged: it no longer fits.
+        assert_eq!(initial_selection(prev, &[left], left), default);
+        // Inside the bounding box but only over the gap below the smaller monitor.
+        let gap = Sel {
+            x: 2000.0,
+            y: 800.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        assert_eq!(initial_selection(gap, &[left, right], left), default);
     }
 
     #[test]
