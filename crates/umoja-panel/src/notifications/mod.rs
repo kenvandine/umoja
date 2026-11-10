@@ -39,6 +39,12 @@ use umoja_common::gsettings as gs;
 
 pub use list::MessageList;
 
+/// Listed notifications kept per app, as gnome-shell's
+/// MAX_NOTIFICATIONS_PER_SOURCE.
+const PER_APP: usize = 3;
+/// Listed notifications kept in all.
+const MAX_LISTED: usize = 50;
+
 pub const NOTIFICATIONS: &str = "org.gnome.desktop.notifications";
 pub const APP_NOTIFICATIONS: &str = "org.gnome.desktop.notifications.application";
 
@@ -452,6 +458,8 @@ impl Center {
             }
         }
 
+        self.trim_history(note.id);
+
         let critical = note.urgency == Urgency::Critical;
         // Progress updates (`value` hint) to a notification whose banner has
         // already gone only refresh the message list, rather than popping a
@@ -489,6 +497,31 @@ impl Center {
             },
         );
         self.expiry.borrow_mut().insert(id, src);
+    }
+
+    /// Keep the message list to [`PER_APP`] notifications per app (as
+    /// gnome-shell's MessageTray keeps per source) and [`MAX_LISTED`] in all,
+    /// dropping the oldest. Every listed notification keeps its image and
+    /// its row widgets, so the list used to grow for as long as the session
+    /// ran. `keep` (the one just added) always stays.
+    fn trim_history(&self, keep: u32) {
+        let drop: Vec<u32> = {
+            let notes = self.notes.borrow();
+            let mut per_app: HashMap<&str, usize> = HashMap::new();
+            notes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| {
+                    let source = n.app_id.as_deref().unwrap_or(n.app_name.as_str());
+                    let seen = per_app.entry(source).or_default();
+                    *seen += 1;
+                    (n.id != keep && !n.resident && (*seen > PER_APP || i >= MAX_LISTED)).then_some(n.id)
+                })
+                .collect()
+        };
+        for id in drop {
+            self.close(id, CloseReason::Expired);
+        }
     }
 
     /// Remove a notification everywhere and tell its sender.
