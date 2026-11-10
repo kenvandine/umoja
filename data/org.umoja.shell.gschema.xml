@@ -10,6 +10,17 @@
       <default>true</default>
       <summary>Enable the Lemonade AI assistant in the overlay search</summary>
     </key>
+    <key name="assistant-idle-unload" type="i">
+      <range min="0" max="1440"/>
+      <default>10</default>
+      <summary>Minutes before an idle local model is unloaded</summary>
+      <description>
+        The local chat model takes several gigabytes of memory while it is
+        loaded. After this many minutes without a request it is unloaded;
+        the next question loads it again, which takes a few seconds.
+        0 keeps it loaded.
+      </description>
+    </key>
     <key name="lemonade-model" type="s">
       <default>'Qwen3-4B-Instruct-2507-GGUF'</default>
       <summary>Model the embedded Lemonade server uses for the assistant</summary>

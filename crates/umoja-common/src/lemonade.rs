@@ -71,6 +71,13 @@ pub fn unload_url() -> String {
 /// processes need no HTTP client). `Ok(false)` when the server isn't
 /// running, which leaves nothing loaded either.
 pub fn unload() -> Result<bool, String> {
+    unload_model(None)
+}
+
+/// Like [`unload`], for one model only (`None`: all of them), so dropping
+/// the idle chat model leaves the embedding model alone and the other way
+/// round.
+pub fn unload_model(model: Option<&str>) -> Result<bool, String> {
     use std::io::{Read, Write};
     use std::time::Duration;
     let url = unload_url();
@@ -93,7 +100,10 @@ pub fn unload() -> Result<bool, String> {
         Err(e) => return Err(e.to_string()),
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
-    let body = "{}";
+    let body = match model {
+        Some(m) => serde_json::json!({ "model_name": m }).to_string(),
+        None => "{}".to_string(),
+    };
     write!(
         stream,
         "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -108,6 +118,115 @@ pub fn unload() -> Result<bool, String> {
         Ok(true)
     } else {
         Err(format!("the AI server answered {code}"))
+    }
+}
+
+/// Unloading the chat model when nobody has asked it anything for a while
+/// (`org.umoja.shell assistant-idle-unload` minutes). Loaded, Qwen3-4B and
+/// its context take about 5.5 GB of memory, which an APU shares with
+/// everything else.
+///
+/// Every process that talks to the local chat model calls [`note_chat_use`]
+/// when a request starts and when it ends. That touches a file in
+/// `$XDG_RUNTIME_DIR`, so the overlay and the panel see each other's use,
+/// and wakes one watcher thread in this process. The watcher unloads the
+/// model once the file is older than the idle time, but only when this
+/// process used it since the last unload, so idle processes never wake.
+pub mod idle {
+    use std::path::PathBuf;
+    use std::sync::{Condvar, LazyLock, Mutex};
+    use std::time::{Duration, SystemTime};
+
+    const DEFAULT_MINUTES: i32 = 10;
+
+    /// The chat model this process last used, waiting to be unloaded.
+    static PENDING: LazyLock<(Mutex<Option<String>>, Condvar)> =
+        LazyLock::new(|| (Mutex::new(None), Condvar::new()));
+
+    fn stamp() -> PathBuf {
+        let dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        dir.join("umoja-lemonade-chat-used")
+    }
+
+    fn idle_time() -> Option<Duration> {
+        let minutes =
+            crate::gsettings::get_int(crate::gsettings::UMOJA_SHELL, "assistant-idle-unload", DEFAULT_MINUTES);
+        (minutes > 0).then(|| Duration::from_secs(minutes as u64 * 60))
+    }
+
+    /// When any process last used the chat model.
+    fn last_use() -> Option<SystemTime> {
+        std::fs::metadata(stamp()).and_then(|m| m.modified()).ok()
+    }
+
+    /// A request to the local chat `model` starts or ends. Cheap; any thread.
+    pub fn note_chat_use(model: &str) {
+        let path = stamp();
+        let touched = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(SystemTime::now()));
+        if let Err(e) = touched {
+            tracing::debug!(error = %e, path = %path.display(), "could not mark model use");
+        }
+        let (lock, cv) = &*PENDING;
+        let mut pending = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let start = pending.is_none();
+        *pending = Some(model.to_string());
+        cv.notify_all();
+        drop(pending);
+        if start {
+            start_watcher();
+        }
+    }
+
+    fn start_watcher() {
+        static STARTED: std::sync::Once = std::sync::Once::new();
+        STARTED.call_once(|| {
+            let spawned = std::thread::Builder::new()
+                .name("umoja-model-idle".into())
+                .spawn(watch);
+            if let Err(e) = spawned {
+                tracing::warn!(error = %e, "no idle model unload");
+            }
+        });
+    }
+
+    fn watch() {
+        let (lock, cv) = &*PENDING;
+        loop {
+            // Sleep until this process has used the model.
+            let mut pending = lock.lock().unwrap_or_else(|e| e.into_inner());
+            while pending.is_none() {
+                pending = cv.wait(pending).unwrap_or_else(|e| e.into_inner());
+            }
+            drop(pending);
+            let Some(idle) = idle_time() else {
+                // Kept loaded: look again in a while (the setting may change).
+                std::thread::sleep(Duration::from_secs(300));
+                continue;
+            };
+            let since = last_use()
+                .and_then(|t| SystemTime::now().duration_since(t).ok())
+                .unwrap_or(idle);
+            if since < idle {
+                // Wake early when used again, so a new question re-arms it.
+                let pending = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = cv.wait_timeout(pending, idle - since);
+                continue;
+            }
+            let model = lock.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let Some(model) = model else { continue };
+            match super::unload_model(Some(&model)) {
+                Ok(true) => tracing::info!(model, "unloaded the idle chat model"),
+                Ok(false) => {}
+                Err(e) => tracing::info!(model, error = %e, "could not unload the idle chat model"),
+            }
+        }
     }
 }
 
