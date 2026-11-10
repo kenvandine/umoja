@@ -51,6 +51,8 @@ pub fn parse_wpctl(out: &str) -> Option<VolumeState> {
 type Listener = Box<dyn Fn(&VolumeState)>;
 
 pub struct Volume {
+    /// `@DEFAULT_AUDIO_SINK@` or `@DEFAULT_AUDIO_SOURCE@`.
+    target: &'static str,
     state: Cell<VolumeState>,
     listeners: RefCell<Vec<Listener>>,
     /// When a media key last set the volume. While keys are coming in we
@@ -63,16 +65,24 @@ pub struct Volume {
 }
 
 thread_local! {
-    static VOLUME: Rc<Volume> = Volume::start();
+    static VOLUME: Rc<Volume> = Volume::start(SINK);
+    static MIC: Rc<Volume> = Volume::start(SOURCE);
 }
 
 impl Volume {
+    /// The default output.
     pub fn get() -> Rc<Self> {
         VOLUME.with(Rc::clone)
     }
 
-    fn start() -> Rc<Self> {
+    /// The default input, for the Quick Settings microphone slider.
+    pub fn mic() -> Rc<Self> {
+        MIC.with(Rc::clone)
+    }
+
+    fn start(target: &'static str) -> Rc<Self> {
         let v = Rc::new(Self {
+            target,
             state: Cell::default(),
             listeners: RefCell::default(),
             last_key: Cell::default(),
@@ -104,12 +114,17 @@ impl Volume {
         }
     }
 
-    fn poll(self: &Rc<Self>) {
+    pub fn state(&self) -> VolumeState {
+        self.state.get()
+    }
+
+    /// Read the volume now, e.g. after the default device changed.
+    pub fn poll(self: &Rc<Self>) {
         let Ok(proc) = gio::Subprocess::newv(
             &[
                 "wpctl".as_ref(),
                 "get-volume".as_ref(),
-                "@DEFAULT_AUDIO_SINK@".as_ref(),
+                self.target.as_ref(),
             ],
             gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE,
         ) else {
@@ -134,15 +149,15 @@ impl Volume {
         s.muted = false;
         self.update(s);
         let vol = format!("{volume:.2}");
-        spawn(&["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"]);
-        spawn(&["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", &vol]);
+        spawn(&["wpctl", "set-mute", self.target, "0"]);
+        spawn(&["wpctl", "set-volume", self.target, &vol]);
     }
 
     pub fn toggle_mute(&self) {
         let mut s = self.state.get();
         s.muted = !s.muted;
         self.update(s);
-        spawn(&["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"]);
+        spawn(&["wpctl", "set-mute", self.target, "toggle"]);
     }
 }
 
@@ -282,6 +297,8 @@ impl Volume {
         let Some(old) = read_now(SOURCE) else { return };
         let muted = !old.muted;
         spawn(&["wpctl", "set-mute", SOURCE, if muted { "1" } else { "0" }]);
+        let mic = Volume::mic();
+        mic.update(VolumeState { muted, ..old });
         let level = if muted { 0.0 } else { old.volume };
         crate::osd::show(
             crate::osd::Request::icon(crate::osd::volume_icon(true, muted, level))
@@ -335,6 +352,11 @@ fn spawn(argv: &[&str]) {
     }
 }
 
+/// The microphone icon: gnome-shell's microphone-sensitivity levels.
+pub fn mic_icon(s: &VolumeState) -> &'static str {
+    crate::osd::volume_icon(true, s.muted || s.volume <= 0.0, s.volume)
+}
+
 /// The top bar speaker icon.
 pub fn indicator() -> gtk::Image {
     let img = gtk::Image::new();
@@ -345,6 +367,28 @@ pub fn indicator() -> gtk::Image {
             img.set_icon_name(Some(s.icon()));
         }
     });
+    img
+}
+
+/// The top bar microphone icon, shown while an app is recording, as
+/// gnome-shell's volume indicator shows its input icon.
+pub fn mic_indicator() -> gtk::Image {
+    let img = gtk::Image::new();
+    img.set_visible(false);
+    let sync = {
+        let img = img.clone();
+        move || {
+            let mic = Volume::mic().state();
+            img.set_visible(crate::sound::Sound::get().state().recording && mic.available);
+            img.set_icon_name(Some(mic_icon(&mic)));
+        }
+    };
+    let sync = Rc::new(sync);
+    crate::sound::Sound::get().subscribe({
+        let sync = sync.clone();
+        move |_| sync()
+    });
+    Volume::mic().subscribe(move |_| sync());
     img
 }
 
@@ -380,18 +424,42 @@ mod tests {
             volume,
             muted,
         };
-        assert_eq!(apply_key(s(0.5, false), Key::Up, 0.06, 1.0).0, s(0.56, false));
-        assert_eq!(apply_key(s(0.98, false), Key::Up, 0.06, 1.0).0, s(1.0, false));
+        assert_eq!(
+            apply_key(s(0.5, false), Key::Up, 0.06, 1.0).0,
+            s(0.56, false)
+        );
+        assert_eq!(
+            apply_key(s(0.98, false), Key::Up, 0.06, 1.0).0,
+            s(1.0, false)
+        );
         assert_eq!(apply_key(s(1.0, false), Key::Up, 0.06, 1.0).1, false);
-        assert_eq!(apply_key(s(1.0, false), Key::Up, 0.06, 1.5).0, s(1.06, false));
+        assert_eq!(
+            apply_key(s(1.0, false), Key::Up, 0.06, 1.5).0,
+            s(1.06, false)
+        );
         // Unmuting with Up keeps the old volume unless it was 0.
         assert_eq!(apply_key(s(0.5, true), Key::Up, 0.06, 1.0).0, s(0.5, false));
-        assert_eq!(apply_key(s(0.0, true), Key::Up, 0.06, 1.0).0, s(0.06, false));
+        assert_eq!(
+            apply_key(s(0.0, true), Key::Up, 0.06, 1.0).0,
+            s(0.06, false)
+        );
         // Down to the bottom mutes.
-        assert_eq!(apply_key(s(0.04, false), Key::Down, 0.06, 1.0).0, s(0.0, true));
-        assert_eq!(apply_key(s(0.06, false), Key::Down, 0.06, 1.0).0, s(0.0, true));
-        assert_eq!(apply_key(s(0.5, false), Key::Down, 0.06, 1.0).0, s(0.44, false));
-        assert_eq!(apply_key(s(0.5, false), Key::Mute, 0.06, 1.0).0, s(0.5, true));
+        assert_eq!(
+            apply_key(s(0.04, false), Key::Down, 0.06, 1.0).0,
+            s(0.0, true)
+        );
+        assert_eq!(
+            apply_key(s(0.06, false), Key::Down, 0.06, 1.0).0,
+            s(0.0, true)
+        );
+        assert_eq!(
+            apply_key(s(0.5, false), Key::Down, 0.06, 1.0).0,
+            s(0.44, false)
+        );
+        assert_eq!(
+            apply_key(s(0.5, false), Key::Mute, 0.06, 1.0).0,
+            s(0.5, true)
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ mod power_dialog;
 mod quick_settings;
 mod screencast;
 mod sni;
+mod sound;
 mod volume;
 mod wallpaper;
 

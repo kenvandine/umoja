@@ -4,7 +4,7 @@
 //! GNOME, so flipping Dark Style here or in gnome-control-center is the same
 //! operation and both stay in sync.
 
-use crate::{battery, bluetooth, brightness, network, volume};
+use crate::{battery, bluetooth, brightness, network, sound, volume};
 use gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
@@ -48,6 +48,7 @@ pub fn button() -> gtk::MenuButton {
     icons.append(&vpn);
     icons.append(&bluetooth::indicator());
     icons.append(&volume::indicator());
+    icons.append(&volume::mic_indicator());
     icons.append(&battery::indicator());
     let power = gtk::Image::from_icon_name("system-shutdown-symbolic");
     battery::Battery::get().subscribe({
@@ -81,7 +82,8 @@ fn menu() -> gtk::Box {
     root.add_css_class("quick-settings");
 
     root.append(&session_row());
-    root.append(&volume_row());
+    root.append(&stream_slider(false));
+    root.append(&stream_slider(true));
 
     let flow = gtk::FlowBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -504,38 +506,186 @@ fn keyboard_tile() -> (gtk::Box, gtk::Revealer) {
     (split, revealer)
 }
 
-/// Output volume slider; the speaker icon mutes, like gnome-shell.
-fn volume_row() -> gtk::Box {
+/// gnome-shell's OutputStreamSlider / InputStreamSlider: the icon mutes,
+/// and an arrow (shown with more than one device) opens "Sound Output" /
+/// "Sound Input" to pick the device. The input slider is only shown while
+/// an app is recording.
+fn stream_slider(input: bool) -> gtk::Box {
+    let volume = if input {
+        volume::Volume::mic()
+    } else {
+        volume::Volume::get()
+    };
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    section.append(&row);
     let mute = gtk::Button::builder()
-        .icon_name("audio-volume-high-symbolic")
+        .icon_name(if input {
+            "microphone-sensitivity-high-symbolic"
+        } else {
+            "audio-volume-high-symbolic"
+        })
         .css_classes(["flat", "circular"])
+        .tooltip_text(if input {
+            i18n::shell("Microphone")
+        } else {
+            i18n::shell("Volume")
+        })
         .build();
-    mute.connect_clicked(|_| volume::Volume::get().toggle_mute());
+    mute.connect_clicked({
+        let volume = volume.clone();
+        move |_| volume.toggle_mute()
+    });
     row.append(&mute);
     let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
     scale.set_hexpand(true);
     row.append(&scale);
+    let arrow = gtk::ToggleButton::builder()
+        .icon_name("go-next-symbolic")
+        .css_classes(["flat", "circular", "tile-arrow", "slider-menu-arrow"])
+        .visible(false)
+        .build();
+    row.append(&arrow);
+
+    let (list, revealer) = network::tile_menu(&arrow);
+    section.append(&revealer);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.add_css_class("network-list-header");
+    header.append(&gtk::Image::from_icon_name(if input {
+        "audio-input-microphone-symbolic"
+    } else {
+        "audio-headphones-symbolic"
+    }));
+    header.append(
+        &gtk::Label::builder()
+            .label(i18n::shell(if input {
+                "Sound Input"
+            } else {
+                "Sound Output"
+            }))
+            .xalign(0.0)
+            .css_classes(["heading"])
+            .build(),
+    );
+    let devices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let settings = gtk::Button::builder()
+        .label(i18n::shell("Sound Settings"))
+        .css_classes(["flat", "network-row"])
+        .build();
+    if let Some(l) = settings.child().and_downcast::<gtk::Label>() {
+        l.set_xalign(0.0);
+    }
+    settings.connect_clicked(|b| {
+        close_menu(b);
+        open_settings("sound");
+    });
+    list.append(&header);
+    list.append(&devices);
+    list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    list.append(&settings);
+
+    // Rebuild the device rows only when the list itself changes.
+    let shown: Rc<std::cell::RefCell<Vec<(sound::Device, gtk::Image)>>> = Rc::default();
+    let recording = Rc::new(Cell::new(false));
+    let available = Rc::new(Cell::new(false));
+    let sync_visible = {
+        let (section, arrow, recording, available) = (
+            section.clone(),
+            arrow.clone(),
+            recording.clone(),
+            available.clone(),
+        );
+        move || {
+            let visible = !input || (recording.get() && available.get());
+            section.set_visible(visible);
+            if !visible {
+                arrow.set_active(false);
+            }
+        }
+    };
+    let sync_visible = Rc::new(sync_visible);
+    sound::Sound::get().subscribe({
+        let (arrow, devices, shown, recording, sync_visible) = (
+            arrow.clone(),
+            devices.clone(),
+            shown.clone(),
+            recording.clone(),
+            sync_visible.clone(),
+        );
+        move |s| {
+            let list = s.devices(input);
+            let same = {
+                let shown = shown.borrow();
+                shown.len() == list.len() && shown.iter().zip(list).all(|((d, _), n)| d == n)
+            };
+            if !same {
+                while let Some(c) = devices.first_child() {
+                    devices.remove(&c);
+                }
+                let mut rows = Vec::new();
+                for dev in list {
+                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    row.append(&gtk::Image::from_icon_name(dev.icon));
+                    row.append(
+                        &gtk::Label::builder()
+                            .label(&dev.description)
+                            .xalign(0.0)
+                            .hexpand(true)
+                            .ellipsize(gtk::pango::EllipsizeMode::End)
+                            .build(),
+                    );
+                    let check = gtk::Image::from_icon_name("object-select-symbolic");
+                    row.append(&check);
+                    let button = gtk::Button::builder()
+                        .child(&row)
+                        .css_classes(["flat", "network-row"])
+                        .build();
+                    let d = dev.clone();
+                    button.connect_clicked(move |_| sound::Sound::get().set_default(input, &d));
+                    devices.append(&button);
+                    rows.push((dev.clone(), check));
+                }
+                shown.replace(rows);
+            }
+            let default = s.default_name(input);
+            for (d, check) in shown.borrow().iter() {
+                check.set_opacity(if Some(d.name.as_str()) == default {
+                    1.0
+                } else {
+                    0.0
+                });
+            }
+            // gnome-shell: menuEnabled = this._deviceItems.size > 1.
+            arrow.set_visible(list.len() > 1);
+            if list.len() <= 1 {
+                arrow.set_active(false);
+            }
+            recording.set(s.recording);
+            sync_visible();
+        }
+    });
 
     let updating = Rc::new(Cell::new(false));
-    volume::Volume::get().subscribe({
+    volume.subscribe({
         let (row, scale, updating) = (row.clone(), scale.clone(), updating.clone());
         move |s| {
             row.set_sensitive(s.available);
-            mute.set_icon_name(s.icon());
+            mute.set_icon_name(if input { volume::mic_icon(s) } else { s.icon() });
             if (scale.value() - s.volume).abs() > 0.005 {
                 updating.set(true);
                 scale.set_value(s.volume);
                 updating.set(false);
             }
+            available.set(s.available);
+            sync_visible();
         }
     });
     scale.connect_value_changed(move |s| {
         if !updating.get() {
-            volume::Volume::get().set_volume(s.value());
+            volume.set_volume(s.value());
         }
     });
-    row
+    section
 }
 
 fn session_row() -> gtk::Box {

@@ -217,6 +217,14 @@ window.umoja-panel .battery-percentage {
 .quick-settings .network-row image:last-child {
   color: @accent_bg_color;
 }
+/* The device menu button at the end of a volume slider. */
+.quick-settings .slider-menu-arrow:checked {
+  background-color: @shell_fill;
+}
+.quick-settings .network-list separator {
+  margin: 4px 8px;
+  background-color: alpha(#ffffff, 0.10);
+}
 
 /* ---- Date menu: message list + calendar (gnome-shell layout) ---- */
 .clock-unseen {
