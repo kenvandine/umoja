@@ -56,12 +56,13 @@ const CARD_PAD: f64 = 24.0;
 /// Background preview capture: wait this long after the last window change
 /// (apps redraw after a raise or resize), and capture at most this often.
 const SNAP_SETTLE: Duration = Duration::from_millis(700);
-const SNAP_INTERVAL: Duration = Duration::from_secs(2);
+const SNAP_INTERVAL: Duration = Duration::from_secs(10);
 /// Capture scale (of the logical layout) when the overview opens: previews
 /// are shown scaled down, so logical size is already sharp.
 const OPEN_SCALE: f64 = 1.0;
-/// Capture scale for the background preview refresh.
-const SNAP_SCALE: f64 = 1.0;
+/// Capture scale for the background preview refresh: half the logical
+/// size, a few MB, enough for a preview shown until a fresh one replaces it.
+const SNAP_SCALE: f64 = 0.5;
 /// Pointer travel before a press on a window becomes a drag.
 const DRAG_THRESHOLD: f64 = 8.0;
 
