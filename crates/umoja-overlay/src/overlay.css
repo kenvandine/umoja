@@ -5,22 +5,106 @@ window.umoja-overlay {
   backdrop-filter: blur(24px);
   color: #ffffff;
 }
+/* Overlay controls follow the shell scale (top of the panel's panel.css):
+   one 44 px search row whose buttons match the entry, 36 px buttons and
+   chips with 12 px corners, cards with 22 px corners, and the accent
+   color for anything that is on or suggested. */
 .umoja-overlay entry {
   min-height: 44px;
-  border-radius: 999px;
+  border-radius: 14px;
+  padding: 0 14px;
   font-size: 1.15em;
+  color: #ffffff;
+  background-color: alpha(#ffffff, 0.10);
+  box-shadow: inset 0 0 0 1px alpha(#ffffff, 0.08);
+  outline: none;
+}
+.umoja-overlay entry:focus-within {
+  box-shadow: inset 0 0 0 2px alpha(@accent_bg_color, 0.85);
+}
+.umoja-overlay entry image {
+  color: alpha(#ffffff, 0.6);
+}
+/* The buttons beside the search entry: square-ish, as tall as the entry. */
+.myna-pill,
+.context-button > button,
+.clip-button,
+.model-pill > button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 14px;
+  color: #ffffff;
+  background-color: alpha(#ffffff, 0.10);
+  box-shadow: inset 0 0 0 1px alpha(#ffffff, 0.08);
+}
+.myna-pill:hover,
+.context-button > button:hover,
+.clip-button:hover,
+.model-pill > button:hover {
+  background-color: alpha(#ffffff, 0.16);
+}
+.context-button > button:checked,
+.model-pill > button:checked {
+  background-color: alpha(#ffffff, 0.22);
+}
+/* Buttons in the overlay's own content: one family with the shell's. */
+.umoja-overlay button.pill {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-weight: 600;
+  box-shadow: none;
+}
+.umoja-overlay button.pill.suggested-action {
+  min-height: 40px;
+  padding: 0 18px;
+  color: @accent_fg_color;
+  background-color: @accent_bg_color;
+}
+.umoja-overlay button.pill.suggested-action:hover {
+  background-color: mix(@accent_bg_color, #ffffff, 0.1);
+}
+.umoja-overlay button.circular.flat {
+  min-width: 32px;
+  min-height: 32px;
 }
 .app-tile {
   border-radius: 16px;
-  padding: 12px;
+  padding: 10px;
 }
 .app-tile:hover {
   background-color: alpha(#ffffff, 0.1);
 }
+/* The answer card, like a notification bubble: the shell's dark card
+   with a hairline edge, over the overlay's blurred scrim. */
 .assistant-card {
-  background-color: alpha(#ffffff, 0.08);
-  border-radius: 18px;
-  padding: 18px;
+  background-color: alpha(#000000, 0.28);
+  border: 1px solid alpha(#ffffff, 0.08);
+  border-radius: 22px;
+  padding: 16px;
+  box-shadow: 0 10px 28px alpha(#000000, 0.25);
+}
+.assistant-card flowboxchild {
+  padding: 0;
+  margin: 0 8px 8px 0;
+}
+.assistant-steps {
+  padding: 4px 4px 8px 4px;
+  border-bottom: 1px solid alpha(#ffffff, 0.08);
+}
+.assistant-step {
+  min-height: 28px;
+  color: alpha(#ffffff, 0.85);
+}
+.assistant-step.done > image {
+  color: @accent_color;
+}
+.assistant-step.failed > image {
+  color: @warning_color;
+}
+.assistant-step.declined {
+  color: alpha(#ffffff, 0.5);
 }
 .files-heading {
   color: alpha(#ffffff, 0.8);
@@ -38,53 +122,66 @@ window.umoja-overlay {
 .files-list row:hover {
   background-color: alpha(#ffffff, 0.08);
 }
-.action-chip {
-  background-color: alpha(#E95420, 0.9);
-  color: #ffffff;
+.umoja-overlay button.action-chip {
+  color: @accent_fg_color;
+  background-color: @accent_bg_color;
+}
+.umoja-overlay button.action-chip:hover {
+  background-color: mix(@accent_bg_color, #ffffff, 0.1);
 }
 /* Quick answers to the assistant's yes-or-no question. */
-.reply-chip {
+.umoja-overlay button.reply-chip {
   min-width: 72px;
 }
-.reply-chip.suggested {
-  background-color: alpha(#E95420, 0.9);
-  color: #ffffff;
+.umoja-overlay button.reply-chip.suggested {
+  color: @accent_fg_color;
+  background-color: @accent_bg_color;
 }
-.reply-chip.flat {
-  background-color: alpha(#ffffff, 0.12);
+.umoja-overlay button.reply-chip.suggested:hover {
+  background-color: mix(@accent_bg_color, #ffffff, 0.1);
+}
+.umoja-overlay button.reply-chip.flat,
+.umoja-overlay button.pill.flat,
+.umoja-overlay button.clip-action {
+  background-color: alpha(#ffffff, 0.10);
+}
+.umoja-overlay button.reply-chip.flat:hover,
+.umoja-overlay button.pill.flat:hover,
+.umoja-overlay button.clip-action:hover {
+  background-color: alpha(#ffffff, 0.16);
 }
 /* Context attached to a question, and the clipboard history. */
 .attach-pill {
-  background-color: alpha(#ffffff, 0.12);
-  border-radius: 999px;
-  padding: 2px 4px 2px 12px;
-  min-height: 30px;
+  background-color: alpha(#ffffff, 0.10);
+  border-radius: 10px;
+  padding: 2px 4px 2px 10px;
+  min-height: 32px;
 }
 .attach-pill > image {
   opacity: 0.8;
 }
-.attach-pill .attach-remove {
+.umoja-overlay .attach-pill button.attach-remove {
   min-width: 24px;
   min-height: 24px;
   padding: 0;
+  border-radius: 8px;
 }
-.context-button:checked,
 .clip-button:checked {
-  background-color: alpha(#E95420, 0.9);
-  color: #ffffff;
+  color: @accent_fg_color;
+  background-color: @accent_bg_color;
 }
 .clip-list,
 .clip-list > row {
   background-color: transparent;
 }
 .clip-list > row {
-  border-radius: 14px;
+  border-radius: 12px;
   margin-bottom: 6px;
 }
 .clip-row {
   background-color: alpha(#ffffff, 0.06);
-  border-radius: 14px;
-  padding: 10px 10px 10px 16px;
+  border-radius: 12px;
+  padding: 6px 6px 6px 12px;
 }
 .clip-row:hover {
   background-color: alpha(#ffffff, 0.1);
@@ -93,13 +190,65 @@ window.umoja-overlay {
   font-family: monospace;
   font-size: 0.92em;
 }
-.clip-action {
-  padding: 4px 12px;
-  min-height: 28px;
+.umoja-overlay button.clip-action {
+  padding: 0 12px;
+  min-height: 32px;
 }
+/* GNOME's privacy-indicator orange while dictating, as in the bar. */
 .myna-pill.listening {
-  background-color: #E95420;
+  background-color: #f99b11;
+  color: #000000;
+}
+
+/* Menus from the search row (Ask About, Assistant Model): the shell's
+   dark menu card, rows like the panel's menus. */
+.umoja-overlay popover > contents {
+  background-color: rgba(22, 22, 24, 0.92);
   color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid alpha(#ffffff, 0.08);
+  box-shadow: 0 10px 28px alpha(#000000, 0.30);
+  padding: 4px;
+}
+.umoja-overlay popover > arrow {
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+.umoja-overlay popover button.context-item,
+.umoja-overlay popover button.flat {
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+}
+.umoja-overlay popover button.context-item:hover,
+.umoja-overlay popover button.flat:hover {
+  background-color: alpha(#ffffff, 0.14);
+}
+.umoja-overlay popover .model-list {
+  background: none;
+}
+.umoja-overlay popover .model-list > row {
+  border-radius: 8px;
+}
+.umoja-overlay popover .model-list > row:hover {
+  background-color: alpha(#ffffff, 0.08);
+}
+.umoja-overlay popover stackswitcher button {
+  min-height: 32px;
+  border-radius: 8px;
+}
+
+/* "Allow the assistant to do this?" and "Run this command?": the shell's
+   dialog card (as Power Off). Nearly opaque, so the text needs no blur
+   behind it. libadwaita lays out and styles the buttons itself. */
+.umoja-overlay dialog.alert > sheet,
+.umoja-overlay dialog.alert.floating > sheet {
+  background-color: rgba(30, 30, 33, 0.97);
+  color: #ffffff;
+  border-radius: 22px;
+  border: 1px solid alpha(#ffffff, 0.08);
+  box-shadow: 0 10px 28px alpha(#000000, 0.35);
 }
 
 /* Screenshot UI, after gnome-shell's. */
@@ -260,7 +409,7 @@ window.umoja-spread {
 }
 window.umoja-spread entry {
   min-height: 40px;
-  border-radius: 999px;
+  border-radius: 14px;
   background-color: alpha(#ffffff, 0.12);
   color: #ffffff;
 }
@@ -337,7 +486,7 @@ window.umoja-shortcuts {
 .umoja-shortcuts entry.shortcuts-search,
 .umoja-shortcuts .shortcuts-search {
   min-height: 40px;
-  border-radius: 999px;
+  border-radius: 14px;
   padding: 0 14px;
   background-color: alpha(#ffffff, 0.08);
   color: #ffffff;

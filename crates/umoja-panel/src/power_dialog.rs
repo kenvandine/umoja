@@ -118,10 +118,10 @@ fn show(kind: Kind) {
 
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
+        .spacing(8)
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
-        .width_request(420)
+        .width_request(380)
         .css_classes(["end-session-card"])
         .build();
     card.append(
@@ -143,7 +143,7 @@ fn show(kind: Kind) {
     card.append(&body);
 
     let buttons = gtk::Box::builder()
-        .spacing(12)
+        .spacing(8)
         .homogeneous(true)
         .margin_top(12)
         .build();

@@ -240,7 +240,7 @@ impl Overlay {
         answer.set_hexpand(true);
         answer_row.append(&answer);
         answer_row.append(&copy_button);
-        let assistant = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let assistant = gtk::Box::new(gtk::Orientation::Vertical, 10);
         assistant.add_css_class("assistant-card");
         assistant.set_halign(gtk::Align::Center);
         assistant.set_width_request(640);

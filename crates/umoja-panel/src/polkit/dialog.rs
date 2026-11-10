@@ -79,7 +79,7 @@ impl Dialog {
         );
 
         let avatar = adw::Avatar::new(64, None, true);
-        avatar.set_margin_top(12);
+        avatar.set_margin_top(4);
         card.append(&avatar);
         let name = gtk::Label::builder().css_classes(["polkit-user"]).build();
         let names: Vec<String> = req.uids.iter().map(|&u| user_info(u).1).collect();
@@ -102,7 +102,7 @@ impl Dialog {
             .sensitive(false)
             .css_classes(["polkit-entry"])
             .build();
-        entry.set_margin_top(12);
+        entry.set_margin_top(4);
         card.append(&entry);
         let message = gtk::Label::builder()
             .wrap(true)

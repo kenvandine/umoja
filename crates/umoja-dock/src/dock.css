@@ -46,7 +46,7 @@ popover > contents {
   background-color: @shell_bg;
   backdrop-filter: blur(12px);
   color: #ffffff;
-  border-radius: 18px;
+  border-radius: 14px;
   border: 1px solid @shell_hairline;
   box-shadow: 0 10px 28px alpha(#000000, 0.30);
   padding: 6px;
@@ -58,12 +58,14 @@ popover > arrow {
 }
 popover separator {
   background-color: @shell_hairline;
-  margin: 6px 8px;
+  margin: 4px 10px;
 }
+/* Menu rows on the shell scale (see the panel's panel.css): 36 px tall,
+   8 px corners inside the menu's 6 px padding. */
 popover button {
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 12px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
   background: none;
   box-shadow: none;
   color: #ffffff;
@@ -80,12 +82,12 @@ popover button:active {
 .dock-menu-heading {
   font-weight: bold;
   color: alpha(#ffffff, 0.6);
-  padding: 6px 12px 4px 12px;
+  padding: 6px 10px 4px 10px;
 }
 .dock-menu-submenu > title {
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 12px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
 }
 .dock-menu-submenu > title:hover {
   background-color: @shell_fill_hover;

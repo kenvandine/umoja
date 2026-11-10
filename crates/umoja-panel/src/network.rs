@@ -1147,8 +1147,13 @@ fn fill_vpns(list: &gtk::Box, s: &NetState) {
     list.append(&settings);
 }
 
-fn tile_content(t: &gtk::ToggleButton) -> Option<gtk::Box> {
-    t.child().and_downcast()
+/// The icon + text box inside a tile (quick_settings::tile wraps it in an
+/// Overlay).
+pub fn tile_content(t: &gtk::ToggleButton) -> Option<gtk::Box> {
+    t.child()
+        .and_downcast::<gtk::Overlay>()
+        .and_then(|o| o.child())
+        .and_downcast()
 }
 
 /// The title and subtitle labels built by quick_settings::tile.

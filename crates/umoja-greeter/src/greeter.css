@@ -32,8 +32,8 @@ window.umoja-greeter {
 .login-card {
   /* Margin leaves room for the shadow inside the fade-in revealer. */
   margin: 64px;
-  padding: 40px 40px 24px 40px;
-  border-radius: 32px;
+  padding: 32px 32px 20px 32px;
+  border-radius: 28px;
   background-color: alpha(#1a0d15, 0.42);
   border: 1px solid alpha(#ffffff, 0.14);
   box-shadow: 0 24px 64px alpha(#000000, 0.45), inset 0 1px 0 alpha(#ffffff, 0.08);
@@ -48,9 +48,11 @@ window.umoja-greeter {
   font-weight: 600;
   margin-top: 6px;
 }
+/* Shell scale: a 44 px field with 14 px corners, like the overview's
+   search entry, and a 36 px button inside it. */
 .password-pill {
-  padding: 4px 4px 4px 14px;
-  border-radius: 999px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 14px;
   background-color: alpha(#ffffff, 0.12);
   border: 1px solid alpha(#ffffff, 0.18);
   transition: border-color 200ms ease;
@@ -71,6 +73,7 @@ window.umoja-greeter {
   color: #ffffff;
   min-width: 36px;
   min-height: 36px;
+  border-radius: 10px;
 }
 .message {
   color: #ffb4a0;
@@ -96,8 +99,8 @@ window.umoja-greeter {
   margin-bottom: 40px;
 }
 .user-chip {
-  padding: 10px 14px;
-  border-radius: 20px;
+  padding: 8px 12px;
+  border-radius: 14px;
   color: #ffffff;
   opacity: 0.75;
   transition: opacity 200ms ease, background-color 200ms ease;

@@ -401,6 +401,9 @@ fn export(
 }
 
 fn load_css() {
+    // Always dark, like the panel and dock: the overlay's controls sit on
+    // the shell's dark scrim whatever Settings > Appearance says.
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
     let provider = gtk::CssProvider::new();
     provider.load_from_string(include_str!("overlay.css"));
     if let Some(display) = gtk::gdk::Display::default() {

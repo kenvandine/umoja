@@ -78,7 +78,9 @@ fn collapse_tile_menus(w: &gtk::Widget) {
 }
 
 fn menu() -> gtk::Box {
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    // Spacing follows the shell scale at the top of panel.css: 8 px
+    // between sections, 6 px between tiles.
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     root.add_css_class("quick-settings");
 
     root.append(&session_row());
@@ -88,8 +90,8 @@ fn menu() -> gtk::Box {
     let grid = gtk::Grid::builder()
         .column_homogeneous(true)
         .row_homogeneous(true)
-        .row_spacing(8)
-        .column_spacing(8)
+        .row_spacing(6)
+        .column_spacing(6)
         .build();
     let (wifi, networks) = network::wifi_tile(tile);
     let (power, profiles) = power_profile_tile();
@@ -133,28 +135,48 @@ fn menu() -> gtk::Box {
         t.connect_visible_notify(move |_| layout());
     }
     root.append(&grid);
-    root.append(&networks);
-    root.append(&vpns);
-    root.append(&bt_devices);
-    root.append(&profiles);
-    root.append(&kbd_levels);
+    for menu in [&networks, &vpns, &bt_devices, &profiles, &kbd_levels] {
+        hide_when_collapsed(menu);
+        root.append(menu);
+    }
     root
+}
+
+/// Keep a closed tile menu out of the layout. A Revealer that shows
+/// nothing is still a visible child, so the box put its spacing around
+/// each one: five closed menus left 60 px of empty space at the bottom
+/// of Quick Settings. Shown when it starts to open, hidden once it has
+/// finished closing so the slide-up still plays.
+pub fn hide_when_collapsed(revealer: &gtk::Revealer) {
+    revealer.set_visible(revealer.reveals_child());
+    revealer.connect_reveal_child_notify(|r| {
+        if r.reveals_child() {
+            r.set_visible(true);
+        }
+    });
+    revealer.connect_child_revealed_notify(|r| {
+        if !r.is_child_revealed() && !r.reveals_child() {
+            r.set_visible(false);
+        }
+    });
 }
 
 pub fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
     // gnome-shell 46+ QuickToggle: icon, then a title over an optional
     // subtitle (network name, connected device, active profile...).
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     content.append(&gtk::Image::from_icon_name(icon));
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .valign(gtk::Align::Center)
+        .hexpand(true)
         .build();
     text.append(
         &gtk::Label::builder()
             .label(label)
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(1)
             .css_classes(["tile-title"])
             .build(),
     );
@@ -162,13 +184,18 @@ pub fn tile(icon: &str, label: &str) -> gtk::ToggleButton {
         &gtk::Label::builder()
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(1)
             .css_classes(["tile-subtitle"])
             .visible(false)
             .build(),
     );
     content.append(&text);
+    // The Overlay only hides the label's baseline from the grid. GtkGrid
+    // lines its rows up on their children's baselines, and a two-line tile
+    // (Wired, Power Mode) has a different one from a one-line tile, so
+    // every mixed row came out 8 px taller than the tile.
     gtk::ToggleButton::builder()
-        .child(&content)
+        .child(&gtk::Overlay::builder().child(&content).build())
         .css_classes(["tile"])
         .build()
 }
@@ -187,8 +214,7 @@ fn dark_style_tile() -> gtk::ToggleButton {
     let t = tile("dark-mode-symbolic", &i18n::shell("Dark Style"));
     // gnome-shell draws dark-mode-symbolic from its own resources; icon
     // themes may not have it, so fall back to a themed moon.
-    if let Some(img) = t
-        .child()
+    if let Some(img) = network::tile_content(&t)
         .and_then(|c| c.first_child())
         .and_downcast::<gtk::Image>()
     {
@@ -561,6 +587,7 @@ fn stream_slider(input: bool) -> gtk::Box {
     row.append(&arrow);
 
     let (list, revealer) = network::tile_menu(&arrow);
+    hide_when_collapsed(&revealer);
     section.append(&revealer);
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     header.add_css_class("network-list-header");
