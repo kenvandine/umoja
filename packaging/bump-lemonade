@@ -1,0 +1,56 @@
+#!/bin/bash
+# Move the embedded Lemonade to another upstream release.
+#
+#   packaging/bump-lemonade            # latest upstream release
+#   packaging/bump-lemonade 2026.45.3  # a specific one (with or without "v")
+#
+# Downloads the "embeddable" Ubuntu tarball for every architecture we ship,
+# rewrites lemonade.sha256 with their checksums, and sets LEMONADE_VERSION in
+# the Makefile. Review the diff, read upstream's release notes for API or
+# flag changes (see bin/umoja-lemonade and crates/umoja-common/src/lemonade.rs
+# for what Umoja relies on), then commit.
+#
+# Upstream moved from semver (last one 11.9.0) to calendar versions
+# (vYYYY.WW.N, first one v2026.39.1). A plain version sort ranks 11.9.0 last,
+# so "latest" here only looks at calendar tags.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+REPO=https://github.com/lemonade-sdk/lemonade
+ARCHES=(x64 arm64)
+
+version=${1:-}
+version=${version#v}
+if [[ -z "$version" ]]; then
+    version=$(git ls-remote --tags --refs "$REPO" 'v20*' \
+        | sed -n 's#.*refs/tags/v\(20[0-9][0-9]\.[0-9]*\.[0-9]*\)$#\1#p' \
+        | sort -V | tail -n1)
+    [[ -n "$version" ]] || { echo "bump-lemonade: no upstream release tags found" >&2; exit 1; }
+fi
+
+current=$(sed -n 's/^LEMONADE_VERSION ?= //p' Makefile)
+echo "Lemonade: $current -> $version"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+: >"$tmp/sha256"
+for arch in "${ARCHES[@]}"; do
+    tarball=lemonade-embeddable-$version-ubuntu-$arch.tar.gz
+    echo "  downloading $tarball"
+    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+        -o "$tmp/$tarball" "$REPO/releases/download/v$version/$tarball"
+    # The packaging step expects lemond at the top of the tarball's one directory.
+    listing=$(tar -tzf "$tmp/$tarball")
+    grep -qE '^[^/]+/lemond$' <<<"$listing" \
+        || { echo "bump-lemonade: $tarball has no lemond; layout changed?" >&2; exit 1; }
+    (cd "$tmp" && sha256sum "$tarball") >>"$tmp/sha256"
+done
+
+cp "$tmp/sha256" lemonade.sha256
+sed -i "s/^LEMONADE_VERSION ?= .*/LEMONADE_VERSION ?= $version/" Makefile
+
+echo "Updated Makefile and lemonade.sha256. Release notes:"
+echo "  $REPO/releases/tag/v$version"
+echo "  $REPO/compare/v$current...v$version"

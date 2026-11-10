@@ -6,20 +6,25 @@
 #   make deb             build binary packages locally
 #   make source-package  build a signed-ready source package for the PPA
 #   make bump-version    move to the next vYYYY.WW.REVISION (see packaging/bump-version)
+#   make bump-lemonade   move the embedded Lemonade to the latest upstream release
+#                        (LEMONADE=2026.45.3 for a specific one)
 #   make nested          run umoja-mir in a window inside your current session
 
 CARGO ?= cargo
-LEMONADE_VERSION ?= 11.9.0
+LEMONADE_VERSION ?= 2026.45.3
 LEMONADE_ARCHES ?= x64 arm64
 LEMONADE_BASE := https://github.com/lemonade-sdk/lemonade/releases/download/v$(LEMONADE_VERSION)
 VENDOR := vendor
 
-.PHONY: bump-version all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
+.PHONY: bump-version bump-lemonade all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
 
 all: build
 
 bump-version:
 	packaging/bump-version
+
+bump-lemonade:
+	packaging/bump-lemonade $(LEMONADE)
 
 build:
 	$(CARGO) build --release --workspace
