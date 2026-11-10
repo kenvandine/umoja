@@ -73,7 +73,9 @@ APP_CANDIDATES = [
     "org.gnome.Characters.desktop",
     "org.gnome.Settings.desktop",
 ]
-TILE_LEFT, TILE_RIGHT = 1, 2
+TILE_LEFT, TILE_RIGHT, TILE_RESTORE, MINIMIZE = 1, 2, 4, 5
+# GetWindows flags (UMOJA_WINDOW_* in the shim header).
+F_FOCUSED, F_MINIMIZED, F_MAXIMIZED, F_FULLSCREEN, F_TILED = 1, 2, 8, 16, 32
 
 DEMO_NOTIFICATIONS = [
     ("Calendar", "x-office-calendar", "Design review in 10 minutes",
@@ -90,7 +92,7 @@ DEFAULT_QUESTIONS = [
 ]
 
 SCENES = [
-    "desktop", "app-grid", "overview", "workspaces", "quick-settings",
+    "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings",
     "notifications", "shortcuts", "screenshot-ui", "screensaver", "assistant",
 ]
 
@@ -222,7 +224,7 @@ class Recorder:
                 self.proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
-        self.demo.clips.append((self.path, caption))
+        self.demo.clips.append((self.path, caption, self.demo.scene))
         self.proc = None
 
     def abort(self):
@@ -246,8 +248,12 @@ class Demo:
         self.raw_dir = self.out / ".raw"
         self.video = not opts.no_video
         self.output = None
+        self.area = None  # (x, y, w, h) of the captured monitor, layout pixels
+        self.terminal = None  # the window we were started from, minimized
+        self.spots = {}  # window id -> where its title bar sits when floating
+        self.names = {}  # window id -> app name, for the assistant
         self.shots = {}  # scene -> [(file, caption)]
-        self.clips = []  # (raw webm, caption)
+        self.clips = []  # (raw webm, caption, scene)
         self.videos = {}  # scene -> [(gif or None, mp4/webm, caption)]
         self.scene = None
         self.opened = []  # window ids this tour opened
@@ -323,19 +329,35 @@ class Demo:
         if self.video and not self.ffmpeg:
             log("note: ffmpeg is missing, so clips stay .webm (no GIFs for the README). "
                 "sudo apt install ffmpeg, then rerun.")
-        self.output = self.opts.output or self.primary_connector()
+        self.output, self.area = self.monitor()
+        if self.opts.output:
+            self.output = self.opts.output
         log(f"capturing monitor {self.output or '(all)'}; writing to {self.out}")
 
-    def primary_connector(self):
+    def monitor(self):
+        """(connector, (x, y, w, h)) of the primary monitor, in layout pixels."""
         res = self.bus.call(DISPLAY_CONFIG, "GetCurrentState", None, quiet=True)
         if not res:
-            return None
-        _serial, _monitors, logical, _props = res
-        for lm in logical:
-            # (x, y, scale, transform, primary, monitors a(ssss), props)
-            if lm[4] and lm[5]:
-                return lm[5][0][0]
-        return logical[0][5][0][0] if logical and logical[0][5] else None
+            return None, (0, 0, 1920, 1080)
+        _serial, monitors, logical, props = res
+        physical_layout = props.get("layout-mode") == 2
+        pick = next((lm for lm in logical if lm[4] and lm[5]), logical[0] if logical else None)
+        if not pick or not pick[5]:
+            return None, (0, 0, 1920, 1080)
+        x, y, scale, _transform, _primary, mons, _p = pick
+        connector = mons[0][0]
+        w, h = 1920, 1080
+        for (spec, modes, _mp) in monitors:
+            if spec[0] != connector:
+                continue
+            for mode in modes:
+                if mode[6].get("is-current"):
+                    w, h = mode[1], mode[2]
+        if not physical_layout and scale:
+            w, h = round(w / scale), round(h / scale)
+        if pick[3] in (1, 3, 5, 7):  # rotated 90/270
+            w, h = h, w
+        return connector, (x, y, w, h)
 
     def prepare_out(self):
         if self.dry:
@@ -408,15 +430,55 @@ class Demo:
         if self.dry:
             return
         self.opened = [w for w in self.opened if w not in before]
-        if len(self.opened) >= 1:
-            self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.opened[0], TILE_LEFT)))
-        if len(self.opened) >= 2:
-            self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.opened[1], TILE_RIGHT)))
+        for wid, info in zip(self.opened, found):
+            self.names[wid] = info.get_name()
+        # Nothing maximized or full screen: the wallpaper should show.
+        for w in self.windows():
+            if w[0] in self.opened and w[7] & (F_MAXIMIZED | F_FULLSCREEN | F_TILED):
+                self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (w[0], TILE_RESTORE)))
+        self.wait(0.6)
+        self.arrange_floating()
         if len(self.opened) >= 3 and self.bus.has_method(COMPOSITOR, "SendWindowToWorkspace"):
             cur, _count = self.workspaces()
             self.bus.call(COMPOSITOR, "SendWindowToWorkspace",
                           GLib.Variant("(tu)", (self.opened[2], cur + 1)))
         self.wait(1.5)
+
+    def can_drag(self):
+        return self.bus.has_method(COMPOSITOR, "DragWindow")
+
+    def drag(self, wid, x, y, ms=900):
+        """Drag a window by its title bar to (x, y), as a person would."""
+        self.check_screen()
+        log(f"  drag {self.names.get(wid, wid)} -> {x},{y}")
+        self.bus.call(COMPOSITOR, "DragWindow", GLib.Variant("(tiiu)", (wid, int(x), int(y), ms)),
+                      "(b)", timeout=ms + 5000)
+        self.wait(0.5)
+
+    def arrange_floating(self):
+        """Two windows floating, overlapping a little, with desktop around them."""
+        if not self.can_drag():
+            return
+        x, y, w, h = self.area
+        # Title-bar grab points, as fractions of the monitor.
+        spots = [(0.36, 0.20), (0.62, 0.34), (0.50, 0.26)]
+        for wid, (fx, fy) in zip(self.opened, spots):
+            self.spots[wid] = (x + int(w * fx), y + int(h * fy))
+            self.drag(wid, *self.spots[wid], ms=450)
+
+    def minimize_terminal(self):
+        """Get the terminal that started us out of the shots."""
+        if self.opts.keep_terminal:
+            return
+        focused = [w for w in self.windows() if w[7] & F_FOCUSED]
+        if self.dry:
+            log("  minimize the focused window (this terminal)")
+            return
+        if focused:
+            self.terminal = focused[0][0]
+            log(f"  minimize {focused[0][1] or focused[0][2]} (restored at the end)")
+            self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (self.terminal, MINIMIZE)))
+            self.wait(0.8)
 
     def wait_for_window(self, known, timeout=10):
         end = time.monotonic() + timeout
@@ -449,6 +511,9 @@ class Demo:
         if self.start_workspace is not None:
             self.bus.call(COMPOSITOR, "ShowWorkspace",
                           GLib.Variant("(u)", (self.start_workspace,)), quiet=True)
+        if self.terminal is not None:
+            time.sleep(0.5)
+            self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.terminal,)), quiet=True)
         if self.banners is False:
             s = settings("org.gnome.desktop.notifications")
             s.set_boolean("show-banners", False)
@@ -458,7 +523,34 @@ class Demo:
     # ---- scenes -------------------------------------------------------
 
     def scene_desktop(self):
-        self.shot("desktop", "The desktop: top bar, Ubuntu-style dock and half-tiled windows.")
+        self.shot("desktop", "The desktop: top bar, Ubuntu-style dock and floating windows over the wallpaper.")
+
+    def scene_tiling(self):
+        if not self.can_drag():
+            log("  this compositor can't drag windows over D-Bus (update umoja), skipping")
+            return
+        if len(self.opened) < 2 and not self.dry:
+            log("  needs two of the demo's windows, skipping")
+            return
+        a, b = (self.opened[:2] if not self.dry else (1, 2))
+        x, y, w, h = self.area
+        mid = y + h // 2
+        self.recorder.start("tiling")
+        # Drag to the screen edges: the preview shows, the window snaps.
+        self.drag(a, x + 3, mid)
+        self.drag(b, x + w - 3, mid)
+        self.wait(0.8)
+        self.shot("tiling-halves", "Drag a window to a screen edge and it snaps to that half, like Ubuntu's Tiling Assistant.")
+        # A corner gives a quarter.
+        self.drag(b, x + w - 3, y + 3)
+        self.wait(0.8)
+        self.shot("tiling-quarter", "Drag to a corner for a quarter; tiled windows resize together.")
+        # Drag them back out: they get their own size back.
+        for wid in (b, a):
+            spot = self.spots.get(wid) or (x + w // 2, y + h // 3)
+            self.drag(wid, *spot)
+        self.wait(0.8)
+        self.recorder.stop("Drag-to-tile: halves at the sides, quarters in the corners, drag out to float again.")
 
     def scene_app_grid(self):
         self.bus.call(OVERLAY, "Show")
@@ -620,10 +712,35 @@ class Demo:
             log(f"  ! warming the model failed ({e}); asking anyway")
         return True
 
+    def tiling_question(self):
+        names = [self.names.get(w) for w in self.opened[:2]] if not self.dry else ["Files", "Text Editor"]
+        if len(names) < 2 or not all(names):
+            return None
+        return f"Put {names[0]} on the left half of the screen and {names[1]} on the right half"
+
+    def untile_demo_windows(self):
+        for w in self.windows():
+            if w[0] in self.opened and w[7] & (F_MAXIMIZED | F_FULLSCREEN | F_TILED):
+                self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (w[0], TILE_RESTORE)))
+
     def scene_assistant(self):
         if not self.warm_model():
             return
         questions = self.opts.ask or DEFAULT_QUESTIONS
+        tile_q = None if self.opts.ask else self.tiling_question()
+        if tile_q:
+            self.check_screen()
+            self.recorder.start("assistant-tiling")
+            log(f"  ask  {tile_q!r}")
+            self.bus.call(OVERLAY, "Ask", GLib.Variant("(s)", (tile_q,)))
+            # The overlay closes itself once the windows are arranged.
+            self.wait(self.opts.answer_wait)
+            self.bus.call(OVERLAY, "Hide")
+            self.wait(1.0)
+            self.shot("assistant-tiling", f"Tiling by asking: \u201c{tile_q}\u201d")
+            self.recorder.stop("Window tiling done by the local assistant (arrange_window tool).")
+            self.untile_demo_windows()
+            self.wait(1.0)
         for i, q in enumerate(questions, 1):
             self.check_screen()
             if i == 1:
@@ -643,10 +760,9 @@ class Demo:
 
     def encode(self):
         """webm -> GIF (inline on GitHub) + MP4, after capture so it can't stutter."""
-        for raw, caption in self.clips:
-            scene = raw.stem
-            gif = self.vid_dir / f"{scene}.gif"
-            mp4 = self.vid_dir / f"{scene}.mp4"
+        for raw, caption, scene in self.clips:
+            gif = self.vid_dir / f"{raw.stem}.gif"
+            mp4 = self.vid_dir / f"{raw.stem}.mp4"
             if self.dry:
                 self.videos.setdefault(scene, []).append((gif, mp4, caption))
                 continue
@@ -658,7 +774,7 @@ class Demo:
                 shutil.move(raw, dest)
                 self.videos.setdefault(scene, []).append((None, dest, caption))
                 continue
-            log(f"  encode {scene}")
+            log(f"  encode {raw.stem}")
             ok_mp4 = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw),
                 "-vf", "scale='min(1920,iw)':-2", "-c:v", "libx264", "-preset", "slow",
@@ -687,7 +803,7 @@ class Demo:
 
     def write_markdown(self):
         titles = {
-            "desktop": "Desktop", "app-grid": "App grid and search",
+            "desktop": "Desktop", "tiling": "Window tiling", "app-grid": "App grid and search",
             "overview": "Activities overview", "workspaces": "Workspaces",
             "quick-settings": "Quick Settings", "notifications": "Notifications",
             "shortcuts": "Keyboard shortcuts guide", "screenshot-ui": "Screenshot UI",
@@ -726,7 +842,7 @@ class Demo:
             base = str(self.out)
         if base.startswith(".."):
             base = str(self.out)
-        hero = [s for s in ("overview", "app-grid", "quick-settings", "assistant") if s in self.shots]
+        hero = [s for s in ("overview", "tiling", "app-grid", "assistant") if s in self.shots]
         snippet = ["## Screenshots", ""]
         if "overview" in self.videos and self.videos["overview"][0][0]:
             gif, video, caption = self.videos["overview"][0]
@@ -769,6 +885,7 @@ class Demo:
             self.notifications_on()
             self.start_workspace = self.workspaces()[0] if not self.dry else None
             self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.minimize_terminal()
             log("opening apps")
             self.open_apps()
             for s in scenes:
@@ -815,6 +932,8 @@ def main():
     p.add_argument("--output", help="monitor connector to capture, e.g. eDP-1 (default: primary)")
     p.add_argument("--no-video", action="store_true", help="stills only")
     p.add_argument("--no-apps", action="store_true", help="don't open apps for the tour")
+    p.add_argument("--keep-terminal", action="store_true",
+                   help="don't minimize the terminal the tour was started from")
     p.add_argument("--hidpi", action="store_true", help="full-resolution stills (default: logical size)")
     p.add_argument("--gif-width", type=int, default=960, help="GIF width in pixels (default 960)")
     p.add_argument("--pace", type=float, default=1.0, help="multiply every pause by this (e.g. 1.5 on a slow machine)")

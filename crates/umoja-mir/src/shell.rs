@@ -468,12 +468,58 @@ unsafe extern "C" {
     fn umoja_wm_close(id: u64);
     fn umoja_wm_switcher_pick(index: u32);
     fn umoja_wm_tile(id: u64, action: u32);
+    fn umoja_wm_script_drag(
+        id: u64,
+        phase: u32,
+        x: i32,
+        y: i32,
+        out_x: *mut i32,
+        out_y: *mut i32,
+    ) -> bool;
     fn umoja_wm_workspaces(current: *mut u32, count: *mut u32);
     fn umoja_wm_switch_workspace(index: u32);
     fn umoja_wm_move_to_workspace(id: u64, index: u32);
     fn umoja_wm_show_workspace(index: u32);
     fn umoja_wm_send_to_workspace(id: u64, index: u32);
     fn umoja_wm_workspace_settings_changed();
+}
+
+/// Ease-in-out position `t` (0..=1) of a scripted drag.
+fn ease(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The steps of a scripted drag from `from` to `to`, one per ~16 ms frame.
+fn drag_path(from: (i32, i32), to: (i32, i32), duration_ms: u32) -> Vec<(i32, i32)> {
+    let steps = (duration_ms / 16).clamp(8, 600);
+    (1..=steps)
+        .map(|i| {
+            let e = ease(f64::from(i) / f64::from(steps));
+            (
+                from.0 + (f64::from(to.0 - from.0) * e).round() as i32,
+                from.1 + (f64::from(to.1 - from.1) * e).round() as i32,
+            )
+        })
+        .collect()
+}
+
+fn scripted_drag(id: u64, x: i32, y: i32, duration_ms: u32) -> bool {
+    let (mut gx, mut gy) = (0i32, 0i32);
+    if !unsafe { umoja_wm_script_drag(id, 0, 0, 0, &mut gx, &mut gy) } {
+        return false;
+    }
+    let frame = std::time::Duration::from_millis(16);
+    for (px, py) in drag_path((gx, gy), (x, y), duration_ms) {
+        std::thread::sleep(frame);
+        if !unsafe { umoja_wm_script_drag(id, 1, px, py, std::ptr::null_mut(), std::ptr::null_mut()) } {
+            break;
+        }
+    }
+    // Hold still a moment so the tile preview settles, as a person would.
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    unsafe { umoja_wm_script_drag(id, 2, 0, 0, std::ptr::null_mut(), std::ptr::null_mut()) };
+    true
 }
 
 /// Re-apply GNOME's workspace settings after they changed.
@@ -573,6 +619,17 @@ impl Compositor {
     /// top/bottom half (the `tiling::Action` numbers).
     async fn tile_window(&self, id: u64, action: u32) {
         let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_tile(id, action) }).await;
+    }
+
+    /// Drag a window by its title bar so the grab point glides to (x, y)
+    /// over `duration_ms`, then drop it, exactly as a pointer drag would:
+    /// the tile preview and layout picker follow it and it snaps to the
+    /// half, quarter or maximized area under (x, y). For demos
+    /// (tools/demo). False if the window can't be dragged now.
+    async fn drag_window(&self, id: u64, x: i32, y: i32, duration_ms: u32) -> bool {
+        tokio::task::spawn_blocking(move || scripted_drag(id, x, y, duration_ms))
+            .await
+            .unwrap_or(false)
     }
 
     /// (current, count): the active workspace (0-based) and how many exist.
@@ -728,4 +785,20 @@ pub fn start() {
             Err(e) => tracing::warn!(error = %e, "org.umoja.Compositor unavailable"),
         }
     });
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::drag_path;
+
+    #[test]
+    fn drag_path_ends_on_target_and_eases() {
+        let p = drag_path((100, 100), (900, 500), 800);
+        assert_eq!(p.len(), 50);
+        assert_eq!(*p.last().unwrap(), (900, 500));
+        // Slow start: the first step covers far less than an even share.
+        assert!(p[0].0 - 100 < 800 / 50);
+        let q = drag_path((0, 0), (10, 10), 0);
+        assert_eq!(q.len(), 8);
+    }
 }

@@ -416,11 +416,12 @@ public:
 
         bool const consumed = MinimalWindowManager::handle_pointer_event(event);
 
+        // A scripted drag (DragWindow) ignores the real pointer.
         if (action == mir_pointer_action_motion) {
-            if (moving) on_move(px, py);
-            else report_motion(event, px, py);
+            if (moving && !scripted) on_move(px, py);
+            else if (!moving) report_motion(event, px, py);
         } else if (action == mir_pointer_action_button_up) {
-            if (moving && mir_pointer_event_buttons(event) == 0) end_move();
+            if (moving && !scripted && mir_pointer_event_buttons(event) == 0) end_move();
         }
         return consumed;
     }
@@ -669,6 +670,40 @@ public:
         if (w) guarded("tile", [&] { apply_to(w, action, false); });
     }
 
+    // org.umoja.Compositor.DragWindow: a title-bar drag driven by points
+    // instead of the pointer, through the same drag-to-snap path (tile
+    // preview, layout picker, drop). Phase 0 grabs the window's title bar
+    // and returns the grab point, 1 moves the grab point to (x, y), 2 drops.
+    bool script_drag(Window w, uint32_t phase, int32_t x, int32_t y, int32_t* gx, int32_t* gy) {
+        switch (phase) {
+        case 0: {
+            if (!w || moving || !all_windows.count(w)) return false;
+            if (tools.info_for(w).state() == mir_window_state_fullscreen) return false;
+            int32_t const px = w.top_left().x.as_int() + w.size().width.as_int() / 2;
+            int32_t const py = w.top_left().y.as_int() + 16;
+            activate(w);
+            begin_move(w, px, py, was_tiled_or_maximized(w));
+            if (moving != w) return false;
+            scripted = true;
+            script_last = geom::Point{px, py};
+            if (gx) *gx = px;
+            if (gy) *gy = py;
+            return true;
+        }
+        case 1: {
+            if (!w || moving != w || !scripted) return false;
+            geom::Point const p{x, y};
+            tools.drag_window(w, p - script_last);
+            script_last = p;
+            on_move(x, y);
+            return true;
+        }
+        default:
+            if (moving && scripted) end_move();
+            return true;
+        }
+    }
+
     void invoke(std::function<void()> const& f) { tools.invoke_under_lock(f); }
 
 private:
@@ -735,6 +770,9 @@ private:
     uint32_t held_buttons = 0;
     Window moving;
     bool elevated = false;
+    // The drag is org.umoja.Compositor.DragWindow's, not the pointer's.
+    bool scripted = false;
+    geom::Point script_last;
     uint32_t drag_target = UMOJA_ACTION_NONE;
 
     std::vector<Window> stacking; // bottom to top
@@ -1086,6 +1124,7 @@ private:
     void end_move() {
         Window const w = moving;
         moving = Window{};
+        scripted = false;
         uint32_t const target = umoja_drag_end();
         if (!w) return;
         if (elevated) {
@@ -1946,6 +1985,13 @@ extern "C" void umoja_wm_switcher_pick(uint32_t index) {
 
 extern "C" void umoja_wm_tile(uint64_t id, uint32_t action) {
     with_wm("tile window", [&] { g_wm->tile(g_wm->find(id), action); });
+}
+
+extern "C" bool umoja_wm_script_drag(uint64_t id, uint32_t phase, int32_t x, int32_t y, int32_t* out_x,
+                                     int32_t* out_y) {
+    bool ok = false;
+    with_wm("scripted drag", [&] { ok = g_wm->script_drag(g_wm->find(id), phase, x, y, out_x, out_y); });
+    return ok;
 }
 
 extern "C" void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count) {
