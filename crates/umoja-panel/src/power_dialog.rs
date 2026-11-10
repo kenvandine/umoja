@@ -1,6 +1,6 @@
-//! The Power Off confirmation, like gnome-shell's end-session dialog: a
-//! card over a dimmed screen that powers off by itself after 60 seconds,
-//! with Cancel, Restart and Power Off.
+//! The Power Off and Log Out confirmations, like gnome-shell's end-session
+//! dialog: a card over a dimmed screen that acts by itself after 60
+//! seconds, with Cancel, Restart and Power Off, or Cancel and Log Out.
 
 use gtk::{gdk, glib, prelude::*};
 use gtk4 as gtk;
@@ -17,17 +17,80 @@ thread_local! {
     static OPEN: RefCell<Option<gtk::Window>> = const { RefCell::new(None) };
 }
 
-fn countdown_text(left: u32) -> String {
-    i18n::shell_n(
-        "The system will power off automatically in %d second.",
-        "The system will power off automatically in %d seconds.",
-        left,
-    )
-    .replace("%d", &left.to_string())
+/// What the dialog ends.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Kind {
+    PowerOff,
+    LogOut,
 }
 
-/// Shows the dialog (or brings the open one back to the front).
+/// What a button (or the countdown running out) does.
+#[derive(Clone, Copy)]
+enum Action {
+    Run(&'static [&'static str]),
+    LogOut,
+}
+
+impl Action {
+    fn perform(self) {
+        match self {
+            Action::Run(argv) => {
+                tracing::info!(cmd = ?argv, "end session confirmed");
+                crate::quick_settings::run(argv);
+            }
+            Action::LogOut => {
+                tracing::info!("log out confirmed");
+                crate::fade::log_out();
+            }
+        }
+    }
+}
+
+const POWER_OFF: Action = Action::Run(&["systemctl", "poweroff"]);
+const REBOOT: Action = Action::Run(&["systemctl", "reboot"]);
+
+/// The user's full name, when they have one (gnome-shell names them in the
+/// Log Out countdown).
+fn real_name() -> Option<String> {
+    let name = glib::real_name().to_string_lossy().trim().to_string();
+    (!name.is_empty() && name != "Unknown").then_some(name)
+}
+
+fn countdown_text(kind: Kind, left: u32) -> String {
+    let text = match kind {
+        Kind::PowerOff => i18n::shell_n(
+            "The system will power off automatically in %d second.",
+            "The system will power off automatically in %d seconds.",
+            left,
+        ),
+        Kind::LogOut => match real_name() {
+            Some(name) => i18n::shell_n(
+                "%s will be logged out automatically in %d second.",
+                "%s will be logged out automatically in %d seconds.",
+                left,
+            )
+            .replacen("%s", &name, 1),
+            None => i18n::shell_n(
+                "You will be logged out automatically in %d second.",
+                "You will be logged out automatically in %d seconds.",
+                left,
+            ),
+        },
+    };
+    text.replace("%d", &left.to_string())
+}
+
+/// Shows the Power Off dialog (or brings the open one back to the front).
 pub fn open() {
+    show(Kind::PowerOff);
+}
+
+/// Shows the Log Out dialog (or brings the open one back to the front).
+pub fn open_log_out() {
+    show(Kind::LogOut);
+}
+
+fn show(kind: Kind) {
     if let Some(w) = OPEN.with(|o| o.borrow().clone()) {
         w.present();
         return;
@@ -61,12 +124,15 @@ pub fn open() {
         .build();
     card.append(
         &gtk::Label::builder()
-            .label(i18n::shell("Power Off"))
+            .label(match kind {
+                Kind::PowerOff => i18n::shell("Power Off"),
+                Kind::LogOut => i18n::shell("Log Out"),
+            })
             .css_classes(["end-session-title"])
             .build(),
     );
     let body = gtk::Label::builder()
-        .label(countdown_text(SECONDS))
+        .label(countdown_text(kind, SECONDS))
         .wrap(true)
         .justify(gtk::Justification::Center)
         .max_width_chars(40)
@@ -86,11 +152,28 @@ pub fn open() {
             .build()
     };
     let cancel = button(&i18n::shell("Cancel"), &[]);
-    let restart = button(&i18n::shell("Restart"), &[]);
-    let power_off = button(&i18n::shell("Power Off"), &["suggested-action"]);
     buttons.append(&cancel);
-    buttons.append(&restart);
-    buttons.append(&power_off);
+    // The other buttons, the last one being the default (also what the
+    // countdown does).
+    let choices: &[(String, Action)] = &match kind {
+        Kind::PowerOff => vec![
+            (i18n::shell("Restart"), REBOOT),
+            (i18n::shell("Power Off"), POWER_OFF),
+        ],
+        Kind::LogOut => vec![(i18n::shell("Log Out"), Action::LogOut)],
+    };
+    let default_action = choices.last().map(|(_, a)| *a).unwrap_or(POWER_OFF);
+    let choice_buttons: Vec<(gtk::Button, Action)> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, (label, action))| {
+            let last = i + 1 == choices.len();
+            let b = button(label, if last { &["suggested-action"] } else { &[] });
+            buttons.append(&b);
+            (b, *action)
+        })
+        .collect();
+    let default_button = choice_buttons.last().map(|(b, _)| b.clone());
     card.append(&buttons);
 
     let backdrop = gtk::Box::builder()
@@ -106,7 +189,7 @@ pub fn open() {
     // Closes the dialog once, then runs the chosen action.
     let finish = {
         let (window, timer, done) = (window.clone(), timer.clone(), done.clone());
-        move |argv: Option<&'static [&'static str]>| {
+        move |action: Option<Action>| {
             if done.replace(true) {
                 return;
             }
@@ -115,31 +198,21 @@ pub fn open() {
             }
             OPEN.with(|o| o.borrow_mut().take());
             window.destroy();
-            match argv {
-                Some(argv) => {
-                    tracing::info!(cmd = ?argv, "end session confirmed");
-                    crate::quick_settings::run(argv);
-                }
-                None => tracing::info!("power off cancelled"),
+            match action {
+                Some(action) => action.perform(),
+                None => tracing::info!(?kind, "end session cancelled"),
             }
         }
     };
     let finish = Rc::new(finish);
-    const POWER_OFF: &[&str] = &["systemctl", "poweroff"];
-    const REBOOT: &[&str] = &["systemctl", "reboot"];
-
     cancel.connect_clicked({
         let f = finish.clone();
         move |_| f(None)
     });
-    restart.connect_clicked({
+    for (b, action) in choice_buttons {
         let f = finish.clone();
-        move |_| f(Some(REBOOT))
-    });
-    power_off.connect_clicked({
-        let f = finish.clone();
-        move |_| f(Some(POWER_OFF))
-    });
+        b.connect_clicked(move |_| f(Some(action)));
+    }
     let keys = gtk::EventControllerKey::new();
     keys.connect_key_pressed({
         let f = finish.clone();
@@ -162,10 +235,10 @@ pub fn open() {
             if n == 0 {
                 // The source ends by returning Break; don't remove it twice.
                 timer.borrow_mut().take();
-                f(Some(POWER_OFF));
+                f(Some(default_action));
                 return glib::ControlFlow::Break;
             }
-            body.set_label(&countdown_text(n));
+            body.set_label(&countdown_text(kind, n));
             glib::ControlFlow::Continue
         }
     });
@@ -173,5 +246,7 @@ pub fn open() {
 
     OPEN.with(|o| *o.borrow_mut() = Some(window.clone()));
     window.present();
-    power_off.grab_focus();
+    if let Some(b) = default_button {
+        b.grab_focus();
+    }
 }

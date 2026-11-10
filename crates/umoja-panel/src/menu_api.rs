@@ -7,8 +7,10 @@
 //! Focus()              give the top bar the keyboard (Ctrl+Alt+Tab):
 //!                      Tab/arrows move between its buttons, Escape leaves
 //! Unfocus()            hand the keyboard back (a click elsewhere)
-//! LogOut()             Log Out as the Quick Settings button does
-//!                      (the assistant's session tool)
+//! LogOut()             Log Out right away, no dialog (the assistant's
+//!                      session tool, which confirms on its own)
+//! ConfirmLogOut()      show the Log Out dialog, as the Quick Settings
+//!                      button does (it logs out after 60 s)
 //! ConfirmPowerOff()    show the Power Off dialog, as the Quick Settings
 //!                      button does (it powers off after 60 s)
 //! ```
@@ -27,6 +29,7 @@ const XML: &str = r#"<node>
     <method name="Focus"/>
     <method name="Unfocus"/>
     <method name="LogOut"/>
+    <method name="ConfirmLogOut"/>
     <method name="ConfirmPowerOff"/>
   </interface>
 </node>"#;
@@ -134,6 +137,11 @@ pub fn own_name(
                         invocation.return_value(None);
                         // After the reply, so the caller isn't left waiting.
                         gtk::glib::idle_add_local_once(crate::fade::log_out);
+                        return;
+                    }
+                    "ConfirmLogOut" => {
+                        invocation.return_value(None);
+                        gtk::glib::idle_add_local_once(crate::power_dialog::open_log_out);
                         return;
                     }
                     "ConfirmPowerOff" => {
