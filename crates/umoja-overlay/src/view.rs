@@ -85,6 +85,9 @@ pub struct Overlay {
     /// assistant messages, sent along with follow-ups. Cleared when the
     /// card goes away.
     conversation: RefCell<Vec<serde_json::Value>>,
+    /// Bumped by show() and hide(): a hide waiting for its clean frame
+    /// only goes ahead if nothing reopened the overlay meanwhile.
+    hide_serial: Rc<Cell<u32>>,
     /// The last answer asked the user something: the search entry is a
     /// reply box until it's answered.
     awaiting_reply: Cell<bool>,
@@ -369,6 +372,7 @@ impl Overlay {
             conversation: RefCell::default(),
             awaiting_reply: Cell::new(false),
             local_chat: Cell::new(false),
+            hide_serial: Rc::new(Cell::new(0)),
         });
         let weak = Rc::downgrade(&overlay);
         clip_clear.connect_clicked(move |_| {
@@ -484,6 +488,7 @@ impl Overlay {
     }
 
     pub fn show(self: &Rc<Self>) {
+        self.hide_serial.set(self.hide_serial.get().wrapping_add(1));
         self.end_conversation();
         self.entry.set_text("");
         self.assistant.set_visible(false);
@@ -582,7 +587,44 @@ impl Overlay {
         if let Some(d) = self.confirm_dialog.take() {
             d.force_close();
         }
-        self.window.set_visible(false);
+        let serial = self.hide_serial.get().wrapping_add(1);
+        self.hide_serial.set(serial);
+        if !self.window.is_visible() {
+            return;
+        }
+        // The compositor keeps an unmapped surface's last frame and shows it
+        // for a moment when the overlay opens again, so the previous answer
+        // flashed up before the app grid (plainly visible in screencasts).
+        // Paint one clean frame first, then unmap.
+        self.entry.set_text("");
+        self.assistant.set_visible(false);
+        let window = self.window.clone();
+        let pending = self.hide_serial.clone();
+        let done = Rc::new(Cell::new(false));
+        let finish = {
+            let done = done.clone();
+            move || {
+                if !done.replace(true) && pending.get() == serial {
+                    window.set_visible(false);
+                }
+            }
+        };
+        let finish = Rc::new(finish);
+        if let Some(clock) = self.window.frame_clock() {
+            let f = finish.clone();
+            let id = Rc::new(RefCell::new(None::<glib::SignalHandlerId>));
+            let id2 = id.clone();
+            let c2 = clock.clone();
+            *id.borrow_mut() = Some(clock.connect_after_paint(move |_| {
+                if let Some(h) = id2.borrow_mut().take() {
+                    c2.disconnect(h);
+                }
+                f();
+            }));
+            self.window.queue_draw();
+        }
+        // In case no frame comes (the surface isn't being drawn).
+        glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || finish());
     }
 
     pub fn toggle(self: &Rc<Self>) {
