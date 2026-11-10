@@ -290,6 +290,95 @@ fn grim(path: &Path, region: Option<(i32, i32, i32, i32)>, cursor: bool) -> bool
     matches!(cmd.arg(path).status(), Ok(s) if s.success())
 }
 
+/// Grab the screen (or `region`) straight into memory. grim's PNG output
+/// is what made the UI slow to open: grim renders every output at the
+/// highest scale, so a HiDPI laptop next to an ultrawide is a frame of tens
+/// of megapixels, and zlib-compressing that (then inflating it again here)
+/// took seconds. Uncompressed PPM over a pipe costs almost nothing.
+fn grim_pixbuf(region: Option<(i32, i32, i32, i32)>, cursor: bool) -> Option<Pixbuf> {
+    grim_rgb(region, cursor).map(rgb_pixbuf)
+}
+
+/// grim's PPM output: width, height and RGB rows.
+fn grim_rgb(region: Option<(i32, i32, i32, i32)>, cursor: bool) -> Option<(i32, i32, Vec<u8>)> {
+    let mut cmd = Command::new("grim");
+    cmd.args(["-t", "ppm"]);
+    if cursor {
+        cmd.arg("-c");
+    }
+    if let Some((x, y, w, h)) = region {
+        cmd.args(["-g", &format!("{x},{y} {w}x{h}")]);
+    }
+    let out = cmd
+        .arg("-")
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_ppm(out.stdout)
+}
+
+fn rgb_pixbuf((w, h, data): (i32, i32, Vec<u8>)) -> Pixbuf {
+    Pixbuf::from_bytes(
+        &glib::Bytes::from_owned(data),
+        gtk::gdk_pixbuf::Colorspace::Rgb,
+        false,
+        8,
+        w,
+        h,
+        w * 3,
+    )
+}
+
+/// The frozen frames, without and with the pointer, grabbed at the same
+/// time so neither waits on the other.
+fn grim_frames() -> Option<(Pixbuf, Pixbuf)> {
+    let cursor = std::thread::spawn(|| grim_rgb(None, true));
+    let plain = grim_rgb(None, false);
+    let cursor = cursor.join().ok()?;
+    Some((rgb_pixbuf(plain?), rgb_pixbuf(cursor?)))
+}
+
+/// A binary (P6) PPM with 8-bit samples: width, height and the RGB rows.
+fn parse_ppm(mut buf: Vec<u8>) -> Option<(i32, i32, Vec<u8>)> {
+    fn field(buf: &[u8], pos: &mut usize) -> Option<usize> {
+        loop {
+            match buf.get(*pos)? {
+                b'#' => {
+                    while *buf.get(*pos)? != b'\n' {
+                        *pos += 1;
+                    }
+                }
+                c if c.is_ascii_whitespace() => *pos += 1,
+                _ => break,
+            }
+        }
+        let start = *pos;
+        while buf.get(*pos).is_some_and(|c| !c.is_ascii_whitespace()) {
+            *pos += 1;
+        }
+        std::str::from_utf8(&buf[start..*pos]).ok()?.parse().ok()
+    }
+    if !buf.starts_with(b"P6") {
+        return None;
+    }
+    let mut pos = 2;
+    let w = field(&buf, &mut pos)?;
+    let h = field(&buf, &mut pos)?;
+    let max = field(&buf, &mut pos)?;
+    // One whitespace byte separates the header from the samples.
+    pos += 1;
+    let len = w.checked_mul(h)?.checked_mul(3)?;
+    if max != 255 || w == 0 || h == 0 || buf.len() < pos.checked_add(len)? {
+        return None;
+    }
+    buf.drain(..pos);
+    buf.truncate(len);
+    Some((i32::try_from(w).ok()?, i32::try_from(h).ok()?, buf))
+}
+
 impl ScreenshotUi {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         umoja_common::monitors::start();
@@ -797,19 +886,7 @@ impl ScreenshotUi {
         }
         // Grab with and without the pointer up front, so "Show Pointer" can be
         // toggled after the fact like in gnome-shell.
-        let dir = glib::user_runtime_dir();
-        let plain = dir.join(format!("umoja-shot-{}.png", std::process::id()));
-        let cursor = dir.join(format!("umoja-shot-{}-cursor.png", std::process::id()));
-        let ok = grim(&plain, None, false) && grim(&cursor, None, true);
-        let frames = ok.then(|| {
-            (
-                Pixbuf::from_file(&plain).ok(),
-                Pixbuf::from_file(&cursor).ok(),
-            )
-        });
-        let _ = std::fs::remove_file(&plain);
-        let _ = std::fs::remove_file(&cursor);
-        let Some((Some(plain), Some(cursor))) = frames else {
+        let Some((plain, cursor)) = grim_frames() else {
             tracing::warn!("grim failed; is it installed?");
             return;
         };
@@ -1061,12 +1138,7 @@ impl ScreenshotUi {
         let app = self.app.clone();
         // Give the compositor a few frames to raise it and drop our surface.
         glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
-            let path = glib::user_runtime_dir()
-                .join(format!("umoja-shot-{}-window.png", std::process::id()));
-            let pixbuf = grim(&path, Some(region), cursor)
-                .then(|| Pixbuf::from_file(&path).ok())
-                .flatten();
-            let _ = std::fs::remove_file(&path);
+            let pixbuf = grim_pixbuf(Some(region), cursor);
             match (ask, pixbuf) {
                 (Some(done), p) => done(p),
                 (None, Some(p)) if kind == Kind::Text => copy_text(&app, &p),
@@ -1360,6 +1432,19 @@ mod tests {
             flags,
             workspace: 0,
         }
+    }
+
+    #[test]
+    fn ppm_frames_parse() {
+        let mut ppm = b"P6\n# grim\n2 1\n255\n".to_vec();
+        ppm.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        assert_eq!(parse_ppm(ppm.clone()), Some((2, 1, vec![1, 2, 3, 4, 5, 6])));
+        // Truncated samples, other depths and other formats are refused.
+        ppm.pop();
+        assert_eq!(parse_ppm(ppm), None);
+        assert_eq!(parse_ppm(b"P6 1 1 65535\n\0\0\0\0\0\0".to_vec()), None);
+        assert_eq!(parse_ppm(b"P5 1 1 255\n\0".to_vec()), None);
+        assert_eq!(parse_ppm(Vec::new()), None);
     }
 
     #[test]
