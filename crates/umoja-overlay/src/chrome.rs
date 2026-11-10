@@ -121,7 +121,7 @@ const PREVIEW_RADIUS: f64 = 18.0;
 
 struct Preview {
     window: gtk::ApplicationWindow,
-    area: gtk::DrawingArea,
+    area: crate::canvas::Canvas,
     monitor: Cell<(i32, i32)>,
     from: Cell<R>,
     to: Cell<R>,
@@ -140,7 +140,7 @@ impl Preview {
         for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             window.set_anchor(e, true);
         }
-        let area = gtk::DrawingArea::new();
+        let area = crate::canvas::Canvas::new();
         window.set_child(Some(&area));
         let this = Rc::new(Self {
             window,
@@ -156,9 +156,9 @@ impl Preview {
             ticking: Cell::new(false),
         });
         let weak = Rc::downgrade(&this);
-        this.area.set_draw_func(move |_, cr, _, _| {
+        this.area.set_draw(move |snapshot, _, _| {
             if let Some(p) = weak.upgrade() {
-                p.draw(cr);
+                p.draw(snapshot);
             }
         });
         this
@@ -169,7 +169,8 @@ impl Preview {
         ease_out_quad((elapsed / ANIMATION_MS).clamp(0.0, 1.0))
     }
 
-    fn draw(&self, cr: &gtk::cairo::Context) {
+    fn draw(&self, snapshot: &gtk::Snapshot) {
+        use crate::canvas::{fill_rounded, rect, stroke_rounded};
         let t = self.progress();
         let target_opacity = if self.target_visible.get() { 1.0 } else { 0.0 };
         let opacity = self.opacity_from.get() + (target_opacity - self.opacity_from.get()) * t;
@@ -194,20 +195,23 @@ impl Preview {
             h: (r.h - 2.0 * PREVIEW_INSET).max(0.0),
         };
         let radius = PREVIEW_RADIUS.min(r.w / 2.0).min(r.h / 2.0);
-        cr.set_source_rgba(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, 0.55 * opacity);
-        rounded(cr, r, [radius; 4]);
-        let _ = cr.fill();
+        let bg = gdk::RGBA::new(
+            SHELL_BG.0 as f32,
+            SHELL_BG.1 as f32,
+            SHELL_BG.2 as f32,
+            (0.55 * opacity) as f32,
+        );
+        fill_rounded(snapshot, rect(r.x, r.y, r.w, r.h), radius, &bg);
         let a = accent();
-        cr.set_source_rgba(a.red() as f64, a.green() as f64, a.blue() as f64, 0.9 * opacity);
-        cr.set_line_width(2.0);
-        let inner = R {
-            x: r.x + 1.0,
-            y: r.y + 1.0,
-            w: (r.w - 2.0).max(0.0),
-            h: (r.h - 2.0).max(0.0),
-        };
-        rounded(cr, inner, [(radius - 1.0).max(0.0); 4]);
-        let _ = cr.stroke();
+        let line = gdk::RGBA::new(a.red(), a.green(), a.blue(), (0.9 * opacity) as f32);
+        // A 2 px line just inside the card's edge.
+        stroke_rounded(
+            snapshot,
+            rect(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0),
+            (radius - 1.0).max(0.0),
+            2.0,
+            &line,
+        );
     }
 
     fn animate(self: &Rc<Self>) {

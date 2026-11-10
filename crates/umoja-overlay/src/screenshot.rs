@@ -192,7 +192,7 @@ fn pick_at(picks: &[Pick], p: (f64, f64)) -> Option<usize> {
 struct Surface {
     window: gtk::ApplicationWindow,
     overlay: gtk::Overlay,
-    area: gtk::DrawingArea,
+    area: crate::canvas::Canvas,
     /// The monitor, in layout pixels.
     rect: Sel,
 }
@@ -445,10 +445,9 @@ impl ScreenshotUi {
         picture.set_paintable(Some(&gdk::Texture::for_pixbuf(
             &frame.new_subpixbuf(x, y, w, h),
         )));
-        let area = gtk::DrawingArea::builder()
-            .hexpand(true)
-            .vexpand(true)
-            .build();
+        // GPU-drawn: a monitor-sized cairo DrawingArea re-rasterised and
+        // uploaded every pixel on each pointer motion.
+        let area = crate::canvas::Canvas::new();
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
         overlay.add_overlay(&area);
@@ -649,32 +648,40 @@ impl ScreenshotUi {
     fn connect_drawing(self: &Rc<Self>, surface: &Surface, index: usize) {
         let rect = surface.rect;
         let weak = Rc::downgrade(self);
-        surface.area.set_draw_func(move |_, cr, _, _| {
+        surface.area.set_draw(move |s, _, _| {
+            use crate::canvas::{dot, rect as r_, stroke_rounded};
             let Some(ui) = weak.upgrade() else { return };
-            cr.translate(-rect.x, -rect.y);
+            s.translate(&gtk::graphene::Point::new(-rect.x as f32, -rect.y as f32));
             let sel = match ui.mode.get() {
                 Mode::Screen => ui.screen_rect(),
                 Mode::Selection => ui.sel.get(),
                 Mode::Window => ui.picked_rect().unwrap_or_default(),
             };
-            // Dim everything outside the selection.
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
-            cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
-            cr.rectangle(rect.x, rect.y, rect.w, rect.h);
-            cr.rectangle(sel.x, sel.y, sel.w, sel.h);
-            let _ = cr.fill();
+            let white = |a: f32| gdk::RGBA::new(1.0, 1.0, 1.0, a);
+            // Dim everything outside the selection: four bands around it,
+            // clipped to this monitor.
+            let dim = gdk::RGBA::new(0.0, 0.0, 0.0, 0.5);
+            let (right, bottom) = (rect.x + rect.w, rect.y + rect.h);
+            s.push_clip(&r_(rect.x, rect.y, rect.w, rect.h));
+            for band in [
+                r_(rect.x, rect.y, rect.w, sel.y - rect.y),
+                r_(rect.x, sel.y + sel.h, rect.w, bottom - sel.y - sel.h),
+                r_(rect.x, sel.y, sel.x - rect.x, sel.h),
+                r_(sel.x + sel.w, sel.y, right - sel.x - sel.w, sel.h),
+            ] {
+                if band.width() > 0.0 && band.height() > 0.0 {
+                    s.append_color(&dim, &band);
+                }
+            }
+            s.pop();
             // gnome-shell frames the picked monitor when there is a choice.
             if ui.mode.get() == Mode::Screen && sel == rect && ui.surfaces.borrow().len() > 1 {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-                cr.set_line_width(4.0);
-                cr.rectangle(sel.x + 2.0, sel.y + 2.0, sel.w - 4.0, sel.h - 4.0);
-                let _ = cr.stroke();
+                let r = r_(sel.x + 2.0, sel.y + 2.0, sel.w - 4.0, sel.h - 4.0);
+                stroke_rounded(s, r, 0.0, 4.0, &white(0.95));
             }
             if ui.mode.get() == Mode::Selection && sel.w > 0.0 {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
-                cr.set_line_width(1.0);
-                cr.rectangle(sel.x + 0.5, sel.y + 0.5, sel.w - 1.0, sel.h - 1.0);
-                let _ = cr.stroke();
+                let r = r_(sel.x + 0.5, sel.y + 0.5, sel.w - 1.0, sel.h - 1.0);
+                stroke_rounded(s, r, 0.0, 1.0, &white(0.9));
                 // Corner handles, as in gnome-shell.
                 for (hx, hy) in [
                     (sel.x, sel.y),
@@ -682,8 +689,7 @@ impl ScreenshotUi {
                     (sel.x, sel.y + sel.h),
                     (sel.x + sel.w, sel.y + sel.h),
                 ] {
-                    cr.arc(hx, hy, 6.0, 0.0, std::f64::consts::TAU);
-                    let _ = cr.fill();
+                    dot(s, hx, hy, 6.0, &white(0.9));
                 }
             }
             if ui.mode.get() == Mode::Window {
@@ -696,17 +702,13 @@ impl ScreenshotUi {
                     .and_then(|i| windows.get(i))
                     .map(|p| p.rect)
                 {
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
-                    cr.set_line_width(2.0);
-                    rounded(cr, r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0, 8.0);
-                    let _ = cr.stroke();
+                    let r = r_(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0);
+                    stroke_rounded(s, r, 8.0, 2.0, &white(0.5));
                 }
                 // ...and the picked one gnome-shell's white frame.
                 if sel.w > 0.0 {
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-                    cr.set_line_width(4.0);
-                    rounded(cr, sel.x + 2.0, sel.y + 2.0, sel.w - 4.0, sel.h - 4.0, 8.0);
-                    let _ = cr.stroke();
+                    let r = r_(sel.x + 2.0, sel.y + 2.0, sel.w - 4.0, sel.h - 4.0);
+                    stroke_rounded(s, r, 8.0, 4.0, &white(0.95));
                 }
             }
         });
@@ -1290,17 +1292,6 @@ fn initial_selection(previous: Sel, monitors: &[Sel], primary: Sel) -> Sel {
             h: primary.h * 0.5,
         }
     }
-}
-
-fn rounded(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    use std::f64::consts::{FRAC_PI_2, PI};
-    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
-    cr.new_sub_path();
-    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
-    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
-    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
-    cr.arc(x + r, y + r, r, PI, 3.0 * FRAC_PI_2);
-    cr.close_path();
 }
 
 /// `icons` are tried in order; the first one the icon theme has is drawn.
