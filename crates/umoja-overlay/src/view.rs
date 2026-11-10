@@ -592,10 +592,12 @@ impl Overlay {
         if !self.window.is_visible() {
             return;
         }
-        // The compositor keeps an unmapped surface's last frame and shows it
-        // for a moment when the overlay opens again, so the previous answer
-        // flashed up before the app grid (plainly visible in screencasts).
-        // Paint one clean frame first, then unmap.
+        // Mir hands a compositor that hasn't used a surface's current frame
+        // that frame, not the newer one, so a screen recording (its own
+        // compositor) showed the previous answer for a frame or two when
+        // the overlay opened again. Paint a clean frame and unmap only once
+        // the display has taken it (the frame callback lets GTK paint a
+        // second time), so the frame left behind is the empty search.
         self.entry.set_text("");
         self.assistant.set_visible(false);
         let window = self.window.clone();
@@ -612,10 +614,17 @@ impl Overlay {
         let finish = Rc::new(finish);
         if let Some(clock) = self.window.frame_clock() {
             let f = finish.clone();
+            let paints = Rc::new(Cell::new(0u8));
             let id = Rc::new(RefCell::new(None::<glib::SignalHandlerId>));
             let id2 = id.clone();
             let c2 = clock.clone();
+            let w = self.window.clone();
             *id.borrow_mut() = Some(clock.connect_after_paint(move |_| {
+                paints.set(paints.get() + 1);
+                if paints.get() < 2 {
+                    w.queue_draw();
+                    return;
+                }
                 if let Some(h) = id2.borrow_mut().take() {
                     c2.disconnect(h);
                 }
@@ -624,7 +633,7 @@ impl Overlay {
             self.window.queue_draw();
         }
         // In case no frame comes (the surface isn't being drawn).
-        glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || finish());
+        glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || finish());
     }
 
     pub fn toggle(self: &Rc<Self>) {
