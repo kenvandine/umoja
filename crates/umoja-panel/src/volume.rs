@@ -1,6 +1,7 @@
-//! Output volume via WirePlumber's `wpctl`, polled so that media keys and
-//! other apps changing the volume show up in the panel icon and slider.
-//! TODO: talk to PipeWire directly instead of polling.
+//! Output and input volume. Levels come live from `pw-dump --monitor` (see
+//! `sound.rs`, which already follows the PipeWire graph); changes go through
+//! WirePlumber's `wpctl`. Only when the graph carries no levels does this
+//! fall back to polling `wpctl get-volume`.
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -62,6 +63,8 @@ pub struct Volume {
     label: RefCell<Option<String>>,
     /// The volume-change click, so a held key doesn't stack them.
     feedback: RefCell<Option<gio::Subprocess>>,
+    /// Levels arrive from the PipeWire graph, so no polling is needed.
+    live: Cell<bool>,
 }
 
 thread_local! {
@@ -88,17 +91,34 @@ impl Volume {
             last_key: Cell::default(),
             label: RefCell::default(),
             feedback: RefCell::default(),
+            live: Cell::new(false),
         });
         v.poll();
+        // Start following the graph; poll only until it reports levels.
+        let _ = crate::sound::Sound::get();
         let weak = Rc::downgrade(&v);
         glib::timeout_add_local(POLL, move || match weak.upgrade() {
-            Some(v) => {
+            Some(v) if !v.live.get() => {
                 v.poll();
                 glib::ControlFlow::Continue
             }
-            None => glib::ControlFlow::Break,
+            _ => glib::ControlFlow::Break,
         });
         v
+    }
+
+    /// The level and mute the PipeWire graph reports for this device, and
+    /// (for the output) its OSD label.
+    pub fn from_graph(&self, s: VolumeState, label: Option<String>) {
+        self.live.set(true);
+        if self.target == SINK {
+            self.label.replace(label);
+        }
+        // While keys are coming in our own value wins (see `key`).
+        if self.last_key.get().is_some_and(|t| t.elapsed() < KEY_BURST) {
+            return;
+        }
+        self.update(s);
     }
 
     pub fn subscribe(&self, f: impl Fn(&VolumeState) + 'static) {
@@ -255,7 +275,7 @@ impl Volume {
     /// A volume key: change the default output and show the OSD.
     pub fn key(&self, key: Key, quiet: bool, precise: bool) {
         let in_burst = self.last_key.get().is_some_and(|t| t.elapsed() < KEY_BURST);
-        let old = if in_burst {
+        let old = if in_burst || self.live.get() {
             self.state.get()
         } else {
             self.label.replace(read_label(SINK));
@@ -294,10 +314,15 @@ impl Volume {
 
     /// The microphone mute key.
     pub fn toggle_mic_mute(&self) {
-        let Some(old) = read_now(SOURCE) else { return };
+        let mic = Volume::mic();
+        let old = if mic.live.get() {
+            Some(mic.state()).filter(|s| s.available)
+        } else {
+            read_now(SOURCE)
+        };
+        let Some(old) = old else { return };
         let muted = !old.muted;
         spawn(&["wpctl", "set-mute", SOURCE, if muted { "1" } else { "0" }]);
-        let mic = Volume::mic();
         mic.update(VolumeState { muted, ..old });
         let level = if muted { 0.0 } else { old.volume };
         crate::osd::show(

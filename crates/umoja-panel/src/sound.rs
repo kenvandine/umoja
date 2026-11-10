@@ -35,6 +35,12 @@ pub struct SoundState {
     /// An app has a capture stream open, as gnome-shell's
     /// InputStreamSlider._maybeShowInput checks.
     pub recording: bool,
+    /// Level and mute of the default sink / source, as `wpctl get-volume`
+    /// reports them, from the node's Props (None until pw-dump sent them).
+    pub output_volume: Option<crate::volume::VolumeState>,
+    pub input_volume: Option<crate::volume::VolumeState>,
+    /// The OSD label for the default sink (see `volume::device_label`).
+    pub output_label: Option<String>,
 }
 
 impl SoundState {
@@ -195,6 +201,13 @@ impl Graph {
                         .unwrap_or("");
                     let (port, card) =
                         split_name(&description, card_name, prop(p, "device.profile.description"));
+                    if !input && s.default_output.as_deref() == Some(name.as_str()) {
+                        s.output_volume = node_volume(obj);
+                        s.output_label = node_label(p);
+                    }
+                    if input && s.default_input.as_deref() == Some(name.as_str()) {
+                        s.input_volume = node_volume(obj);
+                    }
                     let dev = Device {
                         id: *id as u32,
                         icon: icon_for(input, p, device),
@@ -277,6 +290,41 @@ pub fn split_name(description: &str, card: &str, profile: Option<&str>) -> (Stri
     (port, card)
 }
 
+/// `wpctl get-volume` for a node: the mean of its Props channelVolumes on
+/// WirePlumber's cubic scale, rounded to whole percent as wpctl prints it.
+fn node_volume(obj: &Value) -> Option<crate::volume::VolumeState> {
+    let props = obj.pointer("/info/params/Props")?.as_array()?;
+    let main = props.iter().find(|p| p.get("channelVolumes").is_some())?;
+    let channels: Vec<f64> = main
+        .get("channelVolumes")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    if channels.is_empty() {
+        return None;
+    }
+    let linear = channels.iter().sum::<f64>() / channels.len() as f64;
+    let volume = (linear.max(0.0).cbrt() * 100.0).round() / 100.0;
+    Some(crate::volume::VolumeState {
+        available: true,
+        volume,
+        muted: main.get("mute").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+/// `volume::device_label` from a node's own properties.
+fn node_label(p: &serde_json::Map<String, Value>) -> Option<String> {
+    let description = prop(p, "node.description")?;
+    let name = prop(p, "node.name").unwrap_or("");
+    let form = prop(p, "device.form-factor").unwrap_or("");
+    let internal = form == "internal"
+        || (form.is_empty()
+            && (name.starts_with("alsa_output.pci-") || name.starts_with("alsa_input.pci-"))
+            && !name.contains("hdmi"));
+    (!internal).then(|| description.to_string())
+}
+
 fn is_default_meta(obj: &Value) -> bool {
     obj.get("type").and_then(Value::as_str) == Some("PipeWire:Interface:Metadata")
         && obj.pointer("/props/metadata.name").and_then(Value::as_str) == Some("default")
@@ -349,13 +397,19 @@ impl Sound {
         if old == s {
             return;
         }
-        // The volume pollers follow @DEFAULT_AUDIO_*@: read the new
-        // device's level now rather than on the next poll.
-        if old.default_output != s.default_output {
-            crate::volume::Volume::get().poll();
+        // Volume levels come from the same stream; without them (a
+        // PipeWire that sends no Props) ask wpctl once instead.
+        match s.output_volume {
+            Some(v) => crate::volume::Volume::get().from_graph(v, s.output_label.clone()),
+            None if old.default_output != s.default_output => crate::volume::Volume::get().poll(),
+            None => {}
         }
-        if old.default_input != s.default_input || old.recording != s.recording {
-            crate::volume::Volume::mic().poll();
+        match s.input_volume {
+            Some(v) => crate::volume::Volume::mic().from_graph(v, None),
+            None if old.default_input != s.default_input || old.recording != s.recording => {
+                crate::volume::Volume::mic().poll()
+            }
+            None => {}
         }
         for l in self.listeners.borrow().iter() {
             l(&s);
@@ -472,6 +526,28 @@ mod tests {
                  "value": "{\"name\":\"alsa_input.pci-0000_c4_00.6.analog-stereo\"}"}
              ]}
         ])
+    }
+
+    #[test]
+    fn default_sink_volume_from_props() {
+        let mut g = Graph::default();
+        g.apply(json!([
+            {"id": 52, "type": "PipeWire:Interface:Node",
+             "info": {"props": {"media.class": "Audio/Sink",
+                "node.name": "alsa_output.usb-headset", "node.description": "USB Headset",
+                "device.form-factor": "headset"},
+              "params": {"Props": [{"mute": true, "channelVolumes": [0.125, 0.125]}]}}},
+            {"id": 30, "type": "PipeWire:Interface:Metadata",
+             "props": {"metadata.name": "default"},
+             "metadata": [{"subject": 0, "key": "default.audio.sink",
+                "value": {"name": "alsa_output.usb-headset"}}]}
+        ]));
+        let s = g.state();
+        let v = s.output_volume.unwrap();
+        assert!((v.volume - 0.5).abs() < 1e-9, "cube root of 0.125");
+        assert!(v.muted && v.available);
+        assert_eq!(s.output_label.as_deref(), Some("USB Headset"));
+        assert!(s.input_volume.is_none());
     }
 
     #[test]
