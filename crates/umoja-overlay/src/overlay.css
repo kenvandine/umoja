@@ -319,6 +319,19 @@ window.umoja-chrome {
   box-shadow: none;
 }
 
+/* Layout picker card (drag a window to the top): the same see-through,
+   blurred card as the Alt+Tab list and notification bubbles. Padding 14 +
+   1px border = chrome.rs INNER_PAD (15), so the icons stay where umoja-mir
+   hit-tests them. */
+.layout-picker {
+  background-color: rgba(22, 22, 24, 0.66);
+  backdrop-filter: blur(12px);
+  border: 1px solid alpha(#ffffff, 0.08);
+  border-radius: 24px;
+  padding: 14px;
+  box-shadow: 0 2px 12px alpha(#000000, 0.45);
+}
+
 /* Alt+Tab, after gnome-shell's .switcher-popup / .switcher-list. */
 .switcher-popup {
   margin: 0;

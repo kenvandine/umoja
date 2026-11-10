@@ -8,7 +8,8 @@
 //! * the tile preview is an accent-coloured translucent rectangle that eases
 //!   from the window's frame to the tile it will fill (250 ms, ease-out);
 //! * the layout picker peeks out from under the top bar during a drag and
-//!   slides down when the pointer reaches it, its hovered tile filled in;
+//!   slides down when the pointer reaches it, its hovered tile filled in; it
+//!   is the blurred see-through shell card with accent-coloured tiles;
 //! * the switcher is the dark rounded popup with app icons and names that
 //!   appears after 150 ms, so a quick Alt+Tab never flashes.
 
@@ -276,12 +277,18 @@ impl Preview {
 
 struct Picker {
     window: gtk::ApplicationWindow,
-    area: gtk::DrawingArea,
+    /// Clips the card at the top bar's bottom edge, so it slides out from
+    /// under the bar.
+    clip: gtk::Fixed,
+    /// The see-through shell card (`.layout-picker` in overlay.css): a real
+    /// widget rather than cairo so GTK's backdrop-filter blurs behind it,
+    /// like the notification bubbles and the Alt+Tab switcher.
+    card: gtk::Box,
+    /// The four layout icons, drawn in the accent colour.
+    icons: gtk::DrawingArea,
     /// Visibility the compositor asked for: 0 hidden, 1 peek, 2 shown.
     visibility: Cell<u32>,
     tile: Cell<u32>,
-    /// Distance from the monitor top to the work area top (the top bar).
-    bar: Cell<f64>,
     translation_from: Cell<f64>,
     translation: Cell<f64>,
     start: Cell<i64>,
@@ -301,24 +308,50 @@ impl Picker {
         let window = chrome_window(app, Layer::Overlay, "umoja-layout-picker");
         window.set_anchor(Edge::Top, true);
         window.set_anchor(Edge::Left, true);
-        let area = gtk::DrawingArea::new();
-        area.set_content_width(PICKER_W as i32);
-        window.set_child(Some(&area));
+        // Only acts on GTK < 4.24; newer GTK blurs via the card's CSS.
+        umoja_common::blur::blur_behind(&window);
+        let clip = gtk::Fixed::new();
+        clip.set_size_request(PICKER_W as i32, PICKER_H as i32);
+        clip.set_overflow(gtk::Overflow::Hidden);
+        clip.set_valign(gtk::Align::Start);
+        let card = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        card.add_css_class("layout-picker");
+        card.set_size_request(
+            (PICKER_W - 2.0 * OUTER_PAD) as i32,
+            (PICKER_H - 2.0 * OUTER_PAD) as i32,
+        );
+        let icons = gtk::DrawingArea::new();
+        icons.set_content_width((4.0 * ICON + 3.0 * SPACING) as i32);
+        icons.set_content_height(ICON as i32);
+        icons.set_hexpand(true);
+        icons.set_halign(gtk::Align::Center);
+        icons.set_valign(gtk::Align::Center);
+        card.append(&icons);
+        clip.put(&card, OUTER_PAD, -PICKER_H);
+        window.set_child(Some(&clip));
         let this = Rc::new(Self {
             window,
-            area,
+            clip,
+            card,
+            icons,
             visibility: Cell::new(0),
             tile: Cell::new(0),
-            bar: Cell::new(0.0),
             translation_from: Cell::new(0.0),
             translation: Cell::new(0.0),
             start: Cell::new(0),
             ticking: Cell::new(false),
         });
         let weak = Rc::downgrade(&this);
-        this.area.set_draw_func(move |_, cr, _, _| {
+        this.icons.set_draw_func(move |_, cr, _, _| {
             if let Some(p) = weak.upgrade() {
-                p.draw(cr);
+                p.draw_icons(cr);
+            }
+        });
+        // Follow the accent colour live, like the tile preview.
+        let weak = Rc::downgrade(&this);
+        adw::StyleManager::default().connect_accent_color_rgba_notify(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.icons.queue_draw();
             }
         });
         this
@@ -329,63 +362,24 @@ impl Picker {
         ease_out_quad((elapsed / ANIMATION_MS).clamp(0.0, 1.0))
     }
 
-    fn draw(&self, cr: &gtk::cairo::Context) {
+    /// Moves the card to this frame's slide position.
+    fn place(&self) {
         let to = picker_translation(self.visibility.get());
         let from = self.translation_from.get();
         let t = from + (to - from) * self.progress();
         self.translation.set(t);
-        if t <= 0.0 {
-            return;
-        }
-        let bar = self.bar.get();
-        // Slides out from under the top bar: clip at the bar's bottom edge.
-        cr.rectangle(0.0, bar, PICKER_W, PICKER_H);
-        cr.clip();
-        let top = bar - PICKER_H + t;
-        let boxr = R {
-            x: OUTER_PAD,
-            y: top + OUTER_PAD,
-            w: PICKER_W - 2.0 * OUTER_PAD,
-            h: PICKER_H - 2.0 * OUTER_PAD,
-        };
-        // Soft shadow, then the popup-menu background.
-        for (grow, alpha) in [(6.0, 0.06), (3.0, 0.1), (1.0, 0.18)] {
-            cr.set_source_rgba(0.0, 0.0, 0.0, alpha);
-            rounded(
-                cr,
-                R {
-                    x: boxr.x - grow,
-                    y: boxr.y - grow + 2.0,
-                    w: boxr.w + 2.0 * grow,
-                    h: boxr.h + 2.0 * grow,
-                },
-                [20.0 + grow; 4],
-            );
-            let _ = cr.fill();
-        }
-        cr.set_source_rgba(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, 0.86);
-        rounded(cr, boxr, [20.0; 4]);
-        let _ = cr.fill();
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.08);
-        cr.set_line_width(1.0);
-        rounded(
-            cr,
-            R {
-                x: boxr.x + 0.5,
-                y: boxr.y + 0.5,
-                w: boxr.w - 1.0,
-                h: boxr.h - 1.0,
-            },
-            [19.5; 4],
-        );
-        let _ = cr.stroke();
+        self.card.set_visible(t > 0.0);
+        self.clip
+            .move_(&self.card, OUTER_PAD, t - PICKER_H + OUTER_PAD);
+    }
 
+    fn draw_icons(&self, cr: &gtk::cairo::Context) {
         // Icons in tiling-assistant's order: vertical, horizontal, quarter, maximize.
         let tile = self.tile.get();
+        let accent = accent();
         for i in 0..4 {
-            let x = OUTER_PAD + INNER_PAD + i as f64 * (ICON + SPACING);
-            let y = top + OUTER_PAD + INNER_PAD;
-            draw_tile_icon(cr, x, y, i, tile);
+            let x = i as f64 * (ICON + SPACING);
+            draw_tile_icon(cr, x, 0.0, i, tile, &accent);
         }
     }
 
@@ -396,22 +390,24 @@ impl Picker {
                 let bar = (area_y - g.y()).max(0) as f64;
                 self.window.set_monitor(&m);
                 self.window.set_margin(Edge::Left, x - g.x());
-                self.area.set_content_height((bar + PICKER_H) as i32);
-                self.bar.set(bar);
+                self.clip.set_margin_top(bar as i32);
             }
             if !self.window.is_visible() {
                 self.translation.set(0.0);
+                self.place();
                 self.window.present();
             }
         }
         let changed_vis = self.visibility.replace(visibility) != visibility;
-        self.tile.set(tile);
+        if self.tile.replace(tile) != tile {
+            self.icons.queue_draw();
+        }
         if changed_vis {
             self.translation_from.set(self.translation.get());
             self.start.set(glib::monotonic_time());
             self.tick();
         }
-        self.area.queue_draw();
+        self.place();
     }
 
     fn tick(self: &Rc<Self>) {
@@ -425,7 +421,7 @@ impl Picker {
             let Some(p) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            p.area.queue_draw();
+            p.place();
             if p.progress() >= 1.0 {
                 p.ticking.set(false);
                 if p.visibility.get() == 0 {
@@ -439,9 +435,16 @@ impl Picker {
 }
 
 /// One layout picker icon (64×64), after tiling-assistant's media/tile-*.svg:
-/// each tile is a 3px outline at 35% opacity with rounded outer corners, and
-/// the hovered tile gets a solid fill inset by 5px.
-fn draw_tile_icon(cr: &gtk::cairo::Context, x: f64, y: f64, icon: usize, hovered: u32) {
+/// each tile is a 3px outline with rounded outer corners, and the hovered
+/// tile gets a solid fill inset by 5px, both in the accent colour.
+fn draw_tile_icon(
+    cr: &gtk::cairo::Context,
+    x: f64,
+    y: f64,
+    icon: usize,
+    hovered: u32,
+    accent: &gdk::RGBA,
+) {
     const H: f64 = 31.0; // half, with a 2px gap between tiles
     const O: f64 = 33.0;
     // (rect in icon space, picker tile number)
@@ -551,7 +554,12 @@ fn draw_tile_icon(cr: &gtk::cairo::Context, x: f64, y: f64, icon: usize, hovered
             corner(right, bottom),
             corner(left, bottom),
         ];
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.35);
+        cr.set_source_rgba(
+            accent.red().into(),
+            accent.green().into(),
+            accent.blue().into(),
+            1.0,
+        );
         cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
         rounded(cr, r, radii);
         let inner = R {
@@ -564,7 +572,12 @@ fn draw_tile_icon(cr: &gtk::cairo::Context, x: f64, y: f64, icon: usize, hovered
         let _ = cr.fill();
         cr.set_fill_rule(gtk::cairo::FillRule::Winding);
         if number == hovered {
-            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+            cr.set_source_rgba(
+                accent.red().into(),
+                accent.green().into(),
+                accent.blue().into(),
+                1.0,
+            );
             let fill = R {
                 x: r.x + 5.0,
                 y: r.y + 5.0,
@@ -680,7 +693,11 @@ impl Switcher {
             let label_text = if self.mode.get() == 3 {
                 name
             } else if self.mode.get() == 0 {
-                if name.is_empty() { title.clone() } else { name }
+                if name.is_empty() {
+                    title.clone()
+                } else {
+                    name
+                }
             } else {
                 windows.first().cloned().unwrap_or_else(|| title.clone())
             };
