@@ -588,6 +588,12 @@ public:
     }
 
     void handle_request_move(WindowInfo& info, MirInputEvent const* input_event) override {
+        // Logged before anything can drop it, so a client's move request
+        // that goes nowhere still shows up in the window trace.
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: move request from %s (input type %d, tracked %d)\n",
+                         describe(info).c_str(), static_cast<int>(mir_input_event_get_type(input_event)),
+                         static_cast<int>(all_windows.count(info.window())));
         MinimalWindowManager::handle_request_move(info, input_event);
         if (!all_windows.count(info.window()) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer)
             return;
