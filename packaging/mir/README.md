@@ -48,6 +48,10 @@ Umoja PPA:
   fine). A client dma-buf drawn on a GPU other than the one that imported it
   is now read back once per commit through the importing GPU and uploaded
   like a wl_shm buffer (`MIR_CROSS_GPU_CPU_COPY=0` turns this off).
+  The copy buffers are pooled (umoja14): a window redrawing on that
+  monitor used to zero and fault in a fresh multi-megabyte buffer and a new
+  texture every frame. While `$XDG_RUNTIME_DIR/umoja-debug-windows` exists,
+  Mir logs the amount copied every 10 s with the most-copied buffer sizes.
 - `patches/3010_xwayland-initial-net-wm-state.patch`: `XWaylandSurface::map()`
   queued a read of `_NET_WM_STATE` but never called the returned cookie, so
   an X11 window's initial state was ignored. Wine/Proton games map their

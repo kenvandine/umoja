@@ -5,26 +5,173 @@ Description: Draw windows from another GPU through a CPU copy
  fine. When a client dma-buf has to be drawn on a GPU other than the one
  that imported it, read it back once through the importing GPU and upload
  it like a wl_shm buffer. MIR_CROSS_GPU_CPU_COPY=0 restores direct import.
+ .
+ Copy buffers are pooled and reused once nothing holds them, so a window
+ redrawing on the other GPU's monitor doesn't zero and fault in a new
+ multi-megabyte buffer (and allocate a new texture) per frame. While
+ $XDG_RUNTIME_DIR/umoja-debug-windows exists, the amount copied is logged
+ every 10 s with the most-copied buffer sizes.
 Author: Umoja
 Forwarded: no
 
 diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dmabuf.cpp
-index 2468dbe..c5211c0 100644
+index 2468dbe..b1bd858 100644
 --- a/src/platform/graphics/linux_dmabuf.cpp
 +++ b/src/platform/graphics/linux_dmabuf.cpp
-@@ -35,6 +35,11 @@
+@@ -35,6 +35,16 @@
  #include <mir/graphics/dmabuf_buffer.h>
  #include <mir/graphics/egl_context_executor.h>
  #include <mir/renderer/sw/pixel_source.h>
 +#include <mir/graphics/shm_buffer.h>
 +
++#include <atomic>
++#include <chrono>
 +#include <cstdlib>
 +#include <future>
++#include <map>
 +#include <mutex>
++#include <string>
++#include <unistd.h>
  
  #include <EGL/egl.h>
  #include <cstdint>
-@@ -1190,7 +1195,86 @@ public:
+@@ -62,6 +72,135 @@ namespace mw = mir::wayland;
+ namespace geom = mir::geometry;
+ namespace mrs = mir::renderer::software;
+ 
++namespace
++{
++/* Buffers for the cross-GPU CPU copies (see DmabufTexBuffer::cpu_copy).
++ *
++ * A window on the other GPU's monitor is copied on every commit. Taking a
++ * fresh buffer each time meant zeroing and faulting in megabytes of new
++ * memory per frame (19 MB for a 3368x1408 window) and a new texture
++ * allocation on the drawing GPU; a buffer nobody holds any more is reused
++ * instead, keeping its texture.
++ */
++class CrossGpuCopyPool
++{
++public:
++    auto take(geom::Size size) -> std::shared_ptr<mgc::MemoryBackedShmBuffer>
++    {
++        std::lock_guard lock{mutex};
++        for (auto const& b : buffers)
++        {
++            // Only the pool holds it: no texture or client buffer uses it.
++            if (b.use_count() == 1 && b->size() == size)
++            {
++                return b;
++            }
++        }
++        if (buffers.size() >= max_buffers)
++        {
++            std::erase_if(buffers, [](auto const& b) { return b.use_count() == 1; });
++        }
++        auto b = std::make_shared<mgc::MemoryBackedShmBuffer>(size, mir_pixel_format_argb_8888);
++        if (buffers.size() < max_buffers)
++        {
++            buffers.push_back(b);
++        }
++        return b;
++    }
++
++private:
++    static std::size_t constexpr max_buffers{8};
++    std::mutex mutex;
++    std::vector<std::shared_ptr<mgc::MemoryBackedShmBuffer>> buffers;
++};
++
++auto cross_gpu_copy_pool() -> CrossGpuCopyPool&
++{
++    static CrossGpuCopyPool pool;
++    return pool;
++}
++
++/* While $XDG_RUNTIME_DIR/umoja-debug-windows exists (Umoja's window debug
++ * switch), log how much cross-GPU copying happened every 10 s. */
++class CrossGpuCopyStats
++{
++public:
++    void add(std::size_t bytes, std::chrono::nanoseconds took, geom::Size size)
++    {
++        copies.fetch_add(1, std::memory_order_relaxed);
++        total_bytes.fetch_add(bytes, std::memory_order_relaxed);
++        total_ns.fetch_add(took.count(), std::memory_order_relaxed);
++        {
++            std::lock_guard lock{sizes_mutex};
++            ++sizes[{size.width.as_int(), size.height.as_int()}];
++        }
++
++        auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
++        auto last = last_report.load(std::memory_order_relaxed);
++        if (last == 0)
++        {
++            last_report.compare_exchange_strong(last, now);
++            return;
++        }
++        auto const interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
++            std::chrono::seconds{10}).count();
++        if (now - last < interval || !last_report.compare_exchange_strong(last, now))
++        {
++            return;
++        }
++        auto const n = copies.exchange(0);
++        auto const b = total_bytes.exchange(0);
++        auto const ns = total_ns.exchange(0);
++        // Which windows (by buffer size) were copied most.
++        std::vector<std::pair<unsigned, std::pair<int, int>>> by_count;
++        {
++            std::lock_guard lock{sizes_mutex};
++            for (auto const& [wh, count] : sizes)
++            {
++                by_count.emplace_back(count, wh);
++            }
++            sizes.clear();
++        }
++        if (!debugging())
++        {
++            return;
++        }
++        std::sort(by_count.rbegin(), by_count.rend());
++        std::string top;
++        for (std::size_t i = 0; i < by_count.size() && i < 4; ++i)
++        {
++            top += (i ? ", " : "") + std::to_string(by_count[i].second.first) + "x" +
++                std::to_string(by_count[i].second.second) + " x" + std::to_string(by_count[i].first);
++        }
++        mir::log_info(
++            "Cross-GPU CPU copies in the last %.1f s: %llu buffers, %.1f MB, %.1f ms copying; most: %s",
++            static_cast<double>(now - last) / static_cast<double>(interval) * 10.0,
++            static_cast<unsigned long long>(n),
++            static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str());
++    }
++
++private:
++    static auto debugging() -> bool
++    {
++        auto const dir = getenv("XDG_RUNTIME_DIR");
++        return dir && access((std::string{dir} + "/umoja-debug-windows").c_str(), F_OK) == 0;
++    }
++
++    std::atomic<unsigned long long> copies{0};
++    std::atomic<unsigned long long> total_bytes{0};
++    std::atomic<long long> total_ns{0};
++    std::mutex sizes_mutex;
++    std::map<std::pair<int, int>, unsigned> sizes;
++    std::atomic<std::chrono::steady_clock::rep> last_report{0};
++};
++
++auto cross_gpu_copy_stats() -> CrossGpuCopyStats&
++{
++    static CrossGpuCopyStats stats;
++    return stats;
++}
++}
++
+ namespace
+ {
+     template <typename T>
+@@ -1190,7 +1329,92 @@ public:
      {
          return provider_;
      }
@@ -44,7 +191,8 @@ index 2468dbe..c5211c0 100644
 +            return cpu_copy_;
 +        }
 +
-+        auto copy = std::make_shared<mgc::MemoryBackedShmBuffer>(size_, mir_pixel_format_argb_8888);
++        auto const started = std::chrono::steady_clock::now();
++        auto copy = cross_gpu_copy_pool().take(size_);
 +        auto mapping = copy->map_writeable();
 +        auto* const dest = mapping->data();
 +        GLsizei const width = size_.width.as_int();
@@ -90,7 +238,12 @@ index 2468dbe..c5211c0 100644
 +                done.set_value(ok);
 +            });
 +        bool const ok = result.get();
++        // Unmapping marks the copy's textures for upload, also when reused.
 +        mapping.reset();
++        cross_gpu_copy_stats().add(
++            static_cast<std::size_t>(width) * height * 4,
++            std::chrono::steady_clock::now() - started,
++            size_);
 +
 +        if (ok)
 +        {
@@ -111,7 +264,7 @@ index 2468dbe..c5211c0 100644
      friend class DmaBufMapping;
      class DmaBufMapping : public mrs::Mapping<std::byte const>
      {
-@@ -1538,6 +1622,20 @@ void mg::DMABufEGLProvider::validate_import(DMABufBuffer const& dma_buf)
+@@ -1538,6 +1762,20 @@ void mg::DMABufEGLProvider::validate_import(DMABufBuffer const& dma_buf)
      }
  }
  
@@ -132,7 +285,7 @@ index 2468dbe..c5211c0 100644
  auto mg::DMABufEGLProvider::as_texture(std::shared_ptr<NativeBufferBase> buffer)
      -> std::shared_ptr<gl::Texture>
  {
-@@ -1548,7 +1646,21 @@ auto mg::DMABufEGLProvider::as_texture(std::shared_ptr<NativeBufferBase> buffer)
+@@ -1548,7 +1786,21 @@ auto mg::DMABufEGLProvider::as_texture(std::shared_ptr<NativeBufferBase> buffer)
              auto tex = dmabuf_tex->as_texture();
              return std::shared_ptr<gl::Texture>(std::move(dmabuf_tex), tex);
          }
