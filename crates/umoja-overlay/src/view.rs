@@ -91,6 +91,14 @@ pub struct Overlay {
     /// This conversation started on the local model (crash diagnosis), so
     /// its follow-ups stay local too.
     local_chat: Cell<bool>,
+    /// Where `AnswerFinished` / `ConfirmShown` go (main.rs emits them on
+    /// D-Bus, for tools/demo).
+    events: RefCell<Option<Rc<dyn Fn(&str, glib::Variant)>>>,
+    /// The current answer's tool steps: id -> (state, label).
+    step_log: RefCell<std::collections::BTreeMap<usize, (String, String)>>,
+    /// The open "Allow the assistant to do this?" dialog, closed (declined)
+    /// when the overlay hides.
+    confirm_dialog: RefCell<Option<adw::AlertDialog>>,
 }
 
 /// Width of an app grid tile, icon plus label, as in GNOME (about 128px).
@@ -337,6 +345,9 @@ impl Overlay {
             myna: Myna::start(),
             generation: Cell::new(0),
             local_once: Cell::new(false),
+            events: RefCell::new(None),
+            step_log: RefCell::new(Default::default()),
+            confirm_dialog: RefCell::new(None),
             context_button,
             pick_selection,
             pick_window,
@@ -516,8 +527,61 @@ impl Overlay {
         self.ask(question);
     }
 
+    /// Like `ask_now`, for org.umoja.Overlay.AskWith: on the selected
+    /// backend unless `local`, and with `typed` the question is typed into
+    /// the entry a few letters at a time first, as a person would.
+    pub fn ask_with(self: &Rc<Self>, question: &str, local: bool, typed: bool) {
+        if !typed {
+            self.show_with_text(question);
+            self.local_once.set(local);
+            self.ask(question);
+            return;
+        }
+        self.show();
+        self.entry.set_text("");
+        let generation = self.generation.get();
+        let chars: Vec<char> = question.chars().collect();
+        let weak = Rc::downgrade(self);
+        let question = question.to_string();
+        glib::spawn_future_local(async move {
+            for n in 1..=chars.len() {
+                glib::timeout_future(std::time::Duration::from_millis(38)).await;
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation || !o.is_visible() {
+                    return;
+                }
+                let typed: String = chars[..n].iter().collect();
+                o.entry.set_text(&typed);
+                o.entry.set_position(-1);
+            }
+            glib::timeout_future(std::time::Duration::from_millis(350)).await;
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() != generation {
+                return;
+            }
+            o.local_once.set(local);
+            o.ask(&question);
+        });
+    }
+
+    pub fn set_event_sink(&self, sink: impl Fn(&str, glib::Variant) + 'static) {
+        self.events.replace(Some(Rc::new(sink)));
+    }
+
+    fn emit(&self, signal: &str, params: glib::Variant) {
+        let sink = self.events.borrow().clone();
+        if let Some(sink) = sink {
+            sink(signal, params);
+        }
+    }
+
     pub fn hide(&self) {
         self.generation.set(self.generation.get() + 1);
+        // A question still waiting for Allow is declined, so the dialog
+        // can't come back (and be allowed) on a later, unrelated question.
+        if let Some(d) = self.confirm_dialog.take() {
+            d.force_close();
+        }
         self.window.set_visible(false);
     }
 
@@ -830,6 +894,7 @@ impl Overlay {
         // Typed-query matches would disagree with the answer; the
         // search_files tool fills the list with its own results instead.
         self.files.clear();
+        self.step_log.borrow_mut().clear();
         crate::assistant::take_hide_request();
 
         let ui: Rc<dyn agent::Ui> = Rc::new(OverlayUi {
@@ -870,6 +935,13 @@ impl Overlay {
             let shown = strip_actions(&text);
             o.copy_button.set_visible(!shown.trim().is_empty());
             *o.answer_text.borrow_mut() = shown.clone();
+            let steps: Vec<String> = o
+                .step_log
+                .borrow()
+                .values()
+                .map(|(state, label)| format!("{state}:{label}"))
+                .collect();
+            o.emit("AnswerFinished", (shown.trim(), steps).to_variant());
             // A tool opened an app or moved a window: get out of the way.
             if crate::assistant::take_hide_request() {
                 o.hide();
@@ -1735,6 +1807,15 @@ impl agent::Ui for OverlayUi {
         icon.set_size_request(16, 16);
         row.prepend(&icon);
         text.set_text(label);
+        let state_name = match state {
+            StepState::Running => "running",
+            StepState::Done => "done",
+            StepState::Failed => "failed",
+            StepState::Declined => "declined",
+        };
+        o.step_log
+            .borrow_mut()
+            .insert(id, (state_name.to_string(), label.to_string()));
         for c in ["running", "done", "failed", "declined"] {
             row.remove_css_class(c);
         }
@@ -1750,6 +1831,7 @@ impl agent::Ui for OverlayUi {
         let Some(o) = self.live() else {
             return Box::pin(async { false });
         };
+        o.emit("ConfirmShown", (label,).to_variant());
         let dialog = adw::AlertDialog::new(
             Some(&i18n::umoja("Allow the assistant to do this?")),
             Some(label),
@@ -1767,7 +1849,16 @@ impl agent::Ui for OverlayUi {
             },
         );
         let window = o.window.clone();
-        Box::pin(async move { dialog.choose_future(&window).await == "allow" })
+        o.confirm_dialog.replace(Some(dialog.clone()));
+        let weak = self.overlay.clone();
+        let generation = self.generation;
+        Box::pin(async move {
+            let allowed = dialog.choose_future(&window).await == "allow";
+            let Some(o) = weak.upgrade() else { return false };
+            o.confirm_dialog.take();
+            // Allowed only if it is still the same question.
+            allowed && o.generation.get() == generation
+        })
     }
 
     fn cancelled(&self) -> bool {

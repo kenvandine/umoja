@@ -44,6 +44,21 @@ const IFACE_XML: &str = r#"
     <method name="Ask">
       <arg name="question" type="s" direction="in"/>
     </method>
+    <!-- flags: 1 = the local model, 2 = type the question out first -->
+    <method name="AskWith">
+      <arg name="question" type="s" direction="in"/>
+      <arg name="flags" type="u" direction="in"/>
+    </method>
+    <!-- An answer finished: its text and steps as "state:label"
+         (state is done, failed, declined or running). -->
+    <signal name="AnswerFinished">
+      <arg name="answer" type="s"/>
+      <arg name="steps" type="as"/>
+    </signal>
+    <!-- The assistant is asking "Allow the assistant to do this?". -->
+    <signal name="ConfirmShown">
+      <arg name="label" type="s"/>
+    </signal>
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
@@ -163,6 +178,18 @@ fn export(
         let menu = menu.clone();
         let guide = guide.clone();
         // umoja-panel's recording indicator follows this.
+        let events_conn = conn.clone();
+        overlay.set_event_sink(move |signal, params| {
+            if let Err(e) = events_conn.emit_signal(
+                None,
+                dbus::OVERLAY_OBJECT_PATH,
+                dbus::OVERLAY_INTERFACE,
+                signal,
+                Some(&params),
+            ) {
+                tracing::warn!(error = %e, signal, "could not emit");
+            }
+        });
         let signal_conn = conn.clone();
         shots.recorder().connect_changed(move |active| {
             if let Err(e) = signal_conn.emit_signal(
@@ -329,6 +356,17 @@ fn export(
                         };
                         spread.hide();
                         methods.ask_now(&question)
+                    }
+                    "AskWith" => {
+                        let Some((question, flags)) = params.get::<(String, u32)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (su)",
+                            );
+                            return;
+                        };
+                        spread.hide();
+                        methods.ask_with(&question, flags & 1 != 0, flags & 2 != 0)
                     }
                     "ShowClipboard" => {
                         spread.hide();

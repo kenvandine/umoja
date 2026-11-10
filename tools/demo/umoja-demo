@@ -96,15 +96,21 @@ DEMO_NOTIFICATIONS = [
 
 # Questions that land on a dedicated tool, so the small local model answers
 # them reliably. Dark style is put back afterwards. ({style} -> on/off.)
-DEFAULT_QUESTIONS = [
-    "Turn {style} dark style",
-    "Summarize my recent notifications, including the ones I've already seen",
-]
+# Night Light, toggled by the settings ask and put back afterwards.
+NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
 
 SCENES = [
     "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings",
-    "notifications", "shortcuts", "screenshot-ui", "screensaver", "assistant",
+    "notifications", "shortcuts", "screenshot-ui", "screensaver",
+    # The assistant, one ask per scene ("assistant" in --only/--skip means all).
+    "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-reply",
+    "ai-troubleshoot", "ai-summary",
 ]
+AI_SCENES = [s for s in SCENES if s.startswith("ai-")]
+
+# The trailer: these clips in this order, each with its caption.
+TRAILER = ["ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates", "ai-reply",
+           "overview", "workspaces", "notifications", "ai-troubleshoot", "screensaver"]
 
 
 class Stop(Exception):
@@ -237,6 +243,13 @@ class Recorder:
         self.demo.clips.append((self.path, caption, self.demo.scene))
         self.proc = None
 
+    def discard(self):
+        """Stop and throw away the clip (a failed try)."""
+        path = self.path
+        self.abort()
+        if path and not self.demo.dry:
+            path.unlink(missing_ok=True)
+
     def abort(self):
         if self.proc and self.proc is not True:
             self.proc.send_signal(signal.SIGINT)
@@ -262,7 +275,12 @@ class Demo:
         self.terminal = None  # the window we were started from, minimized
         self.terminal_name = ""
         self.dark = None  # (color-scheme, gtk-theme) before the dark style ask
-        self.ready = False  # the local model is loaded
+        self.ready = False  # the assistant can be asked
+        self.until = None  # wait() returns early once this says so
+        self.events = []  # (signal, args) from org.umoja.Overlay
+        self.night_light = None
+        self.trailer = None
+        self.can_ask_with = False
         self.spots = {}  # window id -> where its title bar sits when floating
         self.names = {}  # window id -> app name, for the assistant
         self.shots = {}  # scene -> [(file, caption)]
@@ -292,12 +310,21 @@ class Demo:
         if self.dry:
             return
         end = time.monotonic() + seconds * self.opts.pace
+        ctx = GLib.MainContext.default()
+        last_check = 0.0
         while True:
-            left = end - time.monotonic()
-            if left <= 0:
+            # D-Bus signals (AnswerFinished...) are delivered here.
+            while ctx.iteration(False):
+                pass
+            if self.until and self.until():
                 return
-            time.sleep(min(left, 0.5))
-            self.check_screen()
+            now = time.monotonic()
+            if now >= end:
+                return
+            if now - last_check > 0.5:
+                self.check_screen()
+                last_check = now
+            time.sleep(min(end - now, 0.05))
 
     # ---- capture ------------------------------------------------------
 
@@ -547,6 +574,10 @@ class Demo:
                               GLib.Variant("(tu)", (self.terminal, self.start_workspace)), quiet=True)
             time.sleep(0.5)
             self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.terminal,)), quiet=True)
+        if self.night_light is not None:
+            nl = settings(NIGHT_LIGHT[0])
+            nl.set_boolean(NIGHT_LIGHT[1], self.night_light)
+            Gio.Settings.sync()
         if self.dark is not None:
             s = settings("org.gnome.desktop.interface")
             s.set_string("color-scheme", self.dark[0])
@@ -773,43 +804,171 @@ class Demo:
             if w[0] in self.opened and w[7] & (F_MAXIMIZED | F_FULLSCREEN | F_TILED):
                 self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (w[0], TILE_RESTORE)))
 
-    def scene_assistant(self):
-        if not self.ready:
-            log("  the local model isn't ready, skipping")
+    def assistant_ready(self, scenes):
+        if not any(s.startswith("ai-") for s in scenes):
+            return False
+        if self.dry:
+            return True
+        self.can_ask_with = self.bus.has_method(OVERLAY, "AskWith")
+        if not self.can_ask_with:
+            log("note: this overlay has no AskWith, so questions aren't typed out and each answer "
+                "gets a fixed wait (--answer-wait) with no checking. Install newer debs.")
+        else:
+            self.bus.conn.signal_subscribe(
+                OVERLAY[0], OVERLAY[2], None, OVERLAY[1], None, Gio.DBusSignalFlags.NONE,
+                lambda _c, _s, _p, _i, name, params: self.events.append((name, params.unpack())),
+            )
+        if self.opts.local:
+            return self.warm_model()
+        return True
+
+    def ask(self, name, question, caption, expect=(), confirm=False, settle=1.5,
+            keep_open=False):
+        """Ask the assistant, recording it; retry until the answer checks out.
+
+        `expect`: words, one of which the answer must contain. `confirm`:
+        the ask should end at the "Allow the assistant to do this?" dialog,
+        which is shot and then cancelled (the overlay is hidden: nothing is
+        installed or sent). Returns the answer text, or None."""
+        tries = 1 if self.dry else self.opts.retries
+        for attempt in range(1, tries + 1):
+            self.check_screen()
+            self.events.clear()
+            self.recorder.start(name)
+            log(f"  ask  {question!r}" + (f" (try {attempt})" if attempt > 1 else ""))
+            if self.dry or self.can_ask_with:
+                flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
+                self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (question, flags)))
+            else:
+                self.bus.call(OVERLAY, "Ask", GLib.Variant("(s)", (question,)))
+            if self.dry or not self.can_ask_with:
+                self.wait(self.opts.answer_wait)
+                result = ("", [])
+            else:
+                self.until = lambda: any(e[0] in ("AnswerFinished", "ConfirmShown") for e in self.events)
+                try:
+                    self.wait(self.opts.answer_timeout)
+                finally:
+                    self.until = None
+                result = self.check_answer(expect, confirm)
+            if result is not None:
+                answer, steps = result
+                self.wait(settle)
+                self.shot(name, caption)
+                if not keep_open:
+                    self.bus.call(OVERLAY, "Hide")
+                    self.wait(0.8)
+                self.recorder.stop(caption)
+                for st in steps:
+                    log(f"       {st}")
+                if answer:
+                    log(f"       answer: {answer[:160]!r}")
+                return answer
+            self.recorder.discard()
+            self.bus.call(OVERLAY, "Hide")
+            self.wait(1.5)
+        log(f"  ! no good answer after {tries} tries, leaving {name} out")
+        return None
+
+    def check_answer(self, expect, confirm):
+        """(answer, steps) when the answer is good, else None (logged)."""
+        names = [e[0] for e in self.events]
+        if confirm:
+            if "ConfirmShown" in names:
+                label = next(e[1][0] for e in self.events if e[0] == "ConfirmShown")
+                return ("", [f"confirm:{label}"])
+            log("  ! the assistant didn't ask for confirmation")
+            return None
+        done = [e for e in self.events if e[0] == "AnswerFinished"]
+        if not done:
+            if "ConfirmShown" in names:
+                log("  ! it asked for confirmation; retrying")
+            else:
+                log(f"  ! no answer within {self.opts.answer_timeout:.0f} s")
+            return None
+        answer, steps = done[-1][1]
+        bad = [st for st in steps if not st.startswith("done:")]
+        if bad:
+            log(f"  ! a step didn't work: {bad}")
+            return None
+        if expect and not any(w.lower() in answer.lower() for w in expect):
+            log(f"  ! the answer doesn't mention any of {list(expect)}: {answer[:120]!r}")
+            return None
+        if not answer and not steps:
+            log("  ! empty answer")
+            return None
+        return answer, steps
+
+    def scene_ai_tiling(self):
+        q = self.tiling_question()
+        if not q:
+            log("  needs Files and Text Editor open, skipping")
             return
+        # The overlay closes itself once the windows are arranged; the shot
+        # shows the result.
+        self.ask("ai-tiling", q, "Tiling by asking for it, in plain words.", settle=1.2)
+        self.wait(0.5)
+        self.untile_demo_windows()
+        self.wait(1.0)
+
+    def scene_ai_settings(self):
         iface = settings("org.gnome.desktop.interface")
-        is_dark = bool(iface) and iface.get_string("color-scheme") == "prefer-dark"
-        if iface and not self.opts.ask:
+        nl = settings(NIGHT_LIGHT[0])
+        if not iface:
+            log("  no org.gnome.desktop.interface, skipping")
+            return
+        if self.dark is None:
             self.dark = (iface.get_string("color-scheme"), iface.get_string("gtk-theme"))
-        questions = [q.format(style="off" if is_dark else "on") for q in (self.opts.ask or DEFAULT_QUESTIONS)]
-        tile_q = None if self.opts.ask else self.tiling_question()
-        if tile_q:
-            self.check_screen()
-            self.recorder.start("assistant-tiling")
-            log(f"  ask  {tile_q!r}")
-            self.bus.call(OVERLAY, "Ask", GLib.Variant("(s)", (tile_q,)))
-            # The overlay closes itself once the windows are arranged.
-            self.wait(self.opts.answer_wait)
+        if nl and self.night_light is None:
+            self.night_light = nl.get_boolean(NIGHT_LIGHT[1])
+        to_dark = iface.get_string("color-scheme") != "prefer-dark"
+        q = (f"Switch to {'dark' if to_dark else 'light'} style and turn "
+             f"{'on' if not (nl and nl.get_boolean(NIGHT_LIGHT[1])) else 'off'} Night Light")
+        if self.ask("ai-settings", q, "Settings in plain words: dark style and Night Light, done in one ask.",
+                    keep_open=True) is not None:
             self.bus.call(OVERLAY, "Hide")
+            self.wait(1.2)
+            self.shot("ai-settings-after", "The whole desktop after that one sentence.")
+
+    def scene_ai_install(self):
+        self.ask("ai-install", f"I need {self.opts.app}",
+                 f"“I need {self.opts.app}”: it finds the snap or deb and asks before installing.",
+                 confirm=True)
+
+    def scene_ai_updates(self):
+        if self.ask("ai-updates", "Are there any updates for my computer?",
+                    "Checking for updates, debs and snaps together.",
+                    expect=("update", "up to date")) is None:
+            return
+        self.ask("ai-updates-install", "Install all available updates",
+                 "Installing updates: it shows what will change and asks first.", confirm=True)
+
+    def scene_ai_reply(self):
+        if not self.notes and not self.dry:
+            log("  needs the notifications scene first, skipping")
+            return
+        if self.ask("ai-reply", "Draft a reply to Priya saying I'll send the screenshots tonight",
+                    "Drafting a reply to a notification. Nothing is sent until you press Send.",
+                    settle=2.5) is not None:
+            # It opened the date menu at the reply field; close it again.
+            self.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("calendar",)), quiet=True)
             self.wait(1.0)
-            self.shot("assistant-tiling", f"Tiling by asking: \u201c{tile_q}\u201d")
-            self.recorder.stop("Window tiling done by the local assistant (arrange_window tool).")
-            self.untile_demo_windows()
-            self.wait(1.0)
-        for i, q in enumerate(questions, 1):
-            self.check_screen()
-            if i == 1:
-                self.recorder.start("assistant")
-            log(f"  ask  {q!r}")
-            # Ask() opens the overlay with the question and answers it with
-            # the local model, whatever the cloud setting says.
-            self.bus.call(OVERLAY, "Ask", GLib.Variant("(s)", (q,)))
-            self.wait(self.opts.answer_wait)
-            self.shot(f"assistant-{i}", f"Asking the local assistant: “{q}”")
-            self.bus.call(OVERLAY, "Hide")
-            self.wait(1.0)
-            if i == 1:
-                self.recorder.stop(f"The assistant answering “{q}” on the local model, using desktop tools.")
+
+    def scene_ai_troubleshoot(self):
+        self.ask("ai-troubleshoot", "Why is my computer running slow?",
+                 "Troubleshooting from a live system report, not a guess.",
+                 expect=("cpu", "memory", "ram", "process", "load"))
+
+    def scene_ai_summary(self):
+        if not self.notes and not self.dry:
+            log("  needs the notifications scene first, skipping")
+            return
+        self.ask("ai-summary", "Summarize my recent notifications, including the ones I've already seen",
+                 "A digest of the notifications that came in.", expect=("priya", "review", "update"))
+
+    def scene_ai_custom(self):
+        for i, q in enumerate(self.opts.ask, 1):
+            self.ask(f"ai-custom-{i}", q, f"“{q}”")
 
     # ---- output -------------------------------------------------------
 
@@ -846,6 +1005,72 @@ class Demo:
                 shutil.copy(raw, mp4)
             self.videos.setdefault(scene, []).append((gif if ok_gif else None, mp4, caption))
 
+    def font(self):
+        for pattern in ("Ubuntu Sans:bold", "Ubuntu:bold", "sans:bold"):
+            r = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True)
+            if r.returncode == 0 and r.stdout.strip() and Path(r.stdout.strip()).exists():
+                return r.stdout.strip()
+        return None
+
+    def make_trailer(self):
+        """The trailer clips, captioned, after a title card: videos/trailer.mp4."""
+        parts = [(m, c) for sc in TRAILER for _g, m, c in self.videos.get(sc, [])
+                 if m and m.suffix == ".mp4"]
+        if self.dry:
+            log(f"  trailer from {len(parts)} clips")
+            self.trailer = self.vid_dir / "trailer.mp4"
+            return
+        font = self.font()
+        if not self.ffmpeg or not parts or not font:
+            if parts and not font:
+                log("  ! no font found for captions (fc-match), no trailer")
+            return
+        log(f"  trailer from {len(parts)} clips")
+        _x, _y, w, h = self.area
+        W = 1920
+        H = int(round(W * h / w / 2) * 2)
+        work = self.raw_dir / "trailer"
+        work.mkdir(parents=True, exist_ok=True)
+        fit = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p")
+        enc = ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"]
+        ff = font.replace(":", "\\:")
+        segs = []
+        # Title card.
+        (work / "t1.txt").write_text("Umoja")
+        (work / "t2.txt").write_text("The desktop you can just talk to")
+        card = work / "00-title.mp4"
+        r = subprocess.run([
+            "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+            f"color=c=0x2c001e:s={W}x{H}:d=2.5:r=30", "-vf",
+            f"drawtext=expansion=none:fontfile={ff}:textfile={work / 't1.txt'}:fontsize=140:fontcolor=white:"
+            f"x=(w-text_w)/2:y=(h-text_h)/2-60,"
+            f"drawtext=expansion=none:fontfile={ff}:textfile={work / 't2.txt'}:fontsize=48:fontcolor=0xE95420:"
+            f"x=(w-text_w)/2:y=(h/2)+70,format=yuv420p", *enc, str(card)])
+        if r.returncode == 0:
+            segs.append(card)
+        for i, (mp4, caption) in enumerate(parts, 1):
+            txt = work / f"{i:02d}.txt"
+            txt.write_text(caption)
+            out = work / f"{i:02d}.mp4"
+            r = subprocess.run([
+                "ffmpeg", "-loglevel", "error", "-y", "-i", str(mp4), "-vf",
+                f"{fit},drawtext=expansion=none:fontfile={ff}:textfile={txt}:fontsize=40:fontcolor=white:"
+                f"box=1:boxcolor=black@0.6:boxborderw=22:x=(w-text_w)/2:y=h-text_h-70",
+                *enc, str(out)])
+            if r.returncode == 0:
+                segs.append(out)
+        if len(segs) < 2:
+            log("  ! trailer encode failed")
+            return
+        lst = work / "list.txt"
+        lst.write_text("".join(f"file '{p}'\n" for p in segs))
+        dest = self.vid_dir / "trailer.mp4"
+        r = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
+                            "-i", str(lst), "-c", "copy", "-movflags", "+faststart", str(dest)])
+        if r.returncode == 0:
+            self.trailer = dest
+
     def version(self):
         if self.dry:
             return "dry run"
@@ -862,7 +1087,12 @@ class Demo:
             "overview": "Activities overview", "workspaces": "Workspaces",
             "quick-settings": "Quick Settings", "notifications": "Notifications",
             "shortcuts": "Keyboard shortcuts guide", "screenshot-ui": "Screenshot UI",
-            "screensaver": "Screensaver", "assistant": "AI assistant (local model)",
+            "screensaver": "Screensaver",
+            "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
+            "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
+            "ai-reply": "Assistant: reply to a notification",
+            "ai-troubleshoot": "Assistant: troubleshooting",
+            "ai-summary": "Assistant: notification digest", "ai-custom": "Assistant",
         }
         today = datetime.date.today().isoformat()
         lines = [
@@ -872,7 +1102,10 @@ class Demo:
             f"(umoja-desktop {self.version()}).",
             "",
         ]
-        for scene in SCENES:
+        if self.trailer:
+            lines += [f"**[Watch the trailer]({self.rel(self.trailer)})** "
+                      f"(all the clips below in one video, real time).", ""]
+        for scene in SCENES + ["ai-custom"]:
             shots = self.shots.get(scene, [])
             vids = self.videos.get(scene, [])
             if not shots and not vids:
@@ -897,11 +1130,16 @@ class Demo:
             base = str(self.out)
         if base.startswith(".."):
             base = str(self.out)
-        hero = [s for s in ("overview", "tiling", "app-grid", "assistant") if s in self.shots]
+        hero = [s for s in ("ai-tiling", "ai-settings", "overview", "ai-install") if s in self.shots]
         snippet = ["## Screenshots", ""]
-        if "overview" in self.videos and self.videos["overview"][0][0]:
-            gif, video, caption = self.videos["overview"][0]
-            snippet += [f"[![{caption}]({base}/{self.rel(gif)})]({base}/{self.rel(video)})", ""]
+        lead = next((s for s in ("ai-tiling", "ai-settings", "overview")
+                     if s in self.videos and self.videos[s][0][0]), None)
+        if lead:
+            gif, video, caption = self.videos[lead][0]
+            target = self.trailer or video
+            snippet += [f"[![{caption}]({base}/{self.rel(gif)})]({base}/{self.rel(target)})", ""]
+        if self.trailer:
+            snippet += [f"[Watch the trailer]({base}/{self.rel(self.trailer)}).", ""]
         cells = [self.shots[s][0] for s in hero]
         if cells:
             snippet += ["| " + " | ".join(titles[s] for s in hero) + " |",
@@ -913,6 +1151,8 @@ class Demo:
             (self.out / "snippet.md").write_text("\n".join(snippet))
             files = [self.rel(p) for v in self.shots.values() for p, _ in v]
             files += [self.rel(p) for v in self.videos.values() for g, m, _ in v for p in (g, m) if p]
+            if self.trailer:
+                files.append(self.rel(self.trailer))
             files += ["README.md", "snippet.md"]
             (self.out / ".umoja-demo-files").write_text("\n".join(files) + "\n")
             shutil.rmtree(self.raw_dir, ignore_errors=True)
@@ -924,8 +1164,12 @@ class Demo:
 
     def run(self):
         self.preflight()
-        scenes = [s for s in SCENES if (not self.opts.only or s in self.opts.only)
-                  and s not in (self.opts.skip or [])]
+        def picked(s, names):
+            return s in names or (s.startswith("ai-") and "assistant" in names)
+        scenes = [s for s in SCENES if (not self.opts.only or picked(s, self.opts.only))
+                  and not picked(s, self.opts.skip or [])]
+        if self.opts.ask:
+            scenes = [s for s in scenes if not s.startswith("ai-")] + ["ai-custom"]
         if not self.dry:
             self.check_screen()
             log(f"Hands off the keyboard and mouse: the tour starts in {self.opts.countdown} s.")
@@ -944,7 +1188,7 @@ class Demo:
             log("opening apps")
             self.open_apps()
             self.hide_terminal()
-            self.ready = self.warm_model() if "assistant" in scenes else False
+            self.ready = self.assistant_ready(scenes)
             for s in scenes:
                 self.scene = s
                 log(f"scene: {s}")
@@ -960,6 +1204,8 @@ class Demo:
             self.tidy()
         log("encoding clips")
         self.encode()
+        if not self.opts.no_trailer:
+            self.make_trailer()
         self.write_markdown()
         n_shots = sum(len(v) for v in self.shots.values())
         n_vids = sum(len(v) for v in self.videos.values())
@@ -978,13 +1224,22 @@ def main():
         description="Drive a hands-free tour of a live Umoja session and capture screenshots and clips.")
     p.add_argument("--out", type=Path, default=default_out,
                    help=f"output directory (default: {default_out})")
-    p.add_argument("--only", nargs="+", choices=SCENES, metavar="SCENE",
+    p.add_argument("--only", nargs="+", choices=SCENES + ["assistant"], metavar="SCENE",
                    help="run only these scenes: " + ", ".join(SCENES))
-    p.add_argument("--skip", nargs="+", choices=SCENES, metavar="SCENE", help="skip these scenes")
+    p.add_argument("--skip", nargs="+", choices=SCENES + ["assistant"], metavar="SCENE", help="skip these scenes")
     p.add_argument("--ask", action="append", metavar="QUESTION",
                    help="question for the assistant (repeatable; replaces the defaults)")
     p.add_argument("--answer-wait", type=float, default=15.0,
-                   help="seconds to let each answer stream in (default 15)")
+                   help="with an older overlay (no AskWith): seconds to wait for each answer")
+    p.add_argument("--answer-timeout", type=float, default=60.0,
+                   help="give up on an answer after this many seconds (default 60)")
+    p.add_argument("--retries", type=int, default=3,
+                   help="asks per question until the answer checks out (default 3)")
+    p.add_argument("--local", action="store_true",
+                   help="ask the local model instead of the configured backend")
+    p.add_argument("--no-typing", action="store_true", help="don't type questions out letter by letter")
+    p.add_argument("--app", default="VLC", help="app for the \"I need ...\" install ask (default VLC; never installed)")
+    p.add_argument("--no-trailer", action="store_true", help="don't stitch the clips into videos/trailer.mp4")
     p.add_argument("--effect", help="screensaver effect to show (see umoja-screensaver --list-effects)")
     p.add_argument("--output", help="monitor connector to capture, e.g. eDP-1 (default: primary)")
     p.add_argument("--no-video", action="store_true", help="stills only")
