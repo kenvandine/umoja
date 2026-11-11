@@ -81,17 +81,41 @@ const CATALOG: &[(&str, Group, &str)] = &[
     ("overlay-key", Group::Desktop, "Activities overview"),
     ("toggle-overview", Group::Desktop, "Activities overview"),
     ("toggle-application-view", Group::Desktop, "Show apps"),
-    ("shift-overview-up", Group::Desktop, "Step up to overview, then apps"),
-    ("shift-overview-down", Group::Desktop, "Step back down to the desktop"),
-    ("toggle-message-tray", Group::Desktop, "Notifications and calendar"),
+    (
+        "shift-overview-up",
+        Group::Desktop,
+        "Step up to overview, then apps",
+    ),
+    (
+        "shift-overview-down",
+        Group::Desktop,
+        "Step back down to the desktop",
+    ),
+    (
+        "toggle-message-tray",
+        Group::Desktop,
+        "Notifications and calendar",
+    ),
     ("switch-panels", Group::Desktop, "Focus the top bar or dock"),
-    ("cycle-panels", Group::Desktop, "Cycle focus through top bar and dock"),
+    (
+        "cycle-panels",
+        Group::Desktop,
+        "Cycle focus through top bar and dock",
+    ),
     ("screensaver", Group::Desktop, "Lock the screen"),
-    ("shortcuts-guide-hotkey", Group::Desktop, "Keyboard shortcuts"),
+    (
+        "shortcuts-guide-hotkey",
+        Group::Desktop,
+        "Keyboard shortcuts",
+    ),
     ("switch-applications", Group::Apps, "Switch apps"),
     ("switch-group", Group::Apps, "Switch windows of the app"),
     ("switch-windows", Group::Apps, "Switch windows"),
-    ("cycle-group", Group::Apps, "Cycle the app's windows, no popup"),
+    (
+        "cycle-group",
+        Group::Apps,
+        "Cycle the app's windows, no popup",
+    ),
     ("cycle-windows", Group::Apps, "Cycle all windows, no popup"),
     ("close", Group::Windows, "Close"),
     ("minimize", Group::Windows, "Hide"),
@@ -103,11 +127,31 @@ const CATALOG: &[(&str, Group, &str)] = &[
     ("begin-move", Group::Windows, "Move with the keyboard"),
     ("begin-resize", Group::Windows, "Resize with the keyboard"),
     ("always-on-top", Group::Windows, "Always on top"),
-    ("toggle-on-all-workspaces", Group::Windows, "On every workspace"),
-    ("move-to-monitor-left", Group::Windows, "Move to the display on the left"),
-    ("move-to-monitor-right", Group::Windows, "Move to the display on the right"),
-    ("move-to-monitor-up", Group::Windows, "Move to the display above"),
-    ("move-to-monitor-down", Group::Windows, "Move to the display below"),
+    (
+        "toggle-on-all-workspaces",
+        Group::Windows,
+        "On every workspace",
+    ),
+    (
+        "move-to-monitor-left",
+        Group::Windows,
+        "Move to the display on the left",
+    ),
+    (
+        "move-to-monitor-right",
+        Group::Windows,
+        "Move to the display on the right",
+    ),
+    (
+        "move-to-monitor-up",
+        Group::Windows,
+        "Move to the display above",
+    ),
+    (
+        "move-to-monitor-down",
+        Group::Windows,
+        "Move to the display below",
+    ),
     ("toggle-tiled-left", Group::Tiling, "Left half"),
     ("tile-left-half", Group::Tiling, "Left half"),
     ("toggle-tiled-right", Group::Tiling, "Right half"),
@@ -118,32 +162,116 @@ const CATALOG: &[(&str, Group, &str)] = &[
     ("tile-top-left", Group::Tiling, "Top-left quarter"),
     ("tile-topright-quarter", Group::Tiling, "Top-right quarter"),
     ("tile-top-right", Group::Tiling, "Top-right quarter"),
-    ("tile-bottomleft-quarter", Group::Tiling, "Bottom-left quarter"),
+    (
+        "tile-bottomleft-quarter",
+        Group::Tiling,
+        "Bottom-left quarter",
+    ),
     ("tile-bottom-left", Group::Tiling, "Bottom-left quarter"),
-    ("tile-bottomright-quarter", Group::Tiling, "Bottom-right quarter"),
+    (
+        "tile-bottomright-quarter",
+        Group::Tiling,
+        "Bottom-right quarter",
+    ),
     ("tile-bottom-right", Group::Tiling, "Bottom-right quarter"),
     ("tile-maximize", Group::Tiling, "Maximize"),
     ("restore-window", Group::Tiling, "Restore"),
-    ("switch-to-workspace-left", Group::Workspaces, "Previous workspace"),
-    ("switch-to-workspace-up", Group::Workspaces, "Previous workspace"),
-    ("switch-to-workspace-right", Group::Workspaces, "Next workspace"),
-    ("switch-to-workspace-down", Group::Workspaces, "Next workspace"),
+    (
+        "switch-to-workspace-left",
+        Group::Workspaces,
+        "Previous workspace",
+    ),
+    (
+        "switch-to-workspace-up",
+        Group::Workspaces,
+        "Previous workspace",
+    ),
+    (
+        "switch-to-workspace-right",
+        Group::Workspaces,
+        "Next workspace",
+    ),
+    (
+        "switch-to-workspace-down",
+        Group::Workspaces,
+        "Next workspace",
+    ),
     ("switch-to-workspace-#", Group::Workspaces, "Workspace #"),
-    ("switch-to-workspace-last", Group::Workspaces, "Last workspace"),
-    ("move-to-workspace-left", Group::Workspaces, "Move window to previous workspace"),
-    ("move-to-workspace-up", Group::Workspaces, "Move window to previous workspace"),
-    ("move-to-workspace-right", Group::Workspaces, "Move window to next workspace"),
-    ("move-to-workspace-down", Group::Workspaces, "Move window to next workspace"),
-    ("move-to-workspace-#", Group::Workspaces, "Move window to workspace #"),
-    ("move-to-workspace-last", Group::Workspaces, "Move window to last workspace"),
-    ("show-screenshot-ui", Group::Screenshots, "Take a screenshot"),
-    ("screenshot", Group::Screenshots, "Screenshot the whole screen"),
-    ("screenshot-window", Group::Screenshots, "Screenshot the current window"),
-    ("show-screen-recording-ui", Group::Screenshots, "Record the screen"),
-    ("copy-text-hotkey", Group::Screenshots, "Copy text from the screen"),
-    ("ask-about-screen-hotkey", Group::Assistant, "Ask about the screen"),
-    ("clipboard-history-hotkey", Group::Assistant, "Clipboard history"),
-    ("ai-agent-hotkey", Group::Assistant, "Open your coding agent"),
+    (
+        "switch-to-workspace-last",
+        Group::Workspaces,
+        "Last workspace",
+    ),
+    (
+        "move-to-workspace-left",
+        Group::Workspaces,
+        "Move window to previous workspace",
+    ),
+    (
+        "move-to-workspace-up",
+        Group::Workspaces,
+        "Move window to previous workspace",
+    ),
+    (
+        "move-to-workspace-right",
+        Group::Workspaces,
+        "Move window to next workspace",
+    ),
+    (
+        "move-to-workspace-down",
+        Group::Workspaces,
+        "Move window to next workspace",
+    ),
+    (
+        "move-to-workspace-#",
+        Group::Workspaces,
+        "Move window to workspace #",
+    ),
+    (
+        "move-to-workspace-last",
+        Group::Workspaces,
+        "Move window to last workspace",
+    ),
+    (
+        "show-screenshot-ui",
+        Group::Screenshots,
+        "Take a screenshot",
+    ),
+    (
+        "screenshot",
+        Group::Screenshots,
+        "Screenshot the whole screen",
+    ),
+    (
+        "screenshot-window",
+        Group::Screenshots,
+        "Screenshot the current window",
+    ),
+    (
+        "show-screen-recording-ui",
+        Group::Screenshots,
+        "Record the screen",
+    ),
+    (
+        "copy-text-hotkey",
+        Group::Screenshots,
+        "Copy text from the screen",
+    ),
+    (
+        "ask-about-screen-hotkey",
+        Group::Assistant,
+        "Ask about the screen",
+    ),
+    (
+        "clipboard-history-hotkey",
+        Group::Assistant,
+        "Clipboard history",
+    ),
+    (
+        "ai-agent-hotkey",
+        Group::Assistant,
+        "Open your coding agent",
+    ),
     ("dictation-hotkey", Group::Assistant, "Dictate with Myna"),
 ];
 
@@ -587,8 +715,9 @@ impl ShortcutsGuide {
         }
         *self.cards.borrow_mut() = cards;
         if groups.is_empty() {
-            self.empty
-                .set_label(&i18n::umoja("Couldn't read the shortcuts from the desktop."));
+            self.empty.set_label(&i18n::umoja(
+                "Couldn't read the shortcuts from the desktop.",
+            ));
         } else {
             self.empty.set_label(&i18n::umoja("No shortcuts match."));
         }
@@ -713,7 +842,12 @@ fn card(group: Group, rows: &[Row]) -> Card {
             "{} {} {}",
             label,
             row.label,
-            row.keys.iter().flatten().cloned().collect::<Vec<_>>().join(" ")
+            row.keys
+                .iter()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
         )
         .to_lowercase();
         out.push((line, text));
@@ -748,7 +882,10 @@ fn keys_widget(caps: &[String]) -> gtk::Box {
             );
         }
         let wide = cap.chars().count() > 1;
-        let l = gtk::Label::builder().label(cap).css_classes(["keycap"]).build();
+        let l = gtk::Label::builder()
+            .label(cap)
+            .css_classes(["keycap"])
+            .build();
         if !wide {
             l.add_css_class("single");
         }
@@ -773,7 +910,10 @@ mod tests {
         );
         assert_eq!(keycaps("<Super>Left").unwrap(), ["Super", "←"]);
         assert_eq!(keycaps("<Alt>Above_Tab").unwrap(), ["Alt", "`"]);
-        assert_eq!(keycaps("<Primary><Alt>Delete").unwrap(), ["Ctrl", "Alt", "Delete"]);
+        assert_eq!(
+            keycaps("<Primary><Alt>Delete").unwrap(),
+            ["Ctrl", "Alt", "Delete"]
+        );
         assert_eq!(keycaps("<Super>slash").unwrap(), ["Super", "/"]);
         assert_eq!(keycaps("<Super>KP_7").unwrap(), ["Super", "Keypad 7"]);
         assert_eq!(keycaps("<Super>h").unwrap(), ["Super", "H"]);
@@ -823,7 +963,11 @@ mod tests {
         assert_eq!(desktop[1].keys.len(), 1, "hardware key left out");
         let tiling = rows(Group::Tiling);
         assert_eq!(tiling.len(), 1);
-        assert_eq!(tiling[0].keys.len(), 2, "same key from two schemas shown once");
+        assert_eq!(
+            tiling[0].keys.len(),
+            2,
+            "same key from two schemas shown once"
+        );
         let ws = rows(Group::Workspaces);
         assert_eq!(ws[0].label, "Previous workspace");
         assert_eq!(ws[0].keys.len(), 2);

@@ -48,6 +48,45 @@ pub struct Instant {
     pub run: Run,
 }
 
+/// Icons GNOME Shell ships itself, or that older icon themes lack, with
+/// stock icons to fall back on (Yaru and Adwaita don't all have them).
+const ICON_FALLBACKS: &[(&str, &[&str])] = &[
+    ("screenshot-recorded-symbolic", &["camera-photo-symbolic"]),
+    ("focus-windows-symbolic", &["window-new-symbolic"]),
+    ("night-light-symbolic", &["weather-clear-night-symbolic"]),
+    (
+        "power-profile-power-saver-symbolic",
+        &["battery-level-50-symbolic", "battery-symbolic"],
+    ),
+    ("power-profile-balanced-symbolic", &["battery-symbolic"]),
+    (
+        "power-profile-performance-symbolic",
+        &["power-profile-balanced-symbolic", "battery-symbolic"],
+    ),
+    (
+        "preferences-desktop-apps-symbolic",
+        &[
+            "view-app-grid-symbolic",
+            "application-x-executable-symbolic",
+        ],
+    ),
+    (
+        "notifications-disabled-symbolic",
+        &["preferences-system-notifications-symbolic"],
+    ),
+];
+
+/// `icon` then its fallbacks, best first, ending with an icon every theme
+/// has, so a row never shows the "missing image" icon.
+pub fn icon_names(icon: &'static str) -> Vec<&'static str> {
+    let mut names = vec![icon];
+    if let Some((_, more)) = ICON_FALLBACKS.iter().find(|(n, _)| *n == icon) {
+        names.extend_from_slice(more);
+    }
+    names.push("emblem-system-symbolic");
+    names
+}
+
 const fn control(
     id: &'static str,
     title: &'static str,
@@ -459,6 +498,22 @@ pub const CATALOG: &[Instant] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icons_fall_back() {
+        assert_eq!(
+            icon_names("screenshot-recorded-symbolic"),
+            vec![
+                "screenshot-recorded-symbolic",
+                "camera-photo-symbolic",
+                "emblem-system-symbolic"
+            ]
+        );
+        assert_eq!(
+            icon_names("printer-symbolic"),
+            vec!["printer-symbolic", "emblem-system-symbolic"]
+        );
+    }
 
     #[test]
     fn ids_are_unique_and_args_parse() {

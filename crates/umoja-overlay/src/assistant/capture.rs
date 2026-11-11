@@ -30,8 +30,14 @@ pub enum Target {
 impl Target {
     pub fn from_args(a: &Value) -> Self {
         let named = arg_str(a, "window").map(String::from);
-        match arg_str(a, "target").unwrap_or("window").to_lowercase().as_str() {
-            "screen" | "desktop" | "full" | "fullscreen" | "everything" | "monitor" => Target::Screen,
+        match arg_str(a, "target")
+            .unwrap_or("window")
+            .to_lowercase()
+            .as_str()
+        {
+            "screen" | "desktop" | "full" | "fullscreen" | "everything" | "monitor" => {
+                Target::Screen
+            }
             "area" | "region" | "selection" | "part" => Target::Area,
             "overlay" | "assistant" | "this" => Target::Overlay,
             _ => Target::Window(named),
@@ -84,7 +90,11 @@ pub fn screenshot_summary(a: &Value) -> String {
         Target::Overlay => "a screenshot of the assistant".into(),
     };
     match arg_u64(a, "delay").filter(|d| *d > 0) {
-        Some(d) => format!("Take {what} in {} second{}", d.min(10), if d == 1 { "" } else { "s" }),
+        Some(d) => format!(
+            "Take {what} in {} second{}",
+            d.min(10),
+            if d == 1 { "" } else { "s" }
+        ),
         None => format!("Take {what}"),
     }
 }
@@ -176,7 +186,11 @@ fn record(a: Value) -> LocalFuture {
 
 fn copy(a: Value) -> LocalFuture {
     Box::pin(async move {
-        let Some(text) = a.get("text").and_then(Value::as_str).filter(|t| !t.is_empty()) else {
+        let Some(text) = a
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+        else {
             return "error: text is required".into();
         };
         match capturer() {
@@ -200,17 +214,29 @@ mod tests {
             Target::from_args(&json!({"target": "window", "window": "firefox"})),
             Target::Window(Some("firefox".into()))
         );
-        assert_eq!(Target::from_args(&json!({"target": "screen"})), Target::Screen);
+        assert_eq!(
+            Target::from_args(&json!({"target": "screen"})),
+            Target::Screen
+        );
         assert_eq!(Target::from_args(&json!({"target": "area"})), Target::Area);
-        assert_eq!(Target::from_args(&json!({"target": "overlay"})), Target::Overlay);
+        assert_eq!(
+            Target::from_args(&json!({"target": "overlay"})),
+            Target::Overlay
+        );
     }
 
     #[test]
     fn plain_confirmations() {
         set_previous_window(None);
-        assert_eq!(screenshot_summary(&json!({})), "Take a screenshot of the current window");
+        assert_eq!(
+            screenshot_summary(&json!({})),
+            "Take a screenshot of the current window"
+        );
         set_previous_window(Some("Firefox".into()));
-        assert_eq!(screenshot_summary(&json!({"target": "window"})), "Take a screenshot of the Firefox window");
+        assert_eq!(
+            screenshot_summary(&json!({"target": "window"})),
+            "Take a screenshot of the Firefox window"
+        );
         assert_eq!(
             screenshot_summary(&json!({"target": "screen", "delay": 3})),
             "Take a screenshot of the whole screen in 3 seconds"

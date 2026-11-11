@@ -693,11 +693,7 @@ impl Switcher {
             let label_text = if self.mode.get() == 3 {
                 name
             } else if self.mode.get() == 0 {
-                if name.is_empty() {
-                    title.clone()
-                } else {
-                    name
-                }
+                if name.is_empty() { title.clone() } else { name }
             } else {
                 windows.first().cloned().unwrap_or_else(|| title.clone())
             };

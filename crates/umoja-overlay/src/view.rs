@@ -11,8 +11,7 @@
 
 use crate::appgrid;
 use crate::ask::{
-    self,
-    calc,
+    self, calc,
     catalog::{self, Instant, Local, Run},
 };
 use crate::assistant::agent::{self, Question, Reply, StepState, Ui as _};
@@ -927,15 +926,17 @@ impl Overlay {
                     .flatten()
             });
             if let Some(app) = app {
-                o.focus_icon
-                    .set_from_gicon(&app.icon().unwrap_or_else(|| {
+                o.focus_icon.set_from_gicon(
+                    &app.icon().unwrap_or_else(|| {
                         gio::ThemedIcon::new("application-x-executable").upcast()
-                    }));
+                    }),
+                );
                 o.focus_label.set_text(&app.display_name());
-                o.focus_chip.update_property(&[gtk::accessible::Property::Label(
-                    &i18n::umoja("Searching in %s first. Press to search everything.")
-                        .replace("%s", &app.display_name()),
-                )]);
+                o.focus_chip
+                    .update_property(&[gtk::accessible::Property::Label(
+                        &i18n::umoja("Searching in %s first. Press to search everything.")
+                            .replace("%s", &app.display_name()),
+                    )]);
                 o.focus_app.replace(Some(app));
                 o.focus_chip.set_visible(true);
                 o.refresh_results();
@@ -981,7 +982,9 @@ impl Overlay {
     fn refresh_switches(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let Some(client) = mcp::shared().await else { return };
+            let Some(client) = mcp::shared().await else {
+                return;
+            };
             let never: mcp::Confirm = Rc::new(|_, _| Box::pin(async { false }));
             let r = client
                 .call("desktop_status", serde_json::json!({}), never)
@@ -1004,8 +1007,7 @@ impl Overlay {
         let replying = self.awaiting_reply.get();
         // Typing something else after an answer brings the rows back (the
         // conversation is kept for a follow-up); emptying the entry ends it.
-        if self.assistant.is_visible() && !replying && q.trim() != self.asked_text.borrow().trim()
-        {
+        if self.assistant.is_visible() && !replying && q.trim() != self.asked_text.borrow().trim() {
             self.assistant.set_visible(false);
             self.cancel_confirm();
             if q.trim().is_empty() {
@@ -1023,7 +1025,11 @@ impl Overlay {
     fn rebuild_rows(self: &Rc<Self>, keep: bool) {
         let q = self.entry.text().to_string();
         let answering = self.assistant.is_visible() && !self.awaiting_reply.get();
-        let entries = if answering { Vec::new() } else { self.compute(&q) };
+        let entries = if answering {
+            Vec::new()
+        } else {
+            self.compute(&q)
+        };
         while let Some(c) = self.results.first_child() {
             self.results.remove(&c);
         }
@@ -1057,7 +1063,10 @@ impl Overlay {
         let clip = self.stack.visible_child_name().as_deref() == Some("clipboard");
         self.stack.set_visible(clip || has_rows);
         let start = if keep { self.selected.get() } else { 0 };
-        self.select(self.nearest_item(start, 1).or_else(|| self.nearest_item(start, -1)));
+        self.select(
+            self.nearest_item(start, 1)
+                .or_else(|| self.nearest_item(start, -1)),
+        );
         if !keep {
             self.announce_top_soon();
         }
@@ -1158,7 +1167,12 @@ impl Overlay {
             self.selected.set(0);
             self.refresh_results();
         }
-        let item = self.items.borrow().get(self.selected.get()).cloned().flatten();
+        let item = self
+            .items
+            .borrow()
+            .get(self.selected.get())
+            .cloned()
+            .flatten();
         if let Some(item) = item {
             self.activate(item);
         } else if !q.trim().is_empty() {
@@ -1294,7 +1308,9 @@ impl Overlay {
             kw.push(item.title);
             let s = ask::score(&title, &kw, &words);
             if s > 0 {
-                let intent = matches!(item.run, Run::Toggle { .. }).then_some(intent).flatten();
+                let intent = matches!(item.run, Run::Toggle { .. })
+                    .then_some(intent)
+                    .flatten();
                 // "wifi off" is about the switch, not its Settings page.
                 let bonus = usage.bonus(&format!("instant:{}", item.id))
                     + if intent.is_some() { 5 } else { 0 };
@@ -1394,10 +1410,12 @@ impl Overlay {
                 return;
             }
             glib::spawn_future_local(async move {
-                let hits = crate::files::search(&q, MAX_FILES).await.unwrap_or_else(|e| {
-                    tracing::debug!(error = %e, "file search unavailable");
-                    Vec::new()
-                });
+                let hits = crate::files::search(&q, MAX_FILES)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::debug!(error = %e, "file search unavailable");
+                        Vec::new()
+                    });
                 if o.file_generation.get() != g {
                     return;
                 }
@@ -1474,7 +1492,9 @@ impl Overlay {
                 .icon()
                 .map(|i| gtk::Image::from_gicon(&i))
                 .unwrap_or_else(|| gtk::Image::from_icon_name("application-x-executable")),
-            Item::Instant { item, .. } => gtk::Image::from_icon_name(item.icon),
+            Item::Instant { item, .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(
+                &crate::ask::catalog::icon_names(item.icon),
+            )),
             Item::Sum(_) => gtk::Image::from_icon_name("accessories-calculator-symbolic"),
             Item::File(h) => gtk::Image::from_gicon(&crate::files::file_icon(&h.path)),
             Item::Ask { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
@@ -1494,6 +1514,9 @@ impl Overlay {
             icon_box.add_css_class("ask-icon-accent");
         }
         icon_box.set_valign(gtk::Align::Center);
+        // Set outright, or the icon's hexpand spreads to the box and the
+        // box takes half the row, pushing the icon and text to the middle.
+        icon_box.set_hexpand(false);
         icon.set_hexpand(true);
         icon.set_halign(gtk::Align::Center);
         icon_box.append(&icon);
@@ -1635,7 +1658,11 @@ impl Overlay {
                 let on = intent.unwrap_or_else(|| {
                     !self.switches.borrow().get(state).copied().unwrap_or(false)
                 });
-                self.call_tool(tool, serde_json::json!({ "enabled": on }), Some((state, on)));
+                self.call_tool(
+                    tool,
+                    serde_json::json!({ "enabled": on }),
+                    Some((state, on)),
+                );
             }
             Run::Call { tool, args } => {
                 let args = serde_json::from_str(args).unwrap_or_else(|_| serde_json::json!({}));
@@ -2092,8 +2119,11 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         self.clip_button.connect_toggled(move |b| {
             if let Some(o) = weak.upgrade() {
-                o.stack
-                    .set_visible_child_name(if b.is_active() { "clipboard" } else { "results" });
+                o.stack.set_visible_child_name(if b.is_active() {
+                    "clipboard"
+                } else {
+                    "results"
+                });
                 o.rebuild_rows(true);
                 o.refresh_clipboard();
             }
@@ -2197,7 +2227,9 @@ impl Overlay {
             let pill = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             pill.add_css_class("attach-pill");
             pill.set_tooltip_text(Some(&context::truncate_chars(&a.text, 600)));
-            pill.append(&gtk::Image::from_icon_name(a.icon()));
+            pill.append(&gtk::Image::from_gicon(&gio::ThemedIcon::from_names(
+                &crate::ask::catalog::icon_names(a.icon()),
+            )));
             pill.append(
                 &gtk::Label::builder()
                     .label(a.label())
@@ -2840,7 +2872,10 @@ impl agent::Ui for OverlayUi {
         Box::pin(async move {
             let allowed = asked.await;
             // Allowed only if it is still the same question.
-            allowed && weak.upgrade().is_some_and(|o| o.generation.get() == generation)
+            allowed
+                && weak
+                    .upgrade()
+                    .is_some_and(|o| o.generation.get() == generation)
         })
     }
 

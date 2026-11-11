@@ -22,8 +22,8 @@
 //! TODO: live per-window thumbnails once Mir offers toplevel capture
 //! sources (ext-image-capture-source's foreign-toplevel source).
 
-use crate::texpane::TexPane;
 use crate::appgrid::AppGrid;
+use crate::texpane::TexPane;
 use adw::prelude::*;
 use gio::prelude::*;
 use gtk::gdk_pixbuf::Pixbuf;
@@ -317,10 +317,11 @@ impl Spread {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let p = path.clone();
-            let pixels = gio::spawn_blocking(move || umoja_common::wallpaper::decode_cover_pixels(&p, need))
-                .await
-                .ok()
-                .flatten();
+            let pixels =
+                gio::spawn_blocking(move || umoja_common::wallpaper::decode_cover_pixels(&p, need))
+                    .await
+                    .ok()
+                    .flatten();
             let Some(s) = weak.upgrade() else { return };
             if s.wallpaper_path.borrow().as_deref() != Some(path.as_path()) {
                 return; // a newer wallpaper is on its way
