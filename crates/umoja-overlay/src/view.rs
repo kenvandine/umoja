@@ -1819,6 +1819,15 @@ impl Overlay {
         })
     }
 
+    /// Answer the confirmation that is showing, as if Allow or Cancel was
+    /// clicked (tools/demo). False when none is showing.
+    pub fn answer_confirm(&self, allow: bool) -> bool {
+        match self.confirm_tx.take() {
+            Some(tx) => tx.try_send(allow).is_ok(),
+            None => false,
+        }
+    }
+
     /// Decline a confirmation that is waiting.
     fn cancel_confirm(&self) {
         if let Some(tx) = self.confirm_tx.take() {

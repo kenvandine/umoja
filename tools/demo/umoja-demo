@@ -143,7 +143,7 @@ ASK_TYPEAHEAD = [
 # only because ai-reply and ai-summary need its bubbles. ("assistant" in
 # --only/--skip means ask-umoja and all ai-* scenes.)
 SCENES = [
-    "ask-umoja", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
+    "ask-umoja", "ai-btop", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
     "notifications", "ai-reply", "ai-summary",
     "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
     "screenshot-ui", "screensaver",
@@ -151,7 +151,7 @@ SCENES = [
 AI_SCENES = [s for s in SCENES if s.startswith("ai-") or s == "ask-umoja"]
 
 # The trailer: these clips in this order, each with its caption.
-TRAILER = ["ask-umoja", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
+TRAILER = ["ask-umoja", "ai-btop", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
            "notifications", "ai-reply", "ai-summary", "tiling", "overview", "workspaces", "screensaver"]
 
 
@@ -664,6 +664,7 @@ class Demo:
         """Put the desktop back. D-Bus calls only, safe on a blanked screen."""
         log("tidying up")
         self.recorder.abort()
+        self.demo_flag(False)
         if self.saver and self.saver.poll() is None:
             self.saver.terminate()
         self.bus.call(OVERLAY, "Hide", quiet=True)
@@ -1123,6 +1124,139 @@ class Demo:
             s.set_string("gtk-theme", self.dark[1])
             Gio.Settings.sync()
 
+    # While this file exists the overlay lets AnswerConfirm press Allow.
+    def demo_flag(self, on):
+        flag = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "umoja-demo"
+        if on:
+            flag.touch()
+        else:
+            flag.unlink(missing_ok=True)
+
+    @staticmethod
+    def btop_source():
+        """"snap", "deb" or None: how btop is installed now."""
+        if subprocess.run(["snap", "list", "btop"], capture_output=True).returncode == 0:
+            return "snap"
+        r = subprocess.run(["dpkg-query", "-W", "-f", "${Status}", "btop"], capture_output=True, text=True)
+        if r.returncode == 0 and "install ok installed" in r.stdout:
+            return "deb"
+        return None
+
+    @staticmethod
+    def btop_pids():
+        r = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "btop"], capture_output=True, text=True)
+        return {int(p) for p in r.stdout.split()}
+
+    def scene_ai_btop(self):
+        """Type "btop" in Ask Umoja: it isn't installed, so Umoja offers to
+        install it (snap first), then to run it in a terminal. Both prompts
+        are allowed, so this one really installs btop; it is removed again
+        afterwards (sudo -n) so the next run can film it again."""
+        if not self.dry:
+            if not self.can_ask_with or not self.bus.has_method(OVERLAY, "AnswerConfirm"):
+                log("  this overlay can't answer prompts for the demo (AnswerConfirm), skipping")
+                return
+            if self.btop_source():
+                log("  btop is already installed; remove it (sudo snap remove btop) to film this scene")
+                return
+        self.editor_to_front()
+        self.check_screen()
+        before = {w[0] for w in self.windows()} if not self.dry else set()
+        pids_before = self.btop_pids() if not self.dry else set()
+        self.demo_flag(True)
+        self.events.clear()
+        self.recorder.start("ai-btop")
+        log("  ask  'btop'")
+        flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
+        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", ("btop", flags)))
+        if self.dry:
+            self.wait(self.opts.answer_wait)
+            self.recorder.stop("btop")
+            self.demo_flag(False)
+            return
+        seen = 0          # events looked at so far
+        allowed = []      # confirmation labels allowed
+        replies = 0
+        ran = False
+        # Installing takes a while, so allow longer than for an answer.
+        deadline = time.monotonic() + self.opts.answer_timeout * 4
+        try:
+            while not ran and time.monotonic() < deadline:
+                self.until = lambda: len(self.events) > seen
+                try:
+                    self.wait(max(1.0, deadline - time.monotonic()))
+                finally:
+                    self.until = None
+                new, seen = self.events[seen:], len(self.events)
+                for name, params in new:
+                    if name == "ConfirmShown":
+                        label = params[0]
+                        running = "terminal" in label.lower()
+                        self.wait(1.4)
+                        self.shot(f"ai-btop-{len(allowed) + 1}",
+                                  "Installed. Now it offers to run btop in your terminal." if running else
+                                  "“btop” isn't installed, so Umoja offers to install it: the snap "
+                                  "first, the Ubuntu package when there's no snap.")
+                        self.wait(0.6)
+                        self.bus.call(OVERLAY, "AnswerConfirm", GLib.Variant("(b)", (True,)))
+                        allowed.append(label)
+                        log(f"       allowed: {label}")
+                    elif name == "AnswerFinished":
+                        answer, steps = params
+                        if any("terminal" in a.lower() for a in allowed):
+                            ran = True
+                        elif answer.strip().endswith("?") and replies < 2:
+                            # It asked first ("Shall I install it?"): say yes.
+                            replies += 1
+                            self.wait(1.0)
+                            self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", ("Yes", flags)))
+                        else:
+                            log(f"  ! it stopped before running btop: {answer[:160]!r} {steps}")
+                            deadline = 0
+            if not ran:
+                log("  ! btop wasn't installed and run, leaving ai-btop out")
+                self.recorder.discard()
+                return
+            # The terminal running btop.
+            for _ in range(20):
+                if self.btop_pids() - pids_before:
+                    break
+                self.wait(0.5)
+            self.wait(3.5)
+            self.shot("ai-btop-running", "btop running in your terminal: one word typed, two prompts allowed.")
+            self.wait(1.0)
+            self.recorder.stop("Type “btop”: Umoja installs it (snap first) and runs it in a terminal, "
+                               "asking before each step.")
+        finally:
+            self.demo_flag(False)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            # Quit only the btop this scene started, then close its window.
+            for pid in self.btop_pids() - pids_before:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            self.wait(1.5)
+            for w in self.windows():
+                if w[0] not in before:
+                    self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (w[0],)), quiet=True)
+            self.remove_btop()
+            self.wait(0.8)
+            self.scrub_overlay()
+
+    def remove_btop(self):
+        """Take out the btop this scene installed, off camera, so the next
+        run films the install again. Needs passwordless sudo; else says so."""
+        src = self.btop_source()
+        if not src:
+            return
+        cmd = (["sudo", "-n", "snap", "remove", "btop"] if src == "snap"
+               else ["sudo", "-n", "apt-get", "remove", "-y", "btop"])
+        if subprocess.run(cmd, capture_output=True).returncode == 0:
+            log(f"  removed the {src} of btop again")
+        else:
+            log(f"  btop ({src}) stays installed; remove it to film this scene again")
+
     def scene_ai_install(self):
         self.ask("ai-install", f"I need {self.opts.app}",
                  f"“I need {self.opts.app}”: it finds the snap or deb and asks before installing.",
@@ -1293,6 +1427,7 @@ class Demo:
             "screensaver": "Screensaver",
             "ask-umoja": "Ask Umoja: type-ahead",
             "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
+            "ai-btop": "Ask Umoja: install and run btop",
             "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
             "ai-reply": "Assistant: reply to a notification",
             "ai-troubleshoot": "Assistant: troubleshooting",

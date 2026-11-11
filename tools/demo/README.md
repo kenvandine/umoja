@@ -27,6 +27,7 @@ same order.
 | Scene | How it is driven | Output |
 | --- | --- | --- |
 | `ask-umoja` | `Overlay.ToggleAsk` over Text Editor (the empty card: its launcher actions, frequent picks, suggestions), then `Overlay.AskType` types "dark", "12*7+5", "sound" and a question; nothing is picked, so nothing changes | `images/ask-umoja.png`, `images/ask-switch.png`, `images/ask-sum.png`, `images/ask-settings.png`, `images/ask-question.png`, `videos/ask-umoja.*` |
+| `ai-btop` | Types "btop" in Ask Umoja. btop isn't installed, so Umoja offers to install it (snap first, else the deb); the scene allows that with `Overlay.AnswerConfirm(true)`, then allows the "Run btop in a terminal" prompt and films btop running. **This one really installs btop.** Afterwards it quits that btop, closes its window and removes btop again with `sudo -n` so the next run can film it; without passwordless sudo btop stays installed and later runs skip the scene until you remove it. `AnswerConfirm` only works while the scene's `$XDG_RUNTIME_DIR/umoja-demo` flag file exists | `images/ai-btop-1.png`, `images/ai-btop-2.png`, `images/ai-btop-running.png`, `videos/ai-btop.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
 | `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back straight after) | `images/ai-settings.png`, `videos/ai-settings.*` |
 | `ai-install` | "I need VLC" (`--app`): stops at Ask Umoja's "Allow Umoja to do this?" confirmation and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
@@ -116,5 +117,5 @@ Two scenes need a newer build than the one you may have installed: the
 screenshot UI scene needs the overlay's `HideScreenshotUI` (2026.46.4+), and
 the tiling scene and floating layout need the compositor's `DragWindow`
 and parking the pointer needs `MovePointer` (both after 2026.46.4). Without them those steps are skipped. The
-`ask-umoja` scene needs the overlay's `AskType` (after 2026.46.5) and is skipped
+`ask-umoja` scene needs the overlay's `AskType` (after 2026.46.5) and `ai-btop` needs `AnswerConfirm` (newer still); each is skipped
 without it.

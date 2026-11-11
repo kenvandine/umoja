@@ -72,6 +72,13 @@ const IFACE_XML: &str = r#"
     <signal name="ConfirmShown">
       <arg name="label" type="s"/>
     </signal>
+    <!-- Press Allow (true) or Cancel on the confirmation that is showing,
+         for tools/demo. Only while $XDG_RUNTIME_DIR/umoja-demo exists;
+         answered = false when there was nothing to answer. -->
+    <method name="AnswerConfirm">
+      <arg name="allow" type="b" direction="in"/>
+      <arg name="answered" type="b" direction="out"/>
+    </method>
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
@@ -280,6 +287,27 @@ fn export(
                             menu.hide();
                         }
                         methods.toggle()
+                    }
+                    "AnswerConfirm" => {
+                        let Some((allow,)) = params.get::<(bool,)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (b)",
+                            );
+                            return;
+                        };
+                        // Confirmations guard what the assistant does, so
+                        // only the demo, which sets this flag, answers them.
+                        if !gtk::glib::user_runtime_dir().join("umoja-demo").exists() {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.AccessDenied",
+                                "only while $XDG_RUNTIME_DIR/umoja-demo exists",
+                            );
+                            return;
+                        }
+                        let answered = methods.answer_confirm(allow);
+                        invocation.return_value(Some(&(answered,).to_variant()));
+                        return;
                     }
                     "AskType" => {
                         let Some((text, typed)) = params.get::<(String, bool)>() else {
