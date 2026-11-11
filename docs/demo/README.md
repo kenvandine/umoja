@@ -1,14 +1,52 @@
 # A tour of Umoja
 
-Captured hands-free by `tools/demo/umoja-demo` on 2026-11-10 (umoja-desktop 2026.46.4+git202611101325.1d5b473).
+Captured hands-free by `tools/demo/umoja-demo` on 2026-11-11 (umoja-desktop 2026.46.5+git202611112005.41871a8).
 
 **[Watch the trailer](videos/trailer.mp4)** (all the clips below in one video, real time).
 
-## Desktop
+## Ask Umoja: type-ahead
 
-![The desktop: top bar, Ubuntu-style dock and floating windows over the wallpaper.](images/desktop.png)
+![Ask Umoja (the Copilot key, or a tap of Alt) floats over the window you're in, with its launcher actions and the things you use most.](images/ask-umoja.png)
 
-*The desktop: top bar, Ubuntu-style dock and floating windows over the wallpaper.*
+*Ask Umoja (the Copilot key, or a tap of Alt) floats over the window you're in, with its launcher actions and the things you use most.*
+
+![Type “dark”: the Dark Style switch, ready to flip with Enter. No model involved.](images/ask-switch.png)
+
+*Type “dark”: the Dark Style switch, ready to flip with Enter. No model involved.*
+
+![Sums are answered as you type; Enter copies the result.](images/ask-sum.png)
+
+*Sums are answered as you type; Enter copies the result.*
+
+![Settings pages and desktop actions: “sound” finds the Sound page, mute and unmute.](images/ask-settings.png)
+
+*Settings pages and desktop actions: “sound” finds the Sound page, mute and unmute.*
+
+![A question puts “Ask Umoja” first: Enter or Tab hands it to the assistant.](images/ask-question.png)
+
+*A question puts “Ask Umoja” first: Enter or Tab hands it to the assistant.*
+
+[![Ask Umoja: apps, switches, Settings, sums and questions as you type.](videos/ask-umoja.gif)](videos/ask-umoja.mp4)
+
+*Ask Umoja: apps, switches, Settings, sums and questions as you type.* ([video](videos/ask-umoja.mp4))
+
+## Ask Umoja: install and run btop
+
+![“btop” isn't installed, so Umoja offers to install it: the snap first, the Ubuntu package when there's no snap.](images/ai-btop-1.png)
+
+*“btop” isn't installed, so Umoja offers to install it: the snap first, the Ubuntu package when there's no snap.*
+
+![Installed. Now it offers to run btop in your terminal.](images/ai-btop-2.png)
+
+*Installed. Now it offers to run btop in your terminal.*
+
+![btop running in your terminal: one word typed, two prompts allowed.](images/ai-btop-running.png)
+
+*btop running in your terminal: one word typed, two prompts allowed.*
+
+[![Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step.](videos/ai-btop.gif)](videos/ai-btop.mp4)
+
+*Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step.* ([video](videos/ai-btop.mp4))
 
 ## Assistant: tile windows
 
@@ -19,20 +57,6 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-10 (umoja-desktop 2026
 [![Tiling by asking for it, in plain words.](videos/ai-tiling.gif)](videos/ai-tiling.mp4)
 
 *Tiling by asking for it, in plain words.* ([video](videos/ai-tiling.mp4))
-
-## Window tiling
-
-![Drag a window to a screen edge and it snaps to that half, like Ubuntu's Tiling Assistant.](images/tiling-halves.png)
-
-*Drag a window to a screen edge and it snaps to that half, like Ubuntu's Tiling Assistant.*
-
-![Drag to a corner for a quarter; tiled windows resize together.](images/tiling-quarter.png)
-
-*Drag to a corner for a quarter; tiled windows resize together.*
-
-[![Drag-to-tile: halves at the screen edges, quarters in the corners.](videos/tiling.gif)](videos/tiling.mp4)
-
-*Drag-to-tile: halves at the screen edges, quarters in the corners.* ([video](videos/tiling.mp4))
 
 ## Assistant: change settings
 
@@ -72,6 +96,16 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-10 (umoja-desktop 2026
 
 *Installing updates: it shows what will change and asks first.* ([video](videos/ai-updates-install.mp4))
 
+## Assistant: troubleshooting
+
+![Asking about the hardware: answered from a live system report, not a guess.](images/ai-troubleshoot.png)
+
+*Asking about the hardware: answered from a live system report, not a guess.*
+
+[![Asking about the hardware: answered from a live system report, not a guess.](videos/ai-troubleshoot.gif)](videos/ai-troubleshoot.mp4)
+
+*Asking about the hardware: answered from a live system report, not a guess.* ([video](videos/ai-troubleshoot.mp4))
+
 ## Notifications
 
 ![Notifications behave like GNOME's and look like Unity's notify-osd bubbles.](images/notifications.png)
@@ -106,21 +140,31 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-10 (umoja-desktop 2026
 
 *A digest of the notifications that came in.* ([video](videos/ai-summary.mp4))
 
-## Assistant: troubleshooting
+## Desktop
 
-![Asking about the hardware: answered from a live system report, not a guess.](images/ai-troubleshoot.png)
+![The desktop: top bar, Ubuntu-style dock and floating windows over the wallpaper.](images/desktop.png)
 
-*Asking about the hardware: answered from a live system report, not a guess.*
+*The desktop: top bar, Ubuntu-style dock and floating windows over the wallpaper.*
 
-[![Asking about the hardware: answered from a live system report, not a guess.](videos/ai-troubleshoot.gif)](videos/ai-troubleshoot.mp4)
+## Window tiling
 
-*Asking about the hardware: answered from a live system report, not a guess.* ([video](videos/ai-troubleshoot.mp4))
+![Drag a window to a screen edge and it snaps to that half, like Ubuntu's Tiling Assistant.](images/tiling-halves.png)
+
+*Drag a window to a screen edge and it snaps to that half, like Ubuntu's Tiling Assistant.*
+
+![Drag to a corner for a quarter; tiled windows resize together.](images/tiling-quarter.png)
+
+*Drag to a corner for a quarter; tiled windows resize together.*
+
+[![Drag-to-tile: halves at the screen edges, quarters in the corners.](videos/tiling.gif)](videos/tiling.mp4)
+
+*Drag-to-tile: halves at the screen edges, quarters in the corners.* ([video](videos/tiling.mp4))
 
 ## App grid and search
 
-![The app grid with search. Type to find apps, files or ask the assistant.](images/app-grid.png)
+![The app grid (Super, then type, or Show Apps): apps and files. The assistant lives in Ask Umoja instead.](images/app-grid.png)
 
-*The app grid with search. Type to find apps, files or ask the assistant.*
+*The app grid (Super, then type, or Show Apps): apps and files. The assistant lives in Ask Umoja instead.*
 
 ## Activities overview
 

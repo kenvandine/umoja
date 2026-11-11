@@ -32,6 +32,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -151,8 +152,30 @@ SCENES = [
 AI_SCENES = [s for s in SCENES if s.startswith("ai-") or s == "ask-umoja"]
 
 # The trailer: these clips in this order, each with its caption.
+# Waits the viewer would sit through (the model thinking, a package
+# installing) are fast-forwarded in the clips, labelled, down to about this
+# many seconds; shorter waits play in real time.
+FAST_MIN = 5.0
+FAST_TARGET = 2.5
+# Captions longer than this wrap (about 110 characters of 40 px Ubuntu Sans
+# fit across 1920).
+CAPTION_CHARS = 100
+REPO_URL = "github.com/kenvandine/umoja"
+
 TRAILER = ["ask-umoja", "ai-btop", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
            "notifications", "ai-reply", "ai-summary", "tiling", "overview", "workspaces", "screensaver"]
+
+
+def wrap_caption(text, limit=CAPTION_CHARS):
+    """`text` on as few lines as fit `limit`, of about even length (no
+    one-word last line)."""
+    if len(text) <= limit:
+        return text
+    n = -(-len(text) // limit)
+    width = -(-len(text) // n)
+    while len(textwrap.wrap(text, width)) > n:
+        width += 1
+    return textwrap.fill(text, width)
 
 
 class Stop(Exception):
@@ -245,10 +268,13 @@ class Recorder:
         self.demo = demo
         self.proc = None
         self.path = None
+        self.t0 = None
+        self.fast = []  # (start, end) seconds into the clip to fast-forward
 
     def start(self, name):
         if not self.demo.video:
             return
+        self.fast = []
         self.path = self.demo.raw_dir / f"{name}.webm"
         cmd = [
             # -D: a frame every refresh, not only on damage. Damage-only
@@ -268,10 +294,21 @@ class Recorder:
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=open(self.demo.raw_dir / f"{name}.log", "w"),
         )
+        self.t0 = time.monotonic()
         time.sleep(1.0)  # wf-recorder needs a moment before the first frame
         if self.proc.poll() is not None:
             log(f"  ! wf-recorder exited at once (see {self.demo.raw_dir}/{name}.log)")
             self.proc = None
+
+    def waited(self, start, end):
+        """The viewer sat through start..end (time.monotonic()): fast-forward
+        it in the clip if it is long. Trimmed a little at both ends so the
+        moment things start and finish plays in real time."""
+        if not self.proc or self.proc is True or self.t0 is None:
+            return
+        a, b = start - self.t0 + 0.8, end - self.t0 - 0.8
+        if b - a >= FAST_MIN:
+            self.fast.append((round(a, 2), round(b, 2)))
 
     def stop(self, caption):
         if not self.proc:
@@ -287,8 +324,9 @@ class Recorder:
                 self.proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
-        self.demo.clips.append((self.path, caption, self.demo.scene))
+        self.demo.clips.append((self.path, caption, self.demo.scene, self.fast))
         self.proc = None
+        self.fast = []
 
     def discard(self):
         """Stop and throw away the clip (a failed try)."""
@@ -325,7 +363,7 @@ class Demo:
         self.dark = None  # (color-scheme, gtk-theme) before the dark style ask
         self.ready = False  # the assistant can be asked
         self.until = None  # wait() returns early once this says so
-        self.events = []  # (signal, args) from org.umoja.Overlay
+        self.events = []  # (signal, args, time.monotonic()) from org.umoja.Overlay
         self.night_light = None
         self.trailer = None
         self.can_ask_with = False
@@ -333,7 +371,7 @@ class Demo:
         self.spots = {}  # window id -> where its title bar sits when floating
         self.names = {}  # window id -> app name, for the assistant
         self.shots = {}  # scene -> [(file, caption)]
-        self.clips = []  # (raw webm, caption, scene)
+        self.clips = []  # (raw webm, caption, scene, fast-forward spans)
         self.videos = {}  # scene -> [(gif or None, mp4/webm, caption)]
         self.scene = None
         self.opened = []  # window ids this tour opened
@@ -743,8 +781,7 @@ class Demo:
             self.bus.call(OVERLAY, "AskType", GLib.Variant("(sb)", (text, not self.opts.no_typing)))
             self.wait((0 if self.opts.no_typing else 0.06 * len(text)) + 1.4)
             self.shot(name, caption)
-        self.recorder.stop("Ask Umoja: apps, switches, Settings, sums and questions as you type. "
-                           "Everything but the questions runs without the model.")
+        self.recorder.stop("Ask Umoja: apps, switches, Settings, sums and questions as you type.")
         self.bus.call(OVERLAY, "Hide")
         self.wait(0.8)
         self.scrub_overlay()
@@ -964,7 +1001,7 @@ class Demo:
         else:
             self.bus.conn.signal_subscribe(
                 OVERLAY[0], OVERLAY[2], None, OVERLAY[1], None, Gio.DBusSignalFlags.NONE,
-                lambda _c, _s, _p, _i, name, params: self.events.append((name, params.unpack())),
+                lambda _c, _s, _p, _i, name, params: self.events.append((name, params.unpack(), time.monotonic())),
             )
         if self.opts.local:
             return self.warm_model()
@@ -984,6 +1021,7 @@ class Demo:
             self.events.clear()
             self.recorder.start(name)
             log(f"  ask  {question!r}" + (f" (try {attempt})" if attempt > 1 else ""))
+            asked = time.monotonic() + self.typing_time(question)
             if self.dry or self.can_ask_with:
                 flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
                 self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (question, flags)))
@@ -999,6 +1037,9 @@ class Demo:
                 finally:
                     self.until = None
                 result = self.check_answer(expect, confirm, expect_steps, step_has)
+                came = next((e[2] for e in self.events if e[0] in ("AnswerFinished", "ConfirmShown")), None)
+                if came:
+                    self.recorder.waited(asked, came)
             if result is not None:
                 answer, steps = result
                 self.wait(settle)
@@ -1021,6 +1062,11 @@ class Demo:
             self.wait(1.5)
         log(f"  ! no good answer after {tries} tries, leaving {name} out")
         return None
+
+    def typing_time(self, text):
+        """How long AskWith takes to type `text` out (38 ms a letter, then a
+        pause: umoja-overlay's ask_with)."""
+        return 0.0 if self.opts.no_typing else 0.038 * len(text) + 0.35
 
     def scrub_overlay(self):
         """Open and close the empty overlay once, off camera. Stopping the
@@ -1169,6 +1215,7 @@ class Demo:
         log("  ask  'btop'")
         flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
         self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", ("btop", flags)))
+        acted = time.monotonic() + self.typing_time("btop")  # when it was last our move
         if self.dry:
             self.wait(self.opts.answer_wait)
             self.recorder.stop("btop")
@@ -1188,7 +1235,8 @@ class Demo:
                 finally:
                     self.until = None
                 new, seen = self.events[seen:], len(self.events)
-                for name, params in new:
+                for name, params, when in new:
+                    self.recorder.waited(acted, when)
                     if name == "ConfirmShown":
                         label = params[0]
                         running = "terminal" in label.lower()
@@ -1199,6 +1247,7 @@ class Demo:
                                   "first, the Ubuntu package when there's no snap.")
                         self.wait(0.6)
                         self.bus.call(OVERLAY, "AnswerConfirm", GLib.Variant("(b)", (True,)))
+                        acted = time.monotonic()
                         allowed.append(label)
                         log(f"       allowed: {label}")
                     elif name == "AnswerFinished":
@@ -1210,6 +1259,7 @@ class Demo:
                             replies += 1
                             self.wait(1.0)
                             self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", ("Yes", flags)))
+                            acted = time.monotonic() + self.typing_time("Yes")
                         else:
                             log(f"  ! it stopped before running btop: {answer[:160]!r} {steps}")
                             deadline = 0
@@ -1302,7 +1352,7 @@ class Demo:
 
     def encode(self):
         """webm -> GIF (inline on GitHub) + MP4, after capture so it can't stutter."""
-        for raw, caption, scene in self.clips:
+        for raw, caption, scene, fast in self.clips:
             gif = self.vid_dir / f"{raw.stem}.gif"
             mp4 = self.vid_dir / f"{raw.stem}.mp4"
             if self.dry:
@@ -1316,15 +1366,16 @@ class Demo:
                 shutil.move(raw, dest)
                 self.videos.setdefault(scene, []).append((None, dest, caption))
                 continue
-            log(f"  encode {raw.stem}")
+            log(f"  encode {raw.stem}" + (f" (fast-forwarding {fast})" if fast else ""))
+            pre = self.fast_forward(fast)
             ok_mp4 = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw),
-                "-vf", "scale='min(1920,iw)':-2,fps=30", "-c:v", "libx264", "-preset", "slow",
+                "-filter_complex", f"{pre};[v]scale='min(1920,iw)':-2,fps=30", "-c:v", "libx264", "-preset", "slow",
                 "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(mp4),
             ]).returncode == 0
             ok_gif = subprocess.run([
-                "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-vf",
-                f"tpad=stop_mode=clone:stop_duration=1.5,fps=12,scale={self.opts.gif_width}:-1:flags=lanczos,split[a][b];"
+                "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-filter_complex",
+                f"{pre};[v]tpad=stop_mode=clone:stop_duration=1.5,fps=12,scale={self.opts.gif_width}:-1:flags=lanczos,split[a][b];"
                 "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
                 str(gif),
             ]).returncode == 0
@@ -1332,6 +1383,45 @@ class Demo:
                 mp4 = self.vid_dir / raw.name
                 shutil.copy(raw, mp4)
             self.videos.setdefault(scene, []).append((gif if ok_gif else None, mp4, caption))
+
+    def fast_forward(self, spans):
+        """A filter graph from [0:v] to [v] that plays each (start, end) span
+        of the clip fast, down to about FAST_TARGET seconds, with a "N×"
+        label in the corner while it does; the rest in real time."""
+        if not spans:
+            return "[0:v]null[v]"
+        ff = self.filter_font()
+        parts, t = [], 0.0
+        for a, b in sorted(spans):
+            if a > t:
+                parts.append((t, a, 1))
+            parts.append((a, b, max(2, round((b - a) / FAST_TARGET))))
+            t = b
+        parts.append((t, None, 1))
+        chains = []
+        for i, (a, b, k) in enumerate(parts):
+            trim = f"trim=start={a}" + (f":end={b}" if b is not None else "")
+            chain = f"[s{i}]{trim},setpts=(PTS-STARTPTS)/{k}"
+            if k > 1 and ff:
+                chain += (f",drawtext=expansion=none:fontfile={ff}:text='{k}× speed':fontsize=h/28:"
+                          f"fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=14:x=w-text_w-40:y=60")
+            chains.append(chain + f"[p{i}]")
+        n = len(parts)
+        split = f"[0:v]split={n}" + "".join(f"[s{i}]" for i in range(n))
+        return ";".join([split, *chains, "".join(f"[p{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[v]"])
+
+    def filter_font(self):
+        """The caption font as an ffmpeg filter argument, or None. Ubuntu
+        Sans is "UbuntuSans[wdth,wght].ttf": brackets and commas break
+        ffmpeg's filter syntax, so this points at a copy with a plain name."""
+        font = self.font()
+        if not font:
+            return None
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        plain = self.raw_dir / ("font" + Path(font).suffix)
+        if not plain.exists():
+            shutil.copy(font, plain)
+        return str(plain).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
     def font(self):
         for pattern in ("Ubuntu Sans:bold", "Ubuntu:bold", "sans:bold"):
@@ -1348,9 +1438,9 @@ class Demo:
             log(f"  trailer from {len(parts)} clips")
             self.trailer = self.vid_dir / "trailer.mp4"
             return
-        font = self.font()
-        if not self.ffmpeg or not parts or not font:
-            if parts and not font:
+        ff = self.filter_font()
+        if not self.ffmpeg or not parts or not ff:
+            if parts and not ff:
                 log("  ! no font found for captions (fc-match), no trailer")
             return
         log(f"  trailer from {len(parts)} clips")
@@ -1359,11 +1449,6 @@ class Demo:
         H = int(round(W * h / w / 2) * 2)
         work = self.raw_dir / "trailer"
         work.mkdir(parents=True, exist_ok=True)
-        # Ubuntu Sans is "UbuntuSans[wdth,wght].ttf": brackets and commas
-        # break ffmpeg's filter syntax, so use a copy with a plain name.
-        plain = work / ("font" + Path(font).suffix)
-        shutil.copy(font, plain)
-        font = str(plain)
         fit = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p")
         # One frame rate and time base for every segment: concat -c copy
@@ -1371,32 +1456,42 @@ class Demo:
         # played for two frames among clips with another one.
         enc = ["-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
                "-pix_fmt", "yuv420p", "-video_track_timescale", "15360"]
-        ff = font.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         segs = []
-        # Title card.
-        (work / "t1.txt").write_text("Umoja")
-        (work / "t2.txt").write_text("The desktop you can just talk to")
-        card = work / "00-title.mp4"
-        r = subprocess.run([
-            "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-            f"color=c=0x2c001e:s={W}x{H}:d=2.5:r=30", "-vf",
-            f"drawtext=expansion=none:fontfile={ff}:textfile={work / 't1.txt'}:fontsize=140:fontcolor=white:"
-            f"x=(w-text_w)/2:y=(h-text_h)/2-60,"
-            f"drawtext=expansion=none:fontfile={ff}:textfile={work / 't2.txt'}:fontsize=48:fontcolor=0xE95420:"
-            f"x=(w-text_w)/2:y=(h/2)+70,format=yuv420p", *enc, str(card)])
-        if r.returncode == 0:
-            segs.append(card)
+
+        def card(name, title, subtitle, seconds):
+            """A plain card: big title, an orange line under it."""
+            (work / f"{name}-1.txt").write_text(title)
+            (work / f"{name}-2.txt").write_text(subtitle)
+            out = work / f"{name}.mp4"
+            r = subprocess.run([
+                "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                f"color=c=0x2c001e:s={W}x{H}:d={seconds}:r=30", "-vf",
+                f"drawtext=expansion=none:fontfile={ff}:textfile={work / f'{name}-1.txt'}:fontsize=140:"
+                f"fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2-60,"
+                f"drawtext=expansion=none:fontfile={ff}:textfile={work / f'{name}-2.txt'}:fontsize=48:"
+                f"fontcolor=0xE95420:x=(w-text_w)/2:y=(h/2)+70,format=yuv420p", *enc, str(out)])
+            return out if r.returncode == 0 else None
+
+        title = card("00-title", "Umoja", "The desktop you can just talk to", 2.5)
+        if title:
+            segs.append(title)
         for i, (mp4, caption) in enumerate(parts, 1):
             txt = work / f"{i:02d}.txt"
-            txt.write_text(caption)
+            # Long captions wrap onto a second line, centred, instead of
+            # running off both edges.
+            txt.write_text(wrap_caption(caption))
             out = work / f"{i:02d}.mp4"
             r = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-i", str(mp4), "-vf",
                 f"{fit},drawtext=expansion=none:fontfile={ff}:textfile={txt}:fontsize=40:fontcolor=white:"
+                f"text_align=C:line_spacing=10:"
                 f"box=1:boxcolor=black@0.6:boxborderw=22:x=(w-text_w)/2:y=h-text_h-70",
                 *enc, str(out)])
             if r.returncode == 0:
                 segs.append(out)
+        end = card("99-end", "Umoja", REPO_URL, 3.0)
+        if end:
+            segs.append(end)
         if len(segs) < 2:
             log("  ! trailer encode failed")
             return
@@ -1469,9 +1564,10 @@ class Demo:
             base = str(self.out)
         if base.startswith(".."):
             base = str(self.out)
-        hero = [s for s in ("ai-tiling", "ai-settings", "overview", "ai-install") if s in self.shots]
+        hero = [s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview", "ai-install")
+                if s in self.shots][:4]
         snippet = ["## Screenshots", ""]
-        lead = next((s for s in ("ai-tiling", "ai-settings", "overview")
+        lead = next((s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview")
                      if s in self.videos and self.videos[s][0][0]), None)
         if lead:
             gif, video, caption = self.videos[lead][0]
@@ -1479,7 +1575,8 @@ class Demo:
             snippet += [f"[![{caption}]({base}/{self.rel(gif)})]({base}/{self.rel(target)})", ""]
         if self.trailer:
             snippet += [f"[Watch the trailer]({base}/{self.rel(self.trailer)}).", ""]
-        cells = [self.shots[s][0] for s in hero]
+        # btop's last shot is the one with btop running.
+        cells = [self.shots[s][-1 if s == "ai-btop" else 0] for s in hero]
         if cells:
             snippet += ["| " + " | ".join(titles[s] for s in hero) + " |",
                         "| " + " | ".join("---" for _ in hero) + " |",

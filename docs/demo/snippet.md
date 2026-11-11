@@ -1,11 +1,11 @@
 ## Screenshots
 
-[![Tiling by asking for it, in plain words.](docs/demo/videos/ai-tiling.gif)](docs/demo/videos/trailer.mp4)
+[![Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step.](docs/demo/videos/ai-btop.gif)](docs/demo/videos/trailer.mp4)
 
 [Watch the trailer](docs/demo/videos/trailer.mp4).
 
-| Assistant: tile windows | Assistant: change settings | Activities overview | Assistant: install an app |
+| Ask Umoja: install and run btop | Assistant: tile windows | Assistant: change settings | Activities overview |
 | --- | --- | --- | --- |
-| ![Assistant: tile windows](docs/demo/images/ai-tiling.png) | ![Assistant: change settings](docs/demo/images/ai-settings.png) | ![Activities overview](docs/demo/images/overview.png) | ![Assistant: install an app](docs/demo/images/ai-install.png) |
+| ![Ask Umoja: install and run btop](docs/demo/images/ai-btop-running.png) | ![Assistant: tile windows](docs/demo/images/ai-tiling.png) | ![Assistant: change settings](docs/demo/images/ai-settings.png) | ![Activities overview](docs/demo/images/overview.png) |
 
 More in the [tour](docs/demo/README.md).
