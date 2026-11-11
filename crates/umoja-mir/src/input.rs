@@ -1065,6 +1065,7 @@ mod tests {
                 action: Action::Minimize as u32,
             }],
             overlay_keysym: Some(XK_SUPER_L),
+            ask_alt_tap: true,
             edge_tiling: true,
             layout_picker: true,
             raise_tile_group: true,
