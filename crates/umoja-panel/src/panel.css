@@ -46,7 +46,10 @@ window.umoja-panel button {
    lands. The pill you see is the button's child. (Not a transparent border
    around the pill: GTK hit-tests the rounded border box, which leaves the
    corners dead.) main.rs and sni.rs drop the boxes' spacing too. The bar
-   is a GtkCenterBox, whose CSS name is box. */
+   is a GtkCenterBox, whose CSS name is box. A tray item's menu is a
+   child of its button, hence :not(popover) on the pill rules: without it
+   the menu's whole popover gets the pill's rounding and hover/open fill,
+   a big translucent blob around the menu. */
 window.umoja-panel > box > button,
 window.umoja-panel > box > menubutton > button,
 window.umoja-panel > box > box > button,
@@ -68,21 +71,21 @@ window.umoja-panel > box > button:first-child {
 window.umoja-panel > box > box:last-child > menubutton:last-child > button {
   padding-right: 2px;
 }
-window.umoja-panel > box > button > *,
-window.umoja-panel > box > menubutton > button > *,
-window.umoja-panel > box > box > button > *,
-window.umoja-panel > box > box > menubutton > button > *,
-window.umoja-panel > box > box > box > button > * {
+window.umoja-panel > box > button > *:not(popover),
+window.umoja-panel > box > menubutton > button > *:not(popover),
+window.umoja-panel > box > box > button > *:not(popover),
+window.umoja-panel > box > box > menubutton > button > *:not(popover),
+window.umoja-panel > box > box > box > button > *:not(popover) {
   border-radius: 999px;
   padding: 0 12px;
   min-height: 24px;
   transition: background-color 150ms ease-out;
 }
-window.umoja-panel > box > button:hover > *,
-window.umoja-panel > box > menubutton > button:hover > *,
-window.umoja-panel > box > box > button:hover > *,
-window.umoja-panel > box > box > menubutton > button:hover > *,
-window.umoja-panel > box > box > box > button:hover > * {
+window.umoja-panel > box > button:hover > *:not(popover),
+window.umoja-panel > box > menubutton > button:hover > *:not(popover),
+window.umoja-panel > box > box > button:hover > *:not(popover),
+window.umoja-panel > box > box > menubutton > button:hover > *:not(popover),
+window.umoja-panel > box > box > box > button:hover > *:not(popover) {
   background-color: alpha(#ffffff, 0.15);
 }
 /* The button whose menu is open stays lit, like gnome-shell's. */
@@ -93,21 +96,21 @@ window.umoja-panel > box > box > menubutton > button:checked,
 window.umoja-panel > box > box > box > button:checked {
   background: none;
 }
-window.umoja-panel > box > button:checked > *,
-window.umoja-panel > box > menubutton > button:checked > *,
-window.umoja-panel > box > box > button:checked > *,
-window.umoja-panel > box > box > menubutton > button:checked > *,
-window.umoja-panel > box > box > box > button:checked > * {
+window.umoja-panel > box > button:checked > *:not(popover),
+window.umoja-panel > box > menubutton > button:checked > *:not(popover),
+window.umoja-panel > box > box > button:checked > *:not(popover),
+window.umoja-panel > box > box > menubutton > button:checked > *:not(popover),
+window.umoja-panel > box > box > box > button:checked > *:not(popover) {
   background-color: alpha(#ffffff, 0.20);
 }
-window.umoja-panel > box > button:focus-visible > *,
-window.umoja-panel > box > menubutton > button:focus-visible > *,
-window.umoja-panel > box > box > button:focus-visible > *,
-window.umoja-panel > box > box > menubutton > button:focus-visible > *,
-window.umoja-panel > box > box > box > button:focus-visible > * {
+window.umoja-panel > box > button:focus-visible > *:not(popover),
+window.umoja-panel > box > menubutton > button:focus-visible > *:not(popover),
+window.umoja-panel > box > box > button:focus-visible > *:not(popover),
+window.umoja-panel > box > box > menubutton > button:focus-visible > *:not(popover),
+window.umoja-panel > box > box > box > button:focus-visible > *:not(popover) {
   box-shadow: inset 0 0 0 2px alpha(@accent_color, 0.5);
 }
-window.umoja-panel > box > box > box > button.tray-item > * {
+window.umoja-panel > box > box > box > button.tray-item > *:not(popover) {
   padding: 0 6px;
 }
 /* AppIndicator OverlayIcon emblem (e.g. unread mail) and the dot shown for
@@ -668,7 +671,7 @@ window.umoja-curtain {
   background-color: #000000;
 }
 /* Myna dictation: GNOME Shell's privacy-indicator orange while recording. */
-window.umoja-panel > box > box > button.myna-indicator > * {
+window.umoja-panel > box > box > button.myna-indicator > *:not(popover) {
   padding: 0 8px;
 }
 window.umoja-panel button.myna-indicator.recording {
@@ -676,12 +679,12 @@ window.umoja-panel button.myna-indicator.recording {
 }
 
 /* gnome-shell's .screen-recording-indicator while recording. */
-window.umoja-panel > box > box > button.screencast-indicator > * {
+window.umoja-panel > box > box > button.screencast-indicator > *:not(popover) {
   padding: 0 10px;
   background-color: #c01c28;
   color: #ffffff;
 }
-window.umoja-panel > box > box > button.screencast-indicator:hover > * {
+window.umoja-panel > box > box > button.screencast-indicator:hover > *:not(popover) {
   background-color: #d4313d;
 }
 
