@@ -361,7 +361,20 @@ pub fn switcher_cancel() {
 
 // ---- drag chrome ------------------------------------------------------------
 
-static DRAG: LazyLock<Mutex<Option<Chrome>>> = LazyLock::new(Default::default);
+/// The drag in progress: what the overlay shows, and where the press was.
+struct Drag {
+    chrome: Chrome,
+    start: (i32, i32),
+    /// The pointer has moved past [`DRAG_THRESHOLD`]; until then a press on a
+    /// title bar (or a click on its buttons that a client turned into a move)
+    /// neither tiles the window nor slides the picker down.
+    moved: bool,
+}
+
+static DRAG: LazyLock<Mutex<Option<Drag>>> = LazyLock::new(Default::default);
+
+/// GTK's default dnd drag threshold, in logical pixels.
+const DRAG_THRESHOLD: i32 = 8;
 
 fn send_chrome(old: Option<&Chrome>, new: &Chrome, window: Rect) {
     let picker_changed = old.is_none_or(|o| {
@@ -398,37 +411,61 @@ fn send_chrome(old: Option<&Chrome>, new: &Chrome, window: Rect) {
 }
 
 /// A window move started (picker peeks out under the top bar).
-pub fn drag_begin(px: i32, py: i32, window: Rect, area: Rect, monitor: Rect) {
+pub fn drag_begin(px: i32, py: i32, window: Rect, area: Rect, _monitor: Rect) {
     let use_picker = input::read().layout_picker && input::edge_tiling_enabled();
-    let mut chrome = snap::evaluate(px, py, window, area, monitor, use_picker);
-    if !input::edge_tiling_enabled() {
-        chrome.action = Action::None;
-        chrome.preview = None;
-    }
+    // Nothing snaps before the pointer moves: only the peek.
+    let chrome = Chrome {
+        picker: if use_picker {
+            Visibility::Peek
+        } else {
+            Visibility::Hidden
+        },
+        area,
+        ..Chrome::default()
+    };
     send_chrome(None, &chrome, window);
-    *DRAG.lock().unwrap_or_else(|e| e.into_inner()) = Some(chrome);
+    *DRAG.lock().unwrap_or_else(|e| e.into_inner()) = Some(Drag {
+        chrome,
+        start: (px, py),
+        moved: false,
+    });
 }
 
 /// Pointer moved during a window move; returns the snap action so far.
 pub fn drag_motion(px: i32, py: i32, window: Rect, area: Rect, monitor: Rect) -> Action {
     let mut guard = DRAG.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(old) = guard.as_ref() else {
+    let Some(drag) = guard.as_mut() else {
         return Action::None;
     };
     if !input::edge_tiling_enabled() {
         return Action::None;
     }
+    if !drag.moved {
+        let (sx, sy) = drag.start;
+        if (px - sx).abs() < DRAG_THRESHOLD && (py - sy).abs() < DRAG_THRESHOLD {
+            return Action::None;
+        }
+        drag.moved = true;
+    }
+    let old = drag.chrome;
     let use_picker = old.picker != Visibility::Hidden;
-    let chrome = snap::evaluate(px, py, window, area, monitor, use_picker);
-    send_chrome(Some(old), &chrome, window);
-    let action = chrome.action;
-    *guard = Some(chrome);
-    action
+    let chrome = snap::evaluate(
+        px,
+        py,
+        window,
+        area,
+        monitor,
+        use_picker,
+        old.picker == Visibility::Shown,
+    );
+    send_chrome(Some(&old), &chrome, window);
+    drag.chrome = chrome;
+    chrome.action
 }
 
 /// The move ended; returns the action to apply on drop.
 pub fn drag_end() -> Action {
-    let Some(chrome) = DRAG.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+    let Some(Drag { chrome, .. }) = DRAG.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         return Action::None;
     };
     if chrome.picker != Visibility::Hidden {

@@ -89,11 +89,17 @@ fn chrome_window(app: &adw::Application, layer: Layer, namespace: &str) -> gtk::
     window.set_namespace(namespace);
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_exclusive_zone(-1);
-    window.connect_realize(|w| {
+    // Click-through. Set again on every map, not only once at realize:
+    // these surfaces are hidden and shown on every drag, and a surface that
+    // came back without its empty region would be an invisible patch eating
+    // clicks (the layout picker sits over the top middle of the screen).
+    let click_through = |w: &gtk::ApplicationWindow| {
         if let Some(s) = w.surface() {
             s.set_input_region(&gtk::cairo::Region::create());
         }
-    });
+    };
+    window.connect_realize(move |w| click_through(w));
+    window.connect_map(move |w| click_through(w));
     window
 }
 

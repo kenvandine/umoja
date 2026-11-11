@@ -504,6 +504,15 @@ public:
             if (action == mir_pointer_action_button_up) return true;
         }
         if (action == mir_pointer_action_button_down) {
+            // Which surface takes a press: finds invisible surfaces that eat
+            // clicks (a stale input region on a transparent shell surface).
+            if (debug_windows())
+                guarded("trace press", [&] {
+                    std::string target = "nothing";
+                    if (auto const w = tools.window_at(geom::Point{px, py}))
+                        target = describe(tools.info_for(w)) + " app '" + tools.info_for(w).application_id() + "'";
+                    std::fprintf(stderr, "umoja-mir: wm: press at %d,%d goes to %s\n", px, py, target.c_str());
+                });
             umoja_pointer_pressed();
             // Super+click is not a tap of Super: no overview on release.
             overlay_key_armed = false;

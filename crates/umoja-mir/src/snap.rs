@@ -79,11 +79,32 @@ fn contains(r: Rect, x: i32, y: i32) -> bool {
     x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom()
 }
 
+/// How far below the top bar the pointer must come for a peeking picker to
+/// slide down: the strip where it peeks out.
+pub const PEEK: i32 = INNER_PAD + OUTER_PAD;
+
 /// Picker visibility and hovered tile for a pointer position during a drag.
-pub fn picker(px: i32, py: i32, area: Rect, monitor: Rect) -> (Visibility, PickerTile) {
+///
+/// A peeking picker slides down only when the pointer reaches the strip
+/// where it peeks out, right under the top bar; once down it stays down
+/// while the pointer is over it, so the icons can be reached. (Sliding down
+/// as soon as the pointer was anywhere over the picker's full height popped
+/// it up while a window was still well below the top edge.)
+pub fn picker(
+    px: i32,
+    py: i32,
+    area: Rect,
+    monitor: Rect,
+    shown: bool,
+) -> (Visibility, PickerTile) {
     let x0 = picker_x(area);
+    let bottom = if shown {
+        area.y + PICKER_H - OUTER_PAD
+    } else {
+        area.y + PEEK
+    };
     let near = py >= monitor.y
-        && py <= area.y + PICKER_H - OUTER_PAD
+        && py <= bottom
         && px >= x0 + OUTER_PAD
         && px <= x0 + PICKER_W - OUTER_PAD;
     if !near {
@@ -196,9 +217,10 @@ pub fn evaluate(
     area: Rect,
     monitor: Rect,
     use_picker: bool,
+    picker_shown: bool,
 ) -> Chrome {
     let (picker_vis, pick) = if use_picker {
-        picker(px, py, area, monitor)
+        picker(px, py, area, monitor, picker_shown)
     } else {
         (Visibility::Hidden, PickerTile::None)
     };
@@ -285,44 +307,54 @@ mod tests {
     #[test]
     fn picker_peeks_until_pointer_is_near() {
         assert_eq!(
-            picker(100, 500, AREA, MON),
+            picker(100, 500, AREA, MON, false),
             (Visibility::Peek, PickerTile::None)
         );
+        // Over the picker's icons but not yet down: it stays peeking.
         let r = icon_rect(AREA, 1);
         assert_eq!(
-            picker(r.x + 5, r.y + 30, AREA, MON),
+            picker(r.x + 5, r.y + 30, AREA, MON, false),
+            (Visibility::Peek, PickerTile::None)
+        );
+        // Reaching the strip under the bar slides it down.
+        assert_eq!(
+            picker(r.x + 5, AREA.y + PEEK, AREA, MON, false).0,
+            Visibility::Shown
+        );
+        assert_eq!(
+            picker(r.x + 5, r.y + 30, AREA, MON, true),
             (Visibility::Shown, PickerTile::Left)
         );
         assert_eq!(
-            picker(r.right() - 5, r.y + 30, AREA, MON),
+            picker(r.right() - 5, r.y + 30, AREA, MON, true),
             (Visibility::Shown, PickerTile::Right)
         );
         let q = icon_rect(AREA, 2);
-        assert_eq!(picker(q.x + 2, q.y + 2, AREA, MON).1, PickerTile::Q2);
+        assert_eq!(picker(q.x + 2, q.y + 2, AREA, MON, true).1, PickerTile::Q2);
         assert_eq!(
-            picker(q.right() - 2, q.bottom() - 2, AREA, MON).1,
+            picker(q.right() - 2, q.bottom() - 2, AREA, MON, true).1,
             PickerTile::Q4
         );
         let m = icon_rect(AREA, 3);
         assert_eq!(
-            picker(m.x + 30, m.y + 30, AREA, MON).1,
+            picker(m.x + 30, m.y + 30, AREA, MON, true).1,
             PickerTile::Maximize
         );
         // Over the top bar, above the picker, it is shown but nothing picked.
         let x = picker_x(AREA) + PICKER_W / 2;
         assert_eq!(
-            picker(x, 5, AREA, MON),
+            picker(x, 5, AREA, MON, true),
             (Visibility::Shown, PickerTile::None)
         );
     }
 
     #[test]
     fn evaluate_reports_preview() {
-        let c = evaluate(0, 500, WIN, AREA, MON, true);
+        let c = evaluate(0, 500, WIN, AREA, MON, true, false);
         assert_eq!(c.action, Action::TileLeft);
         assert_eq!(c.preview, Some(Rect::new(0, 32, 960, 1048)));
         assert_eq!(c.picker, Visibility::Peek);
-        let c = evaluate(960, 500, WIN, AREA, MON, false);
+        let c = evaluate(960, 500, WIN, AREA, MON, false, false);
         assert_eq!(c.preview, None);
         assert_eq!(c.picker, Visibility::Hidden);
     }
