@@ -159,6 +159,22 @@ shot 03-overlay
 overlay Hide
 sleep 2
 
+# Ask Umoja: with no Copilot key seen, a tap of Alt opens it, and text typed
+# into it brings up rows straight away (a sum here), without the model.
+visible() { gdbus call --session --dest org.umoja.Overlay --object-path /org/umoja/Overlay \
+    --method org.freedesktop.DBus.Properties.Get org.umoja.Overlay Visible 2>>"$LOG" | grep -q true; }
+gdbus call --session --dest org.umoja.Compositor --object-path /org/umoja/Compositor \
+    --method org.umoja.Compositor.GetShortcuts 2>>"$LOG" | grep -q "'ask-umoja', 'Alt_L'" \
+    && pass "compositor binds a tap of Alt to Ask Umoja" || fail "GetShortcuts misses ask-umoja"
+wtype -P Alt_L -p Alt_L 2>>"$LOG"
+sleep 5
+visible && pass "a tap of Alt opens Ask Umoja" || fail "a tap of Alt didn't open Ask Umoja"
+ov AskType "'12*7+5'" false && pass "Ask Umoja takes typed text" || fail "AskType failed"
+sleep 3
+shot 05-ask-umoja
+overlay Hide
+sleep 2
+
 # The keyboard shortcuts guide lists what the compositor really binds, and
 # its own shortcut (Super+/) opens it.
 gdbus call --session --dest org.umoja.Compositor --object-path /org/umoja/Compositor \
