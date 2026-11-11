@@ -992,9 +992,12 @@ public:
         p.workspace = current;
         bool const sticky = umoja_workspaces_only_on_primary() && outputs.size() > 1 && target != primary_output();
         if (saved.workspace >= 0 && !sticky) {
-            // Past the last one: the last (with dynamic workspaces, the
-            // empty one at the end, after which a new empty one appears).
-            p.workspace = std::min<size_t>(static_cast<size_t>(saved.workspace), workspaces.size() - 1);
+            // Past the last one: appended, as mutter's
+            // meta_window_change_workspace_by_index(append) does (dynamic
+            // workspaces then tidy up the empty ones in between).
+            size_t const want = std::min<size_t>(static_cast<size_t>(saved.workspace), 35);
+            while (workspaces.size() <= want) workspaces.push_back(tools.create_workspace());
+            p.workspace = want;
         }
         p.hide = p.workspace != current;
         spec.state() = p.hide ? mir_window_state_hidden : p.state;
