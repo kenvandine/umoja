@@ -1,9 +1,26 @@
-//! The overlay window: search entry, app grid and assistant answers.
+//! Ask Umoja: the floating card that searches, runs and answers.
+//!
+//! The Copilot key (or a tap of Alt) opens it over the focused window. As
+//! the user types, rows come up for apps, launcher actions (the focused
+//! app's first), desktop switches and Settings pages, sums, files and a web
+//! search. Those run straight away, through umoja-mcp or the overlay's own
+//! screens, with no model. "Ask Umoja" (Tab, or the row) hands the text to
+//! the assistant; its tool steps, confirmations and answer show inside the
+//! card. Screen readers get a label for every row and hear the selected
+//! row, confirmations and answers.
 
-use crate::assistant::agent::{self, Question, Reply, StepState};
+use crate::appgrid;
+use crate::ask::{
+    self,
+    calc,
+    catalog::{self, Instant, Local, Run},
+};
+use crate::assistant::agent::{self, Question, Reply, StepState, Ui as _};
+use crate::assistant::mcp;
 use crate::assistant::tools::Risk;
 use crate::clipboard::{self, RowAction};
 use crate::context::{self, Attachment, FocusedWindow, Kind, OcrError, Transform};
+use crate::files::{FilesSection, Hit};
 use crate::lemonade::{self, ChatEvent, LemonadeClient, RUNTIME};
 use crate::myna::{Myna, MynaEvent};
 use crate::screenshot::ScreenshotUi;
@@ -24,36 +41,117 @@ use umoja_common::gsettings as gs;
 use umoja_common::i18n;
 use umoja_common::types::{AssistantAction, extract_actions, strip_actions};
 
-/// Most apps shown for a search. With no search the grid lists every app
-/// and scrolls, like GNOME's app grid.
-const MAX_RESULTS: usize = 48;
 /// Earlier messages sent with a follow-up (three exchanges).
 const MAX_HISTORY: usize = 6;
 /// How much of an earlier message (with its attached context) is kept.
 const MAX_HISTORY_CHARS: usize = 6000;
 /// How long the overlay hides before a capture so it isn't in the shot.
 const STEP_ASIDE: Duration = Duration::from_millis(250);
+/// Rows of matches for typed text (apps, actions, switches, settings).
+const MAX_MATCHES: usize = 7;
+/// File rows for typed text.
+const MAX_FILES: u32 = 3;
+/// Width of the card, as in the mockup.
+const CARD_WIDTH: i32 = 640;
+/// Pause in typing before umoja-files is asked, and before the top row is
+/// read out.
+const DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// What a result row does.
+#[derive(Clone)]
+enum Item {
+    App(gio::AppInfo),
+    /// A launcher action from an app's .desktop file ("New Private Window").
+    Action {
+        app: gio::DesktopAppInfo,
+        action: String,
+        name: String,
+    },
+    /// A switch, desktop action or Settings page. `intent` is the on/off
+    /// the text asked for ("wifi off").
+    Instant {
+        item: &'static Instant,
+        intent: Option<bool>,
+    },
+    /// A calculator result; Enter copies it.
+    Sum(String),
+    File(Hit),
+    /// Hand `question` to the assistant.
+    Ask {
+        question: String,
+        label: String,
+        sub: String,
+    },
+    Web(String),
+}
+
+impl Item {
+    /// The id usage history keeps (never the typed text).
+    fn id(&self) -> Option<String> {
+        match self {
+            Item::App(a) => Some(format!("app:{}", appgrid::app_key(a))),
+            Item::Action { app, action, .. } => Some(format!(
+                "action:{}:{action}",
+                app.id().map(|s| s.to_string()).unwrap_or_default()
+            )),
+            Item::Instant { item, .. } => Some(format!("instant:{}", item.id)),
+            _ => None,
+        }
+    }
+}
+
+/// A row of the result list: a section heading or something to pick.
+enum Entry {
+    Heading(String),
+    Item(Item),
+}
 
 pub struct Overlay {
     model_status: gtk::Label,
-    // An Adwaita window so dialogs (the "Run this command?" prompt) show
-    // inside the overlay; on a plain GTK window they became a separate
-    // toplevel underneath the overlay layer.
+    // An Adwaita window, as the rest of the overlay's.
     window: adw::ApplicationWindow,
+    card: gtk::Box,
     entry: gtk::SearchEntry,
-    grid: gtk::FlowBox,
-    /// App tiles by desktop id, built once and reused: rebuilding hundreds
-    /// of tiles on every open and keystroke made GTK render most icons again
-    /// (its icon cache keeps only a few dozen unused ones).
-    tiles: RefCell<HashMap<String, gtk::FlowBoxChild>>,
-    ask_button: gtk::Button,
+    /// "Firefox": the app Ask Umoja opened over. Its launcher actions come
+    /// first and questions are asked with it in mind. Backspace in the
+    /// empty entry (or a click) removes it.
+    focus_chip: gtk::Button,
+    focus_icon: gtk::Image,
+    focus_label: gtk::Label,
+    focus_app: RefCell<Option<gio::DesktopAppInfo>>,
+    results: gtk::ListBox,
+    /// What each row of `results` does; None for a heading.
+    items: RefCell<Vec<Option<Item>>>,
+    /// The text `items` were made for.
+    items_text: RefCell<String>,
+    selected: Cell<usize>,
+    /// What the user picks most, for ranking and the empty search.
+    usage: RefCell<ask::history::History>,
+    /// On/off state of the switches, by desktop_status line name.
+    switches: RefCell<HashMap<String, bool>>,
+    /// Files matching `.0`, from umoja-files.
+    file_hits: RefCell<(String, Vec<Hit>)>,
+    file_generation: Cell<u64>,
+    /// Every app's launcher actions: (app, action id, its name).
+    actions: RefCell<Vec<(gio::DesktopAppInfo, String, String)>>,
+    /// The label of the row read out last, so it isn't repeated.
+    announced: RefCell<String>,
+    announce_generation: Cell<u64>,
+    foot_backend: gtk::Label,
+    question_label: gtk::Label,
     answer: gtk::Label,
     /// One line per tool call ("✓ Turn on Dark Style").
     steps: gtk::Box,
     chips: gtk::FlowBox,
     assistant: gtk::Box,
-    /// Matching files from umoja-files, under the assistant card.
-    files: Rc<crate::files::FilesSection>,
+    /// "Allow Umoja to do this?" inside the card.
+    confirm_box: gtk::Box,
+    confirm_tx: RefCell<Option<async_channel::Sender<bool>>>,
+    /// The text the answer on show was asked with: typing something else
+    /// puts the rows back.
+    asked_text: RefCell<String>,
+    /// Files from the assistant's search_files, under the answer.
+    files: Rc<FilesSection>,
     myna_pill: gtk::Button,
     apps: RefCell<Vec<gio::AppInfo>>,
     /// Held for the overlay's lifetime: the monitor is a weak singleton,
@@ -77,7 +175,7 @@ pub struct Overlay {
     /// The window the user was in when the overlay opened.
     last_window: RefCell<Option<FocusedWindow>>,
     shots: RefCell<Weak<ScreenshotUi>>,
-    // Clipboard history page, in place of the app grid.
+    // Clipboard history page, in place of the results.
     history: Rc<clipboard::History>,
     clip_button: gtk::ToggleButton,
     stack: gtk::Stack,
@@ -85,9 +183,9 @@ pub struct Overlay {
     clip_empty: gtk::Label,
     copy_button: gtk::Button,
     answer_text: RefCell<String>,
-    /// The conversation shown in the assistant card: earlier user and
-    /// assistant messages, sent along with follow-ups. Cleared when the
-    /// card goes away.
+    /// The conversation so far: earlier user and assistant messages, sent
+    /// along with follow-ups. Cleared when the card opens or the entry is
+    /// emptied.
     conversation: RefCell<Vec<serde_json::Value>>,
     /// Bumped by show() and hide(): a hide waiting for its clean frame
     /// only goes ahead if nothing reopened the overlay meanwhile.
@@ -103,43 +201,67 @@ pub struct Overlay {
     events: RefCell<Option<Rc<dyn Fn(&str, glib::Variant)>>>,
     /// The current answer's tool steps: id -> (state, label).
     step_log: RefCell<std::collections::BTreeMap<usize, (String, String)>>,
-    /// The open "Allow the assistant to do this?" dialog, closed (declined)
-    /// when the overlay hides.
-    confirm_dialog: RefCell<Option<adw::AlertDialog>>,
 }
 
-/// Width of an app grid tile, icon plus label, as in GNOME (about 128px).
-const TILE_WIDTH: i32 = 128;
+fn placeholder() -> String {
+    i18n::umoja("Search, run a command, or ask anything…")
+}
 
 impl Overlay {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let window = adw::ApplicationWindow::builder()
             .application(app)
-            .css_classes(["umoja-overlay"])
+            .css_classes(["umoja-overlay", "ask-umoja"])
+            .title(i18n::umoja("Ask Umoja"))
             .build();
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
-        window.set_namespace("umoja-overlay");
+        window.set_namespace("umoja-ask");
         for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             window.set_anchor(e, true);
         }
         window.set_exclusive_zone(-1);
         window.set_keyboard_mode(KeyboardMode::Exclusive);
+        // Only acts on GTK < 4.24 (and only where the card is); newer GTK
+        // blurs from the card's CSS.
         umoja_common::blur::blur_behind(&window);
 
-        let entry = gtk::SearchEntry::builder()
-            .placeholder_text(i18n::umoja("Search apps, or ask anything…"))
-            .width_request(560)
-            .halign(gtk::Align::Center)
+        // ---- Top row: focused app, entry, microphone ------------------------
+        let focus_icon = gtk::Image::builder().pixel_size(20).build();
+        focus_icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        let focus_label = gtk::Label::new(None);
+        let chip_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        chip_box.append(&focus_icon);
+        chip_box.append(&focus_label);
+        let focus_chip = gtk::Button::builder()
+            .child(&chip_box)
+            .css_classes(["focus-chip"])
+            .tooltip_text(i18n::umoja(
+                "Searching with this app first. Backspace searches everything.",
+            ))
+            .valign(gtk::Align::Center)
+            .visible(false)
             .build();
+        let entry = gtk::SearchEntry::builder()
+            .placeholder_text(placeholder())
+            .hexpand(true)
+            .css_classes(["ask-entry"])
+            .search_delay(60)
+            .build();
+        entry.update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Ask Umoja"))]);
         let myna_pill = gtk::Button::builder()
             .icon_name("audio-input-microphone-symbolic")
             .tooltip_text(i18n::umoja("Dictate with Myna"))
             .css_classes(["circular", "myna-pill"])
+            .valign(gtk::Align::Center)
             .build();
-        let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        search_row.set_halign(gtk::Align::Center);
-        // "Add context" menu and the clipboard history toggle.
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        top.add_css_class("ask-top");
+        top.append(&focus_chip);
+        top.append(&entry);
+        top.append(&myna_pill);
+
+        // "Add context" menu and the clipboard history toggle, in the foot.
         let pick_selection =
             menu_item(&["edit-select-all-symbolic"], &i18n::umoja("Selected Text")).0;
         let pick_window = menu_item(
@@ -181,22 +303,16 @@ impl Overlay {
             .tooltip_text(i18n::umoja("Clipboard History"))
             .css_classes(["circular", "clip-button"])
             .build();
-        search_row.append(&entry);
-        search_row.append(&context_button);
-        search_row.append(&clip_button);
-        search_row.append(&myna_pill);
-        search_row.append(&crate::model_picker::button());
 
         // "Downloading the assistant's model… 42%" while it's fetched.
         let model_status = gtk::Label::builder()
-            .halign(gtk::Align::Center)
+            .halign(gtk::Align::Start)
             .css_classes(["dim-label", "model-status"])
             .visible(false)
             .build();
 
-        // Attached context, as removable pills under the search entry.
+        // Attached context, as removable pills under the entry.
         let attach_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        attach_row.set_halign(gtk::Align::Center);
         attach_row.add_css_class("attach-row");
         let pending_label = gtk::Label::new(None);
         let pending = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -205,14 +321,76 @@ impl Overlay {
         pending.append(&pending_label);
         pending.set_visible(false);
         let attach_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        attach_box.set_halign(gtk::Align::Center);
+        attach_box.add_css_class("ask-attach");
         attach_box.append(&attach_row);
         attach_box.append(&pending);
 
-        let ask_button = gtk::Button::builder()
-            .label(i18n::umoja("Ask the assistant"))
-            .halign(gtk::Align::Center)
-            .css_classes(["pill", "suggested-action"])
+        // ---- Results ---------------------------------------------------------
+        let results = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .activate_on_single_click(true)
+            .css_classes(["ask-list"])
+            .build();
+        results.update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Results"))]);
+        entry.update_relation(&[gtk::accessible::Relation::Controls(&[results.upcast_ref()])]);
+        let results_scroll = gtk::ScrolledWindow::builder()
+            .child(&results)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(400)
+            .build();
+
+        let clip_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["clip-list"])
+            .build();
+        let clip_empty = gtk::Label::builder()
+            .css_classes(["dim-label"])
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .margin_top(24)
+            .margin_bottom(24)
+            .build();
+        let clip_clear = gtk::Button::builder()
+            .label(i18n::umoja("Clear History"))
+            .css_classes(["pill", "flat"])
+            .halign(gtk::Align::End)
+            .build();
+        let clip_header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        clip_header.append(
+            &gtk::Label::builder()
+                .label(i18n::umoja("Clipboard History"))
+                .xalign(0.0)
+                .hexpand(true)
+                .css_classes(["heading"])
+                .build(),
+        );
+        clip_header.append(&clip_clear);
+        let clip_page = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        clip_page.add_css_class("ask-clip");
+        clip_page.append(&clip_header);
+        clip_page.append(&clip_empty);
+        clip_page.append(
+            &gtk::ScrolledWindow::builder()
+                .child(&clip_list)
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .max_content_height(420)
+                .build(),
+        );
+        let stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .vhomogeneous(false)
+            .interpolate_size(true)
+            .build();
+        stack.add_named(&results_scroll, Some("results"));
+        stack.add_named(&clip_page, Some("clipboard"));
+
+        // ---- The answer ------------------------------------------------------
+        let question_label = gtk::Label::builder()
+            .wrap(true)
+            .xalign(0.0)
+            .css_classes(["dim-label", "ask-question"])
             .visible(false)
             .build();
         let answer = gtk::Label::builder()
@@ -240,96 +418,68 @@ impl Overlay {
         answer.set_hexpand(true);
         answer_row.append(&answer);
         answer_row.append(&copy_button);
+        let confirm_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        confirm_box.add_css_class("ask-confirm");
+        confirm_box.set_visible(false);
         let assistant = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        assistant.add_css_class("assistant-card");
-        assistant.set_halign(gtk::Align::Center);
-        assistant.set_width_request(640);
+        assistant.add_css_class("ask-answer");
+        assistant.append(&question_label);
         assistant.append(&steps);
         assistant.append(&answer_row);
+        assistant.append(&confirm_box);
         assistant.append(&chips);
         assistant.set_visible(false);
 
-        // Like GNOME's app grid: a compact block of fixed-width tiles in the
-        // middle of the screen. Centering the FlowBox gives it its natural
-        // width (at most 8 tiles), so on a wide monitor the leftover space
-        // goes to the sides instead of between the icons.
-        let grid = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .max_children_per_line(8)
-            .min_children_per_line(4)
-            .homogeneous(true)
-            .row_spacing(12)
-            .column_spacing(12)
+        // ---- Foot: keys, what answers, context and clipboard -----------------
+        let hints = gtk::Label::builder()
+            .label(i18n::umoja(
+                "↑↓ move · Enter run · Tab ask Umoja · Esc close",
+            ))
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["ask-hints"])
+            .build();
+        let foot_backend = gtk::Label::builder()
+            .css_classes(["ask-hints"])
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .max_width_chars(28)
+            .build();
+        let foot = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        foot.add_css_class("ask-foot");
+        foot.append(&hints);
+        foot.append(&foot_backend);
+        foot.append(&context_button);
+        foot.append(&clip_button);
+        foot.append(&crate::model_picker::button());
+
+        let card = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["ask-card"])
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Start)
+            .width_request(CARD_WIDTH)
+            .accessible_role(gtk::AccessibleRole::Dialog)
             .build();
-        let scroller = gtk::ScrolledWindow::builder()
-            .child(&grid)
-            .vexpand(true)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .build();
+        card.update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Ask Umoja"))]);
+        card.append(&top);
+        card.append(&attach_box);
+        card.append(&model_status);
+        card.append(&stack);
+        card.append(&assistant);
 
-        let clip_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["clip-list"])
-            .build();
-        let clip_empty = gtk::Label::builder()
-            .css_classes(["dim-label"])
-            .wrap(true)
-            .justify(gtk::Justification::Center)
-            .vexpand(true)
-            .valign(gtk::Align::Start)
-            .margin_top(48)
-            .build();
-        let clip_clear = gtk::Button::builder()
-            .label(i18n::umoja("Clear History"))
-            .css_classes(["pill", "flat"])
-            .halign(gtk::Align::End)
-            .build();
-        let clip_header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        clip_header.append(
-            &gtk::Label::builder()
-                .label(i18n::umoja("Clipboard History"))
-                .xalign(0.0)
-                .hexpand(true)
-                .css_classes(["title-4"])
-                .build(),
-        );
-        clip_header.append(&clip_clear);
-        let clip_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        clip_page.set_halign(gtk::Align::Center);
-        clip_page.set_width_request(760);
-        clip_page.append(&clip_header);
-        clip_page.append(&clip_empty);
-        clip_page.append(
-            &gtk::ScrolledWindow::builder()
-                .child(&clip_list)
-                .vexpand(true)
-                .hscrollbar_policy(gtk::PolicyType::Never)
-                .build(),
-        );
-        let stack = gtk::Stack::builder()
-            .transition_type(gtk::StackTransitionType::Crossfade)
-            .vexpand(true)
-            .build();
-        stack.add_named(&scroller, Some("apps"));
-        stack.add_named(&clip_page, Some("clipboard"));
-
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 24);
-        root.set_margin_top(64);
-        root.set_margin_start(96);
-        root.set_margin_end(96);
+        // The card floats over the focused window, about a sixth of the way
+        // down; clicking anywhere else closes it.
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.set_margin_top(96);
+        root.set_margin_start(16);
+        root.set_margin_end(16);
         root.set_margin_bottom(48);
-        root.append(&search_row);
-        root.append(&attach_box);
-        root.append(&model_status);
-        root.append(&ask_button);
-        root.append(&assistant);
-        root.append(&stack);
+        root.append(&card);
         window.set_content(Some(&root));
 
         let overlay = Rc::new_cyclic(|weak: &std::rc::Weak<Self>| Self {
-            files: crate::files::FilesSection::new({
+            files: FilesSection::new({
                 let weak = weak.clone();
                 move || {
                     if let Some(o) = weak.upgrade() {
@@ -338,24 +488,41 @@ impl Overlay {
                 }
             }),
             window,
+            card,
             entry,
-            grid,
-            tiles: RefCell::default(),
-            ask_button,
+            focus_chip,
+            focus_icon,
+            focus_label,
+            focus_app: RefCell::default(),
+            results,
+            items: RefCell::default(),
+            items_text: RefCell::default(),
+            selected: Cell::new(0),
+            usage: RefCell::new(ask::history::History::load()),
+            switches: RefCell::default(),
+            file_hits: RefCell::default(),
+            file_generation: Cell::new(0),
+            actions: RefCell::new(load_actions()),
+            announced: RefCell::default(),
+            announce_generation: Cell::new(0),
+            foot_backend,
+            question_label,
             answer,
             steps,
             chips,
             assistant,
+            confirm_box,
+            confirm_tx: RefCell::default(),
+            asked_text: RefCell::default(),
             myna_pill,
             model_status,
-            apps: RefCell::new(load_apps()),
+            apps: RefCell::new(appgrid::load_apps()),
             app_monitor: gio::AppInfoMonitor::get(),
             myna: Myna::start(),
             generation: Cell::new(0),
             local_once: Cell::new(false),
             events: RefCell::new(None),
             step_log: RefCell::new(Default::default()),
-            confirm_dialog: RefCell::new(None),
             context_button,
             pick_selection,
             pick_window,
@@ -385,7 +552,28 @@ impl Overlay {
                 o.history.clear();
             }
         });
-        root.insert_child_after(&overlay.files.widget, Some(&overlay.assistant));
+        overlay
+            .card
+            .insert_child_after(&overlay.files.widget, Some(&overlay.assistant));
+        overlay.card.append(&foot);
+        overlay.files.widget.set_halign(gtk::Align::Fill);
+        overlay.files.widget.set_width_request(-1);
+        overlay.files.widget.add_css_class("ask-files");
+        // Clicks outside the card close it.
+        let outside = gtk::GestureClick::new();
+        let weak = Rc::downgrade(&overlay);
+        let root_w = root.clone();
+        outside.connect_pressed(move |_, _, x, y| {
+            let Some(o) = weak.upgrade() else { return };
+            let inside = o
+                .card
+                .compute_bounds(&root_w)
+                .is_some_and(|b| b.contains_point(&gtk::graphene::Point::new(x as f32, y as f32)));
+            if !inside {
+                o.hide();
+            }
+        });
+        root.add_controller(outside);
         overlay.connect_signals();
         overlay.connect_context();
         // The assistant's read_focused_window tool steps the overlay aside too.
@@ -407,29 +595,15 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         self.entry.connect_search_changed(move |_| {
             if let Some(o) = weak.upgrade() {
+                o.selected.set(0);
                 o.refresh_results();
             }
         });
 
         let weak = Rc::downgrade(self);
-        self.entry.connect_activate(move |e| {
-            let Some(o) = weak.upgrade() else { return };
-            let q = e.text().to_string();
-            // Answering the assistant's question.
-            if o.awaiting_reply.get() && !q.trim().is_empty() {
-                o.ask(&q);
-                return;
-            }
-            if crate::files::looks_like_file_search(&q) && o.files.activate_first() {
-                return;
-            }
-            if !o.attachments.borrow().is_empty()
-                || lemonade::looks_like_question(&q)
-                || o.grid.first_child().is_none()
-            {
-                o.ask(&q);
-            } else if let Some(app) = o.matches(&q).into_iter().next() {
-                o.launch(&app);
+        self.entry.connect_activate(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.activate_selected();
             }
         });
 
@@ -441,10 +615,21 @@ impl Overlay {
         });
 
         let weak = Rc::downgrade(self);
-        self.ask_button.connect_clicked(move |_| {
+        self.results.connect_row_activated(move |_, row| {
             if let Some(o) = weak.upgrade() {
-                let q = o.entry.text().to_string();
-                o.ask(&q);
+                let i = row.index().max(0) as usize;
+                let item = o.items.borrow().get(i).cloned().flatten();
+                if let Some(item) = item {
+                    o.activate(item);
+                }
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        self.focus_chip.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.drop_focus_app();
+                o.entry.grab_focus();
             }
         });
 
@@ -455,17 +640,47 @@ impl Overlay {
             }
         });
 
-        // Escape anywhere closes the overlay.
+        // Keys: Escape anywhere closes; in the entry, arrows move through
+        // the rows, Tab asks, Backspace in the empty entry drops the app.
         let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(self);
-        keys.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape {
-                if let Some(o) = weak.upgrade() {
-                    o.hide();
-                }
+        keys.connect_key_pressed(move |_, key, _, mods| {
+            use gtk::gdk::Key;
+            let Some(o) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if key == Key::Escape {
+                o.hide();
                 return glib::Propagation::Stop;
             }
-            glib::Propagation::Proceed
+            if !o.entry_has_focus() {
+                return glib::Propagation::Proceed;
+            }
+            let plain = !mods.intersects(
+                gtk::gdk::ModifierType::CONTROL_MASK
+                    | gtk::gdk::ModifierType::ALT_MASK
+                    | gtk::gdk::ModifierType::SHIFT_MASK,
+            );
+            match key {
+                Key::Down | Key::KP_Down => o.move_selection(1),
+                Key::Up | Key::KP_Up => o.move_selection(-1),
+                Key::Page_Down | Key::KP_Page_Down => o.move_selection(5),
+                Key::Page_Up | Key::KP_Page_Up => o.move_selection(-5),
+                Key::Tab | Key::KP_Tab if plain => {
+                    let q = o.entry.text().to_string();
+                    if !q.trim().is_empty() || !o.attachments.borrow().is_empty() {
+                        o.ask(&q);
+                    }
+                }
+                Key::BackSpace
+                    if plain && o.entry.text().is_empty() && o.focus_chip.is_visible() =>
+                {
+                    o.drop_focus_app()
+                }
+                _ => return glib::Propagation::Proceed,
+            }
+            glib::Propagation::Stop
         });
         self.window.add_controller(keys);
 
@@ -473,8 +688,8 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         self.app_monitor.connect_changed(move |_| {
             if let Some(o) = weak.upgrade() {
-                *o.apps.borrow_mut() = load_apps();
-                o.tiles.borrow_mut().clear();
+                *o.apps.borrow_mut() = appgrid::load_apps();
+                *o.actions.borrow_mut() = load_actions();
                 o.refresh_results();
             }
         });
@@ -489,6 +704,12 @@ impl Overlay {
         });
     }
 
+    fn entry_has_focus(&self) -> bool {
+        gtk::prelude::GtkWindowExt::focus(&self.window).is_some_and(|f| {
+            f == *self.entry.upcast_ref::<gtk::Widget>() || f.is_ancestor(&self.entry)
+        })
+    }
+
     pub fn is_visible(&self) -> bool {
         self.window.is_visible()
     }
@@ -496,15 +717,21 @@ impl Overlay {
     pub fn show(self: &Rc<Self>) {
         self.hide_serial.set(self.hide_serial.get().wrapping_add(1));
         self.end_conversation();
+        self.asked_text.borrow_mut().clear();
         self.entry.set_text("");
-        // Text may already be empty (no "changed"): rebuild the grid, which
-        // stays empty while the entry was the reply box.
-        self.refresh_results();
         self.assistant.set_visible(false);
         self.files.clear();
         self.clear_attachments();
         self.clip_button.set_active(false);
+        self.focus_chip.set_visible(false);
+        self.focus_app.replace(None);
+        self.announced.borrow_mut().clear();
+        self.selected.set(0);
+        self.update_foot();
         self.remember_window();
+        self.refresh_switches();
+        // Text may already be empty (no "changed"): rebuild the rows.
+        self.refresh_results();
         self.window.present();
         self.entry.grab_focus();
     }
@@ -525,11 +752,41 @@ impl Overlay {
         self.model_status.set_text(status.as_deref().unwrap_or(""));
     }
 
-    /// Open the app search with `text` already typed (from the overview).
+    /// Open Ask Umoja with `text` already typed.
     pub fn show_with_text(self: &Rc<Self>, text: &str) {
         self.show();
         self.entry.set_text(text);
         self.entry.set_position(-1);
+    }
+
+    /// Open Ask Umoja and type `text` into it, a few letters at a time if
+    /// `typed`, without asking: org.umoja.Overlay.AskType, so tools/demo
+    /// can show the rows that come up.
+    pub fn type_text(self: &Rc<Self>, text: &str, typed: bool) {
+        if !typed {
+            self.show_with_text(text);
+            return;
+        }
+        if !self.is_visible() {
+            self.show();
+        }
+        self.entry.set_text("");
+        let generation = self.generation.get();
+        let serial = self.hide_serial.get();
+        let chars: Vec<char> = text.chars().collect();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            for n in 1..=chars.len() {
+                glib::timeout_future(Duration::from_millis(60)).await;
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation || o.hide_serial.get() != serial {
+                    return;
+                }
+                let typed: String = chars[..n].iter().collect();
+                o.entry.set_text(&typed);
+                o.entry.set_position(-1);
+            }
+        });
     }
 
     /// Open the overlay with `question` typed and asked on the local model,
@@ -591,70 +848,17 @@ impl Overlay {
 
     pub fn hide(&self) {
         self.generation.set(self.generation.get() + 1);
-        // A question still waiting for Allow is declined, so the dialog
-        // can't come back (and be allowed) on a later, unrelated question.
-        let had_dialog = self.confirm_dialog.borrow().is_some();
-        if let Some(d) = self.confirm_dialog.take() {
-            d.force_close();
-        }
+        // A question still waiting for Allow is declined, so it can't come
+        // back (and be allowed) on a later, unrelated question.
+        self.cancel_confirm();
         let serial = self.hide_serial.get().wrapping_add(1);
         self.hide_serial.set(serial);
         if !self.window.is_visible() {
             return;
         }
-        // Mir hands a compositor that hasn't used a surface's current frame
-        // that frame, not the newer one, so a screen recording (its own
-        // compositor) showed the previous answer for a frame or two when
-        // the overlay opened again. Paint a clean frame and unmap only once
-        // the display has taken it (the frame callback lets GTK paint a
-        // second time), so the frame left behind is the empty search.
         self.entry.set_text("");
         self.assistant.set_visible(false);
-        let window = self.window.clone();
-        let pending = self.hide_serial.clone();
-        let done = Rc::new(Cell::new(false));
-        let finish = {
-            let done = done.clone();
-            move || {
-                if !done.replace(true) && pending.get() == serial {
-                    window.set_visible(false);
-                }
-            }
-        };
-        let finish = Rc::new(finish);
-        if let Some(clock) = self.window.frame_clock() {
-            let f = finish.clone();
-            let paints = Rc::new(Cell::new(0u8));
-            let id = Rc::new(RefCell::new(None::<glib::SignalHandlerId>));
-            let id2 = id.clone();
-            let c2 = clock.clone();
-            let w = self.window.clone();
-            // Its close animation, even after force_close().
-            let settled_at = glib::monotonic_time() + if had_dialog { 400_000 } else { 0 };
-            *id.borrow_mut() = Some(clock.connect_after_paint(move |_| {
-                paints.set(paints.get() + 1);
-                // An Allow dialog closed above fades out over a few frames:
-                // keep painting until it is gone, or its last frame is the
-                // one left behind.
-                if paints.get() < 2
-                    || w.visible_dialog().is_some()
-                    || glib::monotonic_time() < settled_at
-                {
-                    // Not from inside the paint itself.
-                    let w = w.clone();
-                    glib::idle_add_local_once(move || w.queue_draw());
-                    return;
-                }
-                if let Some(h) = id2.borrow_mut().take() {
-                    c2.disconnect(h);
-                }
-                f();
-            }));
-            self.window.queue_draw();
-        }
-        // In case no frame comes (the surface isn't being drawn).
-        let wait = if had_dialog { 700 } else { 200 };
-        glib::timeout_add_local_once(std::time::Duration::from_millis(wait), move || finish());
+        appgrid::hide_after_clean_frame(self.window.upcast_ref(), self.hide_serial.clone(), serial);
     }
 
     pub fn toggle(self: &Rc<Self>) {
@@ -682,232 +886,927 @@ impl Overlay {
         }
     }
 
-    fn matches(&self, query: &str) -> Vec<gio::AppInfo> {
-        let q = query.trim().to_lowercase();
-        let apps = self.apps.borrow();
-        if q.is_empty() {
-            return apps.clone();
+    /// Read `text` out with the screen reader, if one is running.
+    fn announce(&self, text: &str) {
+        let text = context::truncate_chars(text.trim(), 600);
+        if !text.is_empty() {
+            self.card
+                .announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
         }
-        let mut scored: Vec<(u8, gio::AppInfo)> = apps
-            .iter()
-            .filter_map(|a| {
-                let name = a.display_name().to_lowercase();
-                let score = if name.starts_with(&q) {
-                    0
-                } else if name.contains(&q) {
-                    1
-                } else if haystack(a).contains(&q) {
-                    2
-                } else {
-                    return None;
-                };
-                Some((score, a.clone()))
-            })
-            .collect();
-        scored.sort_by_key(|(s, a)| (*s, a.display_name().to_lowercase()));
-        scored.into_iter().map(|(_, a)| a).collect()
     }
 
-    fn refresh_results(self: &Rc<Self>) {
-        while let Some(c) = self.grid.first_child() {
-            self.grid.remove(&c);
-        }
-        let q = self.entry.text().to_string();
-        let found = self.matches(&q);
-        let limit = if q.trim().is_empty() && self.awaiting_reply.get() {
-            // The entry is the reply box under the assistant's question:
-            // no app grid under the answer.
-            0
-        } else if q.trim().is_empty() {
-            usize::MAX
+    /// "Qwen3-4B · on this computer": what answers questions.
+    fn update_foot(&self) {
+        let b = umoja_common::assistant_backend::current();
+        let model = b.model.trim_end_matches("-GGUF").to_string();
+        self.foot_backend.set_text(&if b.cloud {
+            format!("{model} · {}", b.host())
         } else {
-            MAX_RESULTS
-        };
-        for app in found.iter().take(limit) {
-            self.grid.append(&self.cached_tile(app));
-        }
-        let attached = !self.attachments.borrow().is_empty();
-        let replying = self.awaiting_reply.get();
-        self.ask_button.set_label(&if replying {
-            i18n::umoja("Reply")
-        } else {
-            i18n::umoja("Ask the assistant")
+            format!("{model} · {}", i18n::umoja("on this computer"))
         });
-        self.ask_button.set_visible(
-            attached
-                || (!q.trim().is_empty()
-                    && (replying || found.is_empty() || lemonade::looks_like_question(&q))),
-        );
-        // Emptying the search closes the answer, unless it's waiting for
-        // the user's reply.
-        if q.trim().is_empty()
-            && !attached
-            && !replying
-            && self.stack.visible_child_name().as_deref() != Some("clipboard")
+    }
+
+    // ---- The focused app ---------------------------------------------------
+
+    /// Note which window the user was in, for "Current Window" and the chip.
+    fn remember_window(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let serial = self.hide_serial.get();
+        glib::spawn_future_local(async move {
+            let win = context::focused_window().await;
+            crate::assistant::capture::set_previous_window(win.as_ref().map(window_name));
+            let Some(o) = weak.upgrade() else { return };
+            *o.last_window.borrow_mut() = win.clone();
+            if o.hide_serial.get() != serial {
+                return;
+            }
+            let app = win.as_ref().and_then(|w| {
+                let id = w.app_id.trim_end_matches(".desktop");
+                (!id.is_empty())
+                    .then(|| gio::DesktopAppInfo::new(&format!("{id}.desktop")))
+                    .flatten()
+            });
+            if let Some(app) = app {
+                o.focus_icon
+                    .set_from_gicon(&app.icon().unwrap_or_else(|| {
+                        gio::ThemedIcon::new("application-x-executable").upcast()
+                    }));
+                o.focus_label.set_text(&app.display_name());
+                o.focus_chip.update_property(&[gtk::accessible::Property::Label(
+                    &i18n::umoja("Searching in %s first. Press to search everything.")
+                        .replace("%s", &app.display_name()),
+                )]);
+                o.focus_app.replace(Some(app));
+                o.focus_chip.set_visible(true);
+                o.refresh_results();
+            }
+        });
+    }
+
+    fn drop_focus_app(self: &Rc<Self>) {
+        self.focus_chip.set_visible(false);
+        self.focus_app.replace(None);
+        self.refresh_results();
+    }
+
+    /// The focused app while the chip is up.
+    fn focused_app(&self) -> Option<gio::DesktopAppInfo> {
+        self.focus_chip
+            .is_visible()
+            .then(|| self.focus_app.borrow().clone())
+            .flatten()
+    }
+
+    /// A line for the assistant about the window Ask Umoja opened over.
+    fn focus_context(&self) -> Option<String> {
+        let app = self.focused_app()?;
+        let title = self
+            .last_window
+            .borrow()
+            .as_ref()
+            .map(|w| w.title.clone())
+            .unwrap_or_default();
+        Some(format!(
+            "The user opened the assistant from {} (window title “{}”). Keep it in mind \
+             when the question is about what they are doing there; otherwise ignore it.\n\n\
+             Question:",
+            app.display_name(),
+            context::truncate_chars(&title, 120)
+        ))
+    }
+
+    // ---- Switch state --------------------------------------------------------
+
+    /// Read which switches are on (desktop_status), for their rows.
+    fn refresh_switches(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Some(client) = mcp::shared().await else { return };
+            let never: mcp::Confirm = Rc::new(|_, _| Box::pin(async { false }));
+            let r = client
+                .call("desktop_status", serde_json::json!({}), never)
+                .await;
+            if r.is_error {
+                return;
+            }
+            let Some(o) = weak.upgrade() else { return };
+            *o.switches.borrow_mut() = ask::parse_status(&r.text);
+            if o.is_visible() {
+                o.rebuild_rows(true);
+            }
+        });
+    }
+
+    // ---- Results -------------------------------------------------------------
+
+    fn refresh_results(self: &Rc<Self>) {
+        let q = self.entry.text().to_string();
+        let replying = self.awaiting_reply.get();
+        // Typing something else after an answer brings the rows back (the
+        // conversation is kept for a follow-up); emptying the entry ends it.
+        if self.assistant.is_visible() && !replying && q.trim() != self.asked_text.borrow().trim()
         {
             self.assistant.set_visible(false);
-            self.conversation.borrow_mut().clear();
+            self.cancel_confirm();
+            if q.trim().is_empty() {
+                self.conversation.borrow_mut().clear();
+                self.local_chat.set(false);
+            }
         }
-        self.files.update(&q);
+        self.search_files(&q);
+        self.rebuild_rows(false);
         self.refresh_clipboard();
     }
 
-    fn cached_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::FlowBoxChild {
-        let key = app
-            .id()
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| format!("{}\0{}", app.display_name(), app.executable().display()));
-        if let Some(tile) = self.tiles.borrow().get(&key) {
-            return tile.clone();
+    /// Fill the list for the current text. `keep` keeps the selected row
+    /// (new file hits or switch states arrived).
+    fn rebuild_rows(self: &Rc<Self>, keep: bool) {
+        let q = self.entry.text().to_string();
+        let answering = self.assistant.is_visible() && !self.awaiting_reply.get();
+        let entries = if answering { Vec::new() } else { self.compute(&q) };
+        while let Some(c) = self.results.first_child() {
+            self.results.remove(&c);
         }
-        let child = gtk::FlowBoxChild::new();
-        child.set_child(Some(&self.app_tile(app)));
-        self.tiles.borrow_mut().insert(key, child.clone());
-        child
+        let mut items = Vec::with_capacity(entries.len());
+        for e in entries {
+            match e {
+                Entry::Heading(h) => {
+                    let label = gtk::Label::builder()
+                        .label(h)
+                        .xalign(0.0)
+                        .css_classes(["ask-section"])
+                        .build();
+                    let row = gtk::ListBoxRow::builder()
+                        .child(&label)
+                        .activatable(false)
+                        .selectable(false)
+                        .can_focus(false)
+                        .build();
+                    self.results.append(&row);
+                    items.push(None);
+                }
+                Entry::Item(item) => {
+                    self.results.append(&self.row_widget(&item));
+                    items.push(Some(item));
+                }
+            }
+        }
+        let has_rows = items.iter().any(Option::is_some);
+        *self.items.borrow_mut() = items;
+        *self.items_text.borrow_mut() = q.clone();
+        let clip = self.stack.visible_child_name().as_deref() == Some("clipboard");
+        self.stack.set_visible(clip || has_rows);
+        let start = if keep { self.selected.get() } else { 0 };
+        self.select(self.nearest_item(start, 1).or_else(|| self.nearest_item(start, -1)));
+        if !keep {
+            self.announce_top_soon();
+        }
     }
 
-    fn app_tile(self: &Rc<Self>, app: &gio::AppInfo) -> gtk::Widget {
-        let image = match app.icon() {
-            Some(icon) => gtk::Image::from_gicon(&icon),
-            None => gtk::Image::from_icon_name("application-x-executable"),
+    /// The first item at or after (`dir` 1) or before (-1) `from`.
+    fn nearest_item(&self, from: usize, dir: i32) -> Option<usize> {
+        let items = self.items.borrow();
+        let mut i = from.min(items.len().saturating_sub(1)) as i64;
+        while i >= 0 && (i as usize) < items.len() {
+            if items[i as usize].is_some() {
+                return Some(i as usize);
+            }
+            i += dir as i64;
+        }
+        None
+    }
+
+    fn select(&self, i: Option<usize>) {
+        let Some(i) = i else {
+            self.results.unselect_all();
+            return;
         };
-        image.set_pixel_size(64);
-        let label = gtk::Label::builder()
-            .label(app.display_name())
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(12)
-            .build();
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        content.append(&image);
-        content.append(&label);
-        let button = gtk::Button::builder()
-            .child(&content)
-            .width_request(TILE_WIDTH)
-            .css_classes(["flat", "app-tile"])
-            .build();
+        self.selected.set(i);
+        if let Some(row) = self.results.row_at_index(i as i32) {
+            self.results.select_row(Some(&row));
+            // Keep it in view (the focus stays in the entry).
+            if let (Some(adj), Some(b)) = (
+                self.results
+                    .parent()
+                    .and_then(|p| p.downcast::<gtk::Viewport>().ok())
+                    .and_then(|v| v.vadjustment()),
+                row.compute_bounds(&self.results),
+            ) {
+                adj.clamp_page(b.y() as f64, (b.y() + b.height()) as f64);
+            }
+        }
+    }
+
+    fn move_selection(&self, by: i32) {
+        let n = self.items.borrow().len();
+        if n == 0 {
+            return;
+        }
+        let cur = self.selected.get() as i32;
+        let target = (cur + by).clamp(0, n as i32 - 1) as usize;
+        let dir = if by >= 0 { 1 } else { -1 };
+        let found = self
+            .nearest_item(target, dir)
+            .or_else(|| self.nearest_item(target, -dir));
+        if let Some(i) = found {
+            self.select(Some(i));
+            if let Some(label) = self.row_label(i) {
+                self.announced.replace(label.clone());
+                self.announce(&label);
+            }
+        }
+    }
+
+    /// The selected row's accessible label.
+    fn row_label(&self, i: usize) -> Option<String> {
+        let item = self.items.borrow().get(i).cloned().flatten()?;
+        let (title, sub, kind) = self.describe(&item);
+        Some(join_label(&title, &kind, &sub))
+    }
+
+    /// Read out the top row once typing pauses, unless it is the same row.
+    fn announce_top_soon(self: &Rc<Self>) {
+        let g = self.announce_generation.get() + 1;
+        self.announce_generation.set(g);
         let weak = Rc::downgrade(self);
-        let app = app.clone();
-        let app_c = app.clone();
-        button.connect_clicked(move |_| {
-            if let Some(o) = weak.upgrade() {
-                o.launch(&app_c);
+        glib::timeout_add_local_once(DEBOUNCE * 2, move || {
+            let Some(o) = weak.upgrade() else { return };
+            if o.announce_generation.get() != g || !o.is_visible() || !o.entry_has_focus() {
+                return;
+            }
+            let Some(label) = o.row_label(o.selected.get()) else {
+                return;
+            };
+            if *o.announced.borrow() != label {
+                o.announced.replace(label.clone());
+                o.announce(&label);
             }
         });
-
-        // Right-click (or long-press) menu, as in GNOME's app grid.
-        if let Ok(desktop) = app.clone().downcast::<gio::DesktopAppInfo>() {
-            let menu = gtk::GestureClick::builder().button(3).build();
-            let (weak, d) = (Rc::downgrade(self), desktop.clone());
-            menu.connect_pressed(move |g, _, _, _| {
-                if let (Some(o), Some(w)) = (weak.upgrade(), g.widget()) {
-                    o.show_tile_menu(&w, &d);
-                }
-            });
-            button.add_controller(menu);
-            let press = gtk::GestureLongPress::builder().touch_only(true).build();
-            let weak = Rc::downgrade(self);
-            press.connect_pressed(move |g, _, _| {
-                if let (Some(o), Some(w)) = (weak.upgrade(), g.widget()) {
-                    o.show_tile_menu(&w, &desktop);
-                }
-            });
-            button.add_controller(press);
-        }
-        button.upcast()
     }
 
-    fn launch(&self, app: &gio::AppInfo) {
-        let ctx = umoja_common::app_scope::scoped(
-            gtk::prelude::WidgetExt::display(&self.window).app_launch_context(),
-        );
-        if let Err(e) = app.launch(&[], Some(&ctx)) {
-            tracing::warn!(error = %e, "launch failed");
+    fn activate_selected(self: &Rc<Self>) {
+        let q = self.entry.text().to_string();
+        // After an answer, or while it waits for a reply, Enter asks.
+        if self.assistant.is_visible() || self.awaiting_reply.get() {
+            if !q.trim().is_empty() {
+                self.ask(&q);
+            }
+            return;
         }
-        self.hide();
+        // Enter straight after typing, before the rows caught up.
+        if *self.items_text.borrow() != q {
+            self.selected.set(0);
+            self.refresh_results();
+        }
+        let item = self.items.borrow().get(self.selected.get()).cloned().flatten();
+        if let Some(item) = item {
+            self.activate(item);
+        } else if !q.trim().is_empty() {
+            self.ask(&q);
+        }
     }
 
-    /// GNOME's app-grid menu: the app's desktop actions, Pin to Dock /
-    /// Unpin (org.gnome.shell favorite-apps, which the dock follows) and
-    /// App Details.
-    fn show_tile_menu(self: &Rc<Self>, parent: &gtk::Widget, app: &gio::DesktopAppInfo) {
-        let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let popover = gtk::Popover::builder().child(&col).build();
-        let weak_pop = popover.downgrade();
-        let item = |label: &str, action: Box<dyn Fn()>| {
-            let b = gtk::Button::builder()
-                .child(&gtk::Label::builder().label(label).xalign(0.0).build())
-                .css_classes(["flat"])
-                .build();
-            let pop = weak_pop.clone();
-            b.connect_clicked(move |_| {
-                if let Some(p) = pop.upgrade() {
-                    p.popdown();
-                }
-                action();
-            });
-            col.append(&b);
+    /// The rows for `text`, best first.
+    fn compute(&self, text: &str) -> Vec<Entry> {
+        let text = text.trim();
+        let mut out = Vec::new();
+        let ask_row = |label: String, sub: String| {
+            Entry::Item(Item::Ask {
+                question: text.to_string(),
+                label,
+                sub,
+            })
         };
+        if self.awaiting_reply.get() {
+            if !text.is_empty() {
+                out.push(ask_row(
+                    i18n::umoja("Reply: “%s”").replace("%s", text),
+                    i18n::umoja("Enter"),
+                ));
+            }
+            return out;
+        }
+        if !self.attachments.borrow().is_empty() {
+            out.push(ask_row(
+                if text.is_empty() {
+                    i18n::umoja("Explain what you attached")
+                } else {
+                    i18n::umoja("Ask Umoja: “%s”").replace("%s", text)
+                },
+                i18n::umoja("With what you attached"),
+            ));
+            return out;
+        }
+        let focus = self.focused_app();
+        let usage = self.usage.borrow();
 
-        let actions = app.list_actions();
-        for action in &actions {
-            let label = app.action_name(action).to_string();
-            let (weak, a, action) = (Rc::downgrade(self), app.clone(), action.to_string());
-            item(
-                &label,
-                Box::new(move || {
-                    if let Some(o) = weak.upgrade() {
-                        let ctx = umoja_common::app_scope::scoped(
-                            gtk::prelude::WidgetExt::display(&o.window).app_launch_context(),
-                        );
-                        a.launch_action(&action, Some(&ctx));
-                        o.hide();
+        if text.is_empty() {
+            let mut shown: Vec<String> = Vec::new();
+            if let Some(app) = &focus {
+                let acts: Vec<Item> = self
+                    .actions
+                    .borrow()
+                    .iter()
+                    .filter(|(a, _, _)| a.id() == app.id())
+                    .take(4)
+                    .map(|(a, action, name)| Item::Action {
+                        app: a.clone(),
+                        action: action.clone(),
+                        name: name.clone(),
+                    })
+                    .collect();
+                if !acts.is_empty() {
+                    out.push(Entry::Heading(
+                        i18n::umoja("In %s").replace("%s", &app.display_name()),
+                    ));
+                    for a in acts {
+                        shown.extend(a.id());
+                        out.push(Entry::Item(a));
                     }
-                }),
-            );
-        }
-        if !actions.is_empty() {
-            col.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+                }
+            }
+            let frequent: Vec<Item> = usage
+                .top(10)
+                .into_iter()
+                .filter(|id| !shown.contains(id))
+                .filter_map(|id| self.resolve(&id))
+                .take(5)
+                .collect();
+            if !frequent.is_empty() {
+                out.push(Entry::Heading(i18n::umoja("Frequently used")));
+                for item in frequent {
+                    shown.extend(item.id());
+                    out.push(Entry::Item(item));
+                }
+            }
+            out.push(Entry::Heading(i18n::umoja("Suggested")));
+            for id in ["ask-window", "clipboard", "screenshot"] {
+                if id == "ask-window" && self.last_window.borrow().is_none() {
+                    continue;
+                }
+                if let Some(item) = catalog::CATALOG.iter().find(|i| i.id == id)
+                    && !shown.contains(&format!("instant:{id}"))
+                {
+                    out.push(Entry::Item(Item::Instant { item, intent: None }));
+                }
+            }
+            return out;
         }
 
-        let id = app.id().map(|s| s.to_string()).unwrap_or_default();
-        let pinned = umoja_common::apps::is_favorite(&id);
-        let label = if pinned {
-            i18n::shell("Unpin")
+        if let Some(v) = calc::evaluate(text) {
+            out.push(Entry::Item(Item::Sum(calc::format(v))));
+        }
+        let words = ask::search_words(text);
+        let intent = ask::switch_intent(text);
+        let mut scored: Vec<(u32, Item)> = Vec::new();
+        for app in self.apps.borrow().iter() {
+            let kw = appgrid::keywords(app);
+            let kw: Vec<&str> = kw.iter().map(String::as_str).collect();
+            let s = ask::score(&app.display_name(), &kw, &words);
+            if s > 0 {
+                let item = Item::App(app.clone());
+                let bonus = item.id().map(|id| usage.bonus(&id)).unwrap_or(0);
+                scored.push((s + bonus + 2, item));
+            }
+        }
+        for (app, action, name) in self.actions.borrow().iter() {
+            let app_name = app.display_name().to_lowercase();
+            let focused = focus.as_ref().is_some_and(|f| f.id() == app.id());
+            // Another app's actions only when its name is typed too:
+            // "new window" alone would list every browser's.
+            if !focused && ask::score(&app_name, &[], &words) == 0 {
+                continue;
+            }
+            let s = ask::score(name, &[app_name.as_str()], &words);
+            if s > 0 {
+                let item = Item::Action {
+                    app: app.clone(),
+                    action: action.clone(),
+                    name: name.clone(),
+                };
+                let bonus = item.id().map(|id| usage.bonus(&id)).unwrap_or(0);
+                scored.push((s + bonus + if focused { 10 } else { 0 }, item));
+            }
+        }
+        for item in catalog::CATALOG {
+            let title = i18n::umoja(item.title);
+            let mut kw: Vec<&str> = item.keywords.to_vec();
+            kw.push(item.title);
+            let s = ask::score(&title, &kw, &words);
+            if s > 0 {
+                let intent = matches!(item.run, Run::Toggle { .. }).then_some(intent).flatten();
+                // "wifi off" is about the switch, not its Settings page.
+                let bonus = usage.bonus(&format!("instant:{}", item.id))
+                    + if intent.is_some() { 5 } else { 0 };
+                scored.push((s + bonus, Item::Instant { item, intent }));
+            }
+        }
+        // Stable: equal scores keep apps, then actions, then the catalog.
+        scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+        let best = scored.first().map(|(s, _)| *s);
+        let hits: Vec<Item> = scored
+            .into_iter()
+            .take(MAX_MATCHES)
+            .map(|(_, i)| i)
+            .collect();
+        let files: Vec<Item> = {
+            let fh = self.file_hits.borrow();
+            if fh.0 == text {
+                fh.1.iter().cloned().map(Item::File).collect()
+            } else {
+                Vec::new()
+            }
+        };
+        let ask_item = ask_row(
+            i18n::umoja("Ask Umoja: “%s”").replace("%s", text),
+            match &focus {
+                Some(app) => i18n::umoja("With %s in mind").replace("%s", &app.display_name()),
+                None => i18n::umoja("Tab"),
+            },
+        );
+        let questionish = lemonade::looks_like_question(text) || hits.is_empty();
+        let file_first = crate::files::looks_like_file_search(text);
+        if ask::ask_first(questionish && !file_first, best, text) {
+            out.push(ask_item);
+            out.extend(files.into_iter().map(Entry::Item));
+            out.extend(hits.into_iter().map(Entry::Item));
         } else {
-            i18n::dock("Pin to Dock")
-        };
-        let pin_id = id.clone();
-        item(
-            &label,
-            Box::new(move || umoja_common::apps::set_favorite(&pin_id, !pinned)),
-        );
-        if let Some(details) = umoja_common::apps::details_for(app) {
-            let weak = Rc::downgrade(self);
-            item(
-                &i18n::shell("App Details"),
-                Box::new(move || {
-                    umoja_common::apps::show_details(&details);
-                    if let Some(o) = weak.upgrade() {
-                        o.hide();
+            if file_first {
+                out.extend(files.into_iter().map(Entry::Item));
+                out.extend(hits.into_iter().map(Entry::Item));
+            } else {
+                out.extend(hits.into_iter().map(Entry::Item));
+                out.extend(files.into_iter().map(Entry::Item));
+            }
+            out.push(ask_item);
+        }
+        out.push(Entry::Item(Item::Web(text.to_string())));
+        out
+    }
+
+    /// The row a usage-history id stands for, if it still exists.
+    fn resolve(&self, id: &str) -> Option<Item> {
+        if let Some(key) = id.strip_prefix("app:") {
+            return self
+                .apps
+                .borrow()
+                .iter()
+                .find(|a| appgrid::app_key(a) == key)
+                .map(|a| Item::App(a.clone()));
+        }
+        if let Some(rest) = id.strip_prefix("action:") {
+            let (app_id, action) = rest.rsplit_once(':')?;
+            return self
+                .actions
+                .borrow()
+                .iter()
+                .find(|(a, act, _)| act == action && a.id().as_deref() == Some(app_id))
+                .map(|(a, act, name)| Item::Action {
+                    app: a.clone(),
+                    action: act.clone(),
+                    name: name.clone(),
+                });
+        }
+        let iid = id.strip_prefix("instant:")?;
+        catalog::CATALOG
+            .iter()
+            .find(|i| i.id == iid)
+            .map(|item| Item::Instant { item, intent: None })
+    }
+
+    /// Ask umoja-files about `q` once typing pauses; the rows are rebuilt
+    /// when the hits arrive.
+    fn search_files(self: &Rc<Self>, q: &str) {
+        let q = q.trim().to_string();
+        let g = self.file_generation.get() + 1;
+        self.file_generation.set(g);
+        if q.chars().count() < 3 || self.awaiting_reply.get() {
+            self.file_hits.replace((String::new(), Vec::new()));
+            return;
+        }
+        if self.file_hits.borrow().0 == q {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(DEBOUNCE, move || {
+            let Some(o) = weak.upgrade() else { return };
+            if o.file_generation.get() != g {
+                return;
+            }
+            glib::spawn_future_local(async move {
+                let hits = crate::files::search(&q, MAX_FILES).await.unwrap_or_else(|e| {
+                    tracing::debug!(error = %e, "file search unavailable");
+                    Vec::new()
+                });
+                if o.file_generation.get() != g {
+                    return;
+                }
+                o.file_hits.replace((q.clone(), hits));
+                if !o.file_hits.borrow().1.is_empty() && o.entry.text().trim() == q {
+                    o.rebuild_rows(true);
+                }
+            });
+        });
+    }
+
+    /// Title, subtitle and kind shown for `item`.
+    fn describe(&self, item: &Item) -> (String, String, String) {
+        match item {
+            Item::App(a) => (
+                a.display_name().to_string(),
+                a.description().map(|d| d.to_string()).unwrap_or_default(),
+                i18n::umoja("App"),
+            ),
+            Item::Action { app, name, .. } => (
+                name.clone(),
+                i18n::umoja("%s · from its launcher").replace("%s", &app.display_name()),
+                app.display_name().to_string(),
+            ),
+            Item::Instant { item, intent } => {
+                let title = i18n::umoja(item.title);
+                match item.run {
+                    Run::Toggle { state, .. } => {
+                        let now = self.switches.borrow().get(state).copied();
+                        let title = match intent {
+                            Some(true) => i18n::umoja("Turn %s On").replace("%s", &title),
+                            Some(false) => i18n::umoja("Turn %s Off").replace("%s", &title),
+                            None => title,
+                        };
+                        let sub = match now {
+                            Some(true) => i18n::umoja("On · Enter switches it"),
+                            Some(false) => i18n::umoja("Off · Enter switches it"),
+                            None => i18n::umoja("Enter switches it"),
+                        };
+                        (title, sub, i18n::umoja("Switch"))
                     }
-                }),
+                    _ => {
+                        let kind = match item.group {
+                            catalog::Group::Control => i18n::umoja("Action"),
+                            catalog::Group::Setting => i18n::umoja("Settings"),
+                        };
+                        (title, String::new(), kind)
+                    }
+                }
+            }
+            Item::Sum(v) => (
+                format!("= {v}"),
+                i18n::umoja("Enter copies the result"),
+                i18n::umoja("Answer"),
+            ),
+            Item::File(h) => (h.name.clone(), h.detail.clone(), i18n::umoja("File")),
+            Item::Ask { label, sub, .. } => (label.clone(), sub.clone(), i18n::umoja("Ask")),
+            Item::Web(q) => (
+                i18n::umoja("Search the web for “%s”").replace("%s", q),
+                String::new(),
+                i18n::umoja("Web"),
+            ),
+        }
+    }
+
+    fn row_widget(&self, item: &Item) -> gtk::ListBoxRow {
+        let (title, sub, kind) = self.describe(item);
+        let icon: gtk::Image = match item {
+            Item::App(a) => a
+                .icon()
+                .map(|i| gtk::Image::from_gicon(&i))
+                .unwrap_or_else(|| gtk::Image::from_icon_name("application-x-executable")),
+            Item::Action { app, .. } => app
+                .icon()
+                .map(|i| gtk::Image::from_gicon(&i))
+                .unwrap_or_else(|| gtk::Image::from_icon_name("application-x-executable")),
+            Item::Instant { item, .. } => gtk::Image::from_icon_name(item.icon),
+            Item::Sum(_) => gtk::Image::from_icon_name("accessories-calculator-symbolic"),
+            Item::File(h) => gtk::Image::from_gicon(&crate::files::file_icon(&h.path)),
+            Item::Ask { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+                "starred-symbolic",
+                "dialog-question-symbolic",
+            ])),
+            Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
+        };
+        icon.set_pixel_size(match item {
+            Item::App(_) | Item::Action { .. } | Item::File(_) => 28,
+            _ => 18,
+        });
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        let icon_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        icon_box.add_css_class("ask-icon");
+        if matches!(item, Item::Ask { .. }) {
+            icon_box.add_css_class("ask-icon-accent");
+        }
+        icon_box.set_valign(gtk::Align::Center);
+        icon.set_hexpand(true);
+        icon.set_halign(gtk::Align::Center);
+        icon_box.append(&icon);
+
+        let texts = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        texts.set_hexpand(true);
+        texts.set_valign(gtk::Align::Center);
+        texts.append(
+            &gtk::Label::builder()
+                .label(&title)
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .css_classes(["ask-title"])
+                .build(),
+        );
+        if !sub.is_empty() {
+            texts.append(
+                &gtk::Label::builder()
+                    .label(&sub)
+                    .xalign(0.0)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .css_classes(["ask-sub"])
+                    .build(),
             );
         }
-
-        popover.set_parent(parent);
-        popover.connect_closed(|p| {
-            let p = p.clone();
-            glib::idle_add_local_once(move || p.unparent());
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        content.add_css_class("ask-row");
+        content.append(&icon_box);
+        content.append(&texts);
+        let mut state = None;
+        if let Item::Instant { item, .. } = item
+            && let Run::Toggle { state: key, .. } = item.run
+        {
+            state = self.switches.borrow().get(key).copied();
+        }
+        match state {
+            Some(on) => {
+                // Shows the state; picking the row is what switches it.
+                let sw = gtk::Switch::builder()
+                    .active(on)
+                    .can_focus(false)
+                    .can_target(false)
+                    .valign(gtk::Align::Center)
+                    .build();
+                sw.set_accessible_role(gtk::AccessibleRole::Presentation);
+                content.append(&sw);
+            }
+            None => content.append(
+                &gtk::Label::builder()
+                    .label(&kind)
+                    .css_classes(["ask-kind"])
+                    .valign(gtk::Align::Center)
+                    .build(),
+            ),
+        }
+        // The focus stays in the entry; the arrows move the selection.
+        let row = gtk::ListBoxRow::builder()
+            .child(&content)
+            .can_focus(false)
+            .build();
+        let state_word = state.map(|on| {
+            if on {
+                i18n::umoja("on")
+            } else {
+                i18n::umoja("off")
+            }
         });
-        popover.popup();
+        let label = match state_word {
+            Some(s) => format!("{title}, {s}"),
+            None => format!("{title}, {kind}"),
+        };
+        row.update_property(&[gtk::accessible::Property::Label(&label)]);
+        if !sub.is_empty() {
+            row.update_property(&[gtk::accessible::Property::Description(&sub)]);
+        }
+        row
+    }
+
+    /// Do what `item` says.
+    fn activate(self: &Rc<Self>, item: Item) {
+        if let Some(id) = item.id() {
+            self.usage.borrow_mut().record(&id);
+        }
+        match item {
+            Item::App(a) => {
+                appgrid::launch_app(self.window.upcast_ref(), &a);
+                self.hide();
+            }
+            Item::Action { app, action, .. } => {
+                appgrid::launch_action(self.window.upcast_ref(), &app, &action);
+                self.hide();
+            }
+            Item::Instant { item, intent } => self.run_instant(item, intent),
+            Item::Sum(v) => {
+                self.copy_text(&v);
+                self.announce(&i18n::umoja("Copied %s").replace("%s", &v));
+                self.hide();
+            }
+            Item::File(h) => {
+                let ctx = WidgetExt::display(&self.window).app_launch_context();
+                match crate::files::open(&h.path, Some(ctx.upcast_ref())) {
+                    Ok(()) => self.hide(),
+                    Err(e) => self.show_error(&e.to_string()),
+                }
+            }
+            Item::Ask { question, .. } => self.ask(&question),
+            Item::Web(q) => {
+                let ctx = WidgetExt::display(&self.window).app_launch_context();
+                match gio::AppInfo::launch_default_for_uri(&ask::web_search_url(&q), Some(&ctx)) {
+                    Ok(()) => self.hide(),
+                    Err(e) => self.show_error(&e.to_string()),
+                }
+            }
+        }
+    }
+
+    fn run_instant(self: &Rc<Self>, item: &'static Instant, intent: Option<bool>) {
+        match item.run {
+            Run::Local(l) => {
+                let shots = self.shots.borrow().upgrade();
+                match l {
+                    Local::ScreenshotUi => {
+                        self.hide();
+                        if let Some(s) = shots {
+                            s.open();
+                        }
+                    }
+                    Local::ScreenRecordingUi => {
+                        self.hide();
+                        if let Some(s) = shots {
+                            s.toggle_screen_recording();
+                        }
+                    }
+                    Local::ClipboardHistory => self.clip_button.set_active(true),
+                    Local::AskAboutWindow => self.attach_window(),
+                }
+            }
+            Run::Toggle { tool, state } => {
+                let on = intent.unwrap_or_else(|| {
+                    !self.switches.borrow().get(state).copied().unwrap_or(false)
+                });
+                self.call_tool(tool, serde_json::json!({ "enabled": on }), Some((state, on)));
+            }
+            Run::Call { tool, args } => {
+                let args = serde_json::from_str(args).unwrap_or_else(|_| serde_json::json!({}));
+                self.call_tool(tool, args, None);
+            }
+        }
+    }
+
+    /// One umoja-mcp tool call, with the server's confirm rules. A switch
+    /// (`switch`: its state name and the new value) just flips its row; any
+    /// other call shows as a step, and the card closes when the tool put
+    /// something in front of the user.
+    fn call_tool(
+        self: &Rc<Self>,
+        tool: &'static str,
+        args: serde_json::Value,
+        switch: Option<(&'static str, bool)>,
+    ) {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        let ui = Rc::new(OverlayUi {
+            overlay: Rc::downgrade(self),
+            generation,
+            rows: RefCell::new(HashMap::new()),
+        });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Some(client) = mcp::shared().await else {
+                if let Some(o) = weak.upgrade() {
+                    o.show_error(&i18n::umoja("The desktop tools aren't running."));
+                }
+                return;
+            };
+            let (label, _) = client.describe(tool, &args).await;
+            if switch.is_none() {
+                if let Some(o) = weak.upgrade() {
+                    o.reset_card();
+                    o.answer.set_visible(false);
+                    o.stack.set_visible(false);
+                    *o.asked_text.borrow_mut() = o.entry.text().to_string();
+                }
+                ui.step(0, &label, StepState::Running);
+            }
+            let confirm: mcp::Confirm = {
+                let ui = ui.clone();
+                Rc::new(move |label, risk| ui.confirm(&label, risk))
+            };
+            let r = client.call(tool, args, confirm).await;
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() != generation {
+                return;
+            }
+            if let Some((state, on)) = switch {
+                if !r.is_error && !r.declined {
+                    o.switches.borrow_mut().insert(state.to_string(), on);
+                    o.rebuild_rows(true);
+                    o.announce(&r.text);
+                } else {
+                    o.show_error(&r.text);
+                }
+                return;
+            }
+            let state = if r.declined {
+                StepState::Declined
+            } else if r.is_error {
+                StepState::Failed
+            } else {
+                StepState::Done
+            };
+            ui.step(0, &label, state);
+            if r.hide && !r.is_error {
+                o.hide();
+                return;
+            }
+            if r.is_error {
+                o.answer.set_visible(true);
+                o.answer.set_text(&r.text);
+            }
+            o.announce(&if r.is_error { r.text.clone() } else { label });
+        });
+    }
+
+    /// Ask "Allow Umoja to do this?" (or `title`) inside the card, with
+    /// Cancel focused. Resolves to the answer; false if the card closes.
+    fn confirm_inline(
+        self: &Rc<Self>,
+        label: &str,
+        risk: Risk,
+        title: &str,
+        allow: &str,
+    ) -> Pin<Box<dyn Future<Output = bool>>> {
+        self.cancel_confirm();
+        while let Some(c) = self.confirm_box.first_child() {
+            self.confirm_box.remove(&c);
+        }
+        let (tx, rx) = async_channel::bounded::<bool>(1);
+        self.confirm_box.append(
+            &gtk::Label::builder()
+                .label(title)
+                .xalign(0.0)
+                .wrap(true)
+                .css_classes(["heading"])
+                .build(),
+        );
+        self.confirm_box.append(
+            &gtk::Label::builder()
+                .label(label)
+                .xalign(0.0)
+                .wrap(true)
+                .selectable(true)
+                .css_classes(["ask-confirm-what"])
+                .build(),
+        );
+        let cancel = gtk::Button::builder()
+            .label(i18n::gtk("_Cancel"))
+            .use_underline(true)
+            .css_classes(["pill", "flat"])
+            .build();
+        let allow_b = gtk::Button::builder()
+            .label(allow)
+            .css_classes(if risk == Risk::High {
+                ["pill", "destructive-action"]
+            } else {
+                ["pill", "suggested-action"]
+            })
+            .build();
+        for (b, answer) in [(&cancel, false), (&allow_b, true)] {
+            let tx = tx.clone();
+            b.connect_clicked(move |_| {
+                let _ = tx.try_send(answer);
+            });
+        }
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        buttons.set_halign(gtk::Align::End);
+        buttons.append(&cancel);
+        buttons.append(&allow_b);
+        self.confirm_box.append(&buttons);
+        self.confirm_tx.replace(Some(tx));
+        self.assistant.set_visible(true);
+        self.confirm_box.set_visible(true);
+        self.stack.set_visible(false);
+        *self.asked_text.borrow_mut() = self.entry.text().to_string();
+        cancel.grab_focus();
+        self.announce(&format!("{title} {label}"));
+        let weak = Rc::downgrade(self);
+        Box::pin(async move {
+            let answer = rx.recv().await.unwrap_or(false);
+            if let Some(o) = weak.upgrade() {
+                o.confirm_tx.take();
+                o.confirm_box.set_visible(false);
+                o.entry.grab_focus();
+            }
+            answer
+        })
+    }
+
+    /// Decline a confirmation that is waiting.
+    fn cancel_confirm(&self) {
+        if let Some(tx) = self.confirm_tx.take() {
+            let _ = tx.try_send(false);
+        }
+        self.confirm_box.set_visible(false);
     }
 
     /// Answer a question, letting the assistant act through its tools. Any
-    /// attached context goes with it.
+    /// attached context goes with it, or else a line about the focused app.
     fn ask(self: &Rc<Self>, query: &str) {
         // A reply to the assistant's question: any attached context already
         // went with the first message.
-        let attachments = if self.awaiting_reply.get() {
+        let replying = self.awaiting_reply.get();
+        let attachments = if replying {
             Vec::new()
         } else {
             self.attachments.borrow().clone()
@@ -916,9 +1815,14 @@ impl Overlay {
             "" if !attachments.is_empty() => context::DEFAULT_QUESTION.to_string(),
             q => q.to_string(),
         };
+        let context = context::build_context(&attachments).or_else(|| {
+            (!replying && self.conversation.borrow().is_empty())
+                .then(|| self.focus_context())
+                .flatten()
+        });
         self.ask_question(Question {
             text,
-            context: context::build_context(&attachments),
+            context,
             history: Vec::new(),
         });
     }
@@ -933,9 +1837,9 @@ impl Overlay {
     fn set_awaiting_reply(&self, on: bool) {
         self.awaiting_reply.set(on);
         self.entry.set_placeholder_text(Some(&if on {
-            i18n::umoja("Reply to the assistant…")
+            i18n::umoja("Reply to Umoja…")
         } else {
-            i18n::umoja("Search apps, or ask anything…")
+            placeholder()
         }));
     }
 
@@ -967,22 +1871,25 @@ impl Overlay {
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
-        // While the card is up, a new message continues the conversation:
-        // "yes" answers "Do you want me to open it?".
-        if question.history.is_empty() && self.assistant.is_visible() {
+        // A new message in the same card continues the conversation: "yes"
+        // answers "Do you want me to open it?".
+        if question.history.is_empty() {
             question.history = self.conversation.borrow().clone();
         }
         if question.history.is_empty() {
-            self.conversation.borrow_mut().clear();
             self.local_chat.set(false);
         }
         self.set_awaiting_reply(false);
         let asked = context::truncate_chars(&agent::user_content(&question), MAX_HISTORY_CHARS);
 
         self.reset_card();
+        *self.asked_text.borrow_mut() = self.entry.text().to_string();
+        self.stack.set_visible(false);
+        self.question_label
+            .set_text(&context::truncate_chars(question.text.trim(), 200));
+        self.question_label.set_visible(true);
         self.answer.set_text(&i18n::umoja("Thinking…"));
-        // Typed-query matches would disagree with the answer; the
-        // search_files tool fills the list with its own results instead.
+        // The search_files tool fills the list with its own results.
         self.files.clear();
         self.step_log.borrow_mut().clear();
         crate::assistant::take_hide_request();
@@ -1040,6 +1947,7 @@ impl Overlay {
             if shown.trim().is_empty() {
                 return;
             }
+            o.announce(&shown);
             {
                 let mut conv = o.conversation.borrow_mut();
                 conv.push(serde_json::json!({"role": "user", "content": asked}));
@@ -1068,6 +1976,8 @@ impl Overlay {
         self.generation.set(generation);
         self.end_conversation();
         self.reset_card();
+        *self.asked_text.borrow_mut() = self.entry.text().to_string();
+        self.stack.set_visible(false);
         self.answer.set_text(&i18n::umoja("Thinking…"));
 
         let messages = vec![
@@ -1097,6 +2007,7 @@ impl Overlay {
                         let shown = context::strip_fences(&text);
                         o.answer.set_text(&shown);
                         o.copy_button.set_visible(!shown.is_empty());
+                        o.announce(&shown);
                         *o.answer_text.borrow_mut() = shown;
                         return;
                     }
@@ -1110,8 +2021,10 @@ impl Overlay {
     }
 
     fn reset_card(&self) {
+        self.cancel_confirm();
         self.assistant.set_visible(true);
         self.answer.set_visible(true);
+        self.question_label.set_visible(false);
         self.copy_button.set_visible(false);
         self.answer_text.borrow_mut().clear();
         for b in [
@@ -1129,7 +2042,10 @@ impl Overlay {
         self.generation.set(self.generation.get() + 1);
         self.end_conversation();
         self.reset_card();
+        *self.asked_text.borrow_mut() = self.entry.text().to_string();
+        self.stack.set_visible(false);
         self.answer.set_text(text);
+        self.announce(text);
     }
 
     // ---- Context: window, screen area, selection, clipboard ----------------
@@ -1177,7 +2093,8 @@ impl Overlay {
         self.clip_button.connect_toggled(move |b| {
             if let Some(o) = weak.upgrade() {
                 o.stack
-                    .set_visible_child_name(if b.is_active() { "clipboard" } else { "apps" });
+                    .set_visible_child_name(if b.is_active() { "clipboard" } else { "results" });
+                o.rebuild_rows(true);
                 o.refresh_clipboard();
             }
         });
@@ -1202,18 +2119,6 @@ impl Overlay {
             if let Some(o) = weak.upgrade() {
                 let text = o.answer_text.borrow().clone();
                 o.copy_text(&text);
-            }
-        });
-    }
-
-    /// Note which window the user was in, for "Current Window".
-    fn remember_window(self: &Rc<Self>) {
-        let weak = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            let win = context::focused_window().await;
-            crate::assistant::capture::set_previous_window(win.as_ref().map(window_name));
-            if let Some(o) = weak.upgrade() {
-                *o.last_window.borrow_mut() = win;
             }
         });
     }
@@ -1318,7 +2223,7 @@ impl Overlay {
             self.attach_row.append(&pill);
         }
         self.entry.set_placeholder_text(Some(&if list.is_empty() {
-            i18n::umoja("Search apps, or ask anything…")
+            placeholder()
         } else {
             i18n::umoja("Ask about this, or press Enter to explain it…")
         }));
@@ -1749,20 +2654,21 @@ impl Overlay {
             let AssistantAction::RunCommand { cmd, .. } = action else {
                 return;
             };
-            let dialog = adw::AlertDialog::new(Some(&i18n::umoja("Run this command?")), Some(cmd));
-            dialog.add_response("cancel", &i18n::gtk("_Cancel"));
-            dialog.add_response("run", &i18n::umoja("Run"));
-            dialog.set_response_appearance("run", adw::ResponseAppearance::Destructive);
+            let asked = self.confirm_inline(
+                cmd,
+                Risk::High,
+                &i18n::umoja("Run this command?"),
+                &i18n::umoja("Run"),
+            );
             let weak = Rc::downgrade(self);
             let action = action.clone();
-            dialog.connect_response(None, move |_, response| {
-                if response == "run"
+            glib::spawn_future_local(async move {
+                if asked.await
                     && let Some(o) = weak.upgrade()
                 {
                     o.execute(&action);
                 }
             });
-            dialog.present(Some(&self.window));
         } else {
             self.execute(action);
         }
@@ -1813,7 +2719,8 @@ impl Overlay {
                     format!("{app_id}.desktop")
                 };
                 if let Some(app) = gio::DesktopAppInfo::new(&id) {
-                    self.launch(app.upcast_ref());
+                    appgrid::launch_app(self.window.upcast_ref(), app.upcast_ref());
+                    self.hide();
                 }
                 Ok(())
             }
@@ -1922,32 +2829,18 @@ impl agent::Ui for OverlayUi {
             return Box::pin(async { false });
         };
         o.emit("ConfirmShown", (label,).to_variant());
-        let dialog = adw::AlertDialog::new(
-            Some(&i18n::umoja("Allow the assistant to do this?")),
-            Some(label),
+        let asked = o.confirm_inline(
+            label,
+            risk,
+            &i18n::umoja("Allow Umoja to do this?"),
+            &i18n::umoja("Allow"),
         );
-        dialog.add_response("cancel", &i18n::gtk("_Cancel"));
-        dialog.add_response("allow", &i18n::umoja("Allow"));
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
-        dialog.set_response_appearance(
-            "allow",
-            if risk == Risk::High {
-                adw::ResponseAppearance::Destructive
-            } else {
-                adw::ResponseAppearance::Suggested
-            },
-        );
-        let window = o.window.clone();
-        o.confirm_dialog.replace(Some(dialog.clone()));
         let weak = self.overlay.clone();
         let generation = self.generation;
         Box::pin(async move {
-            let allowed = dialog.choose_future(&window).await == "allow";
-            let Some(o) = weak.upgrade() else { return false };
-            o.confirm_dialog.take();
+            let allowed = asked.await;
             // Allowed only if it is still the same question.
-            allowed && o.generation.get() == generation
+            allowed && weak.upgrade().is_some_and(|o| o.generation.get() == generation)
         })
     }
 
@@ -2029,29 +2922,6 @@ fn menu_item(icons: &[&str], label: &str) -> (gtk::Button, gtk::Label) {
     (button, text)
 }
 
-fn haystack(app: &gio::AppInfo) -> String {
-    let mut s = app
-        .description()
-        .map(|d| d.to_lowercase())
-        .unwrap_or_default();
-    if let Some(d) = app.downcast_ref::<gio::DesktopAppInfo>() {
-        for k in d.keywords() {
-            s.push(' ');
-            s.push_str(&k.to_lowercase());
-        }
-    }
-    s
-}
-
-fn load_apps() -> Vec<gio::AppInfo> {
-    let mut apps: Vec<_> = gio::AppInfo::all()
-        .into_iter()
-        .filter(|a| a.should_show())
-        .collect();
-    apps.sort_by_key(|a| a.display_name().to_lowercase());
-    apps
-}
-
 fn json_to_variant(v: &serde_json::Value) -> Option<glib::Variant> {
     use serde_json::Value;
     Some(match v {
@@ -2066,6 +2936,34 @@ fn json_to_variant(v: &serde_json::Value) -> Option<glib::Variant> {
             .to_variant(),
         _ => return None,
     })
+}
+
+/// Every app's launcher actions (Desktop Actions in its .desktop file).
+fn load_actions() -> Vec<(gio::DesktopAppInfo, String, String)> {
+    let mut out = Vec::new();
+    for app in gio::AppInfo::all().into_iter().filter(|a| a.should_show()) {
+        let Ok(d) = app.downcast::<gio::DesktopAppInfo>() else {
+            continue;
+        };
+        for action in d.list_actions() {
+            let name = d.action_name(&action).to_string();
+            if !name.is_empty() {
+                out.push((d.clone(), action.to_string(), name));
+            }
+        }
+    }
+    out
+}
+
+/// "Wi-Fi, Switch, On · Enter switches it": what a screen reader says for
+/// a row.
+fn join_label(title: &str, kind: &str, sub: &str) -> String {
+    [title, kind, sub]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(crate) use umoja_common::terminal::{needs_terminal, spawn_in_terminal};

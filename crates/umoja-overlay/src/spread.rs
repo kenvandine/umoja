@@ -23,7 +23,7 @@
 //! sources (ext-image-capture-source's foreign-toplevel source).
 
 use crate::texpane::TexPane;
-use crate::view::Overlay;
+use crate::appgrid::AppGrid;
 use adw::prelude::*;
 use gio::prelude::*;
 use gtk::gdk_pixbuf::Pixbuf;
@@ -196,7 +196,7 @@ pub struct Spread {
     thumbs: gtk::Box,
     main: gtk::Box,
     drag_layer: gtk::Fixed,
-    overlay: Weak<Overlay>,
+    overlay: Weak<AppGrid>,
     opening: Cell<bool>,
     wallpaper: RefCell<Option<gdk::Texture>>,
     /// The file `wallpaper` was decoded from, to notice a new one.
@@ -216,7 +216,7 @@ pub struct Spread {
 }
 
 impl Spread {
-    pub fn new(app: &adw::Application, overlay: &Rc<Overlay>) -> Rc<Self> {
+    pub fn new(app: &adw::Application, overlay: &Rc<AppGrid>) -> Rc<Self> {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .css_classes(["umoja-spread"])

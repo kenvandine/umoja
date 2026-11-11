@@ -93,7 +93,7 @@ pub fn show_in_folder(path: &str) {
 }
 
 /// The file's icon as Files shows it (from its real content type).
-fn file_icon(path: &str) -> gio::Icon {
+pub fn file_icon(path: &str) -> gio::Icon {
     let file = gio::File::for_path(path);
     file.query_info(
         "standard::icon,standard::content-type",
@@ -165,8 +165,16 @@ pub struct FilesSection {
 }
 
 impl FilesSection {
-    /// `on_opened` runs after a file is opened (the overlay hides).
+    /// `on_opened` runs after a file is opened (the overlay hides). This
+    /// section is the one the assistant's search_files results go to.
     pub fn new(on_opened: impl Fn() + 'static) -> Rc<Self> {
+        let section = Self::new_plain(on_opened);
+        SECTION.with(|s| *s.borrow_mut() = Rc::downgrade(&section));
+        section
+    }
+
+    /// A section for typed searches only (the app grid's).
+    pub fn new_plain(on_opened: impl Fn() + 'static) -> Rc<Self> {
         let title = gtk::Label::builder()
             .label(i18n::umoja("Files"))
             .xalign(0.0)
@@ -182,15 +190,13 @@ impl FilesSection {
         widget.append(&title);
         widget.append(&list);
         widget.set_visible(false);
-        let section = Rc::new(Self {
+        Rc::new(Self {
             widget,
             list,
             generation: Rc::default(),
             first: Rc::default(),
             on_opened: Rc::new(on_opened),
-        });
-        SECTION.with(|s| *s.borrow_mut() = Rc::downgrade(&section));
-        section
+        })
     }
 
     pub fn clear(&self) {

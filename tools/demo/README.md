@@ -25,16 +25,17 @@ classic desktop tour follows.
 | Scene | How it is driven | Output |
 | --- | --- | --- |
 | `desktop` | opens up to three apps (Files, Text Editor, Calculator...), drags two into a floating layout, sends the third to the next workspace | `images/desktop.png` |
+| `ask-umoja` | `Overlay.ToggleAsk` over Text Editor (the empty card: its launcher actions, frequent picks, suggestions), then `Overlay.AskType` types "dark", "12*7+5", "sound" and a question; nothing is picked, so nothing changes | `images/ask-umoja.png`, `images/ask-switch.png`, `images/ask-sum.png`, `images/ask-settings.png`, `images/ask-question.png`, `videos/ask-umoja.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
 | `tiling` | `org.umoja.Compositor.DragWindow`: drags one window to the left edge and one to the right (halves), one to the top-right corner (quarter), then both back out | `images/tiling-halves.png`, `images/tiling-quarter.png`, `videos/tiling.*` |
 | `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back straight after) | `images/ai-settings.png`, `videos/ai-settings.*` |
-| `ai-install` | "I need VLC" (`--app`): stops at the "Allow the assistant to do this?" dialog and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
-| `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow dialog and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
+| `ai-install` | "I need VLC" (`--app`): stops at Ask Umoja's "Allow Umoja to do this?" confirmation and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
+| `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow confirmation and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
 | `notifications` | clears the notification list (keep it with `--keep-notifications`), then three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
 | `ai-reply` | "Open a reply to Priya's notification with a few drafts": opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
 | `ai-summary` | "Summarize my recent notifications..." | `images/ai-summary.png`, `videos/ai-summary.*` |
 | `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
-| `app-grid` | `org.umoja.Overlay.Show` | `images/app-grid.png` |
+| `app-grid` | `org.umoja.Overlay.Show` (apps and files only; the assistant is in Ask Umoja) | `images/app-grid.png` |
 | `overview` | `Overlay.ToggleOverview`, `ShiftOverview` up/down | `images/overview.png`, `videos/overview.*` |
 | `workspaces` | `org.umoja.Compositor.SwitchWorkspace` there and back | `images/workspace-2.png`, `videos/workspaces.*` |
 | `quick-settings` | `org.umoja.Panel.OpenMenu("quick-settings")` | `images/quick-settings.png` |
@@ -44,11 +45,11 @@ classic desktop tour follows.
 
 The assistant uses whatever backend you've set up (local or cloud;
 `--local` forces the local model). Each question is typed into the search
-box letter by letter (`Overlay.AskWith`), the tour waits for the overlay's
+box of Ask Umoja letter by letter (`Overlay.AskWith`), the tour waits for the overlay's
 `AnswerFinished` signal instead of a fixed time, and an answer only counts
 when every tool step succeeded and it mentions what it should; otherwise the
 clip is thrown away and it asks again (`--retries`, default 3). Hiding the
-overlay always declines a pending "Allow" dialog, so the install and update
+card always declines a pending "Allow" confirmation, so the install and update
 asks can't go through.
 
 `--only assistant` / `--skip assistant` select all the `ai-*` scenes.
@@ -112,4 +113,6 @@ change). A rerun replaces only the files the previous run wrote.
 Two scenes need a newer build than the one you may have installed: the
 screenshot UI scene needs the overlay's `HideScreenshotUI` (2026.46.4+), and
 the tiling scene and floating layout need the compositor's `DragWindow`
-and parking the pointer needs `MovePointer` (both after 2026.46.4). Without them those steps are skipped.
+and parking the pointer needs `MovePointer` (both after 2026.46.4). Without them those steps are skipped. The
+`ask-umoja` scene needs the overlay's `AskType` (after 2026.46.5) and is skipped
+without it.

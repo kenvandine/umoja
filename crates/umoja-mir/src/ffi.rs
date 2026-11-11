@@ -71,6 +71,22 @@ pub extern "C" fn umoja_overlay_key_matches(keysym: u32) -> bool {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn umoja_ask_alt_tap_enabled() -> bool {
+    if crate::greeter::enabled() {
+        return false;
+    }
+    guard("ask_alt_tap", false, input::ask_alt_tap_enabled)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_copilot_key() {
+    if crate::greeter::enabled() {
+        return;
+    }
+    guard("copilot_key", (), input::copilot_pressed)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn umoja_tile_geometry(action: u32, area: Rect, out: *mut Rect) -> bool {
     guard("tile_geometry", false, || {
         match tiling::geometry(Action::from_u32(action), area) {

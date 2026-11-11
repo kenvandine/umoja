@@ -83,6 +83,7 @@ pub fn dispatch(action: Action) {
         Action::CopyTextUi => "ShowCopyTextUI",
         Action::ShowShortcuts => "ToggleShortcuts",
         Action::LaunchAgent => "LaunchAgent",
+        Action::AskUmoja => "ToggleAsk",
         _ => return,
     };
     overlay_call(method, ());

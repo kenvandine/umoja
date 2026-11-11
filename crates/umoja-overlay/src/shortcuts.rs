@@ -77,9 +77,10 @@ impl Group {
 /// compositor reads; `#` stands for a workspace number. Ids that share a
 /// label in a group become one row with each accelerator as an alternative.
 const CATALOG: &[(&str, Group, &str)] = &[
+    ("ask-umoja", Group::Desktop, "Ask Umoja"),
     ("overlay-key", Group::Desktop, "Activities overview"),
     ("toggle-overview", Group::Desktop, "Activities overview"),
-    ("toggle-application-view", Group::Desktop, "Apps and assistant"),
+    ("toggle-application-view", Group::Desktop, "Show apps"),
     ("shift-overview-up", Group::Desktop, "Step up to overview, then apps"),
     ("shift-overview-down", Group::Desktop, "Step back down to the desktop"),
     ("toggle-message-tray", Group::Desktop, "Notifications and calendar"),
@@ -239,6 +240,7 @@ fn key_label(name: &str) -> String {
         "BackSpace" => "Backspace",
         "Print" => "Print Screen",
         "grave" => "`",
+        "Alt_L" => "Alt",
         "slash" => "/",
         "backslash" => "\\",
         "question" => "?",

@@ -80,6 +80,9 @@ pub enum Action {
     ShowShortcuts = 57,
     /// Umoja's ai-agent-hotkey: open the chosen coding agent in a terminal.
     LaunchAgent = 58,
+    /// Ask Umoja: the Copilot key, or a lone tap of Alt on keyboards
+    /// without one (see input.rs).
+    AskUmoja = 59,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
 }
 
@@ -145,6 +148,7 @@ impl Action {
             56 => CopyTextUi,
             57 => ShowShortcuts,
             58 => LaunchAgent,
+            59 => AskUmoja,
             _ => None,
         }
     }

@@ -72,6 +72,8 @@ enum {
     UMOJA_ACTION_SCREEN_RECORDING_UI = 55,
     UMOJA_ACTION_COPY_TEXT_UI = 56,
     UMOJA_ACTION_SHOW_SHORTCUTS = 57,
+    UMOJA_ACTION_LAUNCH_AGENT = 58,
+    UMOJA_ACTION_ASK_UMOJA = 59,
     /* 1000 + n: run GNOME custom shortcut n (input.rs CUSTOM_BASE). */
     UMOJA_ACTION_CUSTOM_BASE = 1000,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.
@@ -158,6 +160,10 @@ void umoja_mir_stop(int code);
 // Implemented in Rust (src/ffi.rs), called by the shim.
 uint32_t umoja_lookup_binding(uint32_t keysym, uint32_t modifiers);
 bool umoja_overlay_key_matches(uint32_t keysym);
+// Ask Umoja keys. A lone Alt tap opens it only while the keyboard has shown
+// no Copilot key; the Copilot key (evdev KEY_F23 under Super+Shift) always does.
+bool umoja_ask_alt_tap_enabled(void);
+void umoja_copilot_key(void);
 bool umoja_tile_geometry(uint32_t action, UmojaRect area, UmojaRect* out);
 void umoja_tiling_register(uint64_t id, uint32_t action, UmojaRect rect);
 void umoja_tiling_unregister(uint64_t id);

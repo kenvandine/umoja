@@ -1,8 +1,12 @@
 # Using the AI features
 
-Umoja has an assistant built into the desktop. It answers questions, does
-things on the desktop for you, reads what's on your screen when you ask it
-to, summarizes your notifications and finds files by what they're about.
+Umoja has an assistant built into the desktop, **Ask Umoja**. Press the
+**Copilot** key (or tap **Alt** on a keyboard without one) and a card
+floats over the window you're in: type to launch apps, flip switches, open
+Settings pages, do sums and find files, or ask it anything. It answers
+questions, does things on the desktop for you, reads what's on your screen
+when you ask it to, summarizes your notifications and finds files by what
+they're about.
 
 By default all of it runs on your computer, on Umoja's own copy of
 [Lemonade](https://lemonade-server.ai). You can switch the assistant to a
@@ -15,10 +19,11 @@ as a GNOME custom shortcut; Umoja runs GNOME custom shortcuts just as
 Ubuntu's GNOME session does, so whatever key Myna Settings chooses works
 here. While Myna records, a microphone shows in the top bar (click it to
 stop) and Myna's own pill with the voice wave shows at the bottom of the
-screen, as in Ubuntu. The overlay's search box also has a microphone button.
+screen, as in Ubuntu. Ask Umoja's card also has a microphone button.
 
 ## Contents
 
+- [Ask Umoja](#ask-umoja)
 - [Asking the assistant](#asking-the-assistant)
 - [Choosing the model](#choosing-the-model)
 - [Using a cloud model](#using-a-cloud-model)
@@ -39,31 +44,78 @@ screen, as in Ubuntu. The overlay's search box also has a microphone button.
 - [Using the local model from other apps](#using-the-local-model-from-other-apps)
 - [When something doesn't work](#when-something-doesnt-work)
 
+## Ask Umoja
+
+Press the **Copilot** key to open Ask Umoja. On a keyboard without one, a
+quick tap of the left **Alt** key opens it instead, as Unity's HUD did
+(holding Alt for a shortcut, or Alt+Tab, doesn't). Once Umoja has seen a
+Copilot key on your computer, Alt is left to your apps. **Super** still
+opens the overview and app grid, which have no assistant.
+
+The card floats over the window you were in and shows its app as a chip
+beside the entry ("Firefox"): that app's launcher actions ("New Private
+Window") come first, and questions are asked with it in mind. **Backspace**
+in the empty entry, or a click on the chip, searches everything instead.
+
+With nothing typed, the card lists the app's launcher actions, the things
+you pick most often and a few suggestions (ask about this window, the
+clipboard history, a screenshot). As you type, rows come up for:
+
+- **Apps**, and the launcher actions of the app you name ("firefox private").
+- **Switches**: Dark Style, Wi-Fi, Bluetooth, Do Not Disturb and Night
+  Light, with their current state. "wifi off" or "turn on bluetooth" offers
+  exactly that.
+- **Desktop actions**: power modes, mute, play/pause, next track, empty the
+  Trash, lock, suspend, log out, restart, power off, a screenshot or screen
+  recording, the clipboard history.
+- **Settings pages**: Wi-Fi, Sound, Displays, Keyboard and the rest.
+- **Sums**: "12*7+5" or "15% of 80"; **Enter** copies the result.
+- **Files** from the search index (see [Finding files](#finding-files)).
+- **Ask Umoja: "…"**, which hands the text to the assistant. It goes first
+  when what you typed reads like a question and nothing else is a clear
+  match.
+- **Search the web for "…"**, in your default browser.
+
+**↑** and **↓** move through the rows, **Enter** runs the selected one,
+**Tab** asks the assistant whatever is selected, and **Escape** or a click
+outside the card closes it. Everything except asking runs straight away
+through Umoja's tool server, without the model, so it takes well under a
+second. The same confirmation rules apply as when the assistant does it
+(see [What it asks before doing](#what-it-asks-before-doing)): logging out
+or emptying the Trash still asks first.
+
+Ask Umoja remembers which rows you pick (only which rows, never what you
+typed) in `~/.local/share/umoja/ask-history.json`, so the ones you use most
+move up. It keeps nothing while Settings › Privacy › **Remember App Usage**
+is off.
+
+### Screen readers
+
+Ask Umoja works with Orca. The card is a dialog called "Ask Umoja"; the
+selected row is read out as you move (its name, what kind of row it is,
+whether a switch is on), and confirmations and finished answers are read
+out too.
+
 ## Asking the assistant
 
-Press **Super** (or click Activities) to open the overlay and start typing.
-The search entry says *Search apps, or ask anything…*: the same box finds
-apps and talks to the assistant.
+Open [Ask Umoja](#ask-umoja), type a question or a request and press
+**Enter** on the **Ask Umoja** row, or **Tab** from anywhere. Anything
+ending in `?`, four words or more, or starting with words like *how*,
+*what*, *why*, *turn*, *change*, *enable*, *set up* or *help* puts that row
+first. So does a short symptom such as "wifi broken" or "fan loud".
 
-- Type an app name and press **Enter** to launch it, as in GNOME.
-- Type a question or a request and press **Enter**, or click **Ask the
-  assistant** under the entry. Anything ending in `?`, four words or more,
-  or starting with words like *how*, *what*, *why*, *turn*, *change*,
-  *enable*, *set up* or *help* goes to the assistant. So does a short
-  symptom such as "wifi broken" or "fan loud". When no app matches what you
-  typed, the **Ask the assistant** button appears too.
-- The answer appears under the entry, with a **Copy** button. Each thing
+- The answer appears in the card under your question, with a **Copy**
+  button. Each thing
   the assistant does shows up as a progress line ("Turn on Dark Style",
   "Move Terminal to left") with a mark for done, failed or declined.
 - When the answer ends with a question ("btop is already installed. Do you
-  want me to open it?"), the entry turns into a reply box (*Reply to the
-  assistant…*): type your answer and press **Enter**. Yes-or-no questions
-  also get **Yes** and **No** buttons. While an answer is showing, anything
-  you ask next is a follow-up, so the assistant remembers the last few
-  exchanges ("and vlc too"). Clearing the entry, or closing the overlay,
-  starts a fresh conversation.
-- **Escape** closes the overlay. Closing it, or asking something new,
-  cancels the answer in progress.
+  want me to open it?"), the entry turns into a reply box (*Reply to
+  Umoja…*): type your answer and press **Enter**. Yes-or-no questions also
+  get **Yes** and **No** buttons. Until you close the card or clear the
+  entry, anything you ask is a follow-up, so the assistant remembers the
+  last few exchanges ("and vlc too").
+- **Escape** closes the card. Closing it, or asking something new, cancels
+  the answer in progress.
 
 The first question after login can take around ten seconds while the model
 loads; later ones take a few seconds.
@@ -85,7 +137,7 @@ before your first question:
 
 - Downloads only start when you are online on a connection that isn't
   metered. On a metered connection Umoja waits.
-- A **Downloading AI model** notification shows progress, and the overlay
+- A **Downloading AI model** notification shows progress, and Ask Umoja
   shows *Downloading the assistant's model…* until it's done.
 - If the download fails you get a notification saying so. It is tried again
   at your next login, or when you pick a different model.
@@ -112,7 +164,8 @@ If you'd rather use a larger hosted model, the assistant can talk to any
 service with an OpenAI-compatible API: OpenRouter, OpenAI, or a server on
 your own network.
 
-1. Open the overlay, click the model button, and choose **Cloud**.
+1. Open Ask Umoja, click the model button at the bottom of the card, and
+   choose **Cloud**.
 2. Fill in:
    - **Server URL**: the API's base URL, for example
      `https://openrouter.ai/api/v1` or `https://api.openai.com/v1`. Umoja
@@ -184,7 +237,7 @@ searches open DuckDuckGo in your default browser.
 ### Screenshots
 
 "Take a screenshot" captures the window you were working in before you
-opened the overlay. The overlay gets out of the way first, so it isn't in
+opened Ask Umoja. The card gets out of the way first, so it isn't in
 the picture, and comes back afterwards. You can also ask for the whole
 screen, for an area (the screenshot UI opens so you can drag one out), for
 another window by name ("screenshot the terminal"), or for a short delay.
@@ -208,9 +261,9 @@ values, default and current value).
 ### What it asks before doing
 
 Most actions happen straight away, because they're easy to undo. A few
-open an **Allow the assistant to do this?** dialog first, with a one-line
-summary of what it's about to do. **Cancel** is the default; nothing happens
-unless you click **Allow**.
+ask **Allow Umoja to do this?** first, inside the card, with a one-line
+summary of what it's about to do. **Cancel** has the focus; nothing happens
+unless you pick **Allow**. Closing the card declines.
 
 | Action | Asks first? |
 | --- | --- |
@@ -295,7 +348,7 @@ of the system with it (apt, sudo, systemd, NetworkManager and similar).
 The assistant can look at what you're working on, but only when you ask.
 
 - **Super+Shift+A** asks about the text you selected in the last few
-  minutes or, with nothing selected, the window you're in. The overlay
+  minutes or, with nothing selected, the window you're in. Ask Umoja
   opens with it attached; type a question or just press **Enter** to have
   it explained.
 - The paperclip **Ask about something on screen** button beside the
@@ -334,7 +387,7 @@ OCR can misread things, so check what you paste.
 
 ## Clipboard history
 
-**Super+Shift+V**, or the clipboard button beside the search entry, shows
+**Super+Shift+V**, or the clipboard button at the bottom of Ask Umoja, shows
 what you copied this session, newest first (up to 50 entries). Each entry
 has buttons to copy it again, attach it to a question for the assistant,
 or remove it, plus three actions:
@@ -413,7 +466,7 @@ suggests one, and running it goes through the usual **Allow** dialog.
 When a program crashes, a notification says so, for example *Files quit
 unexpectedly*, with two buttons:
 
-- **Ask Why** (or click the notification) opens the overlay and asks the
+- **Ask Why** (or click the notification) opens Ask Umoja and asks the
   assistant why it crashed. It reads the crash report and explains it in
   plain words: whether the computer was out of memory, whether the crash
   started right after a software update, whether it keeps happening, and
@@ -446,10 +499,12 @@ To bring back a program you muted, remove it from
 Umoja keeps a search index of your home folder so you can find files by
 what they're about, not just their names.
 
-- **In the overlay**, matching files appear in a **Files** list as you
-  type. Click a row to open the file, or the folder button to **Show in
-  Files**. Typing something like "find the PDF about the lease" and
-  pressing **Enter** opens the best match.
+- **In Ask Umoja**, matching files appear as rows as you type; **Enter**
+  opens one. Something like "find the PDF about the lease" puts the files
+  first.
+- **In the app grid**, matching files appear in a **Files** list under the
+  entry. Click a row to open the file, or the folder button to **Show in
+  Files**.
 - **Ask the assistant**: "find my tax spreadsheet from 2025", "where's the
   invoice from the plumber?", "open the beach photos from June". It shows
   the matches in the Files list and can open one or show it in Files.
@@ -527,6 +582,8 @@ default) can open the agent with a keyboard shortcut.
   text and not kept.
 - **Clipboard history** lives in memory only, skips secrets, and is off
   with one setting.
+- **Ask Umoja's usage history** keeps only which rows you pick, on your
+  computer, and nothing while Remember App Usage is off.
 - **Your API key** is in your keyring, not in GSettings or any file.
   **Remove** deletes it.
 - **Model downloads** only happen on unmetered connections.
@@ -535,12 +592,14 @@ default) can open the agent with a keyboard shortcut.
 
 | Shortcut | What it does |
 | --- | --- |
-| **Super** | Open the overlay: search apps or ask the assistant |
+| **Copilot** key | Open Ask Umoja |
+| tap **Alt** | Open Ask Umoja, on keyboards without a Copilot key |
+| **Super** | Open the overview and app grid (apps and files, no assistant) |
 | **Super+Shift+A** | Ask about the selected text or the current window |
 | **Super+Shift+V** | Show the clipboard history |
 | **Super+Ctrl+Print** | Copy the text in a screen area |
 | **Super+J** | Start or stop Myna dictation (set in Myna Settings) |
-| **Escape** | Close the overlay |
+| **Escape** | Close Ask Umoja |
 
 The three Umoja shortcuts can be changed with the `ask-about-screen-hotkey`,
 `clipboard-history-hotkey` and `copy-text-hotkey` keys below. Myna's shortcut is changed in
@@ -568,6 +627,8 @@ All in the `org.umoja.shell` schema, for example
 | `crash-notifications` | `true` | Notify when an app crashes, with **Ask Why** |
 | `crash-notifications-muted` | `[]` | Programs whose crashes don't notify |
 | `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |
+| `ask-umoja-alt-tap` | `true` | A tap of Alt opens Ask Umoja, until a Copilot key is seen |
+| `ask-umoja-copilot-seen` | `false` | Set on the first Copilot key press; reset it to use Alt again |
 
 The embedded Lemonade server's port and memory limits are covered in
 [Embedded Lemonade](../README.md#embedded-lemonade) in the README.

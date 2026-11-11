@@ -15,7 +15,7 @@ down. Press **Super+/** for a guide to every keyboard shortcut. It also adds a l
 | `crates/umoja-panel` | Top bar: Activities, clock/calendar, AppIndicator tray (`org.kde.StatusNotifierWatcher` with native dbusmenu menus), network (NetworkManager), volume and battery (UPower) indicators, Quick Settings with Wi-Fi/Wired tiles and a network list, the lock screen, notifications, and the PolicyKit authentication agent (the "Authentication Required" password dialog). |
 | `crates/umoja-screensaver` | The screensaver: "umoja" drawn in Ubuntu-orange circles that fly in and out with a different effect each cycle (gather, orbit, rain, spiral, rings, bloom), inspired by Omarchy's. It starts at Settings › Power › Screen Blank and the screen blanks `org.umoja.shell screensaver-duration` (300 s) later. `umoja-screensaver` previews it; `umoja-screensaver --activate` runs the real idle path. |
 | `crates/umoja-dock` | Ubuntu Dock work-alike driven by the `dash-to-dock` GSettings keys and `favorite-apps`, with running dots from `zwlr_foreign_toplevel`. |
-| `crates/umoja-overlay` | App grid + search, Lemonade assistant with action chips, Myna dictation, the GNOME-style screenshot UI (selection, screen or window; screenshot or screencast via `wf-recorder`), and the keyboard shortcuts guide (Super+/, read live from `org.umoja.Compositor.GetShortcuts`). |
+| `crates/umoja-overlay` | App grid + search, Ask Umoja (type-ahead card with the Lemonade assistant), Myna dictation, the GNOME-style screenshot UI (selection, screen or window; screenshot or screencast via `wf-recorder`), and the keyboard shortcuts guide (Super+/, read live from `org.umoja.Compositor.GetShortcuts`). |
 | `crates/umoja-greeter` | LightDM greeter over Ubuntu's default wallpaper (`warty-final-ubuntu.png`). |
 | `crates/umoja-portal` | `xdg-desktop-portal-umoja`: Settings (GNOME keys incl. `button-layout`), Screenshot, ScreenCast (stub). |
 | `crates/umoja-common` | GSettings, i18n (reuses gnome-shell/GTK/control-center translations), HiDPI rules, shared types. |
@@ -71,8 +71,11 @@ shows what started.
 
 ## AI features
 
-Press **Super** and type a question or a request: the assistant answers,
-and can open apps, change settings, arrange windows, read what's on screen
+Press the **Copilot** key (or tap **Alt**) for **Ask Umoja**, a card that
+floats over the window you're in. As you type it offers apps, launcher
+actions, switches, Settings pages, sums and files, which run straight away
+without the model, and an **Ask Umoja** row (or **Tab**) for the assistant.
+The assistant answers in the card and can open apps, change settings, arrange windows, read what's on screen
 (**Super+Shift+A**), work with the clipboard history (**Super+Shift+V**),
 summarize and reply to notifications, troubleshoot the computer, find
 files by what they're about, and find or remove apps however they were
@@ -163,6 +166,6 @@ gsettings set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 ```
 
-Then log into the Umoja session, press Super for the overlay, Print for the
+Then log into the Umoja session, press Super for the overview, the Copilot key (or tap Alt) for Ask Umoja, Print for the
 screenshot UI (Ctrl+Shift+Alt+R to record the screen), and try Settings ›
 Displays to change scale.

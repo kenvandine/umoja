@@ -3,9 +3,10 @@
 
 Run it from a terminal inside an Umoja session, then keep your hands off the
 keyboard and mouse until it says it is done (about three minutes). It opens a
-few apps, walks through the app grid, the workspaces overview, Quick Settings,
-notifications, the keyboard shortcuts guide, the screenshot UI, the
-screensaver and the AI assistant (asked through the local model), and writes
+few apps, walks through Ask Umoja (its type-ahead rows and the assistant
+inside it), the app grid, the workspaces overview, Quick Settings,
+notifications, the keyboard shortcuts guide, the screenshot UI and the
+screensaver, and writes
 
     <out>/README.md        a tour page with every shot and clip
     <out>/snippet.md       a short gallery to paste into the top-level README
@@ -125,11 +126,23 @@ DEMO_NOTIFICATIONS = [
 # Night Light, toggled by the settings ask and put back afterwards.
 NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
 
+# Ask Umoja's type-ahead: (typed text, shot name, caption). Nothing is
+# picked, so nothing changes; every row comes from local lists, no model.
+ASK_TYPEAHEAD = [
+    ("dark", "ask-switch",
+     "Type “dark”: the Dark Style switch, ready to flip with Enter. No model involved."),
+    ("12*7+5", "ask-sum", "Sums are answered as you type; Enter copies the result."),
+    ("sound", "ask-settings",
+     "Settings pages and desktop actions: “sound” finds the Sound page, mute and unmute."),
+    ("why is my laptop fan so loud", "ask-question",
+     "A question puts “Ask Umoja” first: Enter or Tab hands it to the assistant."),
+]
+
 # The assistant comes first, while viewers are still watching; the classic
 # desktop tour follows. ("assistant" in --only/--skip means all ai-* scenes.)
 # ai-reply and ai-summary need the notifications scene before them.
 SCENES = [
-    "desktop", "ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates",
+    "desktop", "ask-umoja", "ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates",
     "notifications", "ai-reply", "ai-summary", "ai-troubleshoot",
     "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
     "screenshot-ui", "screensaver",
@@ -137,7 +150,7 @@ SCENES = [
 AI_SCENES = [s for s in SCENES if s.startswith("ai-")]
 
 # The trailer: these clips in this order, each with its caption.
-TRAILER = ["ai-tiling", "ai-settings", "ai-install", "ai-updates", "notifications", "ai-reply",
+TRAILER = ["ask-umoja", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "notifications", "ai-reply",
            "ai-summary", "ai-troubleshoot", "tiling", "overview", "workspaces", "screensaver"]
 
 
@@ -713,10 +726,32 @@ class Demo:
         self.editor_to_front()
         self.wait(0.8)
 
+    def scene_ask_umoja(self):
+        """Ask Umoja over Text Editor: the empty card, then rows as you type."""
+        if not self.dry and not self.bus.has_method(OVERLAY, "AskType"):
+            log("  this overlay has no Ask Umoja (AskType), skipping")
+            return
+        self.editor_to_front()
+        self.recorder.start("ask-umoja")
+        self.bus.call(OVERLAY, "ToggleAsk")
+        self.wait(1.4)
+        self.shot("ask-umoja", "Ask Umoja (the Copilot key, or a tap of Alt) floats over the window "
+                  "you're in, with its launcher actions and the things you use most.")
+        for text, name, caption in ASK_TYPEAHEAD:
+            self.bus.call(OVERLAY, "AskType", GLib.Variant("(sb)", (text, not self.opts.no_typing)))
+            self.wait((0 if self.opts.no_typing else 0.06 * len(text)) + 1.4)
+            self.shot(name, caption)
+        self.recorder.stop("Ask Umoja: apps, switches, Settings, sums and questions as you type. "
+                           "Everything but the questions runs without the model.")
+        self.bus.call(OVERLAY, "Hide")
+        self.wait(0.8)
+        self.scrub_overlay()
+
     def scene_app_grid(self):
         self.bus.call(OVERLAY, "Show")
         self.wait(1.5)
-        self.shot("app-grid", "The app grid with search. Type to find apps, files or ask the assistant.")
+        self.shot("app-grid", "The app grid (Super, then type, or Show Apps): apps and files. "
+                  "The assistant lives in Ask Umoja instead.")
         self.bus.call(OVERLAY, "Hide")
         self.wait(0.8)
 
@@ -938,9 +973,9 @@ class Demo:
         """Ask the assistant, recording it; retry until the answer checks out.
 
         `expect`: words, one of which the answer must contain. `confirm`:
-        the ask should end at the "Allow the assistant to do this?" dialog,
-        which is shot and then cancelled (the overlay is hidden: nothing is
-        installed or sent). Returns the answer text, or None."""
+        the ask should end at Ask Umoja's "Allow Umoja to do this?"
+        confirmation, which is shot and then cancelled (the card is hidden:
+        nothing is installed or sent). Returns the answer text, or None."""
         tries = 1 if self.dry else self.opts.retries
         for attempt in range(1, tries + 1):
             self.check_screen()
@@ -992,7 +1027,9 @@ class Demo:
         the start of the next clip."""
         if self.dry:
             return
-        self.bus.call(OVERLAY, "Show", quiet=True)
+        # Answers show in Ask Umoja's card on builds that have it.
+        opener = "ToggleAsk" if self.bus.has_method(OVERLAY, "ToggleAsk") else "Show"
+        self.bus.call(OVERLAY, opener, quiet=True)
         self.wait(0.8)
         self.bus.call(OVERLAY, "Hide", quiet=True)
         self.wait(0.8)

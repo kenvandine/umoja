@@ -1,8 +1,11 @@
-//! umoja-overlay: app grid, window-switching entry point and AI search.
+//! umoja-overlay: app grid, overview, Ask Umoja and the shell's other
+//! full-screen chrome.
 //!
-//! Exposes `org.umoja.Overlay` on the session bus so the compositor (Super
-//! key), panel (Activities) and dock (Show Apps) can toggle it.
+//! Exposes `org.umoja.Overlay` on the session bus so the compositor (Super,
+//! the Copilot key), panel (Activities) and dock (Show Apps) can toggle it.
 
+mod appgrid;
+mod ask;
 mod assistant;
 mod canvas;
 mod chrome;
@@ -35,8 +38,17 @@ const APP_ID: &str = "org.umoja.OverlayApp";
 const IFACE_XML: &str = r#"
 <node>
   <interface name="org.umoja.Overlay">
+    <!-- The app grid (Show Apps). -->
     <method name="Toggle"/>
     <method name="ToggleOverview"/>
+    <!-- Ask Umoja (the Copilot key, or a tap of Alt). -->
+    <method name="ToggleAsk"/>
+    <!-- Open Ask Umoja with text typed but not asked; typed = a few
+         letters at a time, as a person would (for tools/demo). -->
+    <method name="AskType">
+      <arg name="text" type="s" direction="in"/>
+      <arg name="typed" type="b" direction="in"/>
+    </method>
     <method name="Show"/>
     <method name="Hide"/>
     <method name="ToggleDictation"/>
@@ -138,6 +150,7 @@ fn main() -> glib::ExitCode {
     app.connect_startup(|_| load_css());
     app.connect_activate(|app| {
         let overlay = view::Overlay::new(app);
+        let grid = appgrid::AppGrid::new(app);
         let shots = screenshot::ScreenshotUi::new(app);
         overlay.set_screenshot_ui(&shots);
         // Fetch the assistant's model in the background at login.
@@ -147,11 +160,11 @@ fn main() -> glib::ExitCode {
                 o.set_model_status(status);
             }
         }));
-        let spread = spread::Spread::new(app, &overlay);
+        let spread = spread::Spread::new(app, &grid);
         let chrome = chrome::Chrome::new(app);
         let menu = window_menu::WindowMenu::new(app);
         let guide = shortcuts::ShortcutsGuide::new(app);
-        export(overlay, shots, spread, chrome, menu, guide);
+        export(overlay, grid, shots, spread, chrome, menu, guide);
         // Keep the process alive while the overlay window is hidden.
         std::mem::forget(app.hold());
     });
@@ -160,6 +173,7 @@ fn main() -> glib::ExitCode {
 
 fn export(
     overlay: Rc<view::Overlay>,
+    grid: Rc<appgrid::AppGrid>,
     shots: Rc<screenshot::ScreenshotUi>,
     spread: Rc<spread::Spread>,
     chrome: Rc<chrome::Chrome>,
@@ -172,7 +186,8 @@ fn export(
             .lookup_interface(dbus::OVERLAY_INTERFACE)
             .expect("interface");
         let methods = overlay.clone();
-        let props = overlay.clone();
+        let props = (overlay.clone(), grid.clone());
+        let grid = grid.clone();
         let shots = shots.clone();
         let spread = spread.clone();
         let chrome = chrome.clone();
@@ -209,14 +224,17 @@ fn export(
                 match method {
                     "ShowScreenshotUI" => {
                         methods.hide();
+                        grid.hide();
                         shots.open();
                     }
                     "ShowScreenRecordingUI" => {
                         methods.hide();
+                        grid.hide();
                         shots.toggle_screen_recording();
                     }
                     "ShowCopyTextUI" => {
                         methods.hide();
+                        grid.hide();
                         shots.open_copy_text();
                     }
                     // Close the screenshot UI without taking a shot, as
@@ -225,6 +243,7 @@ fn export(
                     "ToggleShortcuts" => {
                         if !guide.is_visible() {
                             methods.hide();
+                            grid.hide();
                             spread.hide();
                             chrome.hide_switcher();
                             menu.hide();
@@ -250,7 +269,29 @@ fn export(
                     },
                     "Toggle" => {
                         spread.hide();
+                        methods.hide();
+                        grid.toggle()
+                    }
+                    "ToggleAsk" => {
+                        if !methods.is_visible() {
+                            spread.hide();
+                            grid.hide();
+                            chrome.hide_switcher();
+                            menu.hide();
+                        }
                         methods.toggle()
+                    }
+                    "AskType" => {
+                        let Some((text, typed)) = params.get::<(String, bool)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (sb)",
+                            );
+                            return;
+                        };
+                        spread.hide();
+                        grid.hide();
+                        methods.type_text(&text, typed)
                     }
                     "ToggleOverview" => {
                         // Drag chrome never stays above the overview.
@@ -259,8 +300,9 @@ fn export(
                         chrome.hide_switcher();
                         menu.hide();
                         // Super from the app grid closes it, as in GNOME.
-                        if methods.is_visible() {
-                            methods.hide();
+                        methods.hide();
+                        if grid.is_visible() {
+                            grid.hide();
                         } else {
                             spread.toggle();
                         }
@@ -318,16 +360,17 @@ fn export(
                     // desktop, overview and app grid are steps on one ladder.
                     "ShiftOverview" => {
                         let up = params.get::<(bool,)>().map(|(u,)| u).unwrap_or(true);
+                        methods.hide();
                         if up {
                             if spread.is_visible() {
                                 spread.hide();
-                                methods.show();
-                            } else if !methods.is_visible() {
+                                grid.show();
+                            } else if !grid.is_visible() {
                                 chrome.hide_switcher();
                                 spread.show();
                             }
-                        } else if methods.is_visible() {
-                            methods.hide();
+                        } else if grid.is_visible() {
+                            grid.hide();
                             spread.show();
                         } else if spread.is_visible() {
                             spread.hide();
@@ -335,16 +378,22 @@ fn export(
                     }
                     "Show" => {
                         spread.hide();
-                        methods.show()
+                        methods.hide();
+                        grid.show()
                     }
-                    "Hide" => methods.hide(),
+                    "Hide" => {
+                        methods.hide();
+                        grid.hide()
+                    }
                     "ToggleDictation" => methods.toggle_dictation(),
                     "AskAboutScreen" => {
                         spread.hide();
+                        grid.hide();
                         methods.ask_about_screen()
                     }
                     "LaunchAgent" => {
                         spread.hide();
+                        grid.hide();
                         methods.launch_agent("")
                     }
                     "Ask" => {
@@ -356,6 +405,7 @@ fn export(
                             return;
                         };
                         spread.hide();
+                        grid.hide();
                         methods.ask_now(&question)
                     }
                     "AskWith" => {
@@ -367,10 +417,12 @@ fn export(
                             return;
                         };
                         spread.hide();
+                        grid.hide();
                         methods.ask_with(&question, flags & 1 != 0, flags & 2 != 0)
                     }
                     "ShowClipboard" => {
                         spread.hide();
+                        grid.hide();
                         methods.show_clipboard()
                     }
                     _ => {
@@ -382,7 +434,7 @@ fn export(
                 invocation.return_value(None);
             })
             .property(move |_, _, _, _, name| match name {
-                "Visible" => props.is_visible().to_variant(),
+                "Visible" => (props.0.is_visible() || props.1.is_visible()).to_variant(),
                 _ => false.to_variant(),
             })
             .build();

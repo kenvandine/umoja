@@ -405,6 +405,16 @@ public:
         // Alt+F7 / Alt+F8: the arrow keys move or resize the window.
         if (key_grab && handle_key_grab(action, keysym, mods)) return true;
 
+        // The Copilot key sends Super+Shift+F23. It opens Ask Umoja, and
+        // the F23 press and release never reach the app. Matched by scan
+        // code: layouts map F23 to TouchpadOff or Assistant, or nothing.
+        if (mir_keyboard_event_scan_code(event) == KEY_COPILOT_F23) {
+            ask_alt_armed = false;
+            overlay_key_armed = false;
+            if (action == mir_keyboard_action_down) umoja_copilot_key();
+            return true;
+        }
+
         // While Alt+Tab is open it sees every key, releases included.
         {
             UmojaSwitchResult res{};
@@ -413,6 +423,7 @@ public:
             if (r != UMOJA_SWITCH_NOT_OURS) {
                 apply_switch(r, res);
                 overlay_key_armed = false;
+                ask_alt_armed = false;
                 return true;
             }
         }
@@ -429,6 +440,25 @@ public:
             return false;
         }
         if (action == mir_keyboard_action_down) overlay_key_armed = false;
+
+        // A lone tap of the left Alt key opens Ask Umoja, as Unity's HUD
+        // did, on keyboards without a Copilot key. The press reaches the
+        // app as usual; the release is kept back so it doesn't count as a
+        // tap there too (Firefox would show its menu bar). Ask Umoja then
+        // takes the keyboard, so the app sees Alt go away with the focus.
+        if (keysym == XK_ALT_L && action != mir_keyboard_action_repeat) {
+            if (action == mir_keyboard_action_down) {
+                ask_alt_armed = (mods & ~UMOJA_MOD_ALT) == 0 && umoja_ask_alt_tap_enabled();
+                return MinimalWindowManager::handle_keyboard_event(event);
+            }
+            if (ask_alt_armed) {
+                ask_alt_armed = false;
+                umoja_handle_action(UMOJA_ACTION_ASK_UMOJA);
+                return true;
+            }
+        } else if (action == mir_keyboard_action_down) {
+            ask_alt_armed = false;
+        }
 
         // Volume, brightness and playback keys work whatever has focus, as
         // in GNOME. Volume and brightness keep stepping while held. The
@@ -477,6 +507,7 @@ public:
             umoja_pointer_pressed();
             // Super+click is not a tap of Super: no overview on release.
             overlay_key_armed = false;
+            ask_alt_armed = false;
         }
 
         // The rest of a click that closed a shell menu (below).
@@ -891,6 +922,7 @@ private:
     }
 
     bool overlay_key_armed = false;
+    bool ask_alt_armed = false;
     bool applying = false;
     // Window menu: Always on Top, Always on Visible Workspace.
     std::set<Window> above;
@@ -1936,6 +1968,8 @@ private:
     // ---- keyboard move / resize -----------------------------------------------
 
     static constexpr int KEY_ABOVE_TAB = 41; // evdev KEY_GRAVE
+    static constexpr int KEY_COPILOT_F23 = 193; // evdev KEY_F23
+    static constexpr uint32_t XK_ALT_L = 0xffe9;
     static constexpr uint32_t XK_GRAVE = 0x60;
 
     static bool resizable(WindowInfo const& info) {

@@ -25,7 +25,7 @@ pub fn tools() -> Vec<Tool> {
         .with_summary(|a| format!("Open Settings › {}", arg_str(a, "panel").unwrap_or(""))),
         Tool::read_only(
             "desktop_status",
-            "Read the current Dark Style, Power Mode, Wi-Fi, Bluetooth and workspace state.",
+            "Read the current Dark Style, Power Mode, Wi-Fi, Bluetooth, Do Not Disturb, Night Light and workspace state.",
             json!({"type": "object", "properties": {}}),
             |_| Box::pin(async move { Outcome::text(desktop_status().await) }),
         )
@@ -451,6 +451,15 @@ async fn desktop_status() -> String {
             Ok((_, p)) => format!("Bluetooth: {}", if p { "on" } else { "off" }),
             Err(e) => format!("Bluetooth: {e}"),
         });
+    }
+    // The switches Quick Settings has too, so Ask Umoja can show them.
+    if let Some(n) = gs::settings("org.gnome.desktop.notifications") {
+        let dnd = !n.boolean("show-banners");
+        lines.push(format!("Do Not Disturb: {}", if dnd { "on" } else { "off" }));
+    }
+    if let Some(c) = gs::settings("org.gnome.settings-daemon.plugins.color") {
+        let on = c.boolean("night-light-enabled");
+        lines.push(format!("Night Light: {}", if on { "on" } else { "off" }));
     }
     if let Some((cur, n)) = workspaces().await {
         lines.push(format!("Workspace: {} of {n}", cur + 1));

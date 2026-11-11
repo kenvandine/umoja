@@ -34,6 +34,10 @@ pub struct Binding {
 pub struct Config {
     pub bindings: Vec<Binding>,
     pub overlay_keysym: Option<u32>,
+    /// A lone tap of the left Alt key opens Ask Umoja. On by default, and
+    /// off once a Copilot key has been seen: then that key is the only one
+    /// (see [`copilot_pressed`]).
+    pub ask_alt_tap: bool,
     pub edge_tiling: bool,
     /// Ubuntu Tiling Assistant's layout picker (drag to the top edge).
     pub layout_picker: bool,
@@ -67,6 +71,7 @@ const TILING_ASSISTANT_UUID: &str = "tiling-assistant@ubuntu.com";
 pub static CONFIG: RwLock<Config> = RwLock::new(Config {
     bindings: Vec::new(),
     overlay_keysym: Some(XK_SUPER_L),
+    ask_alt_tap: true,
     edge_tiling: true,
     layout_picker: true,
     raise_tile_group: true,
@@ -530,9 +535,21 @@ pub fn reload() {
     if keysym_from_name(&overlay).is_some() {
         shortcuts.insert(0, ("overlay-key".to_string(), overlay.clone()));
     }
+    let ask_alt_tap = alt_tap_wanted(
+        gs::get_bool(gs::UMOJA_SHELL, ASK_ALT_TAP_KEY, true),
+        gs::get_bool(gs::UMOJA_SHELL, COPILOT_SEEN_KEY, false),
+    );
+    shortcuts.insert(
+        0,
+        (
+            "ask-umoja".to_string(),
+            if ask_alt_tap { "Alt_L" } else { "Copilot" }.to_string(),
+        ),
+    );
     let cfg = Config {
         bindings,
         overlay_keysym: keysym_from_name(&overlay),
+        ask_alt_tap,
         // Tiling Assistant switches mutter's edge-tiling off and does the
         // edge tiling itself, so with it, edge tiling is on.
         edge_tiling: ta || gs::get_bool(gs::MUTTER, "edge-tiling", true),
@@ -759,6 +776,45 @@ pub fn read() -> std::sync::RwLockReadGuard<'static, Config> {
     CONFIG.read().unwrap_or_else(|e| e.into_inner())
 }
 
+/// org.umoja.shell keys for the Ask Umoja key.
+const ASK_ALT_TAP_KEY: &str = "ask-umoja-alt-tap";
+const COPILOT_SEEN_KEY: &str = "ask-umoja-copilot-seen";
+
+/// Alt taps open Ask Umoja when allowed and no Copilot key was seen yet:
+/// keyboards with a Copilot key leave Alt to the apps (Firefox's menu bar).
+fn alt_tap_wanted(allowed: bool, copilot_seen: bool) -> bool {
+    allowed && !copilot_seen
+}
+
+pub fn ask_alt_tap_enabled() -> bool {
+    CONFIG.read().unwrap_or_else(|e| e.into_inner()).ask_alt_tap
+}
+
+/// The Copilot key was pressed: open Ask Umoja, and from now on leave the
+/// lone Alt tap alone. Keyboards report keys they don't have, so a real
+/// press is the only reliable sign that this one exists. It is remembered
+/// in GSettings (written off the input thread), which also reloads the
+/// config through the watcher.
+pub fn copilot_pressed() {
+    let first = {
+        let mut cfg = CONFIG.write().unwrap_or_else(|e| e.into_inner());
+        std::mem::replace(&mut cfg.ask_alt_tap, false)
+    };
+    if first {
+        tracing::info!("Copilot key seen: the Alt tap no longer opens Ask Umoja");
+        std::thread::spawn(|| {
+            if let Some(s) = gs::settings(gs::UMOJA_SHELL)
+                && gs::has_key(&s, COPILOT_SEEN_KEY)
+                && !s.boolean(COPILOT_SEEN_KEY)
+            {
+                let _ = s.set_boolean(COPILOT_SEEN_KEY, true);
+                gio::Settings::sync();
+            }
+        });
+    }
+    crate::session::dispatch(Action::AskUmoja);
+}
+
 pub fn is_overlay_key(keysym: u32) -> bool {
     let configured = CONFIG
         .read()
@@ -886,6 +942,13 @@ pub fn keysym_from_name(name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn alt_tap_only_without_a_copilot_key() {
+        assert!(alt_tap_wanted(true, false));
+        assert!(!alt_tap_wanted(true, true));
+        assert!(!alt_tap_wanted(false, false));
+    }
+
     use super::*;
 
     #[test]

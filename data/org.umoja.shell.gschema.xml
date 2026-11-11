@@ -80,6 +80,24 @@
         additional one.
       </description>
     </key>
+    <key name="ask-umoja-alt-tap" type="b">
+      <default>true</default>
+      <summary>Tap Alt to open Ask Umoja on keyboards without a Copilot key</summary>
+      <description>
+        The Copilot key always opens Ask Umoja. Until one has been pressed
+        on this computer, a lone tap of the left Alt key opens it too, as
+        Unity's HUD did. Once a Copilot key has been seen
+        (ask-umoja-copilot-seen), Alt is left to the apps.
+      </description>
+    </key>
+    <key name="ask-umoja-copilot-seen" type="b">
+      <default>false</default>
+      <summary>A Copilot key has been pressed on this computer</summary>
+      <description>
+        Set by the compositor on the first Copilot key press. While true,
+        tapping Alt no longer opens Ask Umoja. Reset it to use Alt again.
+      </description>
+    </key>
     <key name="ask-about-screen-hotkey" type="as">
       <default>['&lt;Super&gt;&lt;Shift&gt;a']</default>
       <summary>Ask the assistant about the selected text or the current window</summary>
