@@ -19,22 +19,24 @@ is open). The full tour takes about three minutes.
 
 ## What it shows
 
-The assistant scenes come first, while viewers are still watching; the
-classic desktop tour follows.
+Ask Umoja and the assistant come first, while viewers are still watching;
+the classic desktop tour follows. The notifications scene sits among them
+because `ai-reply` and `ai-summary` need its bubbles. The trailer follows the
+same order.
 
 | Scene | How it is driven | Output |
 | --- | --- | --- |
-| `desktop` | opens up to three apps (Files, Text Editor, Calculator...), drags two into a floating layout, sends the third to the next workspace | `images/desktop.png` |
 | `ask-umoja` | `Overlay.ToggleAsk` over Text Editor (the empty card: its launcher actions, frequent picks, suggestions), then `Overlay.AskType` types "dark", "12*7+5", "sound" and a question; nothing is picked, so nothing changes | `images/ask-umoja.png`, `images/ask-switch.png`, `images/ask-sum.png`, `images/ask-settings.png`, `images/ask-question.png`, `videos/ask-umoja.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
-| `tiling` | `org.umoja.Compositor.DragWindow`: drags one window to the left edge and one to the right (halves), one to the top-right corner (quarter), then both back out | `images/tiling-halves.png`, `images/tiling-quarter.png`, `videos/tiling.*` |
 | `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back straight after) | `images/ai-settings.png`, `videos/ai-settings.*` |
 | `ai-install` | "I need VLC" (`--app`): stops at Ask Umoja's "Allow Umoja to do this?" confirmation and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
 | `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow confirmation and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
+| `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
 | `notifications` | clears the notification list (keep it with `--keep-notifications`), then three `org.freedesktop.Notifications.Notify` bubbles, then the date menu | `images/notifications.png`, `images/calendar.png`, `videos/notifications.*` |
 | `ai-reply` | "Open a reply to Priya's notification with a few drafts": opens the reply field with drafts; nothing is sent | `images/ai-reply.png`, `videos/ai-reply.*` |
 | `ai-summary` | "Summarize my recent notifications..." | `images/ai-summary.png`, `videos/ai-summary.*` |
-| `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
+| `desktop` | opens up to three apps (Files, Text Editor, Calculator...), drags two into a floating layout, sends the third to the next workspace | `images/desktop.png` |
+| `tiling` | `org.umoja.Compositor.DragWindow`: drags one window to the left edge and one to the right (halves), one to the top-right corner (quarter), then both back out | `images/tiling-halves.png`, `images/tiling-quarter.png`, `videos/tiling.*` |
 | `app-grid` | `org.umoja.Overlay.Show` (apps and files only; the assistant is in Ask Umoja) | `images/app-grid.png` |
 | `overview` | `Overlay.ToggleOverview`, `ShiftOverview` up/down | `images/overview.png`, `videos/overview.*` |
 | `workspaces` | `org.umoja.Compositor.SwitchWorkspace` there and back | `images/workspace-2.png`, `videos/workspaces.*` |
@@ -52,7 +54,7 @@ clip is thrown away and it asks again (`--retries`, default 3). Hiding the
 card always declines a pending "Allow" confirmation, so the install and update
 asks can't go through.
 
-`--only assistant` / `--skip assistant` select all the `ai-*` scenes.
+`--only assistant` / `--skip assistant` select `ask-umoja` and all the `ai-*` scenes.
 `--ask "QUESTION"` (repeatable) replaces them with your own questions.
 
 Stills come from `grim` at logical size (`--hidpi` for full resolution),

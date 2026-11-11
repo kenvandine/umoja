@@ -138,20 +138,21 @@ ASK_TYPEAHEAD = [
      "A question puts “Ask Umoja” first: Enter or Tab hands it to the assistant."),
 ]
 
-# The assistant comes first, while viewers are still watching; the classic
-# desktop tour follows. ("assistant" in --only/--skip means all ai-* scenes.)
-# ai-reply and ai-summary need the notifications scene before them.
+# Ask Umoja and the assistant come first, while viewers are still watching;
+# the classic desktop tour follows. The notifications scene sits among them
+# only because ai-reply and ai-summary need its bubbles. ("assistant" in
+# --only/--skip means ask-umoja and all ai-* scenes.)
 SCENES = [
-    "desktop", "ask-umoja", "ai-tiling", "tiling", "ai-settings", "ai-install", "ai-updates",
-    "notifications", "ai-reply", "ai-summary", "ai-troubleshoot",
-    "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
+    "ask-umoja", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
+    "notifications", "ai-reply", "ai-summary",
+    "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
     "screenshot-ui", "screensaver",
 ]
-AI_SCENES = [s for s in SCENES if s.startswith("ai-")]
+AI_SCENES = [s for s in SCENES if s.startswith("ai-") or s == "ask-umoja"]
 
 # The trailer: these clips in this order, each with its caption.
-TRAILER = ["ask-umoja", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "notifications", "ai-reply",
-           "ai-summary", "ai-troubleshoot", "tiling", "overview", "workspaces", "screensaver"]
+TRAILER = ["ask-umoja", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
+           "notifications", "ai-reply", "ai-summary", "tiling", "overview", "workspaces", "screensaver"]
 
 
 class Stop(Exception):
@@ -1290,6 +1291,7 @@ class Demo:
             "quick-settings": "Quick Settings", "notifications": "Notifications",
             "shortcuts": "Keyboard shortcuts guide", "screenshot-ui": "Screenshot UI",
             "screensaver": "Screensaver",
+            "ask-umoja": "Ask Umoja: type-ahead",
             "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
             "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
             "ai-reply": "Assistant: reply to a notification",
@@ -1407,7 +1409,7 @@ class Demo:
             return self.trailer_only()
         self.preflight()
         def picked(s, names):
-            return s in names or (s.startswith("ai-") and "assistant" in names)
+            return s in names or (s in AI_SCENES and "assistant" in names)
         scenes = [s for s in SCENES if (not self.opts.only or picked(s, self.opts.only))
                   and not picked(s, self.opts.skip or [])]
         if self.opts.ask:
