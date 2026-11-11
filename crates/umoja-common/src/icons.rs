@@ -1,7 +1,8 @@
 //! Icons gnome-shell draws from its own copies, kept by Umoja too, so the
 //! shell looks right on systems without GNOME Shell installed.
 //!
-//! The SVGs live in data/icons/hicolor and are installed to
+//! The SVGs (all of gnome-shell's, see data/icons/README.md) live in
+//! data/icons/hicolor and are installed to
 //! /usr/share/umoja/icons/hicolor. Adding that folder to the icon theme's
 //! search path makes them part of the hicolor theme, which every theme
 //! inherits, so a theme that has its own version of an icon still wins.

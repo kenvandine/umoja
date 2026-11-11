@@ -8,7 +8,7 @@ authors.workspace = true
 build = "build.rs"
 
 [dependencies]
-umoja-common.workspace = true
+umoja-common = { workspace = true, features = ["icons"] }
 gtk4.workspace = true
 gtk4-layer-shell.workspace = true
 libadwaita.workspace = true

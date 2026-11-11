@@ -17,8 +17,9 @@ Comment: Prebuilt "lemonade-embeddable" release from
 Files: data/icons/*
 Copyright: The GNOME Project and GNOME Shell contributors
 License: GPL-2.0-or-later
-Comment: Symbolic icons copied from GNOME Shell (data/icons/scalable),
- which draws them from its own resources rather than an icon theme.
+Comment: All symbolic icons from GNOME Shell 51.0 (data/icons/scalable),
+ unchanged; GNOME Shell draws them from its own resources rather than an
+ icon theme. See data/icons/README.md.
 
 Files: vendor/cargo/*
 Copyright: The respective crate authors

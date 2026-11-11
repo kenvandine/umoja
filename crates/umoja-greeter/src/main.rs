@@ -22,6 +22,7 @@ fn main() -> glib::ExitCode {
         .build();
     app.connect_startup(|_| {
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+        umoja_common::icons::add_shell_icons();
         let provider = gtk::CssProvider::new();
         provider.load_from_string(include_str!("greeter.css"));
         if let Some(display) = gtk::gdk::Display::default() {
