@@ -85,6 +85,14 @@ Umoja PPA:
   monitors of different sizes built two new renderers (shaders, blur
   targets) for every screenshot. The overview's background preview refresh
   did that every 10 seconds. It now keeps one renderer per size (up to 4).
+- `patches/3016_xdg-activation-no-focus-stealing-prevention.patch`: Mir's
+  xdg-activation behaved like GNOME's focus stealing prevention and left the
+  window a click asked for behind. Only the focused client got a real token,
+  so the top bar (a layer surface) got a bogus one when a notification was
+  clicked; any key press or focus change revoked pending tokens; tokens
+  expired after 3 s. A client naming the serial of an input event it
+  received now gets a real token, key presses and focus changes don't revoke
+  tokens, and they last 30 s (still single use).
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

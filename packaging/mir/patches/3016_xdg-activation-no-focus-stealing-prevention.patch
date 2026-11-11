@@ -1,0 +1,103 @@
+Description: xdg-activation: let user actions hand focus on reliably
+ Mir's xdg-activation carried GNOME-style focus stealing prevention, and it
+ left the window a click asked for in the background:
+  - only the focused client got a real token, so the top bar (a layer
+    surface, never keyboard-focused) got a bogus one when a notification
+    was clicked, and Telegram could not come forward;
+  - any key press, or focus moving to another client, revoked every
+    pending token, so typing while an app started up kept it behind;
+  - tokens expired after 3 seconds.
+ A client now also gets a real token when it names the serial of an input
+ event it received (the user is interacting with it), key presses and
+ focus changes no longer revoke tokens, and they last 30 seconds. Tokens
+ are still single use.
+Author: Umoja developers
+Forwarded: not-needed
+Last-Update: 2026-11-11
+---
+--- a/src/server/frontend_wayland/xdg_activation_v1.cpp
++++ b/src/server/frontend_wayland/xdg_activation_v1.cpp
+@@ -84,7 +84,8 @@
+     ~XdgActivationV1();
+ 
+     std::shared_ptr<XdgActivationTokenData> get_token_data(Token const& token);
+-    std::shared_ptr<XdgActivationTokenData> create_token(struct XdgActivationTokenV1* owner, std::shared_ptr<ms::Session> session);
++    std::shared_ptr<XdgActivationTokenData> create_token(
++        struct XdgActivationTokenV1* owner, std::shared_ptr<ms::Session> session, bool from_user_input);
+     void invalidate_all();
+     void invalidate_if_not_from_session(std::shared_ptr<ms::Session> const&);
+ 
+@@ -232,9 +233,12 @@
+ }
+ 
+ std::shared_ptr<mf::XdgActivationTokenData> mf::XdgActivationV1::create_token(
+-    XdgActivationTokenV1* owner, std::shared_ptr<ms::Session> session)
++    XdgActivationTokenV1* owner, std::shared_ptr<ms::Session> session, bool from_user_input)
+ {
+-    if (!session_listener->is_focused_session(session))
++    // Umoja: a client the user just clicked or typed in may hand focus on
++    // even when it has no keyboard focus itself, such as the top bar (a
++    // layer surface) when a notification is clicked.
++    if (!from_user_input && !session_listener->is_focused_session(session))
+         return std::make_shared<XdgActivationTokenData>(
+             token_authority->get_bogus_token(), session, owner->serial, owner->seat);
+ 
+@@ -320,9 +324,9 @@
+     if (input_event->input_type() != mir_input_event_type_key)
+         return;
+ 
+-    auto keyboard_event = input_event->to_keyboard();
+-    if (keyboard_event->action() == mir_keyboard_action_down)
+-        xdg_activation_v1->invalidate_all();
++    // Umoja: tokens are not revoked by key presses. That is GNOME's focus
++    // stealing prevention, and it left the window a click asked for behind
++    // whenever the user typed something while the app was starting up.
+ }
+ 
+ void mf::XdgActivationV1::KeyboardObserver::keyboard_focus_set(std::shared_ptr<mi::Surface> const&)
+@@ -336,14 +340,14 @@
+ 
+ void mf::XdgActivationV1::SessionListener::focused(std::shared_ptr<ms::Session> const& session)
+ {
++    // Umoja: focus moving elsewhere doesn't revoke tokens either (see
++    // keyboard_event); they still expire and are used once.
+     focused_session = session;
+-    xdg_activation_v1->invalidate_if_not_from_session(session);
+ }
+ 
+ void mf::XdgActivationV1::SessionListener::unfocused()
+ {
+     focused_session = nullptr;
+-    xdg_activation_v1->invalidate_all();
+ }
+ 
+ bool mf::XdgActivationV1::SessionListener::is_focused_session(std::shared_ptr<ms::Session> const& session) const
+@@ -477,6 +481,14 @@
+     }
+ 
+     used = true;
+-    token = xdg_activation->create_token(this, session);
++    // The serial of an input event this client received is proof the user
++    // is interacting with it right now.
++    bool from_user_input = false;
++    if (serial)
++    {
++        auto const event = client->event_for(serial.value());
++        from_user_input = event && *event && (*event)->type() == mir_event_type_input;
++    }
++    token = xdg_activation->create_token(this, session, from_user_input);
+     send_done_event(std::string(token->token));
+ }
+--- a/src/server/shell/token_authority.cpp
++++ b/src/server/shell/token_authority.cpp
+@@ -29,7 +29,9 @@
+ namespace
+ {
+ /// Time in milliseconds that the compositor will wait before invalidating a token
+-static auto constexpr token_invalidation_timeout = std::chrono::seconds(3);
++// Umoja: 30 s rather than 3, so a slow-starting app still gets to raise its
++// window with the token it was launched with.
++static auto constexpr token_invalidation_timeout = std::chrono::seconds(30);
+ }
+ 
+ namespace msh = mir::shell;

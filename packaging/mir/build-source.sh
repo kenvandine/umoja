@@ -32,4 +32,5 @@ dch --append "Confine the pointer when it is pushed just past the top or left sc
 dch --append "wlr-screencopy: read a capture_output_region region as output-local, as the protocol says, so recording part of a monitor not at the layout origin is not cropped."
 dch --append "Reuse the cross-GPU CPU copy buffers instead of allocating one per frame, and log the copy volume in Umoja's window debug mode."
 dch --append "Screencopy: keep a renderer per capture size, so capturing monitors of different sizes in turn does not rebuild the GL renderer every time."
+dch --append "xdg-activation: give a token to a client the user is interacting with even without keyboard focus (the top bar), stop revoking tokens on key presses and focus changes, and let them live 30 s, so clicked notifications and links bring their window forward."
 echo "$PWD"
