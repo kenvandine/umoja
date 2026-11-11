@@ -442,7 +442,7 @@ impl Overlay {
         let foot_backend = gtk::Label::builder()
             .css_classes(["ask-hints"])
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
-            .max_width_chars(28)
+            .max_width_chars(40)
             .build();
         let foot = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         foot.add_css_class("ask-foot");
@@ -897,7 +897,10 @@ impl Overlay {
     /// "Qwen3-4B · on this computer": what answers questions.
     fn update_foot(&self) {
         let b = umoja_common::assistant_backend::current();
-        let model = b.model.trim_end_matches("-GGUF").to_string();
+        // "~anthropic/claude-sonnet-latest" -> "claude-sonnet-latest": the
+        // provider prefix (OpenRouter's) only pushes the name out of view.
+        let model = b.model.trim_end_matches("-GGUF");
+        let model = model.rsplit('/').next().unwrap_or(model).trim_start_matches('~');
         self.foot_backend.set_text(&if b.cloud {
             format!("{model} · {}", b.host())
         } else {

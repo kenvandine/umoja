@@ -19,9 +19,12 @@ pub fn needs_terminal(cmd: &str) -> bool {
 /// Run `cmd` in the user's terminal, kept open afterwards so the result
 /// can be read.
 pub fn spawn_in_terminal(cmd: &str) -> std::io::Result<()> {
-    let script = format!("{cmd}\nstatus=$?\necho\nprintf '%s' \"$1\"\nread -r _\nexit $status");
+    // The window is titled with the command (an OSC 0 title), not "sh".
+    let script = format!(
+        "printf '\\033]0;%s\\007' \"$2\"\n{cmd}\nstatus=$?\necho\nprintf '%s' \"$1\"\nread -r _\nexit $status"
+    );
     let prompt = i18n::umoja("Press Enter to close this window.");
-    let shell = ["sh", "-c", script.as_str(), "umoja-run", prompt.as_str()];
+    let shell = ["sh", "-c", script.as_str(), "umoja-run", prompt.as_str(), cmd];
     // xdg-terminal-exec takes the command directly; the others after a flag.
     let candidates: [(&str, &[&str]); 4] = [
         ("xdg-terminal-exec", &[]),
