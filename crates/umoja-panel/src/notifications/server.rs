@@ -47,6 +47,10 @@ const XML: &str = r#"
       <arg type="u" name="id"/>
       <arg type="s" name="action_key"/>
     </signal>
+    <signal name="ActivationToken">
+      <arg type="u" name="id"/>
+      <arg type="s" name="activation_token"/>
+    </signal>
     <signal name="NotificationReplied">
       <arg type="u" name="id"/>
       <arg type="s" name="text"/>

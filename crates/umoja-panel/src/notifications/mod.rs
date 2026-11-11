@@ -185,6 +185,9 @@ type ReplyListener = Box<dyn Fn(u32)>;
 /// What the shell does when one of its own notifications' actions is
 /// picked (there is no D-Bus sender to tell).
 type ActionHandler = Rc<dyn Fn(&str)>;
+/// A row of org.umoja.Compositor `GetWindowsMru`: (id, app_id, title,
+/// x, y, width, height, flags).
+type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
 
 /// Shared state between the D-Bus server, the banners and the message list.
 pub struct Center {
@@ -396,7 +399,8 @@ impl Center {
         // Raise the app (its default action usually opens the conversation).
         let resident = note.resident;
         if note.default_action() {
-            self.emit("ActionInvoked", &(id, "default").to_variant());
+            self.emit_action(&note, "default");
+            self.raise_app(&note, true, || {});
         } else {
             self.activate(id);
         }
@@ -567,26 +571,27 @@ impl Center {
     }
 
     /// The user clicked a notification (banner or list row).
+    ///
+    /// The app gets an activation token and its default action, so it can
+    /// open the right conversation and focus its own window. Apps that
+    /// ignore the token (or have none to use, like Telegram with its window
+    /// on another workspace) would stay behind, so once the app has had a
+    /// moment, its newest window is raised unless it already has focus.
+    /// Without a default action, the app's window is raised or the app
+    /// launched, as gnome-shell's `app.activate()` does.
     pub fn activate(&self, id: u32) {
         let Some(note) = self.find(id) else { return };
         if note.default_action() {
+            // The shell's own notifications act in-process, nothing to raise.
+            let from_app = !self.handlers.borrow().contains_key(&id);
             self.invoke(id, "default");
+            if from_app {
+                self.raise_app(&note, true, || {});
+            }
             return;
         }
-        // No default action: GNOME raises/launches the sending app.
-        if let Some(app) = note
-            .app_id
-            .as_deref()
-            .and_then(|a| gio::DesktopAppInfo::new(&format!("{a}.desktop")))
-        {
-            let ctx: gio::AppLaunchContext = match gdk::Display::default() {
-                Some(d) => umoja_common::app_scope::scoped(d.app_launch_context()).upcast(),
-                None => umoja_common::app_scope::launch_context(),
-            };
-            if let Err(e) = app.launch(&[], Some(&ctx)) {
-                tracing::warn!(error = %e, "could not launch notification app");
-            }
-        }
+        let launch_note = note.clone();
+        self.raise_app(&note, false, move || launch_app(&launch_note));
         if !note.resident {
             self.close(id, CloseReason::Dismissed);
         }
@@ -598,12 +603,92 @@ impl Center {
         let handler = self.handlers.borrow().get(&id).cloned();
         match handler {
             Some(h) => h(action),
-            None => self.emit("ActionInvoked", &(id, action).to_variant()),
+            None => self.emit_action(&note, action),
         }
         if !note.resident {
             self.close(id, CloseReason::Dismissed);
         } else {
             self.bubbles.remove(id);
+        }
+    }
+
+    /// Spec 1.2 order, as gnome-shell: an xdg-activation token first, so a
+    /// Wayland app is allowed to focus its window, then the action.
+    fn emit_action(&self, note: &Note, action: &str) {
+        if let Some(token) = activation_token(note) {
+            self.emit("ActivationToken", &(note.id, token.as_str()).to_variant());
+        }
+        self.emit("ActionInvoked", &(note.id, action).to_variant());
+    }
+
+    /// Raise the newest window of the app that sent `note` through
+    /// umoja-mir. With `after_app`, first give the app a moment to act on
+    /// its default action and leave things alone if one of its windows has
+    /// focus by then (it may have opened a new one). `none` runs when the
+    /// app has no window at all.
+    fn raise_app(&self, note: &Note, after_app: bool, none: impl FnOnce() + 'static) {
+        let Some(conn) = self.conn.borrow().clone() else {
+            none();
+            return;
+        };
+        if note.app_id.is_none() && note.app_name.trim().is_empty() {
+            none();
+            return;
+        }
+        let app_id = note.app_id.clone();
+        let app_name = note.app_name.clone();
+        let raise = move || {
+            conn.clone().call(
+                Some(umoja_common::dbus::COMPOSITOR_BUS_NAME),
+                umoja_common::dbus::COMPOSITOR_OBJECT_PATH,
+                umoja_common::dbus::COMPOSITOR_INTERFACE,
+                "GetWindowsMru",
+                None,
+                Some(glib::VariantTy::new("(a(tssiiiiu))").unwrap()),
+                gio::DBusCallFlags::NONE,
+                1000,
+                gio::Cancellable::NONE,
+                move |res| {
+                    let rows: Vec<WindowRow> = match res.ok().and_then(|v| v.get::<(Vec<_>,)>()) {
+                        Some((rows,)) => rows,
+                        None => {
+                            none();
+                            return;
+                        }
+                    };
+                    let is_app = |w: &str| {
+                        let desktop = umoja_common::apps::app_for_window(w)
+                            .and_then(|a| a.id())
+                            .map(|d| d.trim_end_matches(".desktop").to_string());
+                        window_is_app(w, desktop.as_deref(), app_id.as_deref(), &app_name)
+                    };
+                    if after_app && rows.first().is_some_and(|r| is_app(&r.1)) {
+                        return;
+                    }
+                    match rows.iter().find(|r| is_app(&r.1)) {
+                        Some(r) => {
+                            conn.call(
+                                Some(umoja_common::dbus::COMPOSITOR_BUS_NAME),
+                                umoja_common::dbus::COMPOSITOR_OBJECT_PATH,
+                                umoja_common::dbus::COMPOSITOR_INTERFACE,
+                                "ActivateWindow",
+                                Some(&(r.0,).to_variant()),
+                                None,
+                                gio::DBusCallFlags::NONE,
+                                1000,
+                                gio::Cancellable::NONE,
+                                |_| {},
+                            );
+                        }
+                        None => none(),
+                    }
+                },
+            );
+        };
+        if after_app {
+            glib::timeout_add_local_once(std::time::Duration::from_millis(300), raise);
+        } else {
+            raise();
         }
     }
 
@@ -748,10 +833,89 @@ pub(crate) mod tests_support {
     }
 }
 
+fn note_app(note: &Note) -> Option<gio::DesktopAppInfo> {
+    gio::DesktopAppInfo::new(&format!("{}.desktop", note.app_id.as_deref()?))
+}
+
+/// An xdg-activation token for the app to focus its window with.
+fn activation_token(note: &Note) -> Option<String> {
+    let ctx = gdk::Display::default()?.app_launch_context();
+    ctx.startup_notify_id(note_app(note).as_ref(), &[])
+        .map(|t| t.to_string())
+}
+
+/// Launch the app that sent `note` (it had no window to raise).
+fn launch_app(note: &Note) {
+    let Some(app) = note_app(note) else { return };
+    let ctx: gio::AppLaunchContext = match gdk::Display::default() {
+        Some(d) => umoja_common::app_scope::scoped(d.app_launch_context()).upcast(),
+        None => umoja_common::app_scope::launch_context(),
+    };
+    if let Err(e) = app.launch(&[], Some(&ctx)) {
+        tracing::warn!(error = %e, "could not launch notification app");
+    }
+}
+
+/// Whether a window (its Wayland app-id, and the desktop id that resolves
+/// to, as the dock matches them) belongs to the app that sent a
+/// notification (its `desktop-entry` hint, else its app name).
+fn window_is_app(
+    window_app_id: &str,
+    window_desktop_id: Option<&str>,
+    note_app_id: Option<&str>,
+    app_name: &str,
+) -> bool {
+    let window_app_id = window_app_id.trim();
+    if window_app_id.is_empty() {
+        return false;
+    }
+    if let Some(id) = note_app_id.filter(|i| !i.is_empty()) {
+        return window_app_id.eq_ignore_ascii_case(id)
+            || window_desktop_id.is_some_and(|d| d.eq_ignore_ascii_case(id));
+    }
+    let name = app_name.trim();
+    !name.is_empty() && window_app_id.eq_ignore_ascii_case(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::tests_support::note;
     use super::*;
+
+    #[test]
+    fn matches_the_sending_apps_window() {
+        let tg = Some("org.telegram.desktop");
+        assert!(window_is_app(
+            "org.telegram.desktop",
+            None,
+            tg,
+            "Telegram Desktop"
+        ));
+        assert!(window_is_app(
+            "TelegramDesktop",
+            Some("org.telegram.desktop"),
+            tg,
+            "Telegram Desktop"
+        ));
+        assert!(!window_is_app(
+            "firefox",
+            Some("firefox"),
+            tg,
+            "Telegram Desktop"
+        ));
+        // Snap: the compositor names snap windows by their snapd desktop id.
+        let snap = Some("telegram-desktop_telegram-desktop");
+        assert!(window_is_app(
+            "telegram-desktop_telegram-desktop",
+            None,
+            snap,
+            "Telegram"
+        ));
+        // No desktop-entry hint: fall back to the app name.
+        assert!(window_is_app("Slack", None, None, "slack"));
+        assert!(!window_is_app("", None, None, ""));
+        assert!(!window_is_app("firefox", None, None, "notify-send"));
+    }
 
     #[test]
     fn who_gets_quick_replies() {
