@@ -331,4 +331,4 @@ session and captures screenshots and clips ([how](tools/demo/README.md)).
 Umoja is free software under the GNU General Public License, version 3 or
 later. It ships a copy of [Lemonade](https://github.com/lemonade-sdk/lemonade)
 (Apache-2.0) and GNOME Shell's symbolic icons (GPL-2.0-or-later); see
-[debian/copyright](debian/copyright) for details.
+[LICENSE](LICENSE) and [debian/copyright](debian/copyright) for details.
