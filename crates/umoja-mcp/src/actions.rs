@@ -206,11 +206,12 @@ pub fn tools() -> Vec<Tool> {
         .with_summary(|a| format!("Force quit {}", arg_str(a, "app").unwrap_or("the app"))),
         Tool::new(
             "open_in_terminal",
-            "Run a command-line program or command in a new window of the user's default terminal, where they can see and use it (btop, htop, a script). The user is asked first. Never start a terminal app such as gnome-terminal yourself; to open a program by name, launch_app is enough.",
+            "Run a command-line program or command in a new window of the user's default terminal, where they can see and use it (btop, htop, a script). The user is asked first. If the program isn't installed this says so: install it with install_app, then call open_in_terminal again. Never start a terminal app such as gnome-terminal yourself; to open a program by name, launch_app is enough.",
             obj(json!({"command": {"type": "string", "description": "The command line, e.g. \"btop\""}}), &["command"]),
             |a| Box::pin(open_in_terminal(a)),
         )
         .confirm()
+        .with_preflight(open_in_terminal_preflight)
         .with_summary(|a| format!("Run \"{}\" in a terminal", arg_str(a, "command").unwrap_or(""))),
         Tool::new(
             "install_app",
@@ -1483,6 +1484,78 @@ pub enum Redirect {
     Hint(&'static str),
 }
 
+/// Words that start a shell command without naming a program to look for.
+const SHELL_WORDS: &[&str] = &[
+    "cd", "echo", "export", "source", ".", "exec", "time", "nohup", "env", "for", "while", "if",
+    "test", "[", "true", "false", "read", "printf", "set", "ulimit", "umask", "alias", "type",
+];
+
+/// The program `command` runs, when it can't be found in `dirs` (or as a
+/// path): "btop -t" with no btop anywhere → Some("btop"). Shell words,
+/// sudo and leading VAR=value are skipped; anything that can't be told
+/// for sure counts as installed.
+fn missing_program(command: &str, dirs: &[PathBuf]) -> Option<String> {
+    let mut words = command.split_whitespace().skip_while(|w| {
+        *w == "sudo" || (w.contains('=') && !w.starts_with('=') && !w.starts_with('-'))
+    });
+    let first = words.next()?.trim_matches(|c| c == '\'' || c == '"');
+    if first.is_empty()
+        || SHELL_WORDS.contains(&first)
+        || first.contains(['$', '`', '(', ')', '{', '}', '|', ';', '&', '<', '>', '*', '~'])
+    {
+        return None;
+    }
+    if first.contains('/') {
+        return (!Path::new(first).exists()).then(|| first.to_string());
+    }
+    let found = dirs.iter().any(|d| {
+        let p = d.join(first);
+        p.is_file()
+            && std::fs::metadata(&p)
+                .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
+                .unwrap_or(false)
+    });
+    (!found).then(|| first.to_string())
+}
+
+/// Where the user's shell would look for a program: $PATH, plus the
+/// places a login shell adds that a session service may lack.
+fn program_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let extra = [
+        Some(PathBuf::from("/snap/bin")),
+        Some(PathBuf::from("/usr/games")),
+        Some(PathBuf::from("/usr/local/bin")),
+        Some(PathBuf::from("/usr/bin")),
+        Some(PathBuf::from("/bin")),
+        home.as_ref().map(|h| h.join(".local/bin")),
+        home.as_ref().map(|h| h.join(".cargo/bin")),
+    ];
+    for d in extra.into_iter().flatten() {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    dirs
+}
+
+/// Don't offer to run a program that isn't installed: the model is told
+/// to install it first (install_app prefers the snap), then run it.
+fn open_in_terminal_preflight(a: Value) -> LocalFuture<Result<Option<String>, String>> {
+    Box::pin(async move {
+        let cmd = arg_str(&a, "command").map(str::trim).unwrap_or("").to_string();
+        match missing_program(&cmd, &program_dirs()) {
+            Some(p) => Err(format!(
+                "{p} isn't installed, so nothing was run and the user wasn't asked. Install it first with install_app (name \"{p}\"; it picks the snap when there is one, else the Ubuntu package and asks the user), then call open_in_terminal again with the same command."
+            )),
+            None => Ok(None),
+        }
+    })
+}
+
 async fn open_in_terminal(a: Value) -> Outcome {
     let Some(cmd) = arg_str(&a, "command").map(str::trim).filter(|c| !c.is_empty()) else {
         return Outcome::err("command is required");
@@ -1752,6 +1825,25 @@ mod tests {
         assert_eq!(call("ls ~/Downloads"), "none");
         assert_eq!(call("date +%s"), "none");
         assert_eq!(call("systemctl status bluetooth"), "none");
+    }
+
+    #[test]
+    fn missing_programs_are_found() {
+        let dir = std::env::temp_dir().join(format!("umoja-mcp-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let htop = dir.join("htop");
+        std::fs::write(&htop, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&htop, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let dirs = vec![dir.clone()];
+        assert_eq!(missing_program("btop", &dirs), Some("btop".into()));
+        assert_eq!(missing_program("sudo btop -t", &dirs), Some("btop".into()));
+        assert_eq!(missing_program("TERM=xterm btop", &dirs), Some("btop".into()));
+        assert_eq!(missing_program("htop", &dirs), None);
+        assert_eq!(missing_program("cd /tmp && ls", &dirs), None);
+        assert_eq!(missing_program("$EDITOR notes", &dirs), None);
+        assert_eq!(missing_program("/no/such/tool", &dirs), Some("/no/such/tool".into()));
+        assert_eq!(missing_program("", &dirs), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
