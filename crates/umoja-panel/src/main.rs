@@ -307,6 +307,7 @@ fn load_css() {
     // The shell chrome is always dark, like the notification bubbles,
     // whatever Settings > Appearance says; apps keep following it.
     adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+    umoja_common::icons::add_shell_icons();
     let provider = gtk::CssProvider::new();
     provider.load_from_string(include_str!("panel.css"));
     if let Some(display) = gtk::gdk::Display::default() {

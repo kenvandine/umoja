@@ -26,3 +26,5 @@ wayland-protocols = { workspace = true, optional = true }
 blur = ["dep:gtk4", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols"]
 # Primary monitor and hotplug for shell surfaces (org.gnome.Mutter.DisplayConfig).
 monitors = ["dep:gtk4"]
+# Icons gnome-shell keeps to itself, shipped by Umoja (data/icons).
+icons = ["dep:gtk4"]

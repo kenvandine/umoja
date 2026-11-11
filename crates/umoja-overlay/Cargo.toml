@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-umoja-common = { workspace = true, features = ["blur", "monitors"] }
+umoja-common = { workspace = true, features = ["blur", "monitors", "icons"] }
 gtk4.workspace = true
 libadwaita.workspace = true
 gtk4-layer-shell.workspace = true

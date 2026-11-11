@@ -67,6 +67,7 @@ for b in /usr/bin/umoja-mir /usr/bin/umoja-panel /usr/bin/umoja-dock /usr/bin/um
 done
 /usr/lib/umoja/lemonade/lemond --version >>"$LOG" 2>&1 && pass "embedded lemond runs" || fail "embedded lemond does not run"
 [ -r /usr/share/umoja/lemonade/defaults.json ] && pass "Lemonade GPU memory defaults installed" || fail "missing /usr/share/umoja/lemonade/defaults.json"
+[ -r /usr/share/umoja/icons/hicolor/scalable/actions/dark-mode-symbolic.svg ] && pass "shell icons from gnome-shell installed" || fail "missing /usr/share/umoja/icons"
 
 step "Display manager"
 dm=$(cat /etc/X11/default-display-manager 2>/dev/null)

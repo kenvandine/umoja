@@ -18,6 +18,8 @@ pub mod diagnostics;
 pub mod gsettings;
 pub mod hidpi;
 pub mod i18n;
+#[cfg(feature = "icons")]
+pub mod icons;
 pub mod lemonade;
 #[cfg(feature = "monitors")]
 pub mod monitors;
