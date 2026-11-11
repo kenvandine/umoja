@@ -499,12 +499,20 @@ public:
 
         bool const consumed = MinimalWindowManager::handle_pointer_event(event);
 
-        // A scripted drag (DragWindow) ignores the real pointer.
-        if (action == mir_pointer_action_motion) {
+        // A scripted drag (DragWindow) ignores the real pointer. A pointer
+        // drag ends when the last button comes up; motion with no button
+        // held also ends it, because the release can go missing (a client's
+        // move request that lands after the button is already up, or a
+        // release taken by a client's drag-and-drop). Without that the drag
+        // stayed live and plain hovering near the top of the screen showed
+        // the maximize preview, dimming the whole work area.
+        if (moving && !scripted && buttons == 0 &&
+            (action == mir_pointer_action_motion || action == mir_pointer_action_button_up)) {
+            if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: pointer drag ended (no button held)\n");
+            end_move();
+        } else if (action == mir_pointer_action_motion) {
             if (moving && !scripted) on_move(px, py);
             else if (!moving) report_motion(event, px, py);
-        } else if (action == mir_pointer_action_button_up) {
-            if (moving && !scripted && mir_pointer_event_buttons(event) == 0) end_move();
         }
         return consumed;
     }
@@ -653,6 +661,13 @@ public:
         if (!all_windows.count(info.window()) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer)
             return;
         auto const* pev = mir_input_event_get_pointer_event(input_event);
+        // A request that arrives after the button is already up would start
+        // a drag that no release ever ends.
+        if (held_buttons == 0) {
+            if (debug_windows())
+                std::fprintf(stderr, "umoja-mir: wm: move request ignored, no button held\n");
+            return;
+        }
         int32_t const px = static_cast<int32_t>(mir_pointer_event_axis_value(pev, mir_pointer_axis_x));
         int32_t const py = static_cast<int32_t>(mir_pointer_event_axis_value(pev, mir_pointer_axis_y));
         guarded("begin move", [&] { begin_move(info.window(), px, py, was_tiled_or_maximized(info.window())); });
