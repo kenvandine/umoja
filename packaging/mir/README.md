@@ -93,6 +93,12 @@ Umoja PPA:
   expired after 3 s. A client naming the serial of an input event it
   received now gets a real token, key presses and focus changes don't revoke
   tokens, and they last 30 s (still single use).
+- `patches/3017_window-for-xdg-toplevel.patch`: `miral::window_for()`
+  accepted wl_surface, xdg_surface and layer surfaces but not xdg_toplevel.
+  umoja-mir's xdg-session-management-v1 (`src/shim/session_management.cpp`)
+  gets xdg_toplevels from `add_toplevel`/`restore_toplevel` and needs their
+  window. Without the patch it falls back to matching a client's next
+  window.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

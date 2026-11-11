@@ -25,6 +25,11 @@
 //!   dock, menus, notification bubbles and OSD. Only in Umoja's patched Mir
 //!   (`packaging/mir/patches/3004_background-blur.patch`); skipped elsewhere.
 //!
+//! * `xdg_session_manager_v1` — apps that save their session get their
+//!   windows back with the same size, position, maximized/tiled state,
+//!   workspace and monitor, as on GNOME. umoja-mir implements this one
+//!   itself (`src/shim/session_management.cpp`), so it isn't listed below.
+//!
 //! `zxdg_decoration_manager_v1` is deliberately disabled (see the shim):
 //! mutter doesn't offer it either, so apps decorate themselves exactly as
 //! they do on Ubuntu's GNOME session.

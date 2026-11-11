@@ -1,0 +1,30 @@
+Description: Resolve an xdg_toplevel to its window in miral::window_for()
+ miral::window_for() (mir::frontend::get_window()) accepted wl_surface,
+ xdg_surface and layer surfaces, but not xdg_toplevel resources. Umoja's
+ xdg-session-management-v1 implementation (in umoja-mir, through
+ miral::WaylandExtensions) is handed xdg_toplevels by add_toplevel and
+ restore_toplevel, and needs to know whether a toplevel is already mapped
+ and which window it is. Without this it can only guess from the order in
+ which a client's windows appear.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-11
+---
+--- a/src/server/frontend_wayland/xdg_shell_stable.cpp
++++ b/src/server/frontend_wayland/xdg_shell_stable.cpp
+@@ -955,5 +955,15 @@
+         log_debug("No window currently associated with wayland::XdgSurface %p", static_cast<void*>(surface));
+     }
+ 
++    // An xdg_toplevel names its window too (xdg-session-management passes
++    // toplevels, not xdg_surfaces).
++    if (mw::XdgToplevel::is_instance(surface))
++    {
++        if (auto const scene_surface = XdgToplevelStable::from(surface)->scene_surface())
++        {
++            return scene_surface.value();
++        }
++    }
++
+     return {};
+ }

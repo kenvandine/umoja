@@ -8,8 +8,10 @@
 // unit-tested without a running compositor.
 
 #include "umoja_shim.h"
+#include "session_management.h"
 
 #include <miral/application.h>
+#include <miral/application_info.h>
 #include <miral/configuration_option.h>
 #include <miral/cursor_scale.h>
 #include <miral/cursor_theme.h>
@@ -73,11 +75,11 @@ uint64_t window_id(Window const& w) {
     return reinterpret_cast<uint64_t>(s.get());
 }
 
-geom::Point centre_of(Window const& w) {
-    auto const tl = w.top_left();
-    auto const sz = w.size();
-    return {tl.x.as_int() + sz.width.as_int() / 2, tl.y.as_int() + sz.height.as_int() / 2};
+geom::Point centre_of(geom::Rectangle const& r) {
+    return {r.top_left.x.as_int() + r.size.width.as_int() / 2, r.top_left.y.as_int() + r.size.height.as_int() / 2};
 }
+
+geom::Point centre_of(Window const& w) { return centre_of(geom::Rectangle{w.top_left(), w.size()}); }
 
 uint32_t to_umoja_mods(MirInputEventModifiers m) {
     uint32_t out = 0;
@@ -225,6 +227,12 @@ public:
         : MinimalWindowManager{tools, mir_input_event_modifier_caps_lock} {
         workspaces.push_back(this->tools.create_workspace());
         g_wm = this;
+        // Runs on the session writer's thread, which may take the WM lock.
+        umoja_sm::set_snapshotter([] {
+            if (g_wm) g_wm->invoke([] {
+                if (g_wm) guarded("snapshot sessions", [] { g_wm->snapshot_sessions(); });
+            });
+        });
     }
 
     ~UmojaWindowManager() override {
@@ -240,15 +248,32 @@ public:
             std::fprintf(stderr, "umoja-mir: wm: new window '%s' asked%s, Mir placed%s\n",
                          requested.name().is_set() ? requested.name().value().c_str() : "",
                          describe(requested).c_str(), describe(spec).c_str());
-        // org.gnome.mutter center-new-windows
         bool const toplevel = !requested.parent().is_set() || !requested.parent().value().lock();
+        // xdg-session-management: an app restoring this window from its
+        // session gets it back as it was (session_management.cpp).
+        placing.reset();
+        bool restored = false;
+        if (toplevel && !requested.aux_rect().is_set() &&
+            !(spec.state().is_set() && spec.state().value() == mir_window_state_attached)) {
+            guarded("session restore", [&] {
+                if (auto const pending = umoja_sm::take_pending(app.application())) placing.emplace(*pending);
+                if (placing && placing->restore) restored = apply_restore(spec, *placing->restore);
+            });
+        }
+        if (restored) return spec;
+        // Like mutter (meta_window_place): a new window opens on the monitor
+        // under the pointer. Mir picks the monitor of the focused window.
+        if (toplevel && !requested.output_id().is_set()) guarded("place on pointer monitor", [&] { to_pointer_monitor(spec); });
+        // org.gnome.mutter center-new-windows
         // Not a window that maps fullscreen or maximized: Mir has already put
         // it over the monitor or work area, and centring a monitor-sized
         // window in the work area left fullscreen games offset by the panel
         // and dock (36,16).
         bool const placed_by_state = spec.state().is_set() && spec.state().value() != mir_window_state_restored;
         if (toplevel && !placed_by_state && umoja_center_new_windows() && spec.size().is_set()) {
-            auto const area = tools.active_application_zone().extents();
+            auto const area = spec.top_left().is_set()
+                                  ? area_at(centre_of(geom::Rectangle{spec.top_left().value(), spec.size().value()}))
+                                  : tools.active_application_zone().extents();
             auto const sz = spec.size().value();
             spec.top_left() = geom::Point{
                 area.top_left.x.as_int() + (area.size.width.as_int() - sz.width.as_int()) / 2,
@@ -265,11 +290,15 @@ public:
             return;
         }
         all_windows.insert(info.window());
+        remember_monitor(info.window());
         stacking.push_back(info.window());
         mru.insert(mru.begin(), info.window());
+        if (placing) guarded("session bind", [&] { finish_restore(info.window()); });
+        placing.reset();
         update_workspace_membership(info.window());
         relayout_workspaces();
         umoja_windows_changed();
+        umoja_sm::changed();
     }
 
     void advise_delete_window(WindowInfo const& info) override {
@@ -281,6 +310,8 @@ public:
         }
         if (key_grab && key_grab->window == w) key_grab.reset();
         above.erase(w);
+        preferred_output.erase(w);
+        session_restore.erase(w);
         fullscreen_lifted.erase(w);
         pinned.erase(w);
         hidden_at.erase(w);
@@ -291,6 +322,11 @@ public:
         erase(stacking, w);
         erase(mru, w);
         umoja_switcher_window_closed(window_id(w));
+        if (all_windows.count(w)) guarded("session close", [&] {
+            snapshot_session(w);
+            umoja_sm::window_closed(w);
+            umoja_sm::changed();
+        });
         bool const app = all_windows.erase(w);
         if (app) relayout_workspaces(w);
         MinimalWindowManager::advise_delete_window(info);
@@ -324,7 +360,10 @@ public:
 
     void advise_state_change(WindowInfo const& info, MirWindowState state) override {
         MinimalWindowManager::advise_state_change(info, state);
-        if (all_windows.count(info.window())) umoja_windows_changed();
+        if (all_windows.count(info.window())) {
+            umoja_windows_changed();
+            umoja_sm::changed();
+        }
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: state of %s -> %d\n", describe(info).c_str(), int(state));
         update_fullscreen_layer(info.window(), state, info.window() == tools.active_window());
@@ -487,6 +526,8 @@ public:
         int32_t const px = static_cast<int32_t>(mir_pointer_event_axis_value(event, mir_pointer_axis_x));
         int32_t const py = static_cast<int32_t>(mir_pointer_event_axis_value(event, mir_pointer_axis_y));
 
+        last_pointer = geom::Point{px, py};
+        have_pointer = true;
         uint32_t const buttons = mir_pointer_event_buttons(event);
         uint32_t const pressed = buttons & ~held_buttons;
         held_buttons = buttons;
@@ -658,6 +699,7 @@ public:
             auto const requested = spec.state().consume();
             if (requested != mir_window_state_hidden) it->second = requested;
         }
+        use_session_restore(info, spec);
         if (trace)
             std::fprintf(stderr, "umoja-mir: wm: request for %s:%s -> applying%s\n", describe(info).c_str(),
                          describe(modifications).c_str(), describe(spec).c_str());
@@ -717,7 +759,10 @@ public:
 
     void advise_resize(WindowInfo const& info, geom::Size const& size) override {
         MinimalWindowManager::advise_resize(info, size);
-        if (all_windows.count(info.window())) umoja_windows_changed();
+        if (all_windows.count(info.window())) {
+            umoja_windows_changed();
+            umoja_sm::changed();
+        }
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: resize of %s -> %dx%d\n", describe(info).c_str(),
                          size.width.as_int(), size.height.as_int());
@@ -743,13 +788,19 @@ public:
 
     void advise_move_to(WindowInfo const& info, geom::Point top_left) override {
         MinimalWindowManager::advise_move_to(info, top_left);
-        if (all_windows.count(info.window())) umoja_windows_changed();
+        if (all_windows.count(info.window())) {
+            umoja_windows_changed();
+            umoja_sm::changed();
+        }
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: move of %s -> %d,%d\n", describe(info).c_str(),
                          top_left.x.as_int(), top_left.y.as_int());
         // Windows sliding during a workspace switch are not being moved by
         // the user, and must not turn sticky as they leave the monitor.
         if (animating) return;
+        // Only the user's own moves pick a new preferred monitor (mutter:
+        // META_MOVE_RESIZE_USER_ACTION), not monitors coming and going.
+        if (!rehoming && user_moving(info.window())) remember_monitor(info.window());
         if (all_windows.count(info.window()) && update_workspace_membership(info.window())) relayout_workspaces();
         if (applying) return;
         // The user dragged a tiled window away: it leaves its tile group.
@@ -760,29 +811,318 @@ public:
 
     void advise_output_create(Output const& output) override {
         outputs[output.id()] = output.extents();
+        output_names[output.id()] = output.name();
         report(output);
+        return_windows_to(output.name());
     }
 
     void advise_output_update(Output const& updated, Output const&) override {
         outputs[updated.id()] = updated.extents();
+        output_names[updated.id()] = updated.name();
         report(updated);
+        return_windows_to(updated.name());
     }
 
     void advise_output_delete(Output const& output) override {
         auto const gone = output.extents();
         outputs.erase(output.id());
+        output_names.erase(output.id());
         umoja_output_remove(output.id());
         if (outputs.empty()) return;
-        // Like mutter: windows on an unplugged monitor move to the primary one.
+        // Like mutter: windows on an unplugged monitor move to the primary
+        // one. They keep it as their preferred monitor, and go back to it
+        // when it is plugged in again (return_windows_to).
         auto const target = primary_output();
+        rehoming = true;
         for (auto const& w : all_windows) {
             if (!gone.contains(centre_of(w))) continue;
-            auto const moved = umoja_translate_rect(to_rect({w.top_left(), w.size()}), to_rect(gone), to_rect(target));
+            move_between(w, gone, target);
+        }
+        rehoming = false;
+    }
+
+    // ---- preferred monitor ------------------------------------------------
+    //
+    // mutter's window->preferred_logical_monitor: the monitor a window was
+    // opened on or last moved to. Taking a monitor away doesn't change it,
+    // so when that monitor comes back (meta_window_update_for_monitors_changed)
+    // its windows move back to it, at the same relative spot, still maximized
+    // or tiled. Kept by connector name, as Mir may number a returning output
+    // differently.
+
+    std::map<Window, std::string> preferred_output;
+    std::map<int, std::string> output_names;
+    bool rehoming = false;
+
+    std::string output_name_at(geom::Point p) const {
+        for (auto const& [id, r] : outputs)
+            if (r.contains(p))
+                if (auto const it = output_names.find(id); it != output_names.end()) return it->second;
+        return {};
+    }
+
+    bool user_moving(Window const& w) const {
+        return w == moving || (key_grab && key_grab->window == w) || (mod_grab && mod_grab->window == w);
+    }
+
+    void remember_monitor(Window const& w) {
+        if (!all_windows.count(w)) return;
+        auto const name = output_name_at(centre_of(w));
+        if (!name.empty()) preferred_output[w] = name;
+    }
+
+    void return_windows_to(std::string const& name) {
+        if (name.empty() || all_windows.empty()) return;
+        geom::Rectangle home;
+        bool found = false;
+        for (auto const& [id, n] : output_names)
+            if (n == name) {
+                home = outputs[id];
+                found = true;
+            }
+        if (!found) return;
+        rehoming = true;
+        for (auto const& w : all_windows) {
+            auto const it = preferred_output.find(w);
+            if (it == preferred_output.end() || it->second != name) continue;
+            auto const c = centre_of(w);
+            if (home.contains(c)) continue;
+            move_between(w, output_at(c), home);
+        }
+        rehoming = false;
+    }
+
+    // Move a window from one monitor to the same spot on another, keeping
+    // it maximized or fullscreen there.
+    void move_between(Window const& w, geom::Rectangle const& from, geom::Rectangle const& to) {
+        guarded("move between monitors", [&] {
+            auto& info = tools.info_for(w);
             WindowSpecification spec;
+            auto const moved = umoja_translate_rect(to_rect({w.top_left(), w.size()}), to_rect(from), to_rect(to));
             spec.top_left() = geom::Point{moved.x, moved.y};
             spec.size() = geom::Size{moved.w, moved.h};
-            guarded("evacuate output", [&] { tools.modify_window(tools.info_for(w), spec); });
+            for (auto const& [id, r] : outputs)
+                if (r == to) spec.output_id() = id;
+            // As move_to_monitor (Super+Shift+arrows) does.
+            if (info.state() == mir_window_state_maximized || info.state() == mir_window_state_fullscreen) {
+                spec.state() = info.state();
+                tools.place_and_size_for_state(spec, info);
+            }
+            if (debug_windows())
+                std::fprintf(stderr, "umoja-mir: wm: monitor change moves %s ->%s\n", describe(info).c_str(),
+                             describe(spec).c_str());
+            tools.modify_window(info, spec);
+        });
+    }
+
+    // The work area of a monitor (the monitor itself until its panel and
+    // dock have reserved their space).
+    geom::Rectangle area_on(geom::Rectangle const& output) const {
+        for (auto const& [id, r] : zones)
+            if (output.contains(centre_of(r))) return r;
+        return output;
+    }
+
+    // ---- xdg-session-management -------------------------------------------
+    //
+    // mutter's meta_wayland_xdg_session_state_save_window/_restore_window:
+    // floating geometry, maximized/tiled/fullscreen, minimized, workspace,
+    // and the monitor (here by connector, falling back to the pointer's).
+
+    struct Placing : umoja_sm::Pending {
+        explicit Placing(umoja_sm::Pending const& p) : umoja_sm::Pending{p} {}
+        geom::Rectangle floating;
+        MirWindowState state = mir_window_state_restored; // the state it shows in, once on its workspace
+        bool hide = false;                                // created on another workspace
+        size_t workspace = 0;
+    };
+    std::optional<Placing> placing;
+
+    bool apply_restore(WindowSpecification& spec, umoja_sm::SavedToplevel const& saved) {
+        if (outputs.empty()) return false;
+        Placing& p = *placing;
+        // Its monitor if still connected, else where Mir put it (the
+        // pointer's monitor), at the same relative spot.
+        geom::Rectangle target;
+        bool found = false;
+        for (auto const& [id, name] : output_names)
+            if (name == saved.output && outputs.count(id)) {
+                target = outputs[id];
+                found = true;
+            }
+        if (!found) {
+            to_pointer_monitor(spec);
+            target = spec.top_left().is_set() && spec.size().is_set()
+                         ? output_at(centre_of(geom::Rectangle{spec.top_left().value(), spec.size().value()}))
+                         : primary_output();
         }
+        auto const from = saved.output_rect.size.width.as_int() > 0 ? saved.output_rect : target;
+        p.floating = from_rect(umoja_translate_rect(to_rect(saved.floating), to_rect(from), to_rect(target)));
+        auto const area = area_on(target);
+
+        switch (saved.state) {
+        case umoja_sm::WindowState::maximized:
+            p.state = mir_window_state_maximized;
+            spec.top_left() = area.top_left;
+            spec.size() = area.size;
+            break;
+        case umoja_sm::WindowState::fullscreen:
+            p.state = mir_window_state_fullscreen;
+            spec.top_left() = target.top_left;
+            spec.size() = target.size;
+            break;
+        case umoja_sm::WindowState::tiled: {
+            UmojaRect out{};
+            if (umoja_is_tile_action(saved.tile_action) && umoja_tile_geometry(saved.tile_action, to_rect(area), &out)) {
+                spec.top_left() = geom::Point{out.x, out.y};
+                spec.size() = geom::Size{out.w, out.h};
+                break;
+            }
+            [[fallthrough]];
+        }
+        case umoja_sm::WindowState::floating:
+            spec.top_left() = p.floating.top_left;
+            spec.size() = p.floating.size;
+            break;
+        }
+        if (saved.minimized && p.state == mir_window_state_restored) p.state = mir_window_state_minimized;
+
+        // Its workspace (mutter appends workspaces up to it). Windows on a
+        // secondary monitor with workspaces-only-on-primary are on all of them.
+        p.workspace = current;
+        bool const sticky = umoja_workspaces_only_on_primary() && outputs.size() > 1 && target != primary_output();
+        if (saved.workspace >= 0 && !sticky) {
+            // Past the last one: the last (with dynamic workspaces, the
+            // empty one at the end, after which a new empty one appears).
+            p.workspace = std::min<size_t>(static_cast<size_t>(saved.workspace), workspaces.size() - 1);
+        }
+        p.hide = p.workspace != current;
+        spec.state() = p.hide ? mir_window_state_hidden : p.state;
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: session restore -> workspace %zu%s\n", p.workspace,
+                         describe(spec).c_str());
+        return true;
+    }
+
+    void finish_restore(Window const& w) {
+        Placing const p = *placing;
+        umoja_sm::bind(p.token, w);
+        if (!p.restore) return;
+        // Unmaximizing or unminimizing goes back to its own size; Mir would
+        // make one up (WindowInfo::restore_rect), so we keep it until then.
+        if (p.state != mir_window_state_restored) session_restore[w] = p.floating;
+        if (p.restore->state == umoja_sm::WindowState::tiled && umoja_is_tile_action(p.restore->tile_action)) {
+            auto const id = window_id(w);
+            tiled[id] = w;
+            tile_action[w] = p.restore->tile_action;
+            untiled[w] = p.floating;
+            umoja_tiling_register(id, p.restore->tile_action, to_rect({w.top_left(), w.size()}));
+        }
+        if (p.hide) {
+            tools.add_tree_to_workspace(w, workspaces[p.workspace]);
+            hidden_states[w] = p.state;
+            hidden_at[w] = std::chrono::steady_clock::now();
+        }
+    }
+
+    std::map<Window, geom::Rectangle> session_restore;
+
+    // A restored window leaving maximized/fullscreen/minimized for the first
+    // time takes its saved floating geometry.
+    void use_session_restore(WindowInfo const& info, WindowSpecification& spec) {
+        if (session_restore.empty() || !spec.state().is_set()) return;
+        auto const it = session_restore.find(info.window());
+        if (it == session_restore.end()) return;
+        if (spec.state().value() != mir_window_state_restored) return;
+        if (info.state() == mir_window_state_restored) {
+            session_restore.erase(it);
+            return;
+        }
+        spec.top_left() = it->second.top_left;
+        spec.size() = it->second.size;
+        session_restore.erase(it);
+    }
+
+    // How a window in a session looks now.
+    void snapshot_session(Window const& w) {
+        if (!all_windows.count(w)) return;
+        auto& info = tools.info_for(w);
+        umoja_sm::SavedToplevel t;
+        auto state = info.state();
+        if (auto const it = hidden_states.find(w); it != hidden_states.end()) state = it->second;
+        geom::Rectangle const now{w.top_left(), w.size()};
+        bool const is_tiled = tiled.count(window_id(w)) > 0;
+        auto const sr = session_restore.find(w);
+        auto const restore_rect = sr != session_restore.end() ? sr->second : info.restore_rect();
+        if (state == mir_window_state_minimized) {
+            t.minimized = true;
+            t.floating = restore_rect;
+        } else if (state == mir_window_state_maximized) {
+            t.state = umoja_sm::WindowState::maximized;
+            t.floating = restore_rect;
+        } else if (state == mir_window_state_fullscreen) {
+            t.state = umoja_sm::WindowState::fullscreen;
+            t.floating = restore_rect;
+        } else if (is_tiled) {
+            t.state = umoja_sm::WindowState::tiled;
+            auto const a = tile_action.find(w);
+            t.tile_action = a != tile_action.end() ? a->second : 0;
+            auto const u = untiled.find(w);
+            t.floating = u != untiled.end() ? u->second : now;
+        } else if (state == mir_window_state_restored) {
+            t.floating = now;
+        } else {
+            t.floating = restore_rect;
+        }
+        t.workspace = pinned.count(w) ? -1 : workspace_of(w);
+        auto const c = centre_of(state == mir_window_state_minimized ? t.floating : now);
+        t.output = output_name_at(c);
+        t.output_rect = output_at(c);
+        umoja_sm::update(w, t);
+    }
+
+    void snapshot_sessions() {
+        for (auto const& w : umoja_sm::bound_windows()) snapshot_session(w);
+    }
+
+    // ---- new windows on the pointer's monitor -----------------------------
+
+    geom::Point last_pointer;
+    bool have_pointer = false;
+
+    void to_pointer_monitor(WindowSpecification& spec) {
+        if (outputs.size() < 2 || !have_pointer || !spec.size().is_set() || !spec.top_left().is_set()) return;
+        // App windows only: layer-shell surfaces (panel, dock, overlay) are
+        // "attached" and pick their own monitor.
+        if (spec.type().is_set() && spec.type().value() != mir_window_type_normal) return;
+        if (spec.state().is_set() && spec.state().value() == mir_window_state_attached) return;
+        geom::Rectangle target;
+        bool found = false;
+        for (auto const& [id, r] : outputs)
+            if (r.contains(last_pointer)) {
+                target = r;
+                found = true;
+            }
+        if (!found) return;
+        geom::Rectangle const rect{spec.top_left().value(), spec.size().value()};
+        auto const from = output_at(centre_of(rect));
+        if (from == target) return;
+        auto const state = spec.state().is_set() ? spec.state().value() : mir_window_state_restored;
+        if (state == mir_window_state_fullscreen) {
+            spec.top_left() = target.top_left;
+            spec.size() = target.size;
+            return;
+        }
+        auto const from_area = area_on(from);
+        auto const to_area = area_on(target);
+        if (state == mir_window_state_maximized) {
+            spec.top_left() = to_area.top_left;
+            spec.size() = to_area.size;
+            return;
+        }
+        auto const moved = umoja_translate_rect(to_rect(rect), to_rect(from_area), to_rect(to_area));
+        spec.top_left() = geom::Point{moved.x, moved.y};
+        spec.size() = geom::Size{moved.w, moved.h};
     }
 
     void advise_application_zone_create(Zone const& zone) override { zones[zone.id()] = zone.extents(); }
@@ -834,6 +1174,7 @@ public:
                 WindowSpecification spec;
                 spec.state() = mir_window_state_restored;
                 tools.place_and_size_for_state(spec, info);
+                use_session_restore(info, spec);
                 tools.modify_window(info, spec);
             }
             tools.raise_tree(w);
@@ -1814,6 +2155,7 @@ private:
             }
         });
         umoja_workspaces_changed(current, workspaces.size());
+        umoja_sm::changed();
     }
 
     // ---- actions ----------------------------------------------------------
@@ -2168,6 +2510,7 @@ private:
             tools.place_and_size_for_state(spec, info);
         }
         tools.modify_window(info, spec);
+        remember_monitor(w);
         return true;
     }
 
@@ -2179,6 +2522,7 @@ private:
         WindowSpecification spec;
         spec.state() = state;
         tools.place_and_size_for_state(spec, info);
+        use_session_restore(info, spec);
         tools.modify_window(info, spec);
         return true;
     }
@@ -2346,6 +2690,9 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     // Match mutter: no xdg-decoration, so GTK/libadwaita apps draw exactly the
     // client-side headerbars they draw on GNOME, and Qt uses its own CSD.
     if (supported.count("zxdg_decoration_manager_v1")) extensions.disable("zxdg_decoration_manager_v1");
+    // Like mutter: apps that save their session get their windows back
+    // (xdg-session-management-v1, session_management.cpp).
+    extensions.add_extension(umoja_sm::extension());
 
     // Persisted monitor layout (~/.config/umoja-mir.display), seeded from
     // GNOME's monitors.xml by the Rust side; Mir reloads it when it changes.
