@@ -479,7 +479,20 @@ public:
             overlay_key_armed = false;
         }
 
+        // The rest of a click that closed a shell menu (below).
+        if (menu_click_swallowed) {
+            if (action == mir_pointer_action_button_up) {
+                if (buttons == 0) menu_click_swallowed = false;
+                return true;
+            }
+            if (action == mir_pointer_action_button_down) return true;
+        }
         if (mod_grab) return mod_grab_event(action, buttons, px, py);
+        if (action == mir_pointer_action_button_down && pressed && !moving &&
+            close_grabbing_menus(geom::Point{px, py})) {
+            menu_click_swallowed = buttons != 0;
+            return true;
+        }
         if (action == mir_pointer_action_button_down && pressed && !moving &&
             begin_mod_grab(event, pressed, px, py))
             return true;
@@ -494,6 +507,44 @@ public:
             if (moving && !scripted && mir_pointer_event_buttons(event) == 0) end_move();
         }
         return consumed;
+    }
+
+    // ---- shell menus: a click outside closes them ---------------------------
+    // The top bar takes the keyboard exclusively while Quick Settings, the
+    // date menu or a tray menu is open (KeyboardMode::Exclusive). Mir makes
+    // that a grabbing focus mode, and only closes a grabbing xdg_popup when
+    // another window becomes active, which a grabbing window never allows:
+    // so a click outside left the menu open. Do what gnome-shell does: a
+    // press outside the menus and the window they belong to closes them,
+    // and the click goes no further. Presses on the bar itself stay with
+    // the client (GTK closes or switches menus there).
+    static void collect_menus(WindowManagerTools& tools, Window const& w, std::vector<Window>& out) {
+        for (auto const& c : tools.info_for(w).children()) {
+            collect_menus(tools, c, out);
+            auto const& ci = tools.info_for(c);
+            if (ci.type() == mir_window_type_menu && ci.is_visible()) out.push_back(c);
+        }
+    }
+
+    bool close_grabbing_menus(geom::Point p) {
+        bool closed = false;
+        guarded("close menus on outside click", [&] {
+            Window top = tools.active_window();
+            if (!top) return;
+            while (auto const parent = tools.info_for(top).parent()) top = parent;
+            if (tools.info_for(top).focus_mode() != mir_focus_mode_grabbing) return;
+            std::vector<Window> menus;
+            collect_menus(tools, top, menus);
+            if (menus.empty()) return;
+            auto const inside = [&](Window const& w) {
+                return geom::Rectangle{w.top_left(), w.size()}.contains(p);
+            };
+            if (inside(top) || std::ranges::any_of(menus, inside)) return;
+            // Children first, as Mir closes nested popups.
+            for (auto const& m : menus) tools.ask_client_to_close(m);
+            closed = true;
+        });
+        return closed;
     }
 
     // GNOME's touchscreen gestures (three-finger swipes, edge drags):
@@ -854,6 +905,8 @@ private:
     bool elevated = false;
     // The drag is org.umoja.Compositor.DragWindow's, not the pointer's.
     bool scripted = false;
+    // A press closed shell menus: its release (and other buttons) are eaten.
+    bool menu_click_swallowed = false;
     geom::Point script_last;
     uint32_t drag_target = UMOJA_ACTION_NONE;
 
