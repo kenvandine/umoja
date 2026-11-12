@@ -129,6 +129,15 @@ parts:
       - desktop-security-center
       - prompting-client
       - snapd-desktop-integration
+    # Download from latest/stable, but have every snap track Ubuntu's
+    # release branch, as Ubuntu Desktop does. A closed or expired branch
+    # falls back to latest/stable on refresh; prepare-image itself
+    # refuses one, hence the rewrite instead of --channel.
+    override-build: |
+      craftctl default
+      sed -i -E 's|^(\s*channel:).*$|\1 latest/stable/ubuntu-26.10|' \
+        "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
+      grep -n 'channel:' "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
     organize:
       "var/*": (overlay)/var/
 
