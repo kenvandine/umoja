@@ -22,14 +22,21 @@ is open). The full tour takes about three minutes.
 Ask Umoja and the assistant come first, while viewers are still watching;
 the classic desktop tour follows. The notifications scene sits among them
 because `ai-reply` and `ai-summary` need its bubbles. The trailer follows the
-same order.
+same order (without `ai-install`: `ai-btop` already shows an install).
+
+The test hooks some scenes use (`Overlay.AnswerConfirm`, `AskRows`,
+`AskActivate`, `TestAction`) only answer while the tour's
+`$XDG_RUNTIME_DIR/umoja-demo` flag file exists.
 
 | Scene | How it is driven | Output |
 | --- | --- | --- |
 | `ask-umoja` | `Overlay.ToggleAsk` over Text Editor (the empty card: its launcher actions, frequent picks, suggestions), then `Overlay.AskType` types "dark", "12*7+5", "sound" and a question; nothing is picked, so nothing changes | `images/ask-umoja.png`, `images/ask-switch.png`, `images/ask-sum.png`, `images/ask-settings.png`, `images/ask-question.png`, `videos/ask-umoja.*` |
 | `ai-btop` | Types "btop" in Ask Umoja. btop isn't installed, so Umoja offers to install it (snap first, else the deb); the scene allows that with `Overlay.AnswerConfirm(true)`, then allows the "Run btop in a terminal" prompt and films btop running. **This one really installs btop.** Afterwards it quits that btop, closes its window and removes btop again with `sudo -n` so the next run can film it; without passwordless sudo btop stays installed and later runs skip the scene until you remove it. `AnswerConfirm` only works while the scene's `$XDG_RUNTIME_DIR/umoja-demo` flag file exists | `images/ai-btop-1.png`, `images/ai-btop-2.png`, `images/ai-btop-running.png`, `videos/ai-btop.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
-| `ai-settings` | starts from light style with Night Light off, then "Switch to dark style and turn on Night Light" (both put back straight after) | `images/ai-settings.png`, `videos/ai-settings.*` |
+| `ai-setups` | tiles Files left and Text Editor right, asks "Save this window layout as my Writing setup", floats and moves both windows, then types "writing" in Ask Umoja and picks the Setup row (`Overlay.AskRows` / `AskActivate`), which tiles them back. The saved setup is removed again (`~/.config/umoja/setups.json` put back as it was) | `images/ai-setups-saved.png`, `images/ai-setups-row.png`, `images/ai-setups.png`, `videos/ai-setups.*` |
+| `ai-settings` | starts from light style with Night Light off, then "Turn on Night Light and switch to dark style"; the answer's Undo button (`Overlay.TestAction("undo")`) puts the style back on camera (both put back straight after) | `images/ai-settings.png`, `images/ai-settings-undo.png`, `videos/ai-settings.*` |
+| `ai-rewrite` | opens a scratch window (`tools/test/testpad.py`, titled "Note to Priya") with a hasty note, selects it, `Overlay.AskAboutScreen` (Super+Shift+A), picks "Make It More Formal", then presses Replace, which types the rewrite over the selection | `images/ai-rewrite-rows.png`, `images/ai-rewrite.png`, `images/ai-rewrite-replaced.png`, `videos/ai-rewrite.*` |
+| `ai-captions` | `Overlay.ToggleCaptions`, then `Overlay.Speak` reads a short update in Umoja's read-aloud voice (Piper) and the captions follow it; Summarize (`TestAction("captions-summarize")`) hands the transcript to the assistant. Needs parec and the Piper voice; the clips have no sound, so the captions carry it | `images/ai-captions.png`, `images/ai-captions-summary.png`, `videos/ai-captions.*` |
 | `ai-install` | "I need VLC" (`--app`): stops at Ask Umoja's "Allow Umoja to do this?" confirmation and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
 | `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow confirmation and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
 | `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
