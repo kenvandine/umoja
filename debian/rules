@@ -30,6 +30,10 @@ override_dh_auto_configure:
 
 override_dh_auto_build:
 	cargo build --release --offline --frozen --workspace
+ifeq (,$(filter nodoc,$(DEB_BUILD_OPTIONS)))
+	# The user guide (docs/guide) as a PDF, opened from Ask Umoja.
+	python3 tools/guide/build-pdf --out target/umoja-user-guide.pdf
+endif
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
@@ -54,6 +58,14 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
 	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
 	install -D -m 0755 bin/umoja-greeter-session $(GREETER)/usr/libexec/umoja-greeter-session
+
+	# The user guide: the PDF, and a launcher so the app grid and Ask Umoja
+	# find it ("guide", "help", "manual").
+ifeq (,$(filter nodoc,$(DEB_BUILD_OPTIONS)))
+	install -D -m 0644 target/umoja-user-guide.pdf $(DESKTOP)/usr/share/umoja/guide/umoja-user-guide.pdf
+	install -D -m 0644 data/applications/umoja-user-guide.desktop \
+		$(DESKTOP)/usr/share/applications/umoja-user-guide.desktop
+endif
 
 	# Lock screen PAM service
 	install -D -m 0644 data/pam/umoja-lock $(DESKTOP)/etc/pam.d/umoja-lock

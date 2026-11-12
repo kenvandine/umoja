@@ -32,6 +32,8 @@ pub struct CallResult {
     /// The tool put something in front of the user: hide when done.
     pub hide: bool,
     pub data: Option<Value>,
+    /// Journal id when the change can be undone (`umoja/undo`).
+    pub undo: Option<u64>,
 }
 
 pub struct McpClient {
@@ -280,6 +282,7 @@ impl McpClient {
                 declined: v["_meta"]["umoja/declined"].as_bool().unwrap_or(false),
                 hide: v["_meta"]["umoja/hide"].as_bool().unwrap_or(false),
                 data: v.get("structuredContent").cloned(),
+                undo: v["_meta"]["umoja/undo"]["id"].as_u64(),
             },
             Err(e) => CallResult {
                 text: format!("error: {e}"),
@@ -287,6 +290,19 @@ impl McpClient {
                 ..Default::default()
             },
         }
+    }
+}
+
+/// Undo change `id` (from a tool result's `umoja/undo`): Ok with what
+/// was undone, or why it couldn't be.
+pub async fn undo(id: u64) -> Result<String, String> {
+    let c = shared().await.ok_or("the Umoja tool server isn't available")?;
+    let v = c.request("umoja/undo", json!({"id": id})).await?;
+    let text = v["text"].as_str().unwrap_or("").to_string();
+    if v["ok"].as_bool().unwrap_or(false) {
+        Ok(text)
+    } else {
+        Err(text.trim_start_matches("error: ").to_string())
     }
 }
 

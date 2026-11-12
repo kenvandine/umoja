@@ -1110,12 +1110,15 @@ impl ScreenshotUi {
         let pixbuf = full.new_subpixbuf(x, y, w, h);
         let ask = self.ask.borrow_mut().take();
         let kind = self.kind.get();
+        let whole_screen = self.mode.get() == Mode::Screen;
         self.close();
         match ask {
             Some(done) => done(Some(pixbuf)),
             None if kind == Kind::Text => copy_text(&self.app, &pixbuf),
             None => {
-                save_and_notify(&self.app, &pixbuf);
+                if let Some(path) = save_and_notify(&self.app, &pixbuf) {
+                    crate::shotname::start(path, whole_screen);
+                }
             }
         }
     }
@@ -1145,7 +1148,9 @@ impl ScreenshotUi {
                 (Some(done), p) => done(p),
                 (None, Some(p)) if kind == Kind::Text => copy_text(&app, &p),
                 (None, Some(p)) => {
-                    save_and_notify(&app, &p);
+                    if let Some(path) = save_and_notify(&app, &p) {
+                        crate::shotname::start(path, false);
+                    }
                 }
                 (None, None) => tracing::warn!("window screenshot failed"),
             }
@@ -1321,6 +1326,7 @@ fn save_and_notify_file(app: &adw::Application, region: Option<(i32, i32, i32, i
     }
     if let Ok(p) = Pixbuf::from_file(&path) {
         finish(app, &path, &p);
+        crate::shotname::start(path, region.is_none());
     }
 }
 

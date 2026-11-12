@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+async-channel.workspace = true
 gtk4 = { workspace = true, optional = true }
 gdk4-wayland = { workspace = true, optional = true }
 wayland-client = { workspace = true, optional = true }

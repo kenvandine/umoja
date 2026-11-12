@@ -1,0 +1,14 @@
+[Unit]
+Description=Umoja automations (rules made with the assistant)
+Documentation=https://github.com/kenvandine/umoja
+PartOf=umoja-session.target
+After=umoja-session.target
+
+[Service]
+ExecStart=/usr/bin/umoja-mcp --automations
+Restart=on-failure
+RestartSec=5s
+Slice=session.slice
+
+[Install]
+WantedBy=umoja-session.target

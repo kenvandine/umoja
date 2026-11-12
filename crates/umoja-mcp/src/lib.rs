@@ -16,15 +16,20 @@
 //! [`Tool::with_risk`] for anything hard to undo.
 
 pub mod actions;
+pub mod automations;
 pub mod apps;
+pub mod calendar;
 pub mod desktop;
 pub mod diagnostics;
 pub mod files;
 pub mod notifications;
 pub mod pulse;
+pub mod recall;
 pub mod server;
 pub mod settings;
+pub mod setups;
 pub mod tool;
+pub mod undo;
 
 pub use tool::{Outcome, Risk, Tool};
 
@@ -35,8 +40,13 @@ const PROVIDERS: &[fn() -> Vec<Tool>] = &[
     actions::tools,
     settings::tools,
     files::tools,
+    calendar::tools,
+    setups::tools,
+    recall::tools,
+    automations::tools,
     notifications::tools,
     diagnostics::tools,
+    undo::tools,
 ];
 
 /// All tools, in registration order.

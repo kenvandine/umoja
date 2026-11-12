@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 330" width="1000" height="330" role="img" aria-label="Setups">
+<title>Setups</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+<rect x="1" y="1" width="998" height="328" rx="18" fill="#fbf9f8" stroke="#d8d2cf" stroke-width="2"/>
+<text x="500" y="38.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="26" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Setups: your window arrangements, by name</text>
+<rect x="50" y="80" width="260" height="170" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="53" y="83" width="254" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="58" y="100" width="120" height="142" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="58" y="100" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="118.0" y="177.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Editor</text>
+<rect x="182" y="100" width="120" height="70" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="182" y="100" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="242.0" y="141.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Terminal</text>
+<rect x="182" y="172" width="120" height="70" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="182" y="172" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="242.0" y="213.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Docs</text>
+<text x="180" y="280.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Arrange your windows</text>
+<line x1="315" y1="165" x2="425" y2="165" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<text x="370.0" y="151.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central" font-style="italic">“save as Coding”</text>
+<rect x="430" y="115" width="140" height="100" rx="12" fill="#f3e9e4" stroke="#d8d2cf" stroke-width="2" />
+<text x="500.0" y="151.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="19" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Coding</text>
+<text x="500.0" y="181.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">saved</text>
+<line x1="575" y1="165" x2="685" y2="165" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<text x="630.0" y="151.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central" font-style="italic">type “Coding”</text>
+<rect x="690" y="80" width="260" height="170" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="693" y="83" width="254" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="698" y="100" width="120" height="142" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="698" y="100" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="758.0" y="177.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Editor</text>
+<rect x="822" y="100" width="120" height="70" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="822" y="100" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="882.0" y="141.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Terminal</text>
+<rect x="822" y="172" width="120" height="70" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="822" y="172" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="882.0" y="213.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Docs</text>
+<text x="820" y="280.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Apps open and snap into place</text>
+<text x="500" y="312.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">Apps that aren&#x27;t running are started; windows go to their workspace and tile.</text>
+</svg>

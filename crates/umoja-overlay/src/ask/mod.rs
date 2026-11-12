@@ -5,7 +5,9 @@
 
 pub mod calc;
 pub mod catalog;
+pub mod emoji;
 pub mod history;
+pub mod rewrite;
 
 /// Words that say how, not what: "turn on wifi" is about Wi-Fi.
 const FILLER: &[&str] = &[

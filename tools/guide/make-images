@@ -1,0 +1,126 @@
+#!/usr/bin/python3
+"""Make the user guide's pictures from the tour's screenshots.
+
+The tour (tools/demo/umoja-demo) captures whole screens at 1920x1200. The
+guide wants the part that matters, big enough to read: this crops each
+shot to its subject, scales the full-screen ones down, and draws numbered
+callouts on the desktop map. Output goes to docs/guide/images.
+
+    tools/guide/make-images [--shots docs/demo/images] [--out docs/guide/images]
+
+Run it again after a new tour capture; boxes are in 1920x1200 pixels.
+Needs python3-pil.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    sys.exit("make-images needs Pillow: sudo apt install python3-pil")
+
+ROOT = Path(__file__).resolve().parents[2]
+
+# name in the guide: (tour shot, (left, top, right, bottom) or None for the
+# whole screen)
+CROPS = {
+    "ask-empty": ("ask-umoja", (590, 60, 1330, 620)),
+    "ask-switch": ("ask-switch", (590, 60, 1330, 620)),
+    "ask-sum": ("ask-sum", (590, 60, 1330, 620)),
+    "ask-settings": ("ask-settings", (590, 60, 1330, 620)),
+    "ask-question": ("ask-question", (590, 60, 1330, 620)),
+    "ai-btop-install": ("ai-btop-1", (480, 70, 1450, 480)),
+    "ai-btop-run": ("ai-btop-2", (480, 70, 1450, 480)),
+    "ai-install": ("ai-install", (480, 70, 1450, 480)),
+    "ai-updates": ("ai-updates-install", (480, 70, 1450, 480)),
+    "ai-summary": ("ai-summary", (540, 70, 1400, 500)),
+    "ai-settings": ("ai-settings", (620, 90, 1340, 390)),
+    "ai-troubleshoot": ("ai-troubleshoot", (40, 60, 1880, 420)),
+    "ai-reply": ("ai-reply", (740, 40, 1200, 440)),
+    "quick-settings": ("quick-settings", (1520, 20, 1920, 340)),
+    "date-menu": ("calendar", (600, 20, 1360, 580)),
+    "notifications": ("notifications", (770, 30, 1150, 430)),
+    "screenshot-toolbar": ("screenshot-ui", (580, 1000, 1340, 1200)),
+    # Whole screens, scaled down.
+    "screenshot-ui": ("screenshot-ui", None),
+    "overview": ("overview", None),
+    "app-grid": ("app-grid", None),
+    "workspace-2": ("workspace-2", None),
+    "shortcuts": ("shortcuts", None),
+    "tiling-halves": ("tiling-halves", None),
+    "tiling-quarter": ("tiling-quarter", None),
+    "ai-tiling": ("ai-tiling", None),
+    "ai-btop-running": ("ai-btop-running", None),
+    "screensaver": ("screensaver", None),
+}
+
+FULL_WIDTH = 1600
+ORANGE = (233, 84, 32)
+
+# The desktop map: (number, dot position, label position) in 1920x1200.
+CALLOUTS = [
+    (1, (48, 16), (150, 90)),  # workspace indicator / Activities
+    (2, (960, 16), (960, 90)),  # clock and date menu
+    (3, (1790, 16), (1700, 100)),  # tray icons
+    (4, (1880, 16), (1860, 100)),  # status menu (Quick Settings)
+    (5, (37, 560), (150, 560)),  # dock
+    (6, (37, 910), (150, 960)),  # show apps
+    (7, (700, 420), (760, 700)),  # a window
+]
+
+
+def font(size, bold=True):
+    for f in (
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf" if bold else "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        if Path(f).exists():
+            return ImageFont.truetype(f, size)
+    return ImageFont.load_default()
+
+
+def badge(draw, xy, n, r=26):
+    x, y = xy
+    draw.ellipse((x - r, y - r, x + r, y + r), fill=ORANGE, outline=(255, 255, 255), width=4)
+    f = font(int(r * 1.2))
+    draw.text((x, y + 1), str(n), fill=(255, 255, 255), font=f, anchor="mm")
+
+
+def desktop_map(src, out):
+    im = Image.open(src).convert("RGB")
+    d = ImageDraw.Draw(im)
+    for n, dot, label in CALLOUTS:
+        d.line((dot, label), fill=(255, 255, 255), width=4)
+        d.ellipse((dot[0] - 7, dot[1] - 7, dot[0] + 7, dot[1] + 7), fill=(255, 255, 255))
+        badge(d, label, n)
+    im = im.resize((FULL_WIDTH, im.height * FULL_WIDTH // im.width), Image.LANCZOS)
+    im.save(out, quality=88, optimize=True)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--shots", type=Path, default=ROOT / "docs/demo/images")
+    p.add_argument("--out", type=Path, default=ROOT / "docs/guide/images")
+    a = p.parse_args()
+    a.out.mkdir(parents=True, exist_ok=True)
+    for name, (shot, box) in CROPS.items():
+        src = a.shots / f"{shot}.png"
+        if not src.exists():
+            print(f"skip {name}: no {src}", file=sys.stderr)
+            continue
+        im = Image.open(src).convert("RGB")
+        if box:
+            im.crop(box).save(a.out / f"{name}.png", optimize=True)
+        else:
+            im = im.resize((FULL_WIDTH, im.height * FULL_WIDTH // im.width), Image.LANCZOS)
+            im.save(a.out / f"{name}.jpg", quality=86, optimize=True)
+    desktop = a.shots / "desktop.png"
+    if desktop.exists():
+        desktop_map(desktop, a.out / "desktop-map.jpg")
+    print(f"wrote {a.out}")
+
+
+if __name__ == "__main__":
+    main()

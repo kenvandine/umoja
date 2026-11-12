@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Workspaces">
+<title>Workspaces</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+<rect x="1" y="1" width="998" height="358" rx="18" fill="#fbf9f8" stroke="#d8d2cf" stroke-width="2"/>
+<text x="500" y="38.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="26" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Workspaces come and go as you need them</text>
+<rect x="50" y="80" width="200" height="130" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="53" y="83" width="194" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="64" y="104" width="100" height="80" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="64" y="104" width="100" height="12" rx="5" fill="#cfc8c5"/>
+<text x="114.0" y="150.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Mail</text>
+<rect x="140" y="120" width="96" height="76" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="140" y="120" width="96" height="12" rx="5" fill="#cfc8c5"/>
+<text x="188.0" y="164.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Web</text>
+<text x="150" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Workspace 1</text>
+<line x1="254" y1="145" x2="281" y2="145" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="285" y="80" width="200" height="130" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="288" y="83" width="194" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="305" y="104" width="160" height="92" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="305" y="104" width="160" height="12" rx="5" fill="#cfc8c5"/>
+<text x="385.0" y="156.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Code</text>
+<text x="385" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Workspace 2</text>
+<line x1="489" y1="145" x2="516" y2="145" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="520" y="80" width="200" height="130" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="523" y="83" width="194" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="560" y="110" width="120" height="84" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="560" y="110" width="120" height="12" rx="5" fill="#cfc8c5"/>
+<text x="620.0" y="158.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Music</text>
+<text x="620" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Workspace 3</text>
+<line x1="724" y1="145" x2="751" y2="145" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="755" y="80" width="200" height="130" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="758" y="83" width="194" height="14" rx="6" fill="#1d0f1c"/>
+<text x="855" y="150.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="40" fill="#a58aa2" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<text x="855" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">(empty)</text>
+<rect x="60" y="270" width="65" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="62" y="300" width="61" height="4" rx="2" fill="#d8d2cf"/>
+<text x="92.35" y="286.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Super</text>
+<text x="133.7" y="287.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="142.7" y="270" width="107" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="144.7" y="300" width="103" height="4" rx="2" fill="#d8d2cf"/>
+<text x="196.13" y="286.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Page Down</text>
+<text x="261.56" y="288.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="start" dominant-baseline="central">next workspace</text>
+<rect x="470" y="270" width="65" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="472" y="300" width="61" height="4" rx="2" fill="#d8d2cf"/>
+<text x="502.35" y="286.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Super</text>
+<text x="543.7" y="287.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="552.7" y="270" width="65" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="554.7" y="300" width="61" height="4" rx="2" fill="#d8d2cf"/>
+<text x="585.0500000000001" y="286.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Shift</text>
+<text x="626.4000000000001" y="287.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="635.4000000000001" y="270" width="107" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="637.4000000000001" y="300" width="103" height="4" rx="2" fill="#d8d2cf"/>
+<text x="688.83" y="286.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Page Down</text>
+<text x="754.2600000000001" y="288.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="start" dominant-baseline="central">take the window along</text>
+<text x="500" y="336.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="15" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">There is always one empty workspace at the end; an empty one in the middle closes by itself.</text>
+</svg>

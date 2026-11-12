@@ -135,6 +135,13 @@ pub fn tools() -> Vec<Tool> {
             }
         }),
         Tool::new(
+            "open_user_guide",
+            "Open the Umoja User Guide (a PDF covering the whole desktop: basics, windows and workspaces, screenshots, Ask Umoja, the assistant, setups, automations, privacy and every shortcut). Use when the user asks for help, the manual or the guide, or wants to learn the desktop.",
+            obj(json!({}), &[]),
+            |_| Box::pin(async move { open_user_guide().hide_if_ok() }),
+        )
+        .with_summary(|_| "Open the User Guide".into()),
+        Tool::new(
             "open_url",
             "Open a web page in the default browser, or search the web. Pass url for an address, or query to search.",
             obj(json!({
@@ -436,7 +443,7 @@ async fn press_media_key(key: &str) -> Result<(), String> {
 
 // ---- volume ---------------------------------------------------------------------
 
-fn is_mic(a: &Value) -> bool {
+pub(crate) fn is_mic(a: &Value) -> bool {
     arg_str(a, "device").is_some_and(|d| {
         let d = d.to_lowercase();
         d.starts_with("mic") || d == "input" || d == "source"
@@ -507,6 +514,29 @@ async fn set_volume(a: Value) -> Outcome {
     }
     let what = if mic { "Microphone" } else { "Volume" };
     Outcome::ok(if muted { format!("{what} is muted ({pct}%)") } else { format!("{what} is at {pct}%") })
+}
+
+/// (percent, muted) of the default speaker or microphone.
+pub(crate) async fn volume_now(mic: bool) -> Option<(u32, bool)> {
+    blocking(move || -> Result<(u32, bool), String> {
+        let mut c = crate::pulse::Client::connect()?;
+        let d = c.default_device(mic)?;
+        Ok((d.percent(), d.muted))
+    })
+    .await
+    .ok()?
+    .ok()
+}
+
+/// The description of the default output (or input) device.
+pub(crate) async fn default_device_name(input: bool) -> Option<String> {
+    blocking(move || -> Result<String, String> {
+        let mut c = crate::pulse::Client::connect()?;
+        Ok(c.default_device(input)?.description)
+    })
+    .await
+    .ok()?
+    .ok()
 }
 
 // ---- sound devices ----------------------------------------------------------------
@@ -597,6 +627,13 @@ fn backlight() -> Option<Backlight> {
         min = 0;
     }
     (min < max).then_some(Backlight { name, dir, min, max })
+}
+
+/// The screen brightness now, in percent.
+pub(crate) fn brightness_now() -> Option<u64> {
+    let b = backlight()?;
+    let now = read_int(&b.dir.join("brightness"))?;
+    Some((((now - b.min) * 100) as f64 / (b.max - b.min) as f64).round().clamp(0.0, 100.0) as u64)
 }
 
 /// The new raw value for `level`% or a 10% step from `now`.
@@ -863,6 +900,23 @@ fn percent_encode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+/// The installed user guide (docs/guide as a PDF), or the guide on GitHub
+/// when it isn't installed (a development build).
+pub const USER_GUIDE: &str = "/usr/share/umoja/guide/umoja-user-guide.pdf";
+pub const USER_GUIDE_WEB: &str = "https://github.com/kenvandine/umoja/blob/main/docs/guide/README.md";
+
+fn open_user_guide() -> Outcome {
+    let uri = if std::path::Path::new(USER_GUIDE).exists() {
+        gio::File::for_path(USER_GUIDE).uri().to_string()
+    } else {
+        USER_GUIDE_WEB.to_string()
+    };
+    match gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>) {
+        Ok(()) => Outcome::ok("Opened the Umoja User Guide"),
+        Err(e) => err(e),
+    }
 }
 
 fn open_url(a: &Value) -> Outcome {
