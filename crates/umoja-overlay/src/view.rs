@@ -48,6 +48,9 @@ const MAX_HISTORY_CHARS: usize = 6000;
 const STEP_ASIDE: Duration = Duration::from_millis(250);
 /// Rows of matches for typed text (apps, actions, switches, settings).
 const MAX_MATCHES: usize = 7;
+/// The read-aloud button, idle and while speaking.
+const SPEAK_ICON: &str = "audio-volume-high-symbolic";
+const SPEAKING_ICON: &str = "media-playback-stop-symbolic";
 /// File rows for typed text.
 const MAX_FILES: u32 = 3;
 /// Width of the card, as in the mockup.
@@ -212,6 +215,10 @@ pub struct Overlay {
     clip_list: gtk::ListBox,
     clip_empty: gtk::Label,
     copy_button: gtk::Button,
+    /// Reads the answer aloud (Piper); a stop button while it speaks.
+    speak_button: gtk::Button,
+    /// Bumped per read-aloud, so a finished one can't reset a newer one.
+    speak_serial: Cell<u64>,
     answer_text: RefCell<String>,
     /// The conversation so far: earlier user and assistant messages, sent
     /// along with follow-ups. Cleared when the card opens or the entry is
@@ -444,9 +451,18 @@ impl Overlay {
             .valign(gtk::Align::Start)
             .visible(false)
             .build();
+        let speak_button = gtk::Button::builder()
+            .icon_name(SPEAK_ICON)
+            .tooltip_text(i18n::umoja("Read Aloud"))
+            .css_classes(["flat", "circular"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .visible(false)
+            .build();
         let answer_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         answer.set_hexpand(true);
         answer_row.append(&answer);
+        answer_row.append(&speak_button);
         answer_row.append(&copy_button);
         let confirm_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
         confirm_box.add_css_class("ask-confirm");
@@ -572,6 +588,8 @@ impl Overlay {
             clip_list,
             clip_empty,
             copy_button,
+            speak_button,
+            speak_serial: Cell::new(0),
             answer_text: RefCell::default(),
             conversation: RefCell::default(),
             awaiting_reply: Cell::new(false),
@@ -880,6 +898,7 @@ impl Overlay {
 
     pub fn hide(&self) {
         self.generation.set(self.generation.get() + 1);
+        self.stop_speaking();
         // A question still waiting for Allow is declined, so it can't come
         // back (and be allowed) on a later, unrelated question.
         self.cancel_confirm();
@@ -940,6 +959,76 @@ impl Overlay {
         if !text.is_empty() {
             self.card
                 .announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
+        }
+    }
+
+    fn show_answer_actions(&self, on: bool) {
+        self.copy_button.set_visible(on);
+        self.speak_button.set_visible(on);
+    }
+
+    /// Read `text` aloud in Umoja's voice (Piper, see [`crate::speech`]).
+    /// The read-aloud button turns into a stop button meanwhile.
+    pub fn speak(self: &Rc<Self>, text: &str) {
+        // Odd while speaking (or fetching the voice), even when idle.
+        let serial = (self.speak_serial.get() | 1) + 2;
+        self.speak_serial.set(serial);
+        self.set_speak_button(SPEAKING_ICON, &i18n::umoja("Stop Reading"));
+        let weak = Rc::downgrade(self);
+        crate::speech::speak(text, move |ev| {
+            let Some(o) = weak.upgrade() else { return };
+            if o.speak_serial.get() != serial {
+                return;
+            }
+            match ev {
+                crate::speech::Event::Installing => {
+                    o.set_speak_button(SPEAKING_ICON, &i18n::umoja("Installing the voice…"))
+                }
+                crate::speech::Event::Downloading => {
+                    o.set_speak_button(SPEAKING_ICON, &i18n::umoja("Downloading the voice…"))
+                }
+                crate::speech::Event::Speaking => {
+                    o.set_speak_button(SPEAKING_ICON, &i18n::umoja("Stop Reading"))
+                }
+                crate::speech::Event::Done => o.speak_finished(None),
+                crate::speech::Event::Failed(e) => o.speak_finished(Some(e)),
+            }
+        });
+    }
+
+    pub fn stop_speaking(&self) {
+        crate::speech::stop();
+        self.speak_finished(None);
+    }
+
+    fn speak_finished(&self, error: Option<String>) {
+        let s = self.speak_serial.get();
+        self.speak_serial.set(s + (s % 2));
+        let tip = match error {
+            Some(e) => format!("{}\n{e}", i18n::umoja("Read Aloud")),
+            None => i18n::umoja("Read Aloud"),
+        };
+        self.set_speak_button(SPEAK_ICON, &tip);
+    }
+
+    fn set_speak_button(&self, icon: &str, tooltip: &str) {
+        self.speak_button.set_icon_name(icon);
+        self.speak_button.set_tooltip_text(Some(tooltip));
+    }
+
+    /// With "speak-answers" on, read a finished answer aloud, unless a
+    /// screen reader is running (it reads the answer already).
+    fn speak_if_wanted(self: &Rc<Self>, text: &str) {
+        let wanted =
+            umoja_common::gsettings::get_bool(crate::speech::SCHEMA, "speak-answers", false);
+        let screen_reader = umoja_common::gsettings::get_bool(
+            "org.gnome.desktop.a11y.applications",
+            "screen-reader-enabled",
+            false,
+        );
+        // Already reading (the assistant's read_aloud tool): leave it.
+        if wanted && !screen_reader && self.speak_serial.get() % 2 == 0 {
+            self.speak(text);
         }
     }
 
@@ -2175,7 +2264,7 @@ impl Overlay {
                 o.answer.set_visible(false);
             }
             let shown = strip_actions(&text);
-            o.copy_button.set_visible(!shown.trim().is_empty());
+            o.show_answer_actions(!shown.trim().is_empty());
             *o.answer_text.borrow_mut() = shown.clone();
             let steps: Vec<String> = o
                 .step_log
@@ -2193,6 +2282,7 @@ impl Overlay {
                 return;
             }
             o.announce(&shown);
+            o.speak_if_wanted(&shown);
             {
                 let mut conv = o.conversation.borrow_mut();
                 conv.push(serde_json::json!({"role": "user", "content": asked}));
@@ -2251,8 +2341,9 @@ impl Overlay {
                     ChatEvent::Done => {
                         let shown = context::strip_fences(&text);
                         o.answer.set_text(&shown);
-                        o.copy_button.set_visible(!shown.is_empty());
+                        o.show_answer_actions(!shown.is_empty());
                         o.announce(&shown);
+                        o.speak_if_wanted(&shown);
                         *o.answer_text.borrow_mut() = shown;
                         return;
                     }
@@ -2353,7 +2444,8 @@ impl Overlay {
         self.assistant.set_visible(true);
         self.answer.set_visible(true);
         self.question_label.set_visible(false);
-        self.copy_button.set_visible(false);
+        self.show_answer_actions(false);
+        self.stop_speaking();
         self.answer_text.borrow_mut().clear();
         // Through each container's own remove: a FlowBox keeps its own list
         // of children, and unparenting them behind its back left freed
@@ -2453,6 +2545,17 @@ impl Overlay {
             if let Some(o) = weak.upgrade() {
                 let text = o.answer_text.borrow().clone();
                 o.copy_text(&text);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.speak_button.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                if o.speak_serial.get() % 2 == 1 {
+                    o.stop_speaking();
+                } else {
+                    let text = o.answer_text.borrow().clone();
+                    o.speak(&text);
+                }
             }
         });
     }

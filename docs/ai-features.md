@@ -40,6 +40,7 @@ and [activity recall](guide/07-everyday-ai.md#activity-recall).
 - [Asking the assistant](#asking-the-assistant)
 - [Choosing the model](#choosing-the-model)
 - [Using a cloud model](#using-a-cloud-model)
+- [Hearing answers read aloud](#hearing-answers-read-aloud)
 - [Doing things on the desktop](#doing-things-on-the-desktop)
 - [Finding and removing apps](#finding-and-removing-apps)
 - [Asking about what's on screen](#asking-about-whats-on-screen)
@@ -135,8 +136,10 @@ loads; later ones take a few seconds.
 
 ## Choosing the model
 
-The round settings button beside the search entry opens **Assistant
-Model**. It has two pages: **This Computer** and **Cloud**.
+The round settings button beside the search entry opens **Assistant**
+settings. It has three pages: **This Computer** and **Cloud** pick the
+model, and **Voice** picks the read-aloud voice (see
+[Choosing a voice](#choosing-a-voice)).
 
 **This Computer** lists the chat models Lemonade can run here that fit in
 half of your computer's memory, smallest first. Models that are good at
@@ -205,6 +208,50 @@ Cloud page, which also deletes the API key from your keyring.
 Only the overlay assistant (questions, desktop actions, clipboard
 Translate/Reformat/Summarize) uses the cloud model. The notification digest,
 quick replies and file search always stay on your computer.
+
+## Hearing answers read aloud
+
+The speaker button next to an answer's copy button reads the answer out;
+press it again (it shows a stop square meanwhile) to stop. You can also
+ask the assistant to "read that to me". Code blocks are skipped and
+Markdown marks are left out.
+
+The voice is [Piper](https://github.com/OHF-Voice/piper1-gpl)'s British
+"Alan", which runs on this computer. Piper comes from the `piper-tts` snap.
+A deb can't depend on a snap, so the first time something is read out
+without it, Umoja installs the snap (you're asked for your password, as for
+any software install). If that's declined or there's no internet,
+speech-dispatcher's voice reads instead. To install it yourself:
+
+```sh
+sudo snap install piper-tts
+```
+
+### Choosing a voice
+
+Click the round settings button beside Ask Umoja's entry and pick
+the **Voice** page. It lists the Piper voices for your language, with their
+size and whether they're downloaded; search to find voices in other
+languages. Picking a voice downloads it (the bar shows how far), makes it
+the voice and plays a short sample. The bin button removes a downloaded
+voice you no longer use. The same tab sets the **Speed** and **Read every
+answer aloud**. If Piper isn't installed yet, the tab offers
+**Install Piper**.
+
+Voices come from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
+on Hugging Face, into `~/snap/piper-tts/common/voices` (or
+`~/.local/share/umoja/voices` for a `piper` installed another way, such as
+`pip install piper-tts`). The same settings work from a terminal:
+
+```sh
+gsettings set org.umoja.shell speech-voice en_US-lessac-medium
+gsettings set org.umoja.shell speech-rate 1.2       # a little faster
+gsettings set org.umoja.shell speak-answers true    # read every answer
+```
+
+This is separate from the screen reader: Orca keeps its own voice, and
+`speak-answers` is skipped while Orca is on, since it reads answers
+already.
 
 ## Doing things on the desktop
 
@@ -647,6 +694,9 @@ All in the `org.umoja.shell` schema, for example
 | `captions-model` | `'Whisper-Base'` | Lemonade speech model for live captions |
 | `activity-recall` | `false` | Keep the text-only activity timeline |
 | `activity-recall-days` | `14` | Days the activity timeline is kept |
+| `speech-voice` | `'en_GB-alan-medium'` | Piper voice for reading answers aloud |
+| `speech-rate` | `1.0` | How fast answers are read (0.5 to 2.0) |
+| `speak-answers` | `false` | Read every answer aloud (not while Orca runs) |
 
 The embedded Lemonade server's port and memory limits are covered in
 [Embedded Lemonade](../README.md#embedded-lemonade) in the README.

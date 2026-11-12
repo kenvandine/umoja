@@ -26,6 +26,20 @@ fn obj(props: Value, required: &[&str]) -> Value {
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
+            "read_aloud",
+            "Read text out loud in Umoja's voice. Use when the user asks you to say, speak or read something aloud (\"read that to me\", \"say it out loud\"); pass the words to speak, usually your answer. stop=true stops reading. This is not the screen reader.",
+            obj(json!({
+                "text": {"type": "string", "description": "What to say, in plain words"},
+                "stop": {"type": "boolean", "description": "Stop reading instead"}
+            }), &[]),
+            |a| Box::pin(read_aloud(a)),
+        )
+        .with_summary(|a| if arg_bool(a, "stop") == Some(true) {
+            "Stop reading aloud".into()
+        } else {
+            "Read aloud".into()
+        }),
+        Tool::new(
             "set_volume",
             "Change the sound volume or mute/unmute the speakers or the microphone. Use for \"turn it up\", \"volume to 30%\", \"mute\", \"mute my mic\".",
             obj(json!({
@@ -400,6 +414,45 @@ async fn cmd(argv: &[&str]) -> (bool, String) {
     })
     .await
     .unwrap_or_else(|e| (false, e))
+}
+
+/// Ask Umoja's overlay to speak (it owns the voice, see umoja-overlay's
+/// speech module).
+async fn read_aloud(a: Value) -> Outcome {
+    let stop = arg_bool(&a, "stop") == Some(true);
+    let text = arg_str(&a, "text").unwrap_or("").trim().to_owned();
+    if !stop && text.is_empty() {
+        return Outcome::err("nothing to read: pass text");
+    }
+    let c = match session_bus().await {
+        Ok(c) => c,
+        Err(e) => return Outcome::err(e),
+    };
+    let (method, args) = if stop {
+        ("StopSpeaking", None)
+    } else {
+        ("Speak", Some((text.as_str(),).to_variant()))
+    };
+    match c
+        .call_future(
+            Some(dbus::OVERLAY_BUS_NAME),
+            dbus::OVERLAY_OBJECT_PATH,
+            dbus::OVERLAY_INTERFACE,
+            method,
+            args.as_ref(),
+            None,
+            gio::DBusCallFlags::NONE,
+            2000,
+        )
+        .await
+    {
+        Ok(_) if stop => Outcome::ok("Stopped reading."),
+        Ok(_) => Outcome::ok(
+            "Reading it aloud now. Answer with one short sentence saying so (\"Reading it out now.\"), \
+             nothing else: don't repeat the text and don't bring up other topics.",
+        ),
+        Err(e) => Outcome::err(format!("could not read aloud: {e}")),
+    }
 }
 
 /// The panel's OSD (volume/brightness bubble), as gnome-shell's ShowOSD.
