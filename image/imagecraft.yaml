@@ -101,6 +101,10 @@ parts:
         ubuntu-umoja-desktop $local \
         firefox- thunderbird-
       rm -rf /var/cache/umoja-local-debs
+      # Refresh once more now that command-not-found is installed: its apt
+      # hook builds the database behind "Command 'x' not found, but can be
+      # installed with ...".
+      apt-get update
       # Umoja must not have brought GNOME Shell back.
       for p in gnome-shell mutter gdm3; do
         if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
