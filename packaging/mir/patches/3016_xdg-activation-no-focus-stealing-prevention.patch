@@ -10,7 +10,8 @@ Description: xdg-activation: let user actions hand focus on reliably
  A client now also gets a real token when it names the serial of an input
  event it received (the user is interacting with it), key presses and
  focus changes no longer revoke tokens, and they last 30 seconds. Tokens
- are still single use.
+ are still single use. The token authority unit test waits for the new
+ timeout.
 Author: Umoja developers
 Forwarded: not-needed
 Last-Update: 2026-11-11
@@ -101,3 +102,14 @@ Last-Update: 2026-11-11
  }
  
  namespace msh = mir::shell;
+--- a/tests/unit-tests/shell/test_token_authority.cpp
++++ b/tests/unit-tests/shell/test_token_authority.cpp
+@@ -68,7 +68,7 @@
+ {
+     using namespace std::chrono;
+ 
+-    auto constexpr revocation_time = milliseconds(3000);
++    auto constexpr revocation_time = milliseconds(30000);
+     auto constexpr epsilon = milliseconds(50);
+ 
+     bool revoked = false;
