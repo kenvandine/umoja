@@ -16,6 +16,7 @@
 //! [`Tool::with_risk`] for anything hard to undo.
 
 pub mod actions;
+pub mod automations;
 pub mod apps;
 pub mod calendar;
 pub mod desktop;
@@ -40,6 +41,7 @@ const PROVIDERS: &[fn() -> Vec<Tool>] = &[
     files::tools,
     calendar::tools,
     setups::tools,
+    automations::tools,
     notifications::tools,
     diagnostics::tools,
     undo::tools,
