@@ -3109,7 +3109,7 @@ impl Overlay {
             self.assistant.set_visible(true);
             self.answer.set_visible(true);
             self.answer.set_text(&i18n::umoja(
-                "No coding agent is installed. Install one, such as Claude Code, and Umoja connects it at your next login.",
+                "No coding agent is set up. Pick one under Coding agent in the model button's menu, and Install sets it up.",
             ));
             return;
         };

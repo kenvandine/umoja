@@ -1,18 +1,58 @@
-//! AI coding agents the user already has (Claude Code, Codex, Gemini CLI,
-//! OpenCode), so the assistant can hand a job it can't do well (writing a
-//! script, changing code) to one of them.
+//! AI coding agents (Claude Code, Codex, GitHub Copilot CLI, Antigravity
+//! CLI, OpenCode, Gemini CLI), so the assistant can hand a job it can't
+//! do well (writing a script, changing code) to one of them.
 //!
-//! Umoja never installs an agent. It finds the ones on PATH or in the
-//! user's own bin folders, uses the one picked in `org.umoja.shell
-//! ai-agent` (or the first one found), and starts it in a terminal with
-//! the task as its first prompt, in the agent's normal mode, so the agent
-//! still asks before it changes anything. `umoja-agent-setup` gives the
-//! agents Umoja's skill and tools.
+//! [`KNOWN`] is the one table of what Umoja knows about each agent: its
+//! command, how to give it a first prompt, how to install it and how to
+//! sign in. Umoja finds the agents on PATH or in the user's own bin
+//! folders, uses the one picked in `org.umoja.shell ai-agent` (or the
+//! first one found), and starts it in a terminal with the task as its
+//! first prompt, in the agent's normal mode, so the agent still asks
+//! before it changes anything. `umoja-agent-setup` gives the agents
+//! Umoja's skill and tools.
+//!
+//! Umoja installs an agent only when the user asks (the Install button,
+//! or the assistant's install_app with an Allow dialog): from a snap when
+//! the vendor or Ubuntu publishes one, else with the vendor's own
+//! installer, into `~/.local/bin`, without sudo. The unofficial,
+//! strictly confined snaps of some agents can't reach the user's projects
+//! or tools, so they are never used. Signing in is always the agent's own
+//! flow (a browser or a device code) in a terminal; Umoja never sees a
+//! token, and only checks whether the agent's credentials file exists.
 
 use crate::gsettings as gs;
 use std::path::{Path, PathBuf};
 
 pub const AGENT_KEY: &str = "ai-agent";
+
+/// How Umoja installs an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Install {
+    /// A snap from the vendor or Ubuntu.
+    Snap { name: &'static str, classic: bool },
+    /// The vendor's own install script, piped to `shell`. It installs for
+    /// this user only (`~/.local/bin`), without sudo.
+    Script {
+        url: &'static str,
+        shell: &'static str,
+    },
+    /// Umoja doesn't offer to install it (Gemini CLI, which Google is
+    /// replacing with Antigravity CLI).
+    None,
+}
+
+/// Whether an agent is ready for jobs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    NotInstalled,
+    /// Installed, but its credentials file is missing.
+    SignedOut,
+    /// Installed and signed in.
+    Ready,
+    /// Installed; it keeps its sign-in in the keyring, so Umoja can't
+    /// tell whether it is signed in.
+    Installed,
+}
 
 /// A coding agent Umoja knows how to start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,24 +61,101 @@ pub struct Agent {
     pub id: &'static str,
     /// Product name, e.g. "Claude Code".
     pub name: &'static str,
+    /// Flag that starts an interactive session on a first prompt; `None`
+    /// when the prompt goes straight after the command.
+    pub prompt_flag: Option<&'static str>,
+    pub install: Install,
+    /// Arguments of the agent's sign-in command; empty when the agent
+    /// signs in on its first run instead.
+    pub login: &'static [&'static str],
+    /// Files (relative to home) that exist once the agent is signed in;
+    /// empty when it keeps its sign-in in the keyring.
+    pub credentials: &'static [&'static str],
+    /// Other names people use for it, for "install …" requests.
+    pub aliases: &'static [&'static str],
 }
 
 pub const KNOWN: &[Agent] = &[
     Agent {
         id: "claude",
         name: "Claude Code",
+        prompt_flag: None,
+        install: Install::Script {
+            url: "https://claude.ai/install.sh",
+            shell: "bash",
+        },
+        login: &["auth", "login"],
+        credentials: &[".claude/.credentials.json"],
+        aliases: &["claude", "claude code", "claude-code"],
     },
     Agent {
         id: "codex",
         name: "Codex",
+        prompt_flag: None,
+        install: Install::Script {
+            url: "https://chatgpt.com/codex/install.sh",
+            shell: "sh",
+        },
+        login: &["login"],
+        credentials: &[".codex/auth.json"],
+        aliases: &["codex", "codex cli", "openai codex"],
     },
     Agent {
-        id: "gemini",
-        name: "Gemini CLI",
+        id: "copilot",
+        name: "GitHub Copilot",
+        prompt_flag: Some("-i"),
+        install: Install::Script {
+            url: "https://gh.io/copilot-install",
+            shell: "bash",
+        },
+        login: &["login"],
+        credentials: &[],
+        aliases: &[
+            "copilot",
+            "copilot cli",
+            "github copilot",
+            "github copilot cli",
+            "copilot-cli",
+        ],
+    },
+    Agent {
+        id: "agy",
+        name: "Antigravity",
+        prompt_flag: Some("-i"),
+        install: Install::Script {
+            url: "https://antigravity.google/cli/install.sh",
+            shell: "bash",
+        },
+        login: &[],
+        credentials: &[],
+        aliases: &[
+            "agy",
+            "antigravity",
+            "antigravity cli",
+            "google antigravity",
+            "antigravity-cli",
+        ],
     },
     Agent {
         id: "opencode",
         name: "OpenCode",
+        prompt_flag: Some("--prompt"),
+        install: Install::Snap {
+            name: "opencode",
+            classic: true,
+        },
+        login: &["auth", "login"],
+        credentials: &[".local/share/opencode/auth.json"],
+        aliases: &["opencode", "open code"],
+    },
+    Agent {
+        id: "gemini",
+        name: "Gemini CLI",
+        prompt_flag: Some("--prompt-interactive"),
+        install: Install::None,
+        login: &[],
+        credentials: &[".gemini/oauth_creds.json"],
+        aliases: &["gemini", "gemini cli", "gemini-cli"],
     },
 ];
 
@@ -47,9 +164,37 @@ impl Agent {
         KNOWN.iter().copied().find(|a| a.id == id)
     }
 
+    /// The agent a name like "Claude Code" or "copilot cli" means.
+    pub fn by_name(name: &str) -> Option<Agent> {
+        let n = name.trim().to_lowercase();
+        KNOWN
+            .iter()
+            .copied()
+            .find(|a| a.id == n || a.name.to_lowercase() == n || a.aliases.contains(&n.as_str()))
+    }
+
     /// Where the agent's command is, if installed.
     pub fn path(&self) -> Option<PathBuf> {
         find_program(self.id)
+    }
+
+    pub fn state(&self) -> State {
+        if self.path().is_none() {
+            return State::NotInstalled;
+        }
+        if self.credentials.is_empty() {
+            return State::Installed;
+        }
+        let home = glib::home_dir();
+        if self.credentials.iter().any(|c| home.join(c).exists()) {
+            State::Ready
+        } else {
+            State::SignedOut
+        }
+    }
+
+    pub fn can_install(&self) -> bool {
+        self.install != Install::None
     }
 
     /// The command line that starts it on `task` (empty: no first prompt).
@@ -57,14 +202,79 @@ impl Agent {
         let mut v = vec![program.to_string_lossy().into_owned()];
         let task = task.trim();
         if !task.is_empty() {
-            match self.id {
-                "gemini" => v.push("--prompt-interactive".into()),
-                "opencode" => v.push("--prompt".into()),
-                _ => {}
+            if let Some(flag) = self.prompt_flag {
+                v.push(flag.into());
             }
             v.push(task.to_string());
         }
         v
+    }
+
+    /// Shell command that signs the agent in: its login command, or the
+    /// agent itself when it signs in on its first run. `None` when it
+    /// isn't installed.
+    pub fn sign_in_command(&self) -> Option<String> {
+        let program = self.path()?;
+        let mut words = vec![sh_quote(&program.to_string_lossy())];
+        words.extend(self.login.iter().map(|w| sh_quote(w)));
+        Some(words.join(" "))
+    }
+
+    /// Shell command that installs the agent, connects it to Umoja's
+    /// skill and tools, and signs it in. `None` when Umoja doesn't
+    /// install it.
+    pub fn install_command(&self) -> Option<String> {
+        let install = match self.install {
+            Install::Snap { name, classic } => {
+                let args = if classic {
+                    format!("{name} --classic")
+                } else {
+                    name.to_string()
+                };
+                // snapd asks for the password through polkit; sudo only if
+                // there is no polkit agent.
+                format!("{{ snap install {args} || sudo snap install {args}; }}")
+            }
+            Install::Script { url, shell } => format!(
+                "{{ if command -v curl >/dev/null; then curl -fsSL {url}; else wget -qO- {url}; fi; }} | {shell}"
+            ),
+            Install::None => return None,
+        };
+        // Installers put the command in ~/.local/bin, which this shell's
+        // PATH may lack; the agent's own folders come after it.
+        let path = std::env::join_paths(extra_dirs())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut cmd = format!(
+            "{install} && export PATH=\"$PATH:{path}\" && umoja-agent-setup {id}",
+            id = self.id
+        );
+        if !self.login.is_empty() {
+            let login = format!("{} {}", self.id, self.login.join(" "));
+            // Setup may already have signed it in (OpenCode on the
+            // assistant's cloud model): only sign in when still needed.
+            if self.credentials.is_empty() {
+                cmd.push_str(&format!(" && {login}"));
+            } else {
+                let tests: Vec<String> = self
+                    .credentials
+                    .iter()
+                    .map(|c| format!("[ -s \"$HOME/{c}\" ]"))
+                    .collect();
+                cmd.push_str(&format!(" && {{ {} || {login}; }}", tests.join(" || ")));
+            }
+        }
+        Some(cmd)
+    }
+}
+
+fn sh_quote(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+=:".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
 
@@ -139,6 +349,27 @@ pub fn launch(agent: Agent, task: &str, folder: Option<&Path>) -> Result<(), Str
         .map_err(|e| format!("couldn't open a terminal: {e}"))
 }
 
+/// Install `agent` in a terminal, then connect it and sign it in there.
+pub fn install(agent: Agent) -> Result<(), String> {
+    let cmd = agent
+        .install_command()
+        .ok_or_else(|| format!("Umoja can't install {}", agent.name))?;
+    crate::terminal::spawn_in_terminal(&cmd).map_err(|e| format!("couldn't open a terminal: {e}"))
+}
+
+/// Sign `agent` in with its own flow, in a terminal. Its login commands
+/// open the browser (or print a device code) and wait for it.
+pub fn sign_in(agent: Agent) -> Result<(), String> {
+    if agent.login.is_empty() {
+        // Signs in on its first run: start it with no task.
+        return launch(agent, "", None);
+    }
+    let cmd = agent
+        .sign_in_command()
+        .ok_or_else(|| format!("{} isn't installed", agent.name))?;
+    crate::terminal::spawn_in_terminal(&cmd).map_err(|e| format!("couldn't open a terminal: {e}"))
+}
+
 /// Whether a request is a coding job a coding agent does better than the
 /// desktop assistant: writing a script or program, changing code.
 pub fn looks_like_coding(query: &str) -> bool {
@@ -209,6 +440,58 @@ mod tests {
             o.argv(Path::new("opencode"), "hi"),
             ["opencode", "--prompt", "hi"]
         );
+        for id in ["copilot", "agy"] {
+            let a = Agent::by_id(id).unwrap();
+            assert_eq!(a.argv(Path::new(id), "hi"), [id, "-i", "hi"]);
+        }
+    }
+
+    #[test]
+    fn names() {
+        assert_eq!(Agent::by_name("Claude Code"), Some(CLAUDE));
+        assert_eq!(Agent::by_name("github copilot cli").unwrap().id, "copilot");
+        assert_eq!(Agent::by_name("Antigravity").unwrap().id, "agy");
+        assert_eq!(Agent::by_name(" OpenCode ").unwrap().id, "opencode");
+        assert_eq!(Agent::by_name("firefox"), None);
+    }
+
+    #[test]
+    fn install_commands() {
+        // Snap first where the vendor or Ubuntu publishes one.
+        let o = Agent::by_id("opencode").unwrap().install_command().unwrap();
+        assert!(o.starts_with(
+            "{ snap install opencode --classic || sudo snap install opencode --classic; }"
+        ));
+        assert!(o.contains("&& umoja-agent-setup opencode"));
+        // Skips the sign-in when setup already signed it in.
+        assert!(o.ends_with(
+            "&& { [ -s \"$HOME/.local/share/opencode/auth.json\" ] || opencode auth login; }"
+        ));
+        // Else the vendor's installer, for this user only.
+        let c = CODEX.install_command().unwrap();
+        assert!(c.contains("curl -fsSL https://chatgpt.com/codex/install.sh;"));
+        assert!(c.contains("| sh && export PATH="));
+        assert!(!c.contains("sudo"));
+        let g = Agent::by_id("copilot").unwrap().install_command().unwrap();
+        assert!(g.ends_with("&& umoja-agent-setup copilot && copilot login"));
+        let a = Agent::by_id("agy").unwrap().install_command().unwrap();
+        assert!(a.ends_with("&& umoja-agent-setup agy"));
+        assert_eq!(Agent::by_id("gemini").unwrap().install_command(), None);
+        // Every agent the setup script knows is in the table and back.
+        let script = include_str!("../../../bin/umoja-agent-setup");
+        let line = script.lines().find(|l| l.starts_with("AGENTS=(")).unwrap();
+        let ids: Vec<&str> = line["AGENTS=(".len()..line.len() - 1].split(' ').collect();
+        let known: Vec<&str> = KNOWN.iter().map(|a| a.id).collect();
+        assert_eq!(ids, known);
+    }
+
+    #[test]
+    fn quoting() {
+        assert_eq!(
+            sh_quote("/home/k/.local/bin/codex"),
+            "/home/k/.local/bin/codex"
+        );
+        assert_eq!(sh_quote("/a b/it's"), "'/a b/it'\\''s'");
     }
 
     #[test]

@@ -602,8 +602,9 @@ From a terminal, `umoja-files --search "lease pdf"` searches the index.
 
 The assistant is good at doing things on the desktop, but a small local
 model isn't the right tool for writing a script or changing code. If you
-have an AI coding agent installed (Claude Code, Codex, Gemini CLI or
-OpenCode), the assistant hands those jobs to it:
+have an AI coding agent (Claude Code, Codex, GitHub Copilot CLI,
+Antigravity CLI, OpenCode or Gemini CLI), the assistant hands those jobs to
+it:
 
 - Ask for a coding job ("write me a script that renames my photos by
   date") and the assistant offers to open your coding agent with the task.
@@ -616,10 +617,43 @@ OpenCode), the assistant hands those jobs to it:
   added.
 
 Pick which agent gets these jobs under **Coding agent** in the model
-button's popover (only installed agents are listed; **None** turns the
-hand-off off), or with `gsettings set org.umoja.shell ai-agent claude`.
-Umoja never installs an agent for you. The `ai-agent-hotkey` key (unset by
-default) can open the agent with a keyboard shortcut.
+button's popover (**None** turns the hand-off off), or with
+`gsettings set org.umoja.shell ai-agent claude` (`claude`, `codex`,
+`copilot`, `agy`, `opencode`, `gemini`). Under the list it says what the
+agent needs next:
+
+- **Install**, when it isn't installed yet. A terminal opens and installs
+  it, connects it to Umoja (below), and starts its sign-in. OpenCode comes
+  from its snap, which Ubuntu publishes. Claude Code, Codex, GitHub Copilot
+  and Antigravity come from their makers' own installers, for you only,
+  into `~/.local/bin`, without sudo. Their snaps on the Snap Store are
+  unofficial and strictly confined, so they couldn't reach your projects
+  or run your tools. Gemini CLI isn't offered, since Google is replacing it
+  with Antigravity CLI. It still works if you have it.
+- **Sign In**, when the agent isn't signed in, or when Umoja can't tell
+  (GitHub Copilot and Antigravity keep their sign-in in the keyring). A
+  terminal opens with the agent's own sign-in (`claude auth login`,
+  `codex login`, `copilot login`, `opencode auth login`, or Antigravity's
+  first run). It opens your browser, or shows a code for a device login.
+  Umoja never sees your password or token. It only checks whether the
+  agent's sign-in file exists.
+
+You can also ask: "install Codex", "sign me in to Copilot", or "have
+OpenCode write a hello world GTK app in Rust". The assistant asks first,
+the same as for any install.
+
+**OpenCode can use the assistant's cloud model.** If the assistant uses a
+cloud model (the **Cloud** page) when OpenCode is set up, OpenCode gets the
+same model. Umoja adds a `umoja` provider with your URL and model to
+`~/.config/opencode/opencode.json` and makes it the model, unless you
+picked another one. It puts the key from your keyring where
+`opencode auth login` keeps keys (`~/.local/share/opencode/auth.json`,
+readable only by you). `umoja-agent-setup --cloud` sets this up again,
+for example after you change the model, and `umoja-agent-setup --cloud --remove`
+undoes it.
+
+The `ai-agent-hotkey` key (unset by default) can open the agent with a
+keyboard shortcut.
 
 ## Privacy
 
@@ -682,7 +716,7 @@ All in the `org.umoja.shell` schema, for example
 | `ask-about-screen-hotkey` | `['<Super><Shift>a']` | Ask about the screen |
 | `clipboard-history-hotkey` | `['<Super><Shift>v']` | Clipboard history |
 | `copy-text-hotkey` | `['<Super><Control>Print']` | Copy the text in a screen area |
-| `ai-agent` | `''` | Coding agent for coding jobs: `claude`, `codex`, `gemini`, `opencode`, `none`; empty picks the first installed |
+| `ai-agent` | `''` | Coding agent for coding jobs: `claude`, `codex`, `copilot`, `agy`, `opencode`, `gemini`, `none`; empty picks the first installed |
 | `ai-agent-hotkey` | `[]` | Open the coding agent in a terminal |
 | `crash-notifications` | `true` | Notify when an app crashes, with **Ask Why** |
 | `crash-notifications-muted` | `[]` | Programs whose crashes don't notify |
@@ -710,19 +744,22 @@ Claude Code, can use it too and gets the same tools and the same
 **Allow** rules.
 
 **AI coding agents are connected for you.** At login, `umoja-agent-setup`
-looks for Claude Code, Codex, Gemini CLI and OpenCode. For each one it finds
-for the first time, it:
+looks for Claude Code, Codex, GitHub Copilot CLI, Antigravity CLI, OpenCode
+and Gemini CLI. For each one it finds for the first time, and right away
+for one you install from the **Coding agent** picker, it:
 
 - registers `umoja-mcp` with it (`claude mcp add --scope user`, Codex's
-  `config.toml`, Gemini's `settings.json`, OpenCode's `opencode.json`), and
+  `config.toml`, Copilot's `~/.copilot/mcp-config.json`, Antigravity's
+  `~/.gemini/config/mcp_config.json` (shared with the Antigravity app),
+  OpenCode's `opencode.json`, Gemini's `settings.json`), and
 - links Umoja's agent skill into its skills folder (and `~/.agents/skills`),
   so the agent knows how Umoja is configured: GSettings rather than config
   files, which unit to restart, where the logs are, and never to edit
   `/usr`.
 
-A notification says which agents were connected. It never installs an
-agent, never changes an entry it didn't write, and an agent you install
-later is connected at your next login. From a terminal:
+A notification says which agents were connected. The script never
+installs an agent and never changes an entry it didn't write. An agent you
+install outside Umoja is connected at your next login. From a terminal:
 
 - `umoja-agent-setup --status` shows what's connected.
 - `umoja-agent-setup --remove` (or `--remove claude`) undoes it, and that

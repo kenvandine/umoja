@@ -6,8 +6,9 @@ After=umoja-session.target umoja-panel.service
 
 [Service]
 Type=oneshot
-# Sets up each agent (Claude Code, Codex, Gemini CLI, OpenCode) once, the
-# first time it is seen; `umoja-agent-setup --remove` opts an agent out.
+# Sets up each agent (Claude Code, Codex, Copilot, Antigravity, OpenCode,
+# Gemini CLI) once, the first time it is seen; `umoja-agent-setup --remove`
+# opts an agent out.
 ExecStart=/usr/bin/umoja-agent-setup --auto
 Nice=10
 Slice=background.slice
