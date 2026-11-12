@@ -4,7 +4,9 @@
 //! `org.umoja.shell lemonade-model`; the model watcher then downloads it.
 //! A second page sets up an OpenAI-compatible cloud model (see `cloud`).
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::{glib, prelude::*};
@@ -84,51 +86,168 @@ fn pick(entries: Vec<(String, CatalogEntry)>, mem_gb: f64) -> Vec<ModelInfo> {
     out
 }
 
-/// "Coding agent: [Claude Code ▾]": who gets coding jobs. Lists only the
-/// agents installed here, plus None; hidden when there are none.
-fn agent_row() -> gtk::Box {
-    use umoja_common::agents;
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.set_margin_top(6);
-    let installed = agents::installed();
-    if installed.is_empty() {
-        row.set_visible(false);
-        return row;
-    }
-    let label = gtk::Label::builder()
-        .label(i18n::umoja("Coding agent"))
-        .xalign(0.0)
-        .hexpand(true)
-        .tooltip_text(i18n::umoja(
-            "The assistant hands coding jobs, like writing a script, to this app",
-        ))
-        .build();
-    let mut names: Vec<String> = installed.iter().map(|a| a.name.to_string()).collect();
-    names.push(i18n::umoja("None"));
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let drop = gtk::DropDown::from_strings(&refs);
-    let current = gs::get_string(gs::UMOJA_SHELL, agents::AGENT_KEY, "");
-    let selected = if current == "none" {
-        installed.len()
-    } else {
-        agents::chosen()
-            .and_then(|c| installed.iter().position(|a| *a == c))
-            .unwrap_or(0)
-    };
-    drop.set_selected(selected as u32);
-    drop.connect_selected_notify(move |d| {
-        let value = installed
-            .get(d.selected() as usize)
-            .map(|a| a.id)
-            .unwrap_or("none");
-        if let Some(s) = gs::settings(gs::UMOJA_SHELL).filter(|s| gs::has_key(s, agents::AGENT_KEY))
+/// "Coding agent: [Claude Code ▾]": who gets coding jobs, with what that
+/// agent needs next: Install, Sign in, or nothing when it is ready. Lists
+/// every agent Umoja knows (Gemini CLI only when installed, since Google
+/// is replacing it), plus None. Rebuilt each time the popover opens, so
+/// an agent installed meanwhile shows up as installed.
+struct AgentRow {
+    root: gtk::Box,
+    drop: gtk::DropDown,
+    status: gtk::Label,
+    action: gtk::Button,
+    agents: Rc<RefCell<Vec<umoja_common::agents::Agent>>>,
+    /// Set while refresh() fills the list, so it doesn't save a pick.
+    filling: Rc<Cell<bool>>,
+}
+
+impl AgentRow {
+    fn new() -> Rc<Self> {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        root.set_margin_top(6);
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let label = gtk::Label::builder()
+            .label(i18n::umoja("Coding agent"))
+            .xalign(0.0)
+            .hexpand(true)
+            .tooltip_text(i18n::umoja(
+                "The assistant hands coding jobs, like writing a script, to this app",
+            ))
+            .build();
+        let drop = gtk::DropDown::from_strings(&[]);
+        top.append(&label);
+        top.append(&drop);
+        let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let status = gtk::Label::builder()
+            .xalign(0.0)
+            .hexpand(true)
+            .wrap(true)
+            .max_width_chars(36)
+            .css_classes(["dim-label", "caption"])
+            .build();
+        let action = gtk::Button::builder().css_classes(["pill"]).build();
+        bottom.append(&status);
+        bottom.append(&action);
+        root.append(&top);
+        root.append(&bottom);
+        let row = Rc::new(Self {
+            root,
+            drop,
+            status,
+            action,
+            agents: Rc::default(),
+            filling: Rc::default(),
+        });
         {
-            let _ = s.set_string(agents::AGENT_KEY, value);
+            let weak = Rc::downgrade(&row);
+            row.drop.connect_selected_notify(move |_| {
+                let Some(r) = weak.upgrade() else { return };
+                if r.filling.get() {
+                    return;
+                }
+                let value = r.selected().map(|a| a.id).unwrap_or("none");
+                if let Some(s) = gs::settings(gs::UMOJA_SHELL)
+                    .filter(|s| gs::has_key(s, umoja_common::agents::AGENT_KEY))
+                {
+                    let _ = s.set_string(umoja_common::agents::AGENT_KEY, value);
+                }
+                r.show_state();
+            });
         }
-    });
-    row.append(&label);
-    row.append(&drop);
-    row
+        {
+            let weak = Rc::downgrade(&row);
+            row.action.connect_clicked(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    r.act();
+                }
+            });
+        }
+        row.refresh();
+        row
+    }
+
+    fn selected(&self) -> Option<umoja_common::agents::Agent> {
+        self.agents.borrow().get(self.drop.selected() as usize).copied()
+    }
+
+    fn refresh(&self) {
+        use umoja_common::agents::{self, KNOWN, State};
+        let list: Vec<agents::Agent> = KNOWN
+            .iter()
+            .copied()
+            .filter(|a| a.can_install() || a.state() != State::NotInstalled)
+            .collect();
+        let mut names: Vec<String> = list.iter().map(|a| a.name.to_string()).collect();
+        names.push(i18n::umoja("None"));
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let current = gs::get_string(gs::UMOJA_SHELL, agents::AGENT_KEY, "");
+        let selected = match current.as_str() {
+            "none" => list.len(),
+            "" => agents::chosen()
+                .and_then(|c| list.iter().position(|a| *a == c))
+                .unwrap_or(0),
+            id => list.iter().position(|a| a.id == id).unwrap_or(0),
+        };
+        *self.agents.borrow_mut() = list;
+        self.filling.set(true);
+        self.drop.set_model(Some(&gtk::StringList::new(&refs)));
+        self.drop.set_selected(selected as u32);
+        self.filling.set(false);
+        self.show_state();
+    }
+
+    fn show_state(&self) {
+        use umoja_common::agents::State;
+        let Some(agent) = self.selected() else {
+            self.status
+                .set_text(&i18n::umoja("Coding jobs stay with the assistant."));
+            self.action.set_visible(false);
+            return;
+        };
+        let (text, button) = match agent.state() {
+            State::NotInstalled => (
+                i18n::umoja("Not installed on this computer."),
+                Some(i18n::umoja("Install")),
+            ),
+            State::SignedOut => (
+                i18n::umoja("Installed, but not signed in."),
+                Some(i18n::umoja("Sign In")),
+            ),
+            State::Ready => (i18n::umoja("Ready, and signed in."), None),
+            State::Installed => (
+                i18n::umoja("Installed. It asks you to sign in the first time."),
+                Some(i18n::umoja("Sign In")),
+            ),
+        };
+        self.status.set_text(&text);
+        self.action.set_visible(button.is_some());
+        if let Some(b) = button {
+            self.action.set_label(&b);
+        }
+        let suggested = matches!(agent.state(), State::NotInstalled | State::SignedOut);
+        if suggested {
+            self.action.add_css_class("suggested-action");
+            self.action.remove_css_class("flat");
+        } else {
+            self.action.remove_css_class("suggested-action");
+            self.action.add_css_class("flat");
+        }
+    }
+
+    /// Install or sign in, in a terminal: both are the vendor's own flow,
+    /// and signing in opens the browser from there.
+    fn act(&self) {
+        use umoja_common::agents::{self, State};
+        let Some(agent) = self.selected() else { return };
+        let r = match agent.state() {
+            State::NotInstalled => agents::install(agent),
+            _ => agents::sign_in(agent),
+        };
+        match r {
+            Ok(()) => close(),
+            Err(e) => self.status.set_text(&e),
+        }
+    }
 }
 
 /// The model to suggest for this computer: the largest one that is good
@@ -301,7 +420,8 @@ pub fn button() -> gtk::MenuButton {
     content.append(&heading);
     content.append(&switcher);
     content.append(&stack);
-    content.append(&agent_row());
+    let agent_row = AgentRow::new();
+    content.append(&agent_row.root);
     popover.set_child(Some(&content));
     {
         let popover = popover.clone();
@@ -334,6 +454,7 @@ pub fn button() -> gtk::MenuButton {
         stack.set_visible_child_name(page);
         cloud.load();
         voice.load();
+        agent_row.refresh();
         let list = list.clone();
         let popover = popover.clone();
         let mem = mem_total_gb();

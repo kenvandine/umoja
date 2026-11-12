@@ -1,15 +1,22 @@
 #!/bin/bash
 # umoja-agent-setup: let the AI coding agents a user already has (Claude Code,
-# Codex, Gemini CLI, OpenCode) work with Umoja. For each agent it finds it
+# Codex, GitHub Copilot CLI, Antigravity CLI, OpenCode, Gemini CLI) work with
+# Umoja. For each agent it finds it
 # links the Umoja agent skill into the agent's skills folder and registers
 # Umoja's MCP server (umoja-mcp), so the agent knows how the desktop works
 # and gets the same desktop tools, with the same Allow rules, as the overlay
 # assistant.
 #
-# It never installs an agent and never touches an entry it didn't write.
-# The session runs it with --auto at every login: each agent is set up once,
-# the first time it is seen, so an agent installed later is picked up at the
-# next login and an agent the user ran --remove for is left alone.
+# It never installs an agent (Umoja's Coding agent picker does that, then
+# runs this for the new agent; see umoja_common::agents) and never touches an
+# entry it didn't write. The session runs it with --auto at every login: each
+# agent is set up once, the first time it is seen, so an agent installed
+# outside Umoja is picked up at the next login and an agent the user ran
+# --remove for is left alone.
+#
+# OpenCode can also use the assistant's cloud model (org.umoja.shell
+# cloud-base-url and cloud-model, the key from the keyring): that happens
+# when it is set up while the assistant uses the cloud, or with --cloud.
 
 set -uo pipefail
 
@@ -18,7 +25,7 @@ MCP_CMD=${UMOJA_MCP_COMMAND:-umoja-mcp}
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/umoja
 STATE=$STATE_DIR/agent-setup
 CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}
-AGENTS=(claude codex gemini opencode)
+AGENTS=(claude codex copilot agy opencode gemini)
 
 # Login services get a short PATH; agents usually live in the user's own bin
 # folders (native installers, npm, bun, mise, snaps).
@@ -30,6 +37,8 @@ Usage: umoja-agent-setup [AGENT...]          set up these agents (default: all f
        umoja-agent-setup --remove [AGENT...]  undo it (default: all)
        umoja-agent-setup --status             show what is set up
        umoja-agent-setup --auto               set up agents not seen before (run at login)
+       umoja-agent-setup --cloud [opencode]   point OpenCode at the assistant's cloud model
+       umoja-agent-setup --cloud --remove     undo that
 
 Agents: ${AGENTS[*]}
 EOF
@@ -39,6 +48,8 @@ label() {
   case $1 in
     claude) echo "Claude Code" ;;
     codex) echo "Codex" ;;
+    copilot) echo "GitHub Copilot" ;;
+    agy) echo "Antigravity" ;;
     gemini) echo "Gemini CLI" ;;
     opencode) echo "OpenCode" ;;
   esac
@@ -48,13 +59,23 @@ home_of() {
   case $1 in
     claude) echo "$HOME/.claude" ;;
     codex) echo "${CODEX_HOME:-$HOME/.codex}" ;;
+    copilot) echo "${COPILOT_HOME:-$HOME/.copilot}" ;;
+    # Antigravity CLI and the Antigravity app share this folder.
+    agy) echo "$HOME/.gemini/config" ;;
     gemini) echo "$HOME/.gemini" ;;
     opencode) echo "$CONFIG/opencode" ;;
   esac
 }
 
 present() {
-  command -v "$1" >/dev/null 2>&1 || [[ -d $(home_of "$1") ]]
+  command -v "$1" >/dev/null 2>&1 && return 0
+  case $1 in
+    # Antigravity also uses ~/.gemini, so that folder alone doesn't mean
+    # Gemini CLI is here.
+    gemini) [[ -f $HOME/.gemini/oauth_creds.json ]] ;;
+    agy) [[ -d $HOME/.gemini/antigravity-cli ]] ;;
+    *) [[ -d $(home_of "$1") ]] ;;
+  esac
 }
 
 skill_dir() {
@@ -142,6 +163,7 @@ EOF
 }
 
 gemini_entry() { printf '{"command": "%s"}' "$MCP_CMD"; }
+copilot_entry() { printf '{"type": "local", "command": "%s", "args": [], "tools": ["*"]}' "$MCP_CMD"; }
 opencode_entry() { printf '{"type": "local", "command": ["%s"], "enabled": true}' "$MCP_CMD"; }
 codex_toml() { echo "$(home_of codex)/config.toml"; }
 
@@ -184,9 +206,113 @@ if new != text:
 EOF
           ;;
       esac ;;
+    copilot) json_mcp "$action" "$(home_of copilot)/mcp-config.json" mcpServers umoja "$(copilot_entry)" ;;
+    agy) json_mcp "$action" "$(home_of agy)/mcp_config.json" mcpServers umoja "$(gemini_entry)" ;;
     gemini) json_mcp "$action" "$(home_of gemini)/settings.json" mcpServers umoja "$(gemini_entry)" ;;
     opencode) json_mcp "$action" "$CONFIG/opencode/opencode.json" mcp umoja "$(opencode_entry)" ;;
   esac
+}
+
+# --- OpenCode on the assistant's cloud model ------------------------------
+
+OPENCODE_AUTH=${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json
+
+shell_key() {
+  gsettings get org.umoja.shell "$1" 2>/dev/null | sed -e "s/^'//" -e "s/'$//"
+}
+
+# add|remove|has. Adds a "umoja" OpenAI-compatible provider to opencode.json
+# with the cloud URL and model, and makes it the model unless the user picked
+# another one. The key goes where `opencode auth login` keeps keys
+# (auth.json, mode 0600); it reaches Python through the environment, never
+# the command line.
+opencode_cloud() {
+  local action=$1 url="" model="" key=""
+  if [[ $action == add ]]; then
+    url=$(shell_key cloud-base-url)
+    model=$(shell_key cloud-model)
+    if [[ -z $url || -z $model ]]; then
+      echo "  cloud: the assistant has no cloud model set up (Ask Umoja, model button, Cloud)" >&2
+      return 1
+    fi
+    command -v secret-tool >/dev/null && key=$(secret-tool lookup umoja assistant-cloud kind api-key 2>/dev/null)
+  fi
+  UMOJA_CLOUD_KEY=$key python3 - "$action" "$CONFIG/opencode/opencode.json" "$OPENCODE_AUTH" "$url" "$model" <<'PY'
+import json, os, sys, tempfile
+action, conf, auth, url, model = sys.argv[1:6]
+key = os.environ.get("UMOJA_CLOUD_KEY", "")
+NAME = "Umoja cloud model"
+
+def load(path):
+    try:
+        with open(path) as f:
+            text = f.read()
+        return json.loads(text) if text.strip() else {}
+    except FileNotFoundError:
+        return {}
+    except ValueError:
+        print(f"  cloud: {path} isn't plain JSON; left alone", file=sys.stderr)
+        sys.exit(1)
+
+def save(path, data, mode):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+c = load(conf)
+providers = c.get("provider") or {}
+ours = providers.get("umoja", {}).get("name") == NAME
+if action == "has":
+    sys.exit(0 if ours else 1)
+mode = os.stat(conf).st_mode & 0o777 if os.path.exists(conf) else 0o644
+if action == "add":
+    if "umoja" in providers and not ours:
+        print("  cloud: opencode.json already has a provider called umoja; left alone", file=sys.stderr)
+        sys.exit(1)
+    providers["umoja"] = {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": NAME,
+        "options": {"baseURL": url},
+        "models": {model: {"name": model}},
+    }
+    c["provider"] = providers
+    if not c.get("model") or str(c["model"]).startswith("umoja/"):
+        c["model"] = f"umoja/{model}"
+    c.setdefault("$schema", "https://opencode.ai/config.json")
+    save(conf, c, mode)
+    if key:
+        a = load(auth)
+        a["umoja"] = {"type": "api", "key": key}
+        save(auth, a, 0o600)
+elif action == "remove":
+    if not ours:
+        sys.exit(0)
+    del providers["umoja"]
+    if providers:
+        c["provider"] = providers
+    else:
+        c.pop("provider", None)
+    if str(c.get("model", "")).startswith("umoja/"):
+        del c["model"]
+    if set(c) <= {"$schema"}:
+        os.remove(conf)      # we created it
+    else:
+        save(conf, c, mode)
+    a = load(auth)
+    if a.pop("umoja", None) is not None:
+        if a:
+            save(auth, a, 0o600)
+        else:
+            os.remove(auth)
+PY
+}
+
+cloud_note() {
+  echo "OpenCode: uses the assistant's cloud model ($(shell_key cloud-model))"
 }
 
 # --- commands ---------------------------------------------------------------
@@ -195,6 +321,11 @@ setup_one() {
   local agent=$1 ok=0
   link_skill "$(skill_dir "$agent")" || ok=1
   mcp add "$agent" || ok=1
+  # OpenCode set up while the assistant uses the cloud: same model.
+  if [[ $agent == opencode && $(shell_key assistant-backend) == cloud ]] \
+    && ! opencode_cloud has 2>/dev/null; then
+    opencode_cloud add && cloud_note
+  fi
   mark_seen "$agent"
   if ((ok == 0)); then
     echo "$(label "$agent"): Umoja skill and tools added"
@@ -208,6 +339,7 @@ remove_one() {
   local agent=$1
   unlink_skill "$(skill_dir "$agent")"
   mcp remove "$agent"
+  [[ $agent == opencode ]] && opencode_cloud remove
   mark_seen "$agent"
   echo "$(label "$agent"): Umoja skill and tools removed"
 }
@@ -216,13 +348,15 @@ status() {
   local agent
   for agent in "${AGENTS[@]}"; do
     if ! present "$agent"; then
-      printf '%-12s not installed\n' "$(label "$agent")"
+      printf '%-14s not installed\n' "$(label "$agent")"
       continue
     fi
     local skill=no tools=no
     has_skill "$(skill_dir "$agent")" && skill=yes
     mcp has "$agent" 2>/dev/null && tools=yes
-    printf '%-12s skill: %-3s  tools: %s\n' "$(label "$agent")" "$skill" "$tools"
+    local extra=""
+    [[ $agent == opencode ]] && opencode_cloud has 2>/dev/null && extra="  model: the assistant's cloud model"
+    printf '%-14s skill: %-3s  tools: %s%s\n' "$(label "$agent")" "$skill" "$tools" "$extra"
   done
   if has_skill "$HOME/.agents/skills"; then
     echo "~/.agents/skills: skill linked"
@@ -259,6 +393,18 @@ main() {
     --status) status; exit 0 ;;
     --remove) mode=remove; shift ;;
     --auto) mode=auto; shift ;;
+    --cloud)
+      shift
+      if [[ ${1:-} == --remove ]]; then
+        opencode_cloud remove && echo "OpenCode: no longer uses the assistant's cloud model"
+        exit
+      fi
+      if [[ -n ${1:-} && $1 != opencode ]]; then
+        echo "Only OpenCode can use the assistant's cloud model" >&2
+        exit 2
+      fi
+      opencode_cloud add && cloud_note
+      exit ;;
     -*) usage >&2; exit 2 ;;
   esac
 

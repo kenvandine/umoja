@@ -275,20 +275,35 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             "hand_off_to_agent",
-            "Hand a coding job to the user's AI coding agent (Claude Code, Codex, Gemini CLI or OpenCode, whichever is installed and chosen): writing a script or program, changing code in a project, fixing a build. It opens in a terminal with the task as its first message and asks the user before changing anything. Pass the whole task in the user's words, and a folder when the job is about one.",
+            "Hand a coding job to the user's AI coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode or Gemini CLI, whichever is installed and chosen): writing a script or program, changing code in a project, fixing a build. It opens in a terminal with the task as its first message and asks the user before changing anything. Pass the whole task in the user's words, and a folder when the job is about one. If the agent isn't installed, install it with install_app first.",
             obj(json!({
                 "task": {"type": "string", "description": "The job, fully described"},
-                "folder": {"type": "string", "description": "Optional project folder to start in"}
+                "folder": {"type": "string", "description": "Optional project folder to start in"},
+                "agent": {"type": "string", "description": "Only if the user named an agent, e.g. \"opencode\"; default: the one chosen in settings"}
             }), &["task"]),
             |a| Box::pin(async move { hand_off(&a).hide_if_ok() }),
         )
         .with_risk(crate::tool::medium)
         .with_summary(|a| {
-            let who = umoja_common::agents::chosen().map(|g| g.name).unwrap_or("a coding agent");
+            let who = handoff_agent(a).ok().flatten().map(|g| g.name).unwrap_or("a coding agent");
             match arg_str(a, "task") {
                 Some(t) => format!("Open {who} to: {}", truncate_words(t, 80)),
                 None => format!("Open {who}"),
             }
+        }),
+        Tool::new(
+            "sign_in_agent",
+            "Sign the user in to a coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode): opens the agent's own sign-in in a terminal, which opens the browser or shows a code. Umoja never sees the password or token.",
+            obj(json!({"agent": {"type": "string", "description": "Agent name, e.g. \"codex\"; default: the chosen one"}}), &[]),
+            |a| Box::pin(async move { sign_in_agent(&a).hide_if_ok() }),
+        )
+        .with_summary(|a| {
+            let who = arg_str(a, "agent")
+                .and_then(umoja_common::agents::Agent::by_name)
+                .or_else(umoja_common::agents::chosen)
+                .map(|g| g.name)
+                .unwrap_or("the coding agent");
+            format!("Sign in to {who}")
         }),
         Tool::new(
             "free_ai_memory",
@@ -324,17 +339,40 @@ fn truncate_words(s: &str, max: usize) -> String {
     format!("{}…", cut.trim_end())
 }
 
+/// The agent a hand-off goes to: the one named in `agent`, else the
+/// chosen one. Err when the named one isn't known or installed.
+fn handoff_agent(a: &Value) -> Result<Option<umoja_common::agents::Agent>, String> {
+    use umoja_common::agents::{self, Agent, State};
+    match arg_str(a, "agent").filter(|n| !n.trim().is_empty()) {
+        None => Ok(agents::chosen()),
+        Some(n) => {
+            let agent = Agent::by_name(n).ok_or_else(|| format!("{n} isn't a coding agent Umoja knows"))?;
+            if agent.state() == State::NotInstalled {
+                return Err(format!(
+                    "{} isn't installed. Install it with install_app (name \"{}\"), then hand the job off again.",
+                    agent.name, agent.id
+                ));
+            }
+            Ok(Some(agent))
+        }
+    }
+}
+
 fn hand_off(a: &Value) -> Outcome {
     use umoja_common::agents;
     let Some(task) = arg_str(a, "task").filter(|t| !t.trim().is_empty()) else {
         return err("task is required");
     };
-    let Some(agent) = agents::chosen() else {
-        return err(if agents::installed().is_empty() {
-            "No coding agent is installed (Claude Code, Codex, Gemini CLI or OpenCode). Tell the user they can install one, for example Claude Code, and Umoja will connect it at the next login."
-        } else {
-            "The coding agent hand-off is turned off (org.umoja.shell ai-agent is 'none')."
-        });
+    let agent = match handoff_agent(a) {
+        Ok(Some(agent)) => agent,
+        Ok(None) => {
+            return err(if agents::installed().is_empty() {
+                "No coding agent is installed. Ask the user which one they'd like (Claude Code, Codex, GitHub Copilot, Antigravity or OpenCode) and install it with install_app."
+            } else {
+                "The coding agent hand-off is turned off (org.umoja.shell ai-agent is 'none')."
+            });
+        }
+        Err(e) => return err(e),
     };
     let folder = arg_str(a, "folder").map(expand);
     match agents::launch(agent, task, folder.as_deref()) {
@@ -343,6 +381,30 @@ fn hand_off(a: &Value) -> Outcome {
             agent.name
         )),
         Err(e) => err(format!("Couldn't open {}: {e}", agent.name)),
+    }
+}
+
+fn sign_in_agent(a: &Value) -> Outcome {
+    use umoja_common::agents::{self, Agent, State};
+    let agent = match arg_str(a, "agent").filter(|n| !n.trim().is_empty()) {
+        Some(n) => match Agent::by_name(n) {
+            Some(agent) => agent,
+            None => return err(format!("{n} isn't a coding agent Umoja knows")),
+        },
+        None => match agents::chosen() {
+            Some(agent) => agent,
+            None => return err("No coding agent is installed; install one with install_app first."),
+        },
+    };
+    if agent.state() == State::NotInstalled {
+        return err(format!("{} isn't installed. Install it with install_app; that signs in too.", agent.name));
+    }
+    match agents::sign_in(agent) {
+        Ok(()) => Outcome::ok(format!(
+            "Opened {}'s sign-in in a terminal; it opens the browser or shows a code. Tell the user to finish there.",
+            agent.name
+        )),
+        Err(e) => err(format!("Couldn't start {}'s sign-in: {e}", agent.name)),
     }
 }
 
@@ -1387,11 +1449,57 @@ fn plan_detail(p: &InstallPlan) -> String {
     }
 }
 
+/// A coding agent named in an install request ("install codex"). Agents
+/// install their own way (umoja_common::agents): a snap only when the
+/// vendor or Ubuntu publishes it, never the unofficial confined snaps
+/// some agents have, which can't reach the user's projects.
+fn coding_agent(a: &Value) -> Option<umoja_common::agents::Agent> {
+    let agent = umoja_common::agents::Agent::by_name(arg_str(a, "name")?)?;
+    agent.can_install().then_some(agent)
+}
+
+fn agent_install_detail(agent: umoja_common::agents::Agent) -> Result<String, String> {
+    use umoja_common::agents::{Install, State};
+    if agent.state() != State::NotInstalled {
+        return Err(format!("{} is already installed. To sign in to it, use sign_in_agent.", agent.name));
+    }
+    Ok(match agent.install {
+        Install::Snap { name, .. } => format!(
+            "{}: the {name} snap. Opens a terminal that installs it, connects it to Umoja's skill and tools, and signs in.",
+            agent.name
+        ),
+        Install::Script { url, .. } => format!(
+            "{}: its maker's own installer ({url}), for you only, without sudo. Opens a terminal that installs it, connects it to Umoja's skill and tools, and signs in.",
+            agent.name
+        ),
+        Install::None => String::new(),
+    })
+}
+
 fn install_preflight(a: Value) -> LocalFuture<Result<Option<String>, String>> {
-    Box::pin(async move { blocking(move || plan_install(&a)).await?.map(|p| Some(plan_detail(&p))) })
+    Box::pin(async move {
+        if let Some(agent) = coding_agent(&a) {
+            return blocking(move || agent_install_detail(agent)).await?.map(Some);
+        }
+        blocking(move || plan_install(&a)).await?.map(|p| Some(plan_detail(&p)))
+    })
 }
 
 async fn install_app(a: Value) -> Outcome {
+    if let Some(agent) = coding_agent(&a) {
+        return Outcome::from(
+            blocking(move || {
+                agent_install_detail(agent)?;
+                umoja_common::agents::install(agent)?;
+                Ok(format!(
+                    "Opened a terminal that installs {}, connects it to Umoja and then signs in (in the browser). Tell the user to finish there.",
+                    agent.name
+                ))
+            })
+            .await
+            .and_then(|r| r),
+        );
+    }
     let r = blocking(move || {
         let plan = plan_install(&a)?;
         let (p, terminal) = match &plan {
@@ -1821,6 +1929,19 @@ pub fn redirect(command: &str) -> Option<Redirect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coding_agents_install_their_own_way() {
+        let id = |n: &str| coding_agent(&json!({"name": n})).map(|a| a.id);
+        assert_eq!(id("Codex"), Some("codex"));
+        assert_eq!(id("claude code"), Some("claude"));
+        assert_eq!(id("GitHub Copilot CLI"), Some("copilot"));
+        assert_eq!(id("antigravity"), Some("agy"));
+        assert_eq!(id("opencode"), Some("opencode"));
+        // Not offered (Google is replacing it), so the usual snap/deb path.
+        assert_eq!(id("gemini"), None);
+        assert_eq!(id("firefox"), None);
+    }
 
     #[test]
     fn volume_parsing_and_summaries() {

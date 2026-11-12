@@ -146,7 +146,15 @@ always stay on your computer. See [Privacy](09-privacy-and-settings.md).
 ### Coding jobs
 
 A small local model isn't the right tool for writing code. If you have a
-coding agent installed (Claude Code, Codex, Gemini CLI or OpenCode), the
-assistant offers to hand coding jobs to it: "write me a script that
-renames my photos by date". The agent opens in a terminal with your
-request, already set up to use Umoja's desktop tools.
+coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode or
+Gemini CLI), the assistant offers to hand coding jobs to it: "write me a
+script that renames my photos by date". The agent opens in a terminal with
+your request, already set up to use Umoja's desktop tools.
+
+Pick your agent under **Coding agent** in the assistant's model button.
+If it isn't installed yet, **Install** installs it and signs you in. If it
+isn't signed in, **Sign In** opens its own sign-in, which uses your
+browser. OpenCode comes from its snap. The others come from their makers'
+own installers, just for you. You can also ask the assistant: "install
+Codex". If the assistant uses a cloud model, OpenCode is set up to use the
+same one.
