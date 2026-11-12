@@ -251,7 +251,11 @@ class Recorder:
         if self.proc.poll() is not None:
             self.proc = None
             return
-        self.run.current["video"] = str(path.relative_to(self.run.out))
+        rel = str(path.relative_to(self.run.out))
+        if self.run.current["video"]:
+            self.run.current.setdefault("more_videos", []).append(rel)
+        else:
+            self.run.current["video"] = rel
 
     def stop(self):
         if not self.proc:
@@ -275,6 +279,11 @@ class Run:
         (self.out / "images").mkdir(parents=True, exist_ok=True)
         (self.out / "videos").mkdir(exist_ok=True)
         (self.out / "audio").mkdir(exist_ok=True)
+        # Keep test output out of file search (Ask Umoja listed old clips).
+        (self.out / ".nomedia").touch()
+        for old in Path.home().glob("umoja-feature-test-*"):
+            if old.is_dir():
+                (old / ".nomedia").touch()
         self.logf = open(self.out / "log.txt", "w")
         self.bus = Bus(self.log)
         self.video = not opts.no_video
@@ -288,6 +297,7 @@ class Run:
         self.cleanups = []
         self.started = datetime.datetime.now()
         self.inhibit_cookie = None
+        self.before_ids = set()
 
     # ---- plumbing ------------------------------------------------------
 
@@ -495,6 +505,7 @@ class Run:
             OVERLAY[0], OVERLAY[2], None, OVERLAY[1], None, Gio.DBusSignalFlags.NONE,
             lambda _c, _s, _p, _i, name, params: self.events.append((name, params.unpack(), time.monotonic())))
         self.flag(True)
+        self.before_ids = {n[0] for n in self.notifications()}
         self.use_empty_workspace()
         # Banners on for the run (Do Not Disturb would hide what we test).
         n = settings("org.gnome.desktop.notifications")
@@ -524,14 +535,16 @@ class Run:
             self.log(f"running on empty workspace {last + 1} (yours is {cur + 1})")
 
     def clear_test_banners(self):
-        """Close notifications earlier tests sent, so none shows up in the
-        next clip."""
+        """Close notifications that came in during the run (earlier tests'
+        own, and Umoja's about them, like "Screencast recorded"), so none
+        shows up in the next clip. Ones there before the run stay."""
         closed = 0
         for n in self.notifications():
-            if any("4711" in str(f) or f == "Umoja test" for f in n[1:5]):
+            if n[0] not in self.before_ids:
                 self.bus.call(NOTIFY, "CloseNotification", GLib.Variant("(u)", (n[0],)), quiet=True)
                 closed += 1
         if closed:
+            self.log(f"  closed {closed} notification(s) from earlier tests")
             self.wait(1.0)
 
     def teardown(self):
@@ -641,8 +654,9 @@ class Run:
                              + (f"\n  ```\n  {c['detail'][:600]}\n  ```" if c["detail"] and not c["ok"] else ""))
             for n in r["notes"]:
                 lines.append(f"- _{n}_")
-            if r["video"]:
-                lines.append(f"- video: [{Path(r['video']).name}]({r['video']})")
+            for v in [r["video"], *r.get("more_videos", [])]:
+                if v:
+                    lines.append(f"- video: [{Path(v).name}]({v})")
             for a in r.get("audio", []):
                 lines.append(f"- heard: [{Path(a).name}]({a})")
             for s in r["shots"]:
@@ -992,9 +1006,17 @@ def t_automations(run):
     run.hide()
     if not saved:
         return
-    wait_s = max(0, (at.replace(second=0) - datetime.datetime.now()).total_seconds()) + 45
-    run.log(f"  waiting {wait_s:.0f} s for {hhmm}")
-    got = run.wait(wait_s, lambda: any(marker in n[3] or marker in n[4] for n in run.notifications()))
+    # Don't film the empty desktop while waiting: a second clip starts
+    # just before the timer is due.
+    due = (at.replace(second=0) - datetime.datetime.now()).total_seconds()
+    run.log(f"  waiting {max(0, due):.0f} s for {hhmm}")
+    if due > 20:
+        run.recorder.stop()
+        run.wait(due - 8)
+        run.recorder.start("automations-fired")
+    got = run.wait(max(0, (at.replace(second=0) - datetime.datetime.now()).total_seconds()) + 45,
+                   lambda: any(marker in n[3] or marker in n[4] for n in run.notifications()))
+    run.wait(2.0)  # the banner, on film
     run.shot("fired", f"At {hhmm}: the automation's notification")
     run.check(got, f"the automation ran at {hhmm}")
 
@@ -1194,7 +1216,7 @@ def read_aloud_ready(run):
         raise Skip("no default sound output to listen to (pactl get-default-sink)")
 
 
-def heard_speech(run, listener, voice, started, what, words=SPOKEN_WORDS, need=4):
+def heard_speech(run, listener, voice, started, what, words=SPOKEN_WORDS, need=4, min_secs=2.0):
     """Wait for Piper to speak and finish, then check what was heard.
     Returns (seconds of sound, transcript)."""
     # The first time, the voice downloads (about 60 MB) before Piper starts.
@@ -1209,7 +1231,7 @@ def heard_speech(run, listener, voice, started, what, words=SPOKEN_WORDS, need=4
     secs, peak = listener.stop()
     run.current.setdefault("audio", []).append(str(listener.path.relative_to(run.out)))
     run.note(f"sound for {secs:.1f} s, peak {peak:.2f} (audio/{listener.path.name})")
-    run.check(secs >= 2.0, "the speakers played speech", f"{secs:.1f} s of sound, peak {peak:.2f}")
+    run.check(secs >= min_secs, "the speakers played speech", f"{secs:.1f} s of sound, peak {peak:.2f}")
     text = transcribe(listener.path) if secs >= 1.0 else ""
     hits = [w for w in words if w in text.lower()]
     run.check(len(hits) >= need, f"Whisper understands what was said ({need} of its words)",
@@ -1317,7 +1339,8 @@ def t_voice_picker(run):
     done = run.wait(240, lambda: (lambda st: st if f"current={other};" in st else None)(run.action("voice-state")[1]))
     run.check(done is not None, f"{other} is the voice once downloaded", run.action("voice-state")[1])
     run.check(s.get_string("speech-voice") == other, "speech-voice changed", s.get_string("speech-voice"))
-    heard_speech(run, listener, other, t0, "for the sample", SAMPLE_WORDS, 2)
+    # The sample ("Hello! This is how I sound.") is about 1.5 s long.
+    heard_speech(run, listener, other, t0, "for the sample", SAMPLE_WORDS, 2, min_secs=1.0)
     run.shot("picked", f"{other} picked and downloaded")
     # Back to the voice we had, then remove the other one.
     run.action("voice-search:")
@@ -1341,18 +1364,38 @@ def t_speech_settings(run):
     auto, rate = s.get_boolean("speak-answers"), s.get_double("speech-rate")
     run.cleanups.append(("speak-answers and speech-rate", lambda: (s.set_boolean("speak-answers", auto),
                                                                   s.set_double("speech-rate", rate))))
+    voice = current_voice()
     s.set_double("speech-rate", 1.0)
+    # Flip the settings with the Voice page open, so the clip shows them.
+    run.bus.call(OVERLAY, "ToggleAsk")
+    run.wait(1.0)
+    shown = run.action("voice-page")[0]
+    run.wait(1.0)
     s.set_boolean("speak-answers", True)
     Gio.Settings.sync()
-    voice = current_voice()
+    run.wait(1.5)
+    if shown:
+        run.shot("on", "“Read every answer aloud” turned on in the Voice page")
+    run.action("settings-close")
+    run.hide()
     listener = Listener(run, "speak-answers")
     t0 = time.monotonic()
     answer, _, _ = run.ask(f"Reply with exactly this text and nothing else: {SPOKEN}")
     run.shot("answer", "With “Read every answer aloud” on, the answer is read out by itself")
     normal, _ = heard_speech(run, listener, voice, t0, "for the answer by itself")
+    run.hide()
+    run.bus.call(OVERLAY, "ToggleAsk")
+    run.wait(1.0)
+    shown = run.action("voice-page")[0]
+    run.wait(1.0)
     s.set_boolean("speak-answers", False)
     s.set_double("speech-rate", 1.6)
     Gio.Settings.sync()
+    run.wait(1.5)
+    if shown:
+        run.shot("fast", "Speed moved to 1.6, read-every-answer off again")
+    run.action("settings-close")
+    run.hide()
     listener = Listener(run, "speech-rate-fast")
     t0 = time.monotonic()
     run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
