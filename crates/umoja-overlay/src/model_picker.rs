@@ -191,7 +191,7 @@ pub fn button() -> gtk::MenuButton {
         .child(&list)
         .build();
     let heading = gtk::Label::builder()
-        .label(i18n::umoja("Assistant Model"))
+        .label(i18n::umoja("Assistant"))
         .xalign(0.0)
         .css_classes(["heading"])
         .build();
@@ -256,6 +256,8 @@ pub fn button() -> gtk::MenuButton {
         .build();
     stack.add_titled(&local_page, Some("local"), &i18n::umoja("This Computer"));
     stack.add_titled(&cloud.page, Some("cloud"), &i18n::umoja("Cloud"));
+    let voice = crate::voice_picker::VoicePage::new();
+    stack.add_titled(&voice.page, Some("voice"), &i18n::umoja("Voice"));
     let switcher = gtk::StackSwitcher::builder()
         .stack(&stack)
         .halign(gtk::Align::Center)
@@ -287,7 +289,7 @@ pub fn button() -> gtk::MenuButton {
     }
     let button = gtk::MenuButton::builder()
         .icon_name("preferences-system-symbolic")
-        .tooltip_text(i18n::umoja("Assistant model"))
+        .tooltip_text(i18n::umoja("Assistant model and voice"))
         .css_classes(["circular", "model-pill"])
         .popover(&popover)
         .build();
@@ -299,6 +301,7 @@ pub fn button() -> gtk::MenuButton {
             "local"
         });
         cloud.load();
+        voice.load();
         let list = list.clone();
         let popover = popover.clone();
         let mem = mem_total_gb();

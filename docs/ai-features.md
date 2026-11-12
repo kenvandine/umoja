@@ -123,8 +123,10 @@ loads; later ones take a few seconds.
 
 ## Choosing the model
 
-The round settings button beside the search entry opens **Assistant
-Model**. It has two pages: **This Computer** and **Cloud**.
+The round settings button beside the search entry opens **Assistant**
+settings. It has three pages: **This Computer** and **Cloud** pick the
+model, and **Voice** picks the read-aloud voice (see
+[Choosing a voice](#choosing-a-voice)).
 
 **This Computer** lists the chat models Lemonade can run here that fit in
 half of your computer's memory, smallest first. Models that are good at
@@ -202,21 +204,31 @@ ask the assistant to "read that to me". Code blocks are skipped and
 Markdown marks are left out.
 
 The voice is [Piper](https://github.com/OHF-Voice/piper1-gpl)'s British
-"Alan", which runs on this computer. Piper comes from the `piper-tts` snap:
+"Alan", which runs on this computer. Piper comes from the `piper-tts` snap.
+A deb can't depend on a snap, so the first time something is read out
+without it, Umoja installs the snap (you're asked for your password, as for
+any software install). If that's declined or there's no internet,
+speech-dispatcher's voice reads instead. To install it yourself:
 
 ```sh
 sudo snap install piper-tts
 ```
 
-The voice (about 60 MB) downloads from Hugging Face the first time
-something is read out, into `~/snap/piper-tts/common/voices` (or
-`~/.local/share/umoja/voices` for a `piper` installed another way, such
-as `pip install piper-tts`). Without Piper, speech-dispatcher's voice
-reads instead.
+### Choosing a voice
 
-To use another Piper voice, pick one from
-[rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) and
-set it by name:
+Click the round settings button beside Ask Umoja's entry and pick
+the **Voice** page. It lists the Piper voices for your language, with their
+size and whether they're downloaded; search to find voices in other
+languages. Picking a voice downloads it (the bar shows how far), makes it
+the voice and plays a short sample. The bin button removes a downloaded
+voice you no longer use. The same tab sets the **Speed** and **Read every
+answer aloud**. If Piper isn't installed yet, the tab offers
+**Install Piper**.
+
+Voices come from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
+on Hugging Face, into `~/snap/piper-tts/common/voices` (or
+`~/.local/share/umoja/voices` for a `piper` installed another way, such as
+`pip install piper-tts`). The same settings work from a terminal:
 
 ```sh
 gsettings set org.umoja.shell speech-voice en_US-lessac-medium

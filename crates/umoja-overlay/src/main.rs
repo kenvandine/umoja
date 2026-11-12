@@ -25,6 +25,7 @@ mod speech;
 mod spread;
 mod texpane;
 mod view;
+mod voice_picker;
 mod window_menu;
 
 use gio::prelude::*;

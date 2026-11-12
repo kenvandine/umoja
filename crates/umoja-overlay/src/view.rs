@@ -932,6 +932,9 @@ impl Overlay {
                 return;
             }
             match ev {
+                crate::speech::Event::Installing => {
+                    o.set_speak_button(SPEAKING_ICON, &i18n::umoja("Installing the voice…"))
+                }
                 crate::speech::Event::Downloading => {
                     o.set_speak_button(SPEAKING_ICON, &i18n::umoja("Downloading the voice…"))
                 }
