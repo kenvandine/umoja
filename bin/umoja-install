@@ -167,6 +167,9 @@ grep -q '^GRUB_CMDLINE_LINUX=' "$TARGET/etc/default/grub" \
 
 for m in dev dev/pts proc sys run; do
     mount --bind "/$m" "$TARGET/$m"
+    # Slave, so unmounting these later never reaches the live system's own
+    # mounts (a shared /dev would lose its /dev/pts).
+    mount --make-rslave "$TARGET/$m"
 done
 [ -d /sys/firmware/efi/efivars ] && mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars"
 in_target() { chroot "$TARGET" "$@"; }

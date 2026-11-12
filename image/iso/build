@@ -73,6 +73,10 @@ mount -t overlay overlay -o "lowerdir=$TARGET,upperdir=$UPPER,workdir=$OVL" "$LI
 mount -t proc proc "$LIVE/proc"
 mount -t sysfs sys "$LIVE/sys"
 mount --bind /dev "$LIVE/dev"
+# Slave, so mounting and lazily unmounting dev/pts below never propagates
+# back to the host's /dev (that unmounted the host's /dev/pts, after which
+# sudo fails with "unable to open pty").
+mount --make-rslave "$LIVE/dev"
 mount --bind /dev/pts "$LIVE/dev/pts"
 # /run is a tmpfs, so DNS for apt lives there and never reaches the layer.
 mount -t tmpfs tmpfs "$LIVE/run"
