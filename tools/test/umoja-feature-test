@@ -1021,19 +1021,45 @@ SPOKEN = ("Hello Ken. This is Alan, reading aloud on the Umoja desktop. "
 SPOKEN_WORDS = ("hello", "alan", "reading", "aloud", "desktop", "meeting", "moved", "thursday", "three")
 
 
+def _from_overlay(pid):
+    """Whether umoja-overlay started this process (a few levels up)."""
+    for _ in range(5):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return False
+        comm = stat[stat.index("(") + 1:stat.rindex(")")]
+        if comm.startswith("umoja-overlay"):
+            return True
+        pid = stat[stat.rindex(")") + 2:].split()[1]
+        if pid in ("0", "1"):
+            return False
+    return False
+
+
 def piper_voice_running():
-    """The voice file of a running Piper, e.g. en_GB-alan-medium.onnx."""
+    """The voice of a Piper that Umoja's read aloud is running, e.g.
+    en_GB-alan-medium.onnx. The piper-tts snap also runs a system daemon
+    (root, its own voice, never exits), so only the user's processes started
+    by umoja-overlay count, and the last voice on the command line wins (the
+    snap's wrapper puts its default first)."""
+    uid = str(os.getuid())
     for d in Path("/proc").iterdir():
         if not d.name.isdigit():
             continue
         try:
             args = (d / "cmdline").read_bytes().split(b"\0")
+            status = (d / "status").read_text()
         except OSError:
             continue
-        if any(b"piper" in a for a in args[:2]):
-            for a in args:
-                if a.endswith(b".onnx"):
-                    return Path(a.decode(errors="replace")).name
+        if not any(b"piper" in a for a in args[:2]):
+            continue
+        owner = next((ln.split()[1] for ln in status.splitlines() if ln.startswith("Uid:")), "")
+        if owner != uid or not _from_overlay(d.name):
+            continue
+        voices = [a for a in args if a.endswith(b".onnx")]
+        if voices:
+            return Path(voices[-1].decode(errors="replace")).name
     return None
 
 
