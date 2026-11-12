@@ -174,7 +174,9 @@ progress 88 "Building the boot image"
 if in_target sh -c 'command -v dracut' >/dev/null; then
     for k in "$TARGET"/lib/modules/*; do
         kver=$(basename "$k")
-        in_target dracut --force --add crypt "/boot/initrd.img-$kver" "$kver"
+        # Generic (not host-only): dracut can't judge the hardware from a
+        # chroot, and the disk may move to another machine anyway.
+        in_target dracut --force --no-hostonly --add crypt "/boot/initrd.img-$kver" "$kver"
     done
 else
     in_target update-initramfs -u -k all
