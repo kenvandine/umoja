@@ -18,7 +18,9 @@ It writes, by default to ~/umoja-feature-test-<time>/:
     REPORT.md         pass / fail / skip per test, every check, with pictures
     results.json      the same, for a machine (or Claude) to read
     images/*.png      screenshots at the moments that matter (grim)
-    videos/*.webm     a clip of each test (wf-recorder)
+    videos/*.webm     a clip of each test (wf-recorder), with the sound the
+                      computer played (the default output's monitor)
+    audio/*.wav       what read-aloud tests heard, as played
     journal.txt       the session's journal for the run (umoja units)
     log.txt           what the script did, step by step
 
@@ -220,6 +222,15 @@ class Pad:
             self.proc.kill()
 
 
+def monitor_source():
+    """The monitor of the default output: what the speakers play."""
+    if not shutil.which("pactl"):
+        return None
+    r = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True)
+    sink = r.stdout.strip()
+    return f"{sink}.monitor" if r.returncode == 0 and sink else None
+
+
 class Recorder:
     def __init__(self, run):
         self.run = run
@@ -231,6 +242,9 @@ class Recorder:
         path = self.run.out / "videos" / f"{name}.webm"
         cmd = ["wf-recorder", "-y", "-D", "-c", "libvpx", "-x", "yuv420p", "-p", "deadline=realtime",
                "-p", "cpu-used=8", "-p", "b=6M", "-f", str(path)]
+        # The sound too (read-aloud, captions): what the speakers play.
+        if self.run.audio_source:
+            cmd[1:1] = [f"--audio={self.run.audio_source}", "-C", "libopus"]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         time.sleep(1.0)
@@ -260,9 +274,11 @@ class Run:
         self.out = opts.out
         (self.out / "images").mkdir(parents=True, exist_ok=True)
         (self.out / "videos").mkdir(exist_ok=True)
+        (self.out / "audio").mkdir(exist_ok=True)
         self.logf = open(self.out / "log.txt", "w")
         self.bus = Bus(self.log)
         self.video = not opts.no_video
+        self.audio_source = None if opts.no_audio else monitor_source()
         self.recorder = Recorder(self)
         self.tmp = tempfile.mkdtemp(prefix="umoja-test-")
         self.events = []
@@ -468,6 +484,10 @@ class Run:
         if not shutil.which("wf-recorder"):
             self.log("wf-recorder is missing: no videos")
             self.video = False
+        if self.audio_source:
+            self.log(f"recording sound from {self.audio_source}")
+        elif not self.opts.no_audio:
+            self.log("no default output found (pactl): videos have no sound")
         res = self.bus.call(SCREENSAVER, "Inhibit",
                             GLib.Variant("(ss)", ("umoja-feature-test", "Testing the desktop")), "(u)")
         self.inhibit_cookie = res[0] if res else None
@@ -589,6 +609,8 @@ class Run:
                 lines.append(f"- _{n}_")
             if r["video"]:
                 lines.append(f"- video: [{Path(r['video']).name}]({r['video']})")
+            for a in r.get("audio", []):
+                lines.append(f"- heard: [{Path(a).name}]({a})")
             for s in r["shots"]:
                 lines += ["", f"![{s['caption']}]({s['file']})", f"_{s['caption']}_"]
         (self.out / "REPORT.md").write_text("\n".join(lines) + "\n")
@@ -990,6 +1012,163 @@ def t_captions(run):
     run.check(run.wait(5, lambda: not run.action("captions-text")[0]), "captions turned off")
 
 
+# ---- read aloud (Piper) ---------------------------------------------------
+
+PIPER_CLI = "/snap/bin/piper-tts.piper-cli"
+LEMONADE = "http://127.0.0.1:13345"
+SPOKEN = ("Hello Ken. This is Alan, reading aloud on the Umoja desktop. "
+          "The meeting moved to Thursday at three o'clock.")
+SPOKEN_WORDS = ("hello", "alan", "reading", "aloud", "desktop", "meeting", "moved", "thursday", "three")
+
+
+def piper_voice_running():
+    """The voice file of a running Piper, e.g. en_GB-alan-medium.onnx."""
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            args = (d / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if any(b"piper" in a for a in args[:2]):
+            for a in args:
+                if a.endswith(b".onnx"):
+                    return Path(a.decode(errors="replace")).name
+    return None
+
+
+class Listener:
+    """Record what the speakers play (parec on the monitor) to a WAV."""
+
+    RATE = 16000
+
+    def __init__(self, run, name):
+        self.path = run.out / "audio" / f"{name}.wav"
+        self.raw = Path(run.tmp) / f"{name}.raw"
+        self.proc = None
+        if run.audio_source and shutil.which("parec"):
+            self.f = open(self.raw, "wb")
+            self.proc = subprocess.Popen(
+                ["parec", f"--device={run.audio_source}", "--raw", "--format=s16le",
+                 f"--rate={self.RATE}", "--channels=1"],
+                stdout=self.f, stderr=subprocess.DEVNULL)
+
+    def stop(self):
+        """Stop and return (seconds of sound, peak level 0..1)."""
+        if not self.proc:
+            return 0.0, 0.0
+        self.proc.terminate()
+        self.proc.wait(timeout=5)
+        self.f.close()
+        import array
+        import wave
+        data = array.array("h", self.raw.read_bytes()[: (self.raw.stat().st_size // 2) * 2])
+        with wave.open(str(self.path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(self.RATE)
+            w.writeframes(data.tobytes())
+        # 50 ms windows louder than about -40 dBFS count as sound.
+        win = self.RATE // 20
+        loud = 0
+        peak = 0
+        for i in range(0, len(data) - win, win):
+            chunk = data[i:i + win]
+            rms = (sum(x * x for x in chunk) / win) ** 0.5
+            peak = max(peak, max(abs(x) for x in chunk))
+            if rms > 330:
+                loud += 1
+        return loud / 20, peak / 32768
+
+
+def transcribe(path, model="Whisper-Base"):
+    """What Lemonade's Whisper hears in a WAV ('' if it can't)."""
+    import urllib.request
+    import uuid
+    boundary = uuid.uuid4().hex
+    body = b"".join([
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n".encode(),
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n"
+        "Content-Type: audio/wav\r\n\r\n".encode(),
+        Path(path).read_bytes(),
+        f"\r\n--{boundary}--\r\n".encode(),
+    ])
+    req = urllib.request.Request(f"{LEMONADE}/api/v1/audio/transcriptions", data=body,
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            return json.loads(r.read()).get("text", "")
+    except Exception as e:  # noqa: BLE001
+        return f"(transcription failed: {e})"
+
+
+def read_aloud_ready(run):
+    if not run.bus.has_method(OVERLAY, "Speak"):
+        raise Skip("org.umoja.Overlay.Speak is missing: install the read-aloud debs (PR #10)")
+    if not Path(PIPER_CLI).exists():
+        raise Skip("needs Piper: sudo snap install piper-tts")
+    if not run.audio_source:
+        raise Skip("no default sound output to listen to (pactl get-default-sink)")
+
+
+def heard_speech(run, listener, voice, started, what):
+    """Wait for Piper to speak and finish, then check what was heard."""
+    # The first time, the voice downloads (about 60 MB) before Piper starts.
+    seen = run.wait(180, piper_voice_running)
+    run.check(seen is not None, f"Piper started {what}", seen or "no piper process within 180 s")
+    if seen:
+        run.check(seen == f"{voice}.onnx", f"Piper speaks with the {voice} voice", seen)
+        run.note(f"Piper started {time.monotonic() - started:.1f} s after the request")
+        run.wait(90, lambda: piper_voice_running() is None)
+    run.wait(1.5)  # the player drains its buffer
+    secs, peak = listener.stop()
+    run.current.setdefault("audio", []).append(str(listener.path.relative_to(run.out)))
+    run.note(f"sound for {secs:.1f} s, peak {peak:.2f} (audio/{listener.path.name})")
+    run.check(secs >= 2.0, "the speakers played speech", f"{secs:.1f} s of sound, peak {peak:.2f}")
+    text = transcribe(listener.path) if secs >= 1.0 else ""
+    hits = [w for w in SPOKEN_WORDS if w in text.lower()]
+    run.check(len(hits) >= 4, "Whisper understands what was said (four of its words)",
+              f"{text!r}, matched {hits}")
+
+
+@test("read-aloud", "Read aloud in Piper's Alan voice, heard through the speakers")
+def t_read_aloud(run):
+    read_aloud_ready(run)
+    s = settings("org.umoja.shell")
+    voice = s.get_string("speech-voice") if s and s.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
+    run.note(f"voice {voice}")
+    voices = Path.home() / "snap/piper-tts/common/voices"
+    run.note("voice already downloaded" if (voices / f"{voice}.onnx").exists()
+             else "voice not downloaded yet: this run downloads it")
+    listener = Listener(run, "read-aloud")
+    t0 = time.monotonic()
+    run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
+    heard_speech(run, listener, voice, t0, "after Speak")
+    run.check((voices / f"{voice}.onnx").exists() and (voices / f"{voice}.onnx.json").exists(),
+              f"{voice} is in {voices}")
+    # Stop works: start again and stop after a moment.
+    run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
+    run.wait(20, piper_voice_running)
+    run.wait(1.0)
+    run.bus.call(OVERLAY, "StopSpeaking")
+    run.check(run.wait(5, lambda: piper_voice_running() is None) is not None or piper_voice_running() is None,
+              "StopSpeaking stops it")
+
+
+@test("read-aloud-assistant", "Asking the assistant to read something out loud")
+def t_read_aloud_assistant(run):
+    read_aloud_ready(run)
+    s = settings("org.umoja.shell")
+    voice = s.get_string("speech-voice") if s and s.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
+    listener = Listener(run, "read-aloud-assistant")
+    t0 = time.monotonic()
+    answer, steps, _ = run.ask(f"Read this out loud, word for word: {SPOKEN}")
+    run.shot("answer", "The assistant's answer after reading aloud")
+    run.check(any("read_aloud" in st or "Read aloud" in st for st in steps), "the assistant used read_aloud",
+              steps)
+    heard_speech(run, listener, voice, t0, "from the assistant")
+
+
 @test("activity-recall", "Activity recall finds a window title and a notification")
 def t_recall(run):
     s = settings("org.umoja.shell")
@@ -1058,6 +1237,7 @@ def main():
     p.add_argument("--list", action="store_true", help="list the tests and exit")
     p.add_argument("--out", type=Path, help="output folder (default ~/umoja-feature-test-<time>)")
     p.add_argument("--no-video", action="store_true", help="screenshots only")
+    p.add_argument("--no-audio", action="store_true", help="videos without sound")
     p.add_argument("--answer-timeout", type=float, default=150, help="seconds to wait for the assistant")
     p.add_argument("--countdown", type=int, default=5, help="seconds before the first test")
     opts = p.parse_args()

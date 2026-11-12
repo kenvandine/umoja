@@ -35,7 +35,8 @@ By default to `~/umoja-feature-test-<time>/`:
 | `REPORT.md` | pass, fail or skip for each test, every check with its evidence, and the pictures |
 | `results.json` | the same, for a script or Claude to read |
 | `images/*.png` | screenshots at the moments that matter |
-| `videos/*.webm` | one clip per test |
+| `videos/*.webm` | one clip per test, with the sound the computer played (`--no-audio` to leave it out) |
+| `audio/*.wav` | what the read-aloud tests heard from the speakers |
 | `journal.txt` | the journal of the Umoja units during the run |
 | `log.txt` | what the script did, step by step |
 
@@ -57,6 +58,8 @@ The exit status is 1 if any check failed.
 | `setups` | Tiles two small GNOME apps, saves them as setup "Feature Test 4711", closes them, brings the setup back from Ask Umoja, and compares the tiles. |
 | `automations` | Asks for an automation in plain words that runs two minutes from now, waits, and checks that it ran. |
 | `captions` | Speaks a known sentence (with `espeak-ng` or `spd-say`), checks the live captions, and asks for a summary. |
+| `read-aloud` | Calls `Speak` on Ask Umoja with a known sentence, checks that Piper runs with the chosen voice (Alan by default; the first run downloads it), records the speakers, checks there was speech and that Whisper hears its words, then checks that `StopSpeaking` stops it. |
+| `read-aloud-assistant` | Asks the assistant to read a sentence out loud and checks that it used `read_aloud` and that the speech was heard the same way. |
 | `activity-recall` | Turns recall on for a moment, shows a window with a unique title and sends a notification, then asks the assistant to find both. It is skipped if recall is already on, so your history is never touched. |
 | `user-guide` | Opens the User Guide from Ask Umoja and checks that a viewer window appears. |
 
@@ -80,5 +83,8 @@ The exit status is 1 if any check failed.
 
 `python3-gi`, `grim`, `wf-recorder`, `wl-clipboard`, and for the captions
 test `espeak-ng` (or `speech-dispatcher`) and `pulseaudio-utils`. The
+read-aloud tests need the `piper-tts` snap and Lemonade's Whisper model
+(the one captions use); sound is recorded from the default output's
+monitor, so leave the volume up and other audio off. The
 assistant tests use whichever model is set up, so a slow local model needs a
 bigger `--answer-timeout`.
