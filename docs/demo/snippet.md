@@ -4,8 +4,8 @@
 
 [Watch the trailer](/docs/demo/videos/trailer.mp4).
 
-| Ask Umoja: install and run btop | Assistant: tile windows | Assistant: change settings | Activities overview |
+| Ask Umoja: install and run btop | Coding agent: OpenCode | Assistant: tile windows | Assistant: change settings |
 | --- | --- | --- | --- |
-| ![Ask Umoja: install and run btop](/docs/demo/images/ai-btop-running.png) | ![Assistant: tile windows](/docs/demo/images/ai-tiling.png) | ![Assistant: change settings](/docs/demo/images/ai-settings.png) | ![Activities overview](/docs/demo/images/overview.png) |
+| ![Ask Umoja: install and run btop](/docs/demo/images/ai-btop-running.png) | ![Coding agent: OpenCode](/docs/demo/images/ai-opencode-default.png) | ![Assistant: tile windows](/docs/demo/images/ai-tiling.png) | ![Assistant: change settings](/docs/demo/images/ai-settings.png) |
 
 More in the [tour](/docs/demo/README.md).

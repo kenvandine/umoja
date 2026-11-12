@@ -1,6 +1,6 @@
 # A tour of Umoja
 
-Captured hands-free by `tools/demo/umoja-demo` on 2026-11-11 (umoja-desktop 2026.46.5+git202611112005.41871a8).
+Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026.46.6+git202611121043.39b3bb7).
 
 **[Watch the trailer](videos/trailer.mp4)** (all the clips below in one video, real time).
 
@@ -48,6 +48,24 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-11 (umoja-desktop 2026
 
 *Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step.* ([video](videos/ai-btop.mp4))
 
+## Coding agent: OpenCode
+
+![Ask Umoja's settings: OpenCode is now the coding agent, so coding jobs go to it.](images/ai-opencode-default.png)
+
+*Ask Umoja's settings: OpenCode is now the coding agent, so coding jobs go to it.*
+
+![OpenCode at work in a terminal, on the assistant's model.](images/ai-opencode-agent.png)
+
+*OpenCode at work in a terminal, on the assistant's model.*
+
+![hello-gtk/src/main.rs: a GTK 4 window saying Hello, World.](images/ai-opencode.png)
+
+*hello-gtk/src/main.rs: a GTK 4 window saying Hello, World.*
+
+[![Make OpenCode the coding agent, then just ask: “write an app in Rust”. It runs on your model, with Umoja's tools, and writes the project.](videos/ai-opencode.gif)](videos/ai-opencode.mp4)
+
+*Make OpenCode the coding agent, then just ask: “write an app in Rust”. It runs on your model, with Umoja's tools, and writes the project.* ([video](videos/ai-opencode.mp4))
+
 ## Assistant: tile windows
 
 ![Tiling by asking for it, in plain words.](images/ai-tiling.png)
@@ -58,15 +76,69 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-11 (umoja-desktop 2026
 
 *Tiling by asking for it, in plain words.* ([video](videos/ai-tiling.mp4))
 
+## Assistant: saved setups
+
+![Saved as the Writing setup.](images/ai-setups-saved.png)
+
+*Saved as the Writing setup.*
+
+![Typing “writing” offers the setup.](images/ai-setups-row.png)
+
+*Typing “writing” offers the setup.*
+
+![The setup back, each window in its half.](images/ai-setups.png)
+
+*The setup back, each window in its half.*
+
+[![“Save this layout as my Writing setup”, then later just type “writing” and pick it: every window goes back in its place.](videos/ai-setups.gif)](videos/ai-setups.mp4)
+
+*“Save this layout as my Writing setup”, then later just type “writing” and pick it: every window goes back in its place.* ([video](videos/ai-setups.mp4))
+
 ## Assistant: change settings
 
-![Settings in plain words: dark style and Night Light, done in one ask.](images/ai-settings.png)
+![Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.](images/ai-settings.png)
 
-*Settings in plain words: dark style and Night Light, done in one ask.*
+*Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.*
 
-[![Settings in plain words: dark style and Night Light, done in one ask.](videos/ai-settings.gif)](videos/ai-settings.mp4)
+![Every change the assistant makes has an Undo button.](images/ai-settings-undo.png)
 
-*Settings in plain words: dark style and Night Light, done in one ask.* ([video](videos/ai-settings.mp4))
+*Every change the assistant makes has an Undo button.*
+
+[![Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.](videos/ai-settings.gif)](videos/ai-settings.mp4)
+
+*Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.* ([video](videos/ai-settings.mp4))
+
+## Rewrite selected text
+
+![Selected text gets rewrite rows: fix it, shorter, friendlier, more formal, translate.](images/ai-rewrite-rows.png)
+
+*Selected text gets rewrite rows: fix it, shorter, friendlier, more formal, translate.*
+
+![The rewrite, with Replace the Selection.](images/ai-rewrite.png)
+
+*The rewrite, with Replace the Selection.*
+
+![Replaced in the app itself.](images/ai-rewrite-replaced.png)
+
+*Replaced in the app itself.*
+
+[![Select text in any app, press Super+Shift+A and pick a rewrite: Replace types it over your selection.](videos/ai-rewrite.gif)](videos/ai-rewrite.mp4)
+
+*Select text in any app, press Super+Shift+A and pick a rewrite: Replace types it over your selection.* ([video](videos/ai-rewrite.mp4))
+
+## Live captions
+
+![Live captions, as it talks.](images/ai-captions.png)
+
+*Live captions, as it talks.*
+
+![Summarize: what was said, in a line or two.](images/ai-captions-summary.png)
+
+*Summarize: what was said, in a line or two.*
+
+[![Live captions of anything playing, here Umoja's own read-aloud voice; Summarize hands the transcript to the assistant.](videos/ai-captions.gif)](videos/ai-captions.mp4)
+
+*Live captions of anything playing, here Umoja's own read-aloud voice; Summarize hands the transcript to the assistant.* ([video](videos/ai-captions.mp4))
 
 ## Assistant: install an app
 
