@@ -50,6 +50,8 @@ struct Ui {
     progress_label: gtk::Label,
     error_label: gtk::Label,
     log: RefCell<Vec<String>>,
+    /// An install is under way (or done): never start a second one.
+    running: std::cell::Cell<bool>,
 }
 
 fn main() -> glib::ExitCode {
@@ -178,6 +180,7 @@ fn build(app: &adw::Application, preview: bool) {
         progress_label: body("Getting ready"),
         error_label: body(""),
         log: RefCell::new(vec![]),
+        running: std::cell::Cell::new(false),
     });
 
     stack.add_named(&welcome_page(&ui), Some("welcome"));
@@ -552,6 +555,16 @@ fn error_page(ui: &Rc<Ui>) -> gtk::Box {
 /// CI: no questions. First disk, account umoja/umoja-install, power off
 /// when done so the test can boot the installed disk.
 fn start_auto(ui: &Rc<Ui>) {
+    // Once per boot, even if the session (and with it this app) restarts.
+    let marker = std::path::Path::new(
+        &std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into()),
+    )
+    .join("umoja-autoinstall-started");
+    if marker.exists() {
+        tracing::warn!("automatic install already ran this boot; not starting another");
+        return;
+    }
+    let _ = std::fs::write(&marker, b"");
     refresh_disks(ui);
     let disk = ui.disks.borrow().first().cloned();
     {
@@ -567,10 +580,14 @@ fn start_auto(ui: &Rc<Ui>) {
 }
 
 fn run(ui: &Rc<Ui>) {
+    if ui.running.replace(true) {
+        return;
+    }
     ui.stack.set_visible_child_name("progress");
     ui.progress_bar.set_fraction(0.0);
     let a = ui.answers.borrow().clone();
     let Some(disk) = a.disk.clone() else {
+        ui.running.set(false);
         fail(ui, "No disk was chosen.");
         return;
     };
@@ -636,6 +653,7 @@ fn run(ui: &Rc<Ui>) {
     ) {
         Ok(p) => p,
         Err(e) => {
+            ui.running.set(false);
             fail(ui, &format!("Couldn't start the installer: {e}"));
             return;
         }
@@ -646,6 +664,7 @@ fn run(ui: &Rc<Ui>) {
         let _ = stdin.close(gio::Cancellable::NONE);
     }
     let Some(stdout) = proc.stdout_pipe() else {
+        ui.running.set(false);
         fail(ui, "Couldn't read the installer's progress.");
         return;
     };
@@ -688,6 +707,7 @@ fn run(ui: &Rc<Ui>) {
                 let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
             }
         } else {
+            ui.running.set(false);
             let tail: Vec<String> = ui.log.borrow().iter().rev().take(8).rev().cloned().collect();
             let msg = error.unwrap_or_else(|| "The installer stopped with an error.".into());
             fail(&ui, &format!("{msg}\n\n{}", tail.join("\n")));

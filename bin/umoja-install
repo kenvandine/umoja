@@ -186,9 +186,24 @@ progress 94 "Installing the boot loader"
 in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --bootloader-id=ubuntu --uefi-secure-boot --force-extra-removable --recheck
 in_target update-grub
+# The firmware must find these, or the disk won't start.
+for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI; do
+    [ -s "$TARGET/boot/efi/$f" ] || die "boot loader missing from the EFI partition: $f"
+done
+find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
+in_target efibootmgr -v 2>/dev/null || true
 
 progress 99 "Finishing"
+# Plain (not lazy) unmounts, so anything left unwritten shows up as an
+# error instead of a disk that won't boot.
+for m in sys/firmware/efi/efivars sys proc dev/pts dev run; do
+    mountpoint -q "$TARGET/$m" && umount -l "$TARGET/$m"
+done
 sync
-cleanup
+umount "$TARGET/boot/efi"
+umount "$TARGET/boot"
+umount "$TARGET"
+cryptsetup close "$MAPPER"
+sync
 trap - EXIT
 progress 100 "Done"
