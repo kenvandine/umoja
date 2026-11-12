@@ -138,6 +138,16 @@
         afterwards one banner says how many arrived.
       </description>
     </key>
+    <key name="screenshot-names" type="b">
+      <default>true</default>
+      <summary>Name screenshots after what they show</summary>
+      <description>
+        After a screenshot is saved from the screenshot UI, read its text and
+        let the local model add a few words to its file name ("Screenshot From
+        2026-11-12 10-04-33 – Invoice from Acme.png"). Runs on this computer
+        only; the name stays as it was if there is no text or no model.
+      </description>
+    </key>
     <key name="crash-notifications" type="b">
       <default>true</default>
       <summary>Tell me when an app crashes</summary>

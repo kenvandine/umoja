@@ -21,6 +21,7 @@ mod myna;
 mod screencast;
 mod screenshot;
 mod shortcuts;
+mod shotname;
 mod spread;
 mod texpane;
 mod typer;
