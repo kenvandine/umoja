@@ -42,3 +42,30 @@ For an interactive VM, open `umoja.img` in GNOME Boxes or virt-manager
 touch it (using that commit's debs), after each Packages run on main, and
 on demand. Artifacts: `umoja-image` (the compressed image, kept 7 days)
 and `umoja-image-boot` (screenshots and the serial log).
+
+## Installer ISO
+
+`image/iso/build` turns `umoja.img` into a live ISO that boots into the
+Umoja session with the installer (`umoja-installer`, from the
+`umoja-installer` package) on top:
+
+```sh
+sudo apt install xorriso mtools dosfstools squashfs-tools
+make deb                                  # for umoja-installer_*.deb
+sudo image/iso/build image/umoja.img .. umoja.iso
+```
+
+The installer erases the chosen disk and lays out an EFI partition,
+`/boot`, and a LUKS2-encrypted ext4 root that the login password unlocks
+(`bin/umoja-install` does the work). Boot is UEFI only, through Ubuntu's
+signed shim and GRUB, with Secure Boot on.
+
+`--autoinstall` builds a test ISO that installs to the first disk
+unattended (account `umoja`, password `umoja-install`) and powers off.
+`image/test/install-vm` runs that ISO in QEMU, then boots the installed
+disk, types the disk password and takes screenshots:
+
+```sh
+sudo image/iso/build --autoinstall image/umoja.img .. umoja-auto.iso
+image/test/install-vm umoja-auto.iso /tmp/umoja-install
+```

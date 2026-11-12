@@ -18,6 +18,7 @@ endif
 LEMONADE_SRC := vendor/lemonade/$(LEMONADE_ARCH)
 DESKTOP := debian/umoja-desktop
 GREETER := debian/umoja-greeter
+INSTALLER := debian/umoja-installer
 KEYRING := debian/umoja-archive-keyring
 META := packaging/meta/ubuntu-umoja-desktop
 
@@ -40,7 +41,7 @@ endif
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# GTK crates need a display to run; test the headless logic only.
-	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver
+	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver -p umoja-installer
 endif
 
 override_dh_auto_clean:
@@ -55,6 +56,15 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/umoja-files $(DESKTOP)/usr/bin/umoja-files
 	install -D -m 0755 target/release/umoja-mcp $(DESKTOP)/usr/bin/umoja-mcp
 	install -D -m 0755 target/release/umoja-screensaver $(DESKTOP)/usr/bin/umoja-screensaver
+ifeq ($(DEB_HOST_ARCH),amd64)
+	# The installer, for the live ISO only.
+	install -D -m 0755 target/release/umoja-installer $(INSTALLER)/usr/bin/umoja-installer
+	install -D -m 0755 bin/umoja-install $(INSTALLER)/usr/libexec/umoja-installer/umoja-install
+	install -D -m 0644 data/installer/umoja-installer.desktop \
+		$(INSTALLER)/usr/share/applications/umoja-installer.desktop
+	install -D -m 0644 data/installer/umoja-installer-autostart.desktop \
+		$(INSTALLER)/etc/xdg/autostart/umoja-installer.desktop
+endif
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
 	install -D -m 0755 bin/umoja-agent-setup $(DESKTOP)/usr/bin/umoja-agent-setup
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja

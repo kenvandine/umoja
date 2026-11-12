@@ -34,7 +34,7 @@ check:
 
 # GTK crates need a display; these cover the policy/logic crates.
 test:
-	$(CARGO) test -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver
+	$(CARGO) test -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver -p umoja-installer
 
 vendor: vendor-cargo vendor-lemonade
 

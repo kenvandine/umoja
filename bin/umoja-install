@@ -1,0 +1,192 @@
+#!/bin/bash
+# umoja-install: put Umoja on a disk. The installer app runs this as root
+# (pkexec or sudo) from the live session; it can also run by hand.
+#
+#   umoja-install --disk /dev/nvme0n1 --user ken --full-name "Ken" \
+#                 --hostname ken-laptop --timezone America/New_York < password
+#
+# The password comes on stdin (one line): it is the login password and
+# also unlocks the disk. Everything on --disk is erased:
+#
+#   1  1 GiB  EFI system partition (vfat, "UEFI")
+#   2  2 GiB  /boot (ext4, "umoja-boot"), unencrypted so GRUB can read it
+#   3  rest   LUKS2, holding the root file system (ext4, "umoja-root")
+#
+# The root file system is the target layer of the live medium
+# (casper/umoja.squashfs), the same tree as the Umoja disk image. GRUB
+# comes from Ubuntu's signed packages, so Secure Boot stays on.
+#
+# Progress goes to stdout as "PROGRESS <percent> <what>" lines; anything
+# else on stdout/stderr is log. Exit status 0 means a bootable install.
+
+set -euo pipefail
+
+DISK= USERNAME= FULLNAME= HOSTNAME_= TIMEZONE=UTC
+SQUASHFS=${UMOJA_SQUASHFS:-}
+TARGET=/target
+MAPPER=umoja-root
+
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --disk) DISK=$2; shift ;;
+        --user) USERNAME=$2; shift ;;
+        --full-name) FULLNAME=$2; shift ;;
+        --hostname) HOSTNAME_=$2; shift ;;
+        --timezone) TIMEZONE=$2; shift ;;
+        --squashfs) SQUASHFS=$2; shift ;;
+        -h|--help) usage ;;
+        *) echo "unknown option $1" >&2; usage 2 >&2 ;;
+    esac
+    shift
+done
+
+die() { echo "ERROR $*" >&2; exit 1; }
+progress() { echo "PROGRESS $1 $2"; }
+
+[ "$(id -u)" = 0 ] || die "must run as root"
+[ -b "$DISK" ] || die "$DISK is not a block device"
+[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "invalid user name '$USERNAME'"
+[ -n "$HOSTNAME_" ] || HOSTNAME_="$USERNAME-umoja"
+[[ "$HOSTNAME_" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] || die "invalid computer name '$HOSTNAME_'"
+[ -e "/usr/share/zoneinfo/$TIMEZONE" ] || die "unknown time zone '$TIMEZONE'"
+[ -d /sys/firmware/efi ] || die "this computer did not start in UEFI mode; Umoja needs UEFI"
+
+if [ -z "$SQUASHFS" ]; then
+    for f in /cdrom/casper/umoja.squashfs /run/live/medium/casper/umoja.squashfs; do
+        [ -f "$f" ] && SQUASHFS=$f && break
+    done
+fi
+[ -f "$SQUASHFS" ] || die "can't find the Umoja file system (casper/umoja.squashfs)"
+
+IFS= read -r PASSWORD || true
+[ -n "$PASSWORD" ] || die "no password on stdin"
+
+# /dev/sda -> /dev/sda1, /dev/nvme0n1 -> /dev/nvme0n1p1
+part() { case "$DISK" in *[0-9]) echo "${DISK}p$1" ;; *) echo "${DISK}$1" ;; esac; }
+
+cleanup() {
+    set +e
+    for m in sys/firmware/efi/efivars sys proc dev/pts dev run boot/efi boot ""; do
+        mountpoint -q "$TARGET/$m" && umount -l "$TARGET/$m"
+    done
+    [ -e "/dev/mapper/$MAPPER" ] && cryptsetup close "$MAPPER"
+}
+trap cleanup EXIT
+
+progress 1 "Preparing the disk"
+cleanup
+# Let go of anything on the disk (swap, auto-mounted partitions).
+for p in $(lsblk -nrpo NAME "$DISK" | tail -n +2); do
+    swapoff "$p" 2>/dev/null || true
+    umount -l "$p" 2>/dev/null || true
+done
+wipefs -af "$DISK"
+sgdisk --zap-all "$DISK"
+sgdisk -n1:0:+1G -t1:ef00 -c1:UEFI \
+       -n2:0:+2G -t2:8300 -c2:umoja-boot \
+       -n3:0:0   -t3:8309 -c3:umoja \
+       "$DISK"
+partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" || true
+udevadm settle
+for i in 1 2 3; do
+    for _ in $(seq 20); do [ -b "$(part $i)" ] && break; sleep 0.5; done
+    [ -b "$(part $i)" ] || die "partition $(part $i) did not appear"
+done
+
+progress 3 "Formatting"
+mkfs.vfat -F 32 -n UEFI "$(part 1)"
+mkfs.ext4 -q -F -L umoja-boot "$(part 2)"
+
+progress 5 "Encrypting the disk"
+printf '%s' "$PASSWORD" | cryptsetup luksFormat --type luks2 --batch-mode \
+    --label umoja --key-file=- "$(part 3)"
+printf '%s' "$PASSWORD" | cryptsetup open --key-file=- "$(part 3)" "$MAPPER"
+mkfs.ext4 -q -F -L umoja-root "/dev/mapper/$MAPPER"
+
+mkdir -p "$TARGET"
+mount "/dev/mapper/$MAPPER" "$TARGET"
+mkdir -p "$TARGET/boot"
+mount "$(part 2)" "$TARGET/boot"
+mkdir -p "$TARGET/boot/efi"
+mount "$(part 1)" "$TARGET/boot/efi"
+
+progress 8 "Copying Umoja"
+# unsquashfs -percentage prints one number per update.
+unsquashfs -f -d "$TARGET" -percentage "$SQUASHFS" | while read -r pct; do
+    case "$pct" in ''|*[!0-9]*) continue ;; esac
+    progress $((8 + pct * 72 / 100)) "Copying Umoja"
+done
+[ -x "$TARGET/usr/bin/umoja-session" ] || die "copy incomplete"
+
+progress 81 "Setting up the system"
+LUKS_UUID=$(blkid -s UUID -o value "$(part 3)")
+BOOT_UUID=$(blkid -s UUID -o value "$(part 2)")
+EFI_UUID=$(blkid -s UUID -o value "$(part 1)")
+cat > "$TARGET/etc/fstab" <<EOF
+# <file system>          <mount point>  <type>  <options>                   <dump> <pass>
+/dev/mapper/$MAPPER      /              ext4    defaults,errors=remount-ro  0      1
+UUID=$BOOT_UUID  /boot          ext4    defaults                    0      2
+UUID=$EFI_UUID           /boot/efi      vfat    umask=0077                  0      1
+EOF
+echo "$MAPPER UUID=$LUKS_UUID none luks,discard" > "$TARGET/etc/crypttab"
+chmod 0600 "$TARGET/etc/crypttab"
+
+echo "$HOSTNAME_" > "$TARGET/etc/hostname"
+cat > "$TARGET/etc/hosts" <<EOF
+127.0.0.1 localhost
+127.0.1.1 $HOSTNAME_
+
+::1     ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+EOF
+ln -sf "/usr/share/zoneinfo/$TIMEZONE" "$TARGET/etc/localtime"
+echo "$TIMEZONE" > "$TARGET/etc/timezone"
+# A fresh identity on first boot.
+: > "$TARGET/etc/machine-id"
+rm -f "$TARGET/var/lib/dbus/machine-id"
+
+# Unlock the root on boot (dracut reads rd.luks.*; initramfs-tools reads
+# /etc/crypttab).
+sed -i -E "s|^#?GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"rd.luks.name=$LUKS_UUID=$MAPPER\"|" \
+    "$TARGET/etc/default/grub"
+grep -q '^GRUB_CMDLINE_LINUX=' "$TARGET/etc/default/grub" \
+    || echo "GRUB_CMDLINE_LINUX=\"rd.luks.name=$LUKS_UUID=$MAPPER\"" >> "$TARGET/etc/default/grub"
+
+for m in dev dev/pts proc sys run; do
+    mount --bind "/$m" "$TARGET/$m"
+done
+[ -d /sys/firmware/efi/efivars ] && mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars"
+in_target() { chroot "$TARGET" "$@"; }
+
+progress 84 "Creating your account"
+groups=
+for g in adm cdrom sudo dip plugdev lpadmin users; do
+    in_target getent group "$g" >/dev/null && groups="$groups${groups:+,}$g"
+done
+in_target useradd --create-home --shell /bin/bash --comment "$FULLNAME" \
+    ${groups:+--groups "$groups"} "$USERNAME"
+printf '%s:%s\n' "$USERNAME" "$PASSWORD" | in_target chpasswd
+
+progress 88 "Building the boot image"
+if in_target sh -c 'command -v dracut' >/dev/null; then
+    for k in "$TARGET"/lib/modules/*; do
+        kver=$(basename "$k")
+        in_target dracut --force --add crypt "/boot/initrd.img-$kver" "$kver"
+    done
+else
+    in_target update-initramfs -u -k all
+fi
+
+progress 94 "Installing the boot loader"
+in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    --bootloader-id=ubuntu --uefi-secure-boot --force-extra-removable --recheck
+in_target update-grub
+
+progress 99 "Finishing"
+sync
+cleanup
+trap - EXIT
+progress 100 "Done"

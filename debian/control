@@ -117,6 +117,28 @@ Description: GTK4 LightDM greeter for Umoja
  in place of GDM; the change takes effect at the next boot. Removing the
  package restores the previous display manager.
 
+Package: umoja-installer
+Architecture: amd64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         umoja-desktop (= ${binary:Version}),
+         cryptsetup,
+         dosfstools,
+         e2fsprogs,
+         gdisk,
+         parted,
+         squashfs-tools,
+         util-linux
+Description: Umoja installer for the live session
+ Puts Umoja on a disk from the Umoja live ISO: a few questions (disk,
+ account, password, time zone) on a card over the screensaver's dots,
+ then the whole disk is set up with an EFI partition, /boot and a LUKS2
+ encrypted root that the login password unlocks. Ubuntu's signed boot
+ loader keeps Secure Boot on.
+ .
+ This package belongs on the live medium only: it starts the installer
+ when the live session starts.
+
 Package: ubuntu-umoja-desktop
 Architecture: all
 Depends: ${misc:Depends},
