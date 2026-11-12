@@ -173,6 +173,14 @@ pub fn timezones() -> Vec<String> {
     zones
 }
 
+/// "America/New_York" -> "New York (America/New_York)"; "UTC" stays.
+pub fn timezone_label(zone: &str) -> String {
+    match zone.rsplit_once('/') {
+        Some((_, city)) => format!("{} ({zone})", city.replace('_', " ")),
+        None => zone.to_string(),
+    }
+}
+
 pub fn current_timezone() -> String {
     output("timedatectl", &["show", "-p", "Timezone", "--value"])
         .filter(|s| !s.is_empty())
@@ -325,6 +333,13 @@ mod tests {
         assert!(check_password("short", "short").is_err());
         assert!(check_password("longenough", "longenougH").is_err());
         assert!(check_password("longenough", "longenough").is_ok());
+    }
+
+    #[test]
+    fn timezone_labels() {
+        assert_eq!(timezone_label("America/New_York"), "New York (America/New_York)");
+        assert_eq!(timezone_label("America/Argentina/Buenos_Aires"), "Buenos Aires (America/Argentina/Buenos_Aires)");
+        assert_eq!(timezone_label("UTC"), "UTC");
     }
 
     #[test]

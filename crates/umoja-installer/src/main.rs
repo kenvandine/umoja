@@ -371,11 +371,18 @@ fn account_page(ui: &Rc<Ui>) -> gtk::Box {
         .enable_search(true)
         .css_classes(["field"])
         .build();
-    zone.set_expression(Some(gtk::PropertyExpression::new(
-        gtk::StringObject::static_type(),
-        None::<&gtk::Expression>,
-        "string",
+    // Shown and searched as "New York (America/New_York)": typing any part
+    // of it, in any case, finds the zone ("new", "york", "america").
+    zone.set_expression(Some(gtk::ClosureExpression::with_callback(
+        &[] as &[gtk::Expression],
+        |args: &[glib::Value]| {
+            args.first()
+                .and_then(|v| v.get::<gtk::StringObject>().ok())
+                .map(|o| system::timezone_label(&o.string()))
+                .unwrap_or_default()
+        },
     )));
+    zone.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
     let current = ui.answers.borrow().timezone.clone();
     if let Some(i) = zones.iter().position(|z| *z == current) {
         zone.set_selected(i as u32);
