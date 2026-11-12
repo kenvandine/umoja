@@ -132,7 +132,7 @@ VERSION=$(sed -n 's/^VERSION_ID="\(.*\)"/\1/p' "$TARGET/etc/os-release")
 STAMP=$(date -u +%Y%m%d)
 echo "Umoja $VERSION \"$(sed -n 's/^VERSION_CODENAME=//p' "$TARGET/etc/os-release")\" - amd64 ($STAMP)" > "$ISO/.disk/info"
 
-LIVE_ARGS="layerfs-path=umoja.live.squashfs"
+LIVE_ARGS="boot=casper layerfs-path=umoja.live.squashfs"
 {
     echo "set timeout=$([ $AUTO = 1 ] && echo 1 || echo 5)"
     echo "set default=$([ $AUTO = 1 ] && echo 2 || echo 0)"
