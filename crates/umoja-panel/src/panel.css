@@ -533,6 +533,10 @@ window.umoja-lock {
   background-color: alpha(#ffffff, 0.15);
   color: #ffffff;
 }
+.umoja-lock .lock-fingerprint-hint {
+  font-size: 14px;
+  opacity: 0.75;
+}
 .umoja-lock .lock-message {
   color: #ffffff;
   opacity: 0.9;

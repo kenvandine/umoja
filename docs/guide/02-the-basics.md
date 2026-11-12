@@ -143,6 +143,8 @@ dot or number on the icon means the app wants your attention.
 
 - **Lock the screen** with **Super+L**, or the **Lock** button in Quick
   Settings. To unlock, click or press any key, then type your password.
+  With Fingerprint Login set up, you can touch the fingerprint reader
+  instead, even before you click.
 - **Log out** or **power off** with the buttons in Quick Settings. A card
   asks you to confirm. It goes ahead by itself after 60 seconds, so you can
   walk away. From the Power Off card you can also choose **Restart**.

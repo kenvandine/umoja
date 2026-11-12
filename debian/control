@@ -93,7 +93,8 @@ Depends: ${shlibs:Depends},
          accountsservice,
          ubuntu-wallpapers
 Recommends: xserver-xorg-core,
-            xauth
+            xauth,
+            libpam-fprintd
 Provides: lightdm-greeter
 Description: GTK4 LightDM greeter for Umoja
  A login screen for LightDM, written in Rust and GTK4, drawn over a

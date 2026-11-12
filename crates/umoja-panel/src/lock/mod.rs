@@ -1,7 +1,8 @@
 //! The lock screen, in-session like gnome-shell's: an `ext-session-lock-v1`
 //! surface on every monitor showing the blurred wallpaper and a large
 //! clock. A key press or click brings up the unlock prompt, which checks
-//! the password with PAM.
+//! the password with PAM. Users with enrolled fingers can also touch the
+//! fingerprint reader, on the clock or at the prompt (see [`fingerprint`]).
 //!
 //! Triggers: the Quick Settings Lock button, logind's Lock signal
 //! (`loginctl lock-session`), and suspend when
@@ -10,6 +11,7 @@
 //! LockedHint is set, it locks again straight away.
 
 mod backdrop;
+mod fingerprint;
 mod pam;
 
 use crate::login;
@@ -29,6 +31,17 @@ pub struct Locker {
     instance: RefCell<Option<session_lock::Instance>>,
     windows: RefCell<Vec<(gdk::Monitor, gtk::Window)>>,
     monitors_handler: RefCell<Option<glib::SignalHandlerId>>,
+    /// The unlock prompt's widgets, on the first monitor's lock surface.
+    ui: RefCell<Option<PromptUi>>,
+    fingerprint: RefCell<Option<Rc<fingerprint::Fingerprint>>>,
+}
+
+#[derive(Clone)]
+struct PromptUi {
+    stack: gtk::Stack,
+    entry: gtk::PasswordEntry,
+    message: gtk::Label,
+    hint: gtk::Label,
 }
 
 thread_local! {
@@ -50,6 +63,10 @@ pub fn init() {
                 && gs::get_bool(SCREENSAVER, "ubuntu-lock-on-suspend", true);
             if going_down && wanted {
                 locker().lock();
+            }
+            // The reader may have been reset over suspend.
+            if !going_down && let Some(fp) = locker().fingerprint.borrow().clone() {
+                fp.reset();
             }
         }
         _ => {}
@@ -96,6 +113,7 @@ impl Locker {
         }
         *self.instance.borrow_mut() = Some(instance);
         self.cover_monitors();
+        self.start_fingerprint();
 
         // Monitors plugged in while locked get a lock surface too.
         if let Some(display) = gdk::Display::default() {
@@ -135,10 +153,44 @@ impl Locker {
             }
             // The unlock prompt goes on the first monitor, like gnome-shell's
             // primary; the others just show the curtain.
-            let window = lock_window(windows.is_empty());
+            let (window, ui) = lock_window(windows.is_empty());
+            if ui.is_some() {
+                *self.ui.borrow_mut() = ui;
+            }
             instance.assign_window_to_monitor(&window, &monitor);
             window.present();
             windows.push((monitor, window));
+        }
+    }
+
+    fn start_fingerprint(&self) {
+        let fp = fingerprint::Fingerprint::new(fingerprint::Callbacks {
+            hint: Box::new(|text| {
+                if let Some(ui) = locker().ui.borrow().clone() {
+                    ui.hint.set_label(text.as_deref().unwrap_or(""));
+                    ui.hint.set_visible(text.is_some());
+                }
+            }),
+            error: Box::new(|text| {
+                if let Some(ui) = locker().ui.borrow().clone() {
+                    // Show it even if the touch came while on the clock.
+                    if ui.stack.visible_child_name().as_deref() != Some("prompt") {
+                        ui.stack.set_visible_child_name("prompt");
+                        ui.entry.grab_focus();
+                    }
+                    ui.message.set_label(&text);
+                }
+            }),
+            matched: Box::new(|| locker().unlock()),
+        });
+        fp.start();
+        *self.fingerprint.borrow_mut() = Some(fp);
+    }
+
+    /// The curtain was lifted: let the reader listen again if it gave up.
+    fn rearm_fingerprint(&self) {
+        if let Some(fp) = self.fingerprint.borrow().clone() {
+            fp.rearm();
         }
     }
 
@@ -154,6 +206,10 @@ impl Locker {
 
     fn teardown(&self) {
         self.instance.borrow_mut().take();
+        if let Some(fp) = self.fingerprint.borrow_mut().take() {
+            fp.stop();
+        }
+        self.ui.borrow_mut().take();
         if let (Some(id), Some(display)) = (
             self.monitors_handler.borrow_mut().take(),
             gdk::Display::default(),
@@ -166,7 +222,7 @@ impl Locker {
     }
 }
 
-fn lock_window(with_prompt: bool) -> gtk::Window {
+fn lock_window(with_prompt: bool) -> (gtk::Window, Option<PromptUi>) {
     let window = gtk::Window::builder().css_classes(["umoja-lock"]).build();
     let overlay = gtk::Overlay::new();
     let backdrop = backdrop::Backdrop::new(36.0);
@@ -184,10 +240,16 @@ fn lock_window(with_prompt: bool) -> gtk::Window {
     window.set_child(Some(&overlay));
 
     if !with_prompt {
-        return window;
+        return (window, None);
     }
-    let (prompt, entry) = prompt();
+    let (prompt, entry, message, hint) = prompt();
     stack.add_named(&prompt, Some("prompt"));
+    let ui = PromptUi {
+        stack: stack.clone(),
+        entry: entry.clone(),
+        message,
+        hint,
+    };
 
     // Any key or click lifts the curtain; the key that did it is typed
     // into the password field rather than lost.
@@ -206,6 +268,7 @@ fn lock_window(with_prompt: bool) -> gtk::Window {
             }
             stack.set_visible_child_name("prompt");
             entry.grab_focus();
+            locker().rearm_fingerprint();
             if let Some(c) = key.to_unicode().filter(|c| !c.is_control()) {
                 entry.set_text(&c.to_string());
                 entry.set_position(-1);
@@ -221,11 +284,12 @@ fn lock_window(with_prompt: bool) -> gtk::Window {
             if stack.visible_child_name().as_deref() == Some("clock") {
                 stack.set_visible_child_name("prompt");
                 entry.grab_focus();
+                locker().rearm_fingerprint();
             }
         }
     });
     window.add_controller(click);
-    window
+    (window, Some(ui))
 }
 
 /// Big time and date, gnome-shell's lock screen "curtain".
@@ -271,8 +335,8 @@ fn clock() -> gtk::Box {
     b
 }
 
-/// Avatar, name and password field.
-fn prompt() -> (gtk::Box, gtk::PasswordEntry) {
+/// Avatar, name, password field, fingerprint hint and message line.
+fn prompt() -> (gtk::Box, gtk::PasswordEntry, gtk::Label, gtk::Label) {
     let user = glib::user_name().to_string_lossy().into_owned();
     let real = glib::real_name().to_string_lossy().into_owned();
     let name = if real.is_empty() || real == "Unknown" {
@@ -307,11 +371,19 @@ fn prompt() -> (gtk::Box, gtk::PasswordEntry) {
         .css_classes(["lock-entry"])
         .build();
     b.append(&entry);
+    // "(or place finger on reader)" while the fingerprint reader listens.
+    let hint = gtk::Label::builder()
+        .css_classes(["lock-fingerprint-hint"])
+        .wrap(true)
+        .visible(false)
+        .build();
+    b.append(&hint);
     let message = gtk::Label::builder()
         .css_classes(["lock-message"])
         .wrap(true)
         .build();
     b.append(&message);
+    let message_out = message.clone();
 
     entry.connect_activate(move |e| {
         let password = e.text().to_string();
@@ -337,5 +409,5 @@ fn prompt() -> (gtk::Box, gtk::PasswordEntry) {
             }
         });
     });
-    (b, entry)
+    (b, entry, message_out, hint)
 }

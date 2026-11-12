@@ -131,3 +131,36 @@ pub fn authenticate(user: &str, password: &str) -> Result<(), String> {
     }
     result
 }
+
+/// The `umoja-lock` account checks alone (expired or locked account...),
+/// for an unlock that was authenticated by fingerprint. Blocking.
+pub fn account_ok(user: &str) -> Result<(), String> {
+    let service = CString::new(SERVICE).expect("no NUL");
+    let user = CString::new(user).map_err(|e| e.to_string())?;
+    // Any prompt (there should be none) gets an empty answer.
+    let empty = CString::default();
+    let conv = PamConv {
+        conv: conversation,
+        appdata_ptr: empty.as_ptr() as *mut c_void,
+    };
+    let mut handle: *mut c_void = std::ptr::null_mut();
+    let rc = unsafe { pam_start(service.as_ptr(), user.as_ptr(), &conv, &mut handle) };
+    if rc != PAM_SUCCESS || handle.is_null() {
+        return Err(format!("pam_start failed ({rc})"));
+    }
+    let rc = unsafe { pam_acct_mgmt(handle, 0) };
+    let result = if rc == PAM_SUCCESS {
+        Ok(())
+    } else {
+        Err(unsafe {
+            let s = pam_strerror(handle, rc);
+            if s.is_null() {
+                format!("PAM error {rc}")
+            } else {
+                CStr::from_ptr(s).to_string_lossy().into_owned()
+            }
+        })
+    };
+    unsafe { pam_end(handle, rc) };
+    result
+}

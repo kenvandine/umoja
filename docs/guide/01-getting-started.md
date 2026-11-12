@@ -8,6 +8,12 @@ When the computer starts, the login screen shows the last person who logged
 in. Type your password and press **Enter**. To log in as someone else, click
 their picture along the bottom of the screen.
 
+If you've set up **Fingerprint Login** (in **Settings › System › Users**),
+you can touch the fingerprint reader instead of typing your password; the
+login screen says "(or place finger on reader)" under the password box.
+Logging in with your fingerprint doesn't unlock your keyring of saved
+passwords, so some apps may ask for your password once.
+
 The login screen remembers which desktop you used last. If more than one is
 installed (Umoja and Ubuntu's GNOME, say), choose **Umoja** with the session
 button under the password box before you log in. The button in the top-right

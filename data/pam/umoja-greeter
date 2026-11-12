@@ -1,0 +1,17 @@
+#%PAM-1.0
+# Logins from umoja-greeter (LightDM's pam-service, see
+# /usr/share/lightdm/lightdm.conf.d/60-umoja.conf). The same as
+# /etc/pam.d/lightdm, except that users with enrolled fingers are asked for
+# a fingerprint first, as GDM's gdm-fingerprint does. pam_fprintd skips
+# everyone else at once. The greeter keeps the password field usable while
+# it waits: a password restarts this stack with the reader claimed by the
+# greeter, so pam_fprintd steps aside and the password check in
+# common-auth runs straight away. The reader listens until a match or three
+# misses (then it's password only for that attempt).
+auth    requisite       pam_nologin.so
+auth    sufficient      pam_succeed_if.so user ingroup nopasswdlogin quiet
+-auth   [success=1 default=ignore]      pam_fprintd.so max-tries=3 timeout=-1
+auth    substack        lightdm
+account include         lightdm
+password include        lightdm
+session include         lightdm

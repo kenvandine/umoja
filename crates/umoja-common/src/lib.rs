@@ -16,6 +16,7 @@ pub mod clock;
 pub mod crashes;
 pub mod dbus;
 pub mod diagnostics;
+pub mod fprint;
 pub mod gsettings;
 pub mod hidpi;
 pub mod i18n;

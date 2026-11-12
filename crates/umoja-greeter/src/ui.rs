@@ -4,8 +4,15 @@
 //! sharp and gently dimmed, with a large lock-screen clock in the corner, a
 //! frosted-glass login card in the middle, and the other accounts as a row
 //! of avatars underneath.
+//!
+//! Fingerprint login works like GDM's: the `umoja-greeter` PAM service
+//! (data/pam) asks fprintd first, so for a user with enrolled fingers PAM
+//! sits waiting for a finger while the password field stays usable, with
+//! "(or place finger on reader)" under it. Submitting a password then
+//! restarts PAM with the reader claimed by the greeter, which makes
+//! pam_fprintd step aside at once and go straight to the password.
 
-use crate::auth::{self, Greeter, PromptType, User};
+use crate::auth::{self, Greeter, MessageType, PromptType, User};
 use crate::backdrop::{self, Backdrop};
 use adw::prelude::*;
 use gio::prelude::*;
@@ -15,6 +22,7 @@ use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::process::Command;
 use std::rc::Rc;
+use umoja_common::fprint::{self, ScanType};
 use umoja_common::i18n;
 
 /// The session preselected for users who have never logged in.
@@ -38,6 +46,24 @@ struct State {
     session_buttons: RefCell<Vec<gtk::CheckButton>>,
     user_strip: gtk::Box,
     busy: Cell<bool>,
+    /// "(or place finger on reader)" under the password field.
+    fp_hint: gtk::Label,
+    /// fprintd's reader, if there is one.
+    reader: RefCell<Option<fprint::Device>>,
+    scan: Cell<ScanType>,
+    /// PAM is waiting for an answer to a password prompt.
+    prompt_pending: Cell<bool>,
+    /// PAM is waiting for a finger (pam_fprintd said "Place your finger…").
+    fingerprint: Cell<bool>,
+    /// This conversation was started with the reader held by us, to skip
+    /// pam_fprintd and go straight to the password.
+    password_only: Cell<bool>,
+    /// The reader is claimed by the greeter (see `password_only`).
+    reader_claimed: Cell<bool>,
+    /// A password submitted before PAM asked for it.
+    queued: RefCell<Option<String>>,
+    /// Bumped by every new conversation, so a stale async start gives up.
+    generation: Cell<u64>,
     /// Everything on screen; faded in at start and out before the session.
     content: gtk::Overlay,
 }
@@ -109,6 +135,13 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     card.append(&avatar);
     card.append(&name);
     card.append(&pill);
+    let fp_hint = gtk::Label::builder()
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .css_classes(["fingerprint-hint"])
+        .visible(false)
+        .build();
+    card.append(&fp_hint);
     card.append(&message_revealer);
     card.append(&session_menu);
 
@@ -175,6 +208,15 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         session_buttons: RefCell::default(),
         user_strip,
         busy: Cell::new(false),
+        fp_hint,
+        reader: RefCell::default(),
+        scan: Cell::new(ScanType::Press),
+        prompt_pending: Cell::new(false),
+        fingerprint: Cell::new(false),
+        password_only: Cell::new(false),
+        reader_claimed: Cell::new(false),
+        queued: RefCell::default(),
+        generation: Cell::new(0),
         content: overlay.clone(),
     });
 
@@ -357,27 +399,46 @@ fn build_user_strip(state: &Rc<State>) {
 fn wire(state: &Rc<State>) {
     let s = state.clone();
     state.greeter.on_prompt(move |_text, kind| {
-        s.busy.set(false);
-        s.entry.set_sensitive(true);
-        s.submit.set_sensitive(true);
-        s.entry.set_text("");
         // A non-secret prompt is a username question; we always pre-fill it.
         if kind == PromptType::Question {
             if let Some(u) = s.users.get(s.current.get()) {
                 let _ = s.greeter.respond(&u.name);
             }
-        } else {
-            s.entry.grab_focus();
+            return;
+        }
+        // Past pam_fprintd (no fingers, gave up, or skipped): password time.
+        set_fingerprint(&s, false);
+        if let Some(password) = s.queued.borrow_mut().take() {
+            let _ = s.greeter.respond(&password);
+            return;
+        }
+        s.prompt_pending.set(true);
+        s.busy.set(false);
+        s.entry.set_sensitive(true);
+        s.submit.set_sensitive(true);
+        s.entry.grab_focus();
+    });
+
+    let s = state.clone();
+    state.greeter.on_message(move |text, kind| {
+        if kind == MessageType::Info && !s.prompt_pending.get() {
+            // Before the password prompt only pam_fprintd talks: it is
+            // waiting for a finger. Say so the GNOME way, under the field.
+            if s.password_only.get() {
+                tracing::warn!("pam_fprintd ran although the reader was claimed");
+            }
+            set_fingerprint(&s, true);
+            return;
+        }
+        show_message(&s, &text);
+        if kind == MessageType::Error && s.fingerprint.get() {
+            shake(&s.card);
         }
     });
 
     let s = state.clone();
-    state
-        .greeter
-        .on_message(move |text| show_message(&s, &text));
-
-    let s = state.clone();
     state.greeter.on_authentication_complete(move || {
+        release_reader(&s);
         if s.greeter.is_authenticated() {
             let key = s
                 .sessions
@@ -399,6 +460,10 @@ fn wire(state: &Rc<State>) {
                 &i18n::shell("Sorry, that didn’t work. Please try again."),
             );
             shake(&s.card);
+            s.entry.set_text("");
+            s.busy.set(false);
+            s.entry.set_sensitive(true);
+            s.submit.set_sensitive(true);
             let i = s.current.get();
             select_user(&s, i);
         }
@@ -413,8 +478,18 @@ fn wire(state: &Rc<State>) {
             s.entry.set_sensitive(false);
             s.submit.set_sensitive(false);
             s.message_revealer.set_reveal_child(false);
-            if let Err(err) = s.greeter.respond(&s.entry.text()) {
-                show_message(&s, &err.to_string());
+            let password = s.entry.text().to_string();
+            if s.prompt_pending.replace(false) {
+                if let Err(err) = s.greeter.respond(&password) {
+                    show_message(&s, &err.to_string());
+                }
+            } else {
+                // PAM hasn't asked yet; answer when it does. If it is busy
+                // waiting for a finger, start over without the reader.
+                *s.queued.borrow_mut() = Some(password);
+                if s.fingerprint.get() {
+                    start_auth(&s, true);
+                }
             }
         }
     };
@@ -494,10 +569,91 @@ fn select_user(state: &Rc<State>, index: usize) {
         }
     }
 
+    // A different user starts afresh; a retry keeps nothing typed either.
+    state.queued.borrow_mut().take();
+    start_auth(state, false);
+}
+
+/// Start a PAM conversation for the current user. `password_only` claims
+/// the fingerprint reader first so pam_fprintd skips straight to the
+/// password (also used when fingerprint login is turned off).
+fn start_auth(state: &Rc<State>, password_only: bool) {
+    let Some(user) = state.users.get(state.current.get()).map(|u| u.name.clone()) else {
+        return;
+    };
     state.greeter.cancel();
-    if let Err(e) = state.greeter.authenticate(&user.name) {
-        show_message(state, &e.to_string());
+    state.prompt_pending.set(false);
+    set_fingerprint(state, false);
+    let password_only = password_only || !fprint::enabled_by_settings();
+    state.password_only.set(password_only);
+    let generation = state.generation.get() + 1;
+    state.generation.set(generation);
+    if state.greeter.is_preview() {
+        return;
     }
+    let s = state.clone();
+    glib::spawn_future_local(async move {
+        if s.reader.borrow().is_none() {
+            let reader = fprint::Device::default().await;
+            if let Some(r) = &reader {
+                s.scan.set(r.scan_type());
+            }
+            *s.reader.borrow_mut() = reader;
+        }
+        let reader = s.reader.borrow().clone();
+        if let Some(reader) = reader {
+            if password_only {
+                claim_reader(&s, &reader, generation).await;
+            } else if s.reader_claimed.replace(false) {
+                reader.release().await;
+            }
+        }
+        if s.generation.get() != generation {
+            return;
+        }
+        if let Err(e) = s.greeter.authenticate(&user) {
+            show_message(&s, &e.to_string());
+        }
+    });
+}
+
+/// Claim the reader for the greeter. Right after a cancel the old PAM
+/// process may still hold it for a moment, so try for about a second.
+async fn claim_reader(state: &Rc<State>, reader: &fprint::Device, generation: u64) {
+    if state.reader_claimed.get() {
+        return;
+    }
+    for _ in 0..10 {
+        if state.generation.get() != generation {
+            return;
+        }
+        match reader.claim("").await {
+            Ok(()) => {
+                state.reader_claimed.set(true);
+                return;
+            }
+            Err(e) => tracing::debug!(error = %e, "fingerprint reader busy"),
+        }
+        glib::timeout_future(std::time::Duration::from_millis(100)).await;
+    }
+    tracing::warn!("could not claim the fingerprint reader; PAM may wait for it");
+}
+
+fn release_reader(state: &Rc<State>) {
+    if !state.reader_claimed.replace(false) {
+        return;
+    }
+    if let Some(reader) = state.reader.borrow().clone() {
+        glib::spawn_future_local(async move { reader.release().await });
+    }
+}
+
+fn set_fingerprint(state: &State, on: bool) {
+    state.fingerprint.set(on);
+    if on {
+        state.fp_hint.set_text(&fprint::or_hint(state.scan.get()));
+    }
+    state.fp_hint.set_visible(on);
 }
 
 /// Battery level from UPower's display device; hidden on desktops.

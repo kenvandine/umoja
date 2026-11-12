@@ -80,6 +80,11 @@ window.umoja-greeter {
 .message {
   color: #ffb4a0;
 }
+.fingerprint-hint {
+  color: #ffffff;
+  opacity: 0.75;
+  font-size: 0.95em;
+}
 .session-button {
   opacity: 0.8;
 }

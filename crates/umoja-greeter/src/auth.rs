@@ -62,6 +62,13 @@ pub enum PromptType {
     Secret,
 }
 
+/// LightDMMessageType
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageType {
+    Info,
+    Error,
+}
+
 #[derive(Debug, Clone)]
 pub struct User {
     pub name: String,
@@ -216,13 +223,25 @@ impl Greeter {
     }
 
     /// `show-message(text, type)`: informational or error text from PAM.
-    pub fn on_message(&self, f: impl Fn(String) + 'static) {
+    pub fn on_message(&self, f: impl Fn(String, MessageType) + 'static) {
         let Some(obj) = &self.obj else { return };
         obj.connect_local("show-message", false, move |args| {
-            f(args
+            let text = args
                 .get(1)
                 .and_then(|v| v.get::<String>().ok())
-                .unwrap_or_default());
+                .unwrap_or_default();
+            let kind = args
+                .get(2)
+                .map(|v| unsafe { glib::gobject_ffi::g_value_get_enum(v.to_glib_none().0) })
+                .unwrap_or(0);
+            f(
+                text,
+                if kind == 1 {
+                    MessageType::Error
+                } else {
+                    MessageType::Info
+                },
+            );
             None
         });
     }
