@@ -284,8 +284,9 @@ fn display_name(c: &Crash) -> (String, String) {
         return (name, "computer-fail-symbolic".into());
     }
     let app = gio::AppInfo::all().into_iter().find(|a| {
-        a.executable()
-            .file_name()
+        umoja_common::apps::executable(a)
+            .as_deref()
+            .and_then(|e| e.file_name())
             .is_some_and(|n| n.to_string_lossy() == program)
             || a.id().is_some_and(|id| {
                 id.trim_end_matches(".desktop")

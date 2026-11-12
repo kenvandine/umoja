@@ -404,7 +404,10 @@ pub fn launch_action(window: &gtk::Window, app: &gio::DesktopAppInfo, action: &s
 pub fn app_key(app: &gio::AppInfo) -> String {
     app.id()
         .map(|id| id.to_string())
-        .unwrap_or_else(|| format!("{}\0{}", app.display_name(), app.executable().display()))
+        .unwrap_or_else(|| {
+            let exec = umoja_common::apps::executable(app).unwrap_or_default();
+            format!("{}\0{}", app.display_name(), exec.display())
+        })
 }
 
 /// 0: the name starts with the query, 1: contains it, 2: its description

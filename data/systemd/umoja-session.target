@@ -25,5 +25,20 @@ Before=graphical-session.target
 # us: that loop made systemd drop the autostart job. Order it after us.
 Wants=xdg-desktop-autostart.target
 Before=xdg-desktop-autostart.target
+# graphical-session-pre.target is where distributions hook the jobs that
+# must finish before the session's apps start. gnome-session pulls it in and
+# so must we: xdg-user-dirs.service (enabled there by the xdg-user-dirs
+# package) creates ~/Documents, ~/Downloads, ~/Music, ~/Pictures, ~/Videos...
+# with names translated for the session's LANG, and writes
+# ~/.config/user-dirs.dirs. Its autostart entry says X-systemd-skip=true, so
+# without this target nothing ever ran it and a new user had no folders.
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
+# xdg-user-dirs-gtk offers to rename those folders after the user switches
+# language. Its unit has no [Install] section and is After=
+# graphical-session.target (which is after us), so pull it in by hand and,
+# as with the autostart target above, order it after us to avoid a loop.
+Wants=user-dirs-update-gtk.service
+Before=user-dirs-update-gtk.service
 Wants=umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service
 StopWhenUnneeded=no

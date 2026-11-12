@@ -22,7 +22,7 @@ pub fn app_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
     if let Some(c) = found.startup_wm_class() {
         classes.push(c.to_string());
     }
-    let exec = found.executable();
+    let exec = executable(&found);
     visible_entries()
         .into_iter()
         .find(|d| {
@@ -31,15 +31,30 @@ pub fn app_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
         })
         .or_else(|| {
             // No class to go by: the same program (Exec) shown under another id.
-            (!exec.as_os_str().is_empty())
-                .then(|| {
-                    visible_entries()
-                        .into_iter()
-                        .find(|d| d.executable() == exec)
-                })
-                .flatten()
+            exec.as_ref().and_then(|exec| {
+                visible_entries()
+                    .into_iter()
+                    .find(|d| executable(d).as_ref() == Some(exec))
+            })
         })
         .or(Some(found))
+}
+
+/// An app's executable, or `None` when its entry has no `Exec` line.
+///
+/// Use this instead of `AppInfo::executable()`: gio returns NULL for an
+/// entry without `Exec` (QEMU's hidden `qemu.desktop` is one), and the
+/// binding's non-optional `PathBuf` turns that NULL into a `strlen(NULL)`
+/// segfault, which took down the dock, the overlay and the automations
+/// service whenever a QEMU window was open.
+pub fn executable(info: &impl IsA<gio::AppInfo>) -> Option<std::path::PathBuf> {
+    use glib::translate::{FromGlibPtrNone, ToGlibPtr};
+    let p = unsafe { gio::ffi::g_app_info_get_executable(info.as_ref().to_glib_none().0) };
+    if p.is_null() {
+        return None;
+    }
+    let path: std::path::PathBuf = unsafe { FromGlibPtrNone::from_glib_none(p) };
+    (!path.as_os_str().is_empty()).then_some(path)
 }
 
 fn lookup(app_id: &str) -> Option<gio::DesktopAppInfo> {
@@ -222,6 +237,27 @@ pub fn can_open_new_window(info: &gio::DesktopAppInfo) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{electron_class, with_favorite};
+
+    fn entry(body: &str) -> gio::DesktopAppInfo {
+        let kf = glib::KeyFile::new();
+        kf.load_from_data(body, glib::KeyFileFlags::NONE).unwrap();
+        gio::DesktopAppInfo::from_keyfile(&kf).unwrap()
+    }
+
+    #[test]
+    fn executable_of_an_entry_without_exec_is_none() {
+        // QEMU's qemu.desktop: hidden and no Exec line.
+        let qemu = entry(
+            "[Desktop Entry]\nType=Application\nName=QEMU\nIcon=qemu\nNoDisplay=true\n",
+        );
+        assert_eq!(super::executable(&qemu), None);
+    }
+
+    #[test]
+    fn executable_of_an_entry_with_exec() {
+        let app = entry("[Desktop Entry]\nType=Application\nName=Sh\nExec=sh -c true\n");
+        assert_eq!(super::executable(&app), Some("sh".into()));
+    }
 
     #[test]
     fn electron_class_from_desktop_name_ids() {

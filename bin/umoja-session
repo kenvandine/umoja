@@ -51,11 +51,25 @@ SESSION_VARS="XCURSOR_THEME XCURSOR_SIZE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
 
 log() { echo "umoja-session: $*" >&2; }
 
+# The language the user picked at the login screen (LightDM sets it from
+# AccountsService) only lives in our environment; the user manager started
+# with the system locale. Hand it over, as gnome-session does, so the shell
+# services, the apps they launch and xdg-user-dirs.service (which names
+# ~/Documents, ~/Music... in the session language) all agree. These are
+# not unset at logout: the user manager had a locale before us and every
+# session sets its own.
+LOCALE_VARS=""
+for v in LANG LANGUAGE LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY \
+         LC_MESSAGES LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE \
+         LC_MEASUREMENT LC_IDENTIFICATION LC_ALL; do
+    eval "[ -n \"\${$v:-}\" ]" && LOCALE_VARS="$LOCALE_VARS $v"
+done
+
 # Ensure the D-Bus user session and systemd --user see the session variables.
 # shellcheck disable=SC2086
 # XDG_DATA_DIRS is imported but never unset on exit: the user manager had
 # its own value first, and the appended directory is harmless elsewhere.
-IMPORT_VARS="$SESSION_VARS"
+IMPORT_VARS="$SESSION_VARS $LOCALE_VARS"
 [ -n "${XDG_DATA_DIRS:-}" ] && IMPORT_VARS="$IMPORT_VARS XDG_DATA_DIRS"
 systemctl --user import-environment $IMPORT_VARS
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then

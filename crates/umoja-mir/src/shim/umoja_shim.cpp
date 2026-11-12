@@ -284,6 +284,10 @@ public:
 
     void advise_new_window(WindowInfo const& info) override {
         MinimalWindowManager::advise_new_window(info);
+        if (info.visible_on_lock_screen()) {
+            lock_surfaces.push_back(info.window());
+            if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: lock surface added (%zu)\n", lock_surfaces.size());
+        }
         if (!is_app_window(info)) {
             // Chrome mapped during a drag (tile preview) goes under the window.
             if (moving && elevated) guarded("raise dragged", [&] { tools.raise_tree(moving); });
@@ -309,6 +313,11 @@ public:
             elevated = false;
         }
         if (key_grab && key_grab->window == w) key_grab.reset();
+        erase(lock_surfaces, w);
+        if (lock_focus == w) lock_focus = Window{};
+        // Mir refocuses from its MRU list after this returns, which never
+        // holds a lock surface that a grab kept from being focused.
+        if (!lock_surfaces.empty() && tools.active_window() == w) defer_lock_focus();
         above.erase(w);
         preferred_output.erase(w);
         session_restore.erase(w);
@@ -336,6 +345,10 @@ public:
     void advise_focus_gained(WindowInfo const& info) override {
         MinimalWindowManager::advise_focus_gained(info);
         Window const w = info.window();
+        if (!lock_surfaces.empty()) {
+            if (is_lock_surface(w)) lock_focus = w;
+            else defer_lock_focus();
+        }
         if (!all_windows.count(w)) return;
         umoja_windows_changed();
         erase(mru, w);
@@ -367,6 +380,53 @@ public:
         if (debug_windows())
             std::fprintf(stderr, "umoja-mir: wm: state of %s -> %d\n", describe(info).c_str(), int(state));
         update_fullscreen_layer(info.window(), state, info.window() == tools.active_window());
+    }
+
+    // ---- lock screen focus -------------------------------------------------
+    //
+    // While the session is locked (ext-session-lock), the keyboard belongs
+    // to a lock surface. Mir focuses a lock surface when it maps, but not
+    // while another surface holds a keyboard grab: an open shell menu, the
+    // screensaver or any keyboard-exclusive layer surface. Those are hidden
+    // on the lock screen yet kept the focus, so the password entry showed a
+    // cursor but never got a key. Nothing else may hold focus while locked.
+    std::vector<Window> lock_surfaces;  // creation order: umoja-panel maps the prompt first
+    Window lock_focus;                  // the lock surface that last had focus
+
+    void handle_window_ready(WindowInfo& info) override {
+        MinimalWindowManager::handle_window_ready(info);
+        if (is_lock_surface(info.window())) guarded("lock focus", [&] { ensure_lock_focus(); });
+    }
+
+    bool is_lock_surface(Window const& w) const {
+        return w && std::find(lock_surfaces.begin(), lock_surfaces.end(), w) != lock_surfaces.end();
+    }
+
+    void ensure_lock_focus() {
+        if (lock_surfaces.empty()) return;
+        Window const active = tools.active_window();
+        if (is_lock_surface(active)) return;
+        Window const target = is_lock_surface(lock_focus) ? lock_focus : lock_surfaces.front();
+        if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: moving keyboard focus to the lock screen\n");
+        // select_active_window() keeps a grabbing window focused; selecting
+        // no window first drops the grab unconditionally.
+        if (active && tools.info_for(active).focus_mode() == mir_focus_mode_grabbing)
+            tools.select_active_window(Window{});
+        tools.select_active_window(target);
+    }
+
+    // From Mir's focus and delete callbacks, which are inside
+    // select_active_window()/remove_window(): apply afterwards, from a
+    // helper thread that takes the WM lock (see update_fullscreen_layer).
+    void defer_lock_focus() {
+        std::thread([] {
+            guarded("lock focus", [] {
+                if (!g_wm) return;
+                g_wm->invoke([] {
+                    if (g_wm) g_wm->ensure_lock_focus();
+                });
+            });
+        }).detach();
     }
 
     // A focused fullscreen window covers the dock and top bar, as in GNOME.

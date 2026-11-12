@@ -73,7 +73,9 @@ Recommends: umoja-greeter,
             gnome-keyring,
             libsecret-tools,
             tesseract-ocr,
-            systemd-coredump
+            systemd-coredump,
+            xdg-user-dirs,
+            xdg-user-dirs-gtk
 Provides: polkit-1-auth-agent,
           notification-daemon
 Description: AI-native, Rust-based desktop shell for Ubuntu
