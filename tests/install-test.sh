@@ -37,7 +37,7 @@ apt-get update -q
 apt-get install -s "${DEB_SET[@]}" \
     | grep -E '^(Inst|Remv)' | tee "$OUT/apt-plan.txt" >>"$LOG"
 echo "apt would install $(grep -c '^Inst' "$OUT/apt-plan.txt") packages, remove $(grep -c '^Remv' "$OUT/apt-plan.txt" || true)" | tee -a "$LOG"
-for p in gnome-shell mutter gdm3 ubuntu-session budgie-desktop; do
+for p in gnome-shell mutter gdm3 ubuntu-session budgie-desktop gnome-terminal; do
     if grep -q "^Inst $p " "$OUT/apt-plan.txt"; then fail "apt would install $p"; else pass "$p not pulled in"; fi
 done
 if apt-get install -y -q "${DEB_SET[@]}" >>"$LOG" 2>&1; then
@@ -47,7 +47,7 @@ else
     tail -40 "$LOG"
     exit 1
 fi
-for p in gnome-shell mutter gdm3 budgie-desktop; do
+for p in gnome-shell mutter gdm3 budgie-desktop gnome-terminal; do
     dpkg -s "$p" >/dev/null 2>&1 && fail "$p is installed" || pass "$p is not installed"
 done
 for p in nautilus gnome-control-center update-manager showtime gnome-snapshot; do

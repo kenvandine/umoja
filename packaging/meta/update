@@ -37,6 +37,14 @@ ADD = {
     "Recommends": ["gnome-snapshot", "showtime"],
 }
 
+# Recommended by Ubuntu, but made hard dependencies here.
+PROMOTE = {
+    # apport-gtk Depends "gnome-terminal | x-terminal-emulator": unless the
+    # default terminal is a dependency, apt satisfies that with
+    # gnome-terminal instead.
+    "ptyxis": "Ubuntu Desktop's terminal",
+}
+
 PACKAGES = {
     "ubuntu-umoja-desktop": "ubuntu-desktop-minimal",
 }
@@ -75,6 +83,10 @@ def lists(stanzas) -> dict[str, str]:
             deps = [d for d in split(s.get(field, ""))
                     if first_name(d) not in DROP and not first_name(d).startswith("ubuntu-desktop")]
             deps += ADD.get(field, [])
+            if field == "Depends":
+                deps += PROMOTE
+            else:
+                deps = [d for d in deps if first_name(d) not in PROMOTE]
             files[f"{ours}.{field.lower()}"] = "\n".join(sorted(set(deps))) + "\n"
     return files
 
