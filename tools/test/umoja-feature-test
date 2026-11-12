@@ -1135,7 +1135,7 @@ def heard_speech(run, listener, voice, started, what):
 def t_read_aloud(run):
     read_aloud_ready(run)
     s = settings("org.umoja.shell")
-    voice = s.get_string("speech-voice") if s and s.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
+    voice = s.get_string("speech-voice") if s and s.props.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
     run.note(f"voice {voice}")
     voices = Path.home() / "snap/piper-tts/common/voices"
     run.note("voice already downloaded" if (voices / f"{voice}.onnx").exists()
@@ -1159,7 +1159,7 @@ def t_read_aloud(run):
 def t_read_aloud_assistant(run):
     read_aloud_ready(run)
     s = settings("org.umoja.shell")
-    voice = s.get_string("speech-voice") if s and s.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
+    voice = s.get_string("speech-voice") if s and s.props.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
     listener = Listener(run, "read-aloud-assistant")
     t0 = time.monotonic()
     answer, steps, _ = run.ask(f"Read this out loud, word for word: {SPOKEN}")
