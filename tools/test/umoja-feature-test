@@ -1063,6 +1063,29 @@ def piper_voice_running():
     return None
 
 
+PLAYERS = ("pacat", "paplay", "aplay", "pw-play", "pw-cat")
+
+
+def speech_playing():
+    """Whether a sound player umoja-overlay started is still playing (it
+    finishes after Piper, which only generates the sound)."""
+    uid = str(os.getuid())
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            comm = (d / "comm").read_text().strip()
+            status = (d / "status").read_text()
+        except OSError:
+            continue
+        if comm not in PLAYERS:
+            continue
+        owner = next((ln.split()[1] for ln in status.splitlines() if ln.startswith("Uid:")), "")
+        if owner == uid and _from_overlay(d.name):
+            return True
+    return False
+
+
 class Listener:
     """Record what the speakers play (parec on the monitor) to a WAV."""
 
@@ -1146,7 +1169,8 @@ def heard_speech(run, listener, voice, started, what):
         run.check(seen == f"{voice}.onnx", f"Piper speaks with the {voice} voice", seen)
         run.note(f"Piper started {time.monotonic() - started:.1f} s after the request")
         run.wait(90, lambda: piper_voice_running() is None)
-    run.wait(1.5)  # the player drains its buffer
+        run.wait(30, lambda: not speech_playing())
+    run.wait(1.0)
     secs, peak = listener.stop()
     run.current.setdefault("audio", []).append(str(listener.path.relative_to(run.out)))
     run.note(f"sound for {secs:.1f} s, peak {peak:.2f} (audio/{listener.path.name})")
