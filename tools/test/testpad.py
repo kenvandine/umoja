@@ -8,6 +8,7 @@ stdin, one command per line:
     select            select all of it (which makes it the primary selection)
     title <words>     set the window title
     big               large type (for screenshot OCR)
+    font <points>     type of that size (umoja-demo: readable in a video)
     fullscreen / unfullscreen
     present           ask to be focused
     quit
@@ -76,6 +77,8 @@ class Pad(Gtk.Application):
             self.win.set_title(arg)
         elif cmd == "big":
             self.css.load_from_string("textview { font-size: 34pt; }")
+        elif cmd == "font":
+            self.css.load_from_string(f"textview {{ font-size: {float(arg or 11):g}pt; }}")
         elif cmd == "fullscreen":
             self.win.fullscreen()
         elif cmd == "unfullscreen":

@@ -124,6 +124,31 @@ DEMO_NOTIFICATIONS = [
 
 # Questions that land on a dedicated tool, so the small local model answers
 # them reliably. Dark style is put back afterwards. ({style} -> on/off.)
+# ai-setups: the name it is saved under (removed again afterwards).
+SETUP_NAME = "Writing"
+# ai-rewrite: a hasty note, typed into a scratch window and made formal in place.
+REWRITE_TEXT = ("hey priya, cant make the 3pm review today, something came up. "
+                "can we do thurs instead? ill send the screenshots tonight. sry!!")
+# ai-captions: read out in Umoja's own voice (Piper) and captioned live.
+CAPTIONED = ("Hi everyone, a quick update from the design team. The Umoja launch moves "
+             "to Thursday at three o'clock, and the new screenshots are due on Wednesday.")
+CAPTION_WORDS = ("update", "design", "launch", "thursday", "three", "screenshots", "wednesday")
+# ai-opencode: the project OpenCode is asked to make, in the tour folder's
+# Projects (so it goes away afterwards).
+OPENCODE_PROJECT = "hello-gtk"
+# The folder's own OpenCode rules: write files and run cargo new, nothing
+# else (no builds, no downloads). The tour can't answer OpenCode's own
+# permission prompts, so nothing in this job may need one.
+OPENCODE_RULES = {
+    "$schema": "https://opencode.ai/config.json",
+    "permission": {
+        "edit": "allow",
+        "webfetch": "deny",
+        "bash": {"*": "deny", "cargo new*": "allow", "cargo init*": "allow", "mkdir*": "allow",
+                 "ls*": "allow", "cat*": "allow"},
+    },
+}
+TESTPAD = Path(__file__).resolve().parent.parent / "test" / "testpad.py"
 # Night Light, toggled by the settings ask and put back afterwards.
 NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
 
@@ -144,7 +169,8 @@ ASK_TYPEAHEAD = [
 # only because ai-reply and ai-summary need its bubbles. ("assistant" in
 # --only/--skip means ask-umoja and all ai-* scenes.)
 SCENES = [
-    "ask-umoja", "ai-btop", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
+    "ask-umoja", "ai-btop", "ai-opencode", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
+    "ai-install", "ai-updates", "ai-troubleshoot",
     "notifications", "ai-reply", "ai-summary",
     "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
     "screenshot-ui", "screensaver",
@@ -162,8 +188,10 @@ FAST_TARGET = 2.5
 CAPTION_CHARS = 100
 REPO_URL = "github.com/kenvandine/umoja"
 
-TRAILER = ["ask-umoja", "ai-btop", "ai-tiling", "ai-settings", "ai-install", "ai-updates", "ai-troubleshoot",
-           "notifications", "ai-reply", "ai-summary", "tiling", "overview", "workspaces", "screensaver"]
+# ai-install is left out: ai-btop already shows an install, all the way.
+TRAILER = ["ask-umoja", "ai-btop", "ai-opencode", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
+           "ai-updates", "ai-troubleshoot", "notifications", "ai-reply", "ai-summary",
+           "tiling", "overview", "workspaces", "screensaver"]
 
 
 def wrap_caption(text, limit=CAPTION_CHARS):
@@ -1008,13 +1036,15 @@ class Demo:
         return True
 
     def ask(self, name, question, caption, expect=(), confirm=False, settle=1.5,
-            keep_open=False, expect_steps=0, step_has=None):
+            keep_open=False, expect_steps=0, step_has=None, then=None):
         """Ask the assistant, recording it; retry until the answer checks out.
 
         `expect`: words, one of which the answer must contain. `confirm`:
         the ask should end at Ask Umoja's "Allow Umoja to do this?"
         confirmation, which is shot and then cancelled (the card is hidden:
-        nothing is installed or sent). Returns the answer text, or None."""
+        nothing is installed or sent). `then`: called after the shot, while
+        still recording, for a follow-up in the same clip (Undo...).
+        Returns the answer text, or None."""
         tries = 1 if self.dry else self.opts.retries
         for attempt in range(1, tries + 1):
             self.check_screen()
@@ -1044,6 +1074,8 @@ class Demo:
                 answer, steps = result
                 self.wait(settle)
                 self.shot(name, caption)
+                if then:
+                    then()
                 # Stop on the result (the answer, the dialog), not on the
                 # desktop after the overlay closes.
                 self.wait(1.0)
@@ -1151,12 +1183,80 @@ class Demo:
             nl.set_boolean(NIGHT_LIGHT[1], False)
         Gio.Settings.sync()
         self.wait(1.5)
-        q = "Switch to dark style and turn on Night Light"
-        self.ask("ai-settings", q, "Settings in plain words: dark style and Night Light, done in one ask.",
-                 expect_steps=2)
+        # Dark style last: its row gets the answer's Undo button, and dark
+        # style (unlike Night Light's tint) shows in a recording.
+        q = "Turn on Night Light and switch to dark style"
+        self.ask("ai-settings", q, "Settings in plain words: Night Light and dark style in one ask, "
+                 "and Undo puts the style back.", expect_steps=2, keep_open=True,
+                 then=lambda: self.press_undo(iface))
+        self.bus.call(OVERLAY, "Hide")
+        self.wait(0.8)
+        self.scrub_overlay()
         # The rest of the tour in the usual style, without Night Light's tint.
         self.restore_style()
         self.wait(1.5)
+
+    def press_undo(self, iface):
+        """Press the answer's Undo button (the last change: dark style) and
+        let the desktop go light again on camera."""
+        if self.dry:
+            log("  press Undo")
+            return
+        if not self.bus.has_method(OVERLAY, "TestAction"):
+            log("  this overlay has no Undo button hook (TestAction), no undo shown")
+            return
+        self.wait(1.0)
+        self.demo_flag(True)
+        try:
+            ok, _label = self.test_action("undo")
+        finally:
+            self.demo_flag(False)
+        if not ok:
+            log("  ! no Undo button to press")
+            return
+        for _ in range(16):
+            if iface.get_string("color-scheme") != "prefer-dark":
+                break
+            self.wait(0.5)
+        else:
+            log("  ! Undo didn't put the light style back (it may have undone Night Light)")
+        self.wait(2.0)
+        self.shot("ai-settings-undo", "Every change the assistant makes has an Undo button.")
+
+    def test_action(self, name):
+        """org.umoja.Overlay.TestAction: press a button the rows don't cover.
+        Only answers while the demo flag file exists."""
+        res = self.bus.call(OVERLAY, "TestAction", GLib.Variant("(s)", (name,)), "(bs)")
+        return res if res else (False, "")
+
+    def ask_rows(self):
+        res = self.bus.call(OVERLAY, "AskRows", None, "(a(sss))", quiet=True)
+        return res[0] if res else []
+
+    def ask_row(self, kind=None, title_has=None):
+        """The index of the first Ask Umoja row of `kind` whose title has
+        `title_has`, or None."""
+        for i, (k, title, _sub) in enumerate(self.ask_rows()):
+            if (kind is None or k == kind) and (title_has is None or title_has.lower() in title.lower()):
+                return i
+        return None
+
+    def wait_row(self, kind=None, title_has=None, seconds=6):
+        """Wait for an Ask Umoja row (see ask_row); its index, or None."""
+        found = self.wait_for(lambda: (lambda r: None if r is None else (r,))(self.ask_row(kind, title_has)),
+                              seconds)
+        return found[0] if found else None
+
+    def wait_for(self, check, seconds):
+        """Wait until check() returns something true (checked every 0.25 s);
+        returns it, or None after `seconds`."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            got = check()
+            if got:
+                return got
+            self.wait(0.25)
+        return None
 
     def restore_style(self):
         """Put style and Night Light back as they were before ai-settings."""
@@ -1172,6 +1272,8 @@ class Demo:
 
     # While this file exists the overlay lets AnswerConfirm press Allow.
     def demo_flag(self, on):
+        if self.dry:
+            return
         flag = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "umoja-demo"
         if on:
             flag.touch()
@@ -1306,6 +1408,471 @@ class Demo:
             log(f"  removed the {src} of btop again")
         else:
             log(f"  btop ({src}) stays installed; remove it to film this scene again")
+
+    def tiles(self):
+        rows = self.bus.call(COMPOSITOR, "GetWindowTiles", None, "(a(tu))", quiet=True)
+        return dict(rows[0]) if rows else {}
+
+    def scene_ai_setups(self):
+        """Save the two tiled windows as a setup by asking, scatter them, then
+        bring the setup back from Ask Umoja's rows (no model)."""
+        if not self.dry:
+            for target, method in ((OVERLAY, "AskRows"), (OVERLAY, "AskActivate"),
+                                   (COMPOSITOR, "GetWindowTiles")):
+                if not self.bus.has_method(target, method):
+                    log(f"  no {method} (install newer debs), skipping")
+                    return
+            if len(self.opened) < 2:
+                log("  needs two of the demo's windows, skipping")
+                return
+        a, b = self.opened[:2] if not self.dry else (1, 2)
+        self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (a, TILE_LEFT)))
+        self.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (b, TILE_RIGHT)))
+        self.wait(1.5)
+        path = Path(GLib.get_user_config_dir()) / "umoja" / "setups.json"
+        before = path.read_text() if path.exists() else None
+        caption = (f"“Save this layout as my {SETUP_NAME} setup”, then later just type “{SETUP_NAME.lower()}” "
+                   "and pick it: every window goes back in its place.")
+        self.recorder.start("ai-setups")
+        try:
+            log(f"  ask  'Save this window layout as my {SETUP_NAME} setup'")
+            if self.ask_once(f"Save this window layout as my {SETUP_NAME} setup",
+                             expect=(SETUP_NAME, "setup", "saved")) is None:
+                self.recorder.discard()
+                return
+            self.wait(1.5)
+            self.shot("ai-setups-saved", f"Saved as the {SETUP_NAME} setup.")
+            self.bus.call(OVERLAY, "Hide")
+            self.wait(0.8)
+            # Mess the desk up: both windows back to floating, moved about.
+            self.untile_demo_windows()
+            self.wait(0.8)
+            x, y, w, h = self.area
+            if self.can_drag():
+                self.drag(a, x + w // 2 + 120, y + int(h * 0.30), ms=500)
+                self.drag(b, x + w // 2 - 160, y + int(h * 0.45), ms=500)
+            self.wait(0.8)
+            self.bus.call(OVERLAY, "ToggleAsk")
+            self.wait(0.8)
+            self.bus.call(OVERLAY, "AskType", GLib.Variant("(sb)", (SETUP_NAME.lower(), not self.opts.no_typing)))
+            self.demo_flag(True)
+            i = 0 if self.dry else self.wait_row(kind="Setup", title_has=SETUP_NAME)
+            if i is None:
+                log(f"  ! Ask Umoja offers no {SETUP_NAME} setup row: {self.ask_rows()}")
+                self.recorder.discard()
+                return
+            self.wait(1.2)
+            self.shot("ai-setups-row", f"Typing “{SETUP_NAME.lower()}” offers the setup.")
+            if not self.dry:
+                self.bus.call(OVERLAY, "AskActivate", GLib.Variant("(u)", (i,)), "(b)")
+                back = self.wait_for(lambda: self.tiles().get(a) == TILE_LEFT and self.tiles().get(b) == TILE_RIGHT, 12)
+                if not back:
+                    log(f"  ! the setup didn't put the windows back: {self.tiles()}")
+            self.wait(1.5)
+            self.shot("ai-setups", "The setup back, each window in its half.")
+            self.recorder.stop(caption)
+        finally:
+            self.demo_flag(False)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            if not self.dry:
+                if before is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(before)
+            self.wait(0.8)
+            self.untile_demo_windows()
+            self.wait(0.8)
+            for wid in (a, b):
+                spot = self.spots.get(wid)
+                if spot:
+                    self.drag(wid, *spot, ms=450)
+            self.editor_to_front()
+            self.scrub_overlay()
+
+    def ask_once(self, question, step_has=None, expect=()):
+        """Ask the assistant inside a clip that is already recording (one try,
+        no shots): (answer, steps), or None (logged)."""
+        self.events.clear()
+        asked = time.monotonic() + self.typing_time(question)
+        flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
+        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (question, flags)))
+        if self.dry:
+            self.wait(self.opts.answer_wait)
+            return ("", [])
+        self.until = lambda: any(e[0] in ("AnswerFinished", "ConfirmShown") for e in self.events)
+        try:
+            self.wait(self.opts.answer_timeout)
+        finally:
+            self.until = None
+        came = next((e[2] for e in self.events if e[0] in ("AnswerFinished", "ConfirmShown")), None)
+        if came:
+            self.recorder.waited(asked, came)
+        return self.check_answer(expect, False, 0, step_has)
+
+    def scene_ai_rewrite(self):
+        """A hasty note in a scratch window: select it, Super+Shift+A, Make It
+        More Formal, Replace. Umoja types the new text over the selection."""
+        if not self.dry:
+            for method in ("AskAboutScreen", "AskRows", "AskActivate", "TestAction"):
+                if not self.bus.has_method(OVERLAY, method):
+                    log(f"  no Overlay.{method} (install newer debs), skipping")
+                    return
+            if not TESTPAD.exists():
+                log(f"  {TESTPAD} is missing (run from a checkout), skipping")
+                return
+        out = (self.raw_dir / "rewrite.txt")
+        pad = None
+        before = {w[0] for w in self.windows()} if not self.dry else set()
+        try:
+            if self.dry:
+                log(f"  open {TESTPAD.name}, type a note and select it")
+            else:
+                pad = subprocess.Popen([sys.executable, str(TESTPAD), str(out)], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                if pad.stdout.readline().strip() != "ready":
+                    log("  ! the scratch window didn't start (needs gir1.2-gtk-4.0), skipping")
+                    return
+
+                def cmd(*words):
+                    pad.stdin.write(" ".join(words) + "\n")
+                    pad.stdin.flush()
+                    pad.stdout.readline()
+
+                cmd("title", "Note to Priya")
+                cmd("font", "18")
+                wid = self.wait_for_window(before)
+                if wid is None:
+                    return
+                x, y, w, h = self.area
+                self.drag(wid, x + w // 2, y + int(h * 0.22), ms=450)
+                cmd("text", REWRITE_TEXT)
+                cmd("select")
+                self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (wid,)), quiet=True)
+                self.wait(1.0)
+            self.demo_flag(True)
+            caption = ("Select text in any app, press Super+Shift+A and pick a rewrite: "
+                       "Replace types it over your selection.")
+            self.recorder.start("ai-rewrite")
+            self.wait(1.0)
+            self.bus.call(OVERLAY, "AskAboutScreen")
+            self.wait(1.5)
+            i = 0 if self.dry else self.wait_row(kind="Rewrite", title_has="Formal")
+            if i is None:
+                log(f"  ! no Make It More Formal row: {self.ask_rows()}")
+                self.recorder.discard()
+                return
+            self.wait(1.0)
+            self.shot("ai-rewrite-rows", "Selected text gets rewrite rows: fix it, shorter, friendlier, "
+                      "more formal, translate.")
+            if not self.dry:
+                self.bus.call(OVERLAY, "AskActivate", GLib.Variant("(u)", (i,)), "(b)")
+                started = time.monotonic()
+                state = {"last": "", "stable": 0}
+
+                def finished():
+                    _ok, ans = self.test_action("answer")
+                    if ans and ans == state["last"]:
+                        state["stable"] += 1
+                    else:
+                        state["stable"], state["last"] = 0, ans
+                    return ans if state["stable"] >= 6 else None
+
+                answer = self.wait_for(finished, self.opts.answer_timeout)
+                if not answer:
+                    log("  ! the rewrite didn't finish")
+                    self.recorder.discard()
+                    return
+                self.recorder.waited(started, time.monotonic())
+                log(f"       rewrite: {answer[:160]!r}")
+            self.wait(1.5)
+            self.shot("ai-rewrite", "The rewrite, with Replace the Selection.")
+            if not self.dry:
+                ok, _ = self.test_action("replace")
+                if not ok:
+                    log("  ! no Replace button")
+                    self.recorder.discard()
+                    return
+                # Typing it out takes a moment: wait for the text to settle.
+                state = {"last": None, "since": time.monotonic()}
+
+                def settled():
+                    try:
+                        now = out.read_text()
+                    except OSError:
+                        now = None
+                    if now != state["last"]:
+                        state["last"], state["since"] = now, time.monotonic()
+                        return None
+                    return now if now and now != REWRITE_TEXT and time.monotonic() - state["since"] > 1.5 else None
+
+                if not self.wait_for(settled, 30):
+                    log("  ! the note wasn't replaced")
+            self.wait(2.0)
+            self.shot("ai-rewrite-replaced", "Replaced in the app itself.")
+            self.recorder.stop(caption)
+        finally:
+            self.demo_flag(False)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            if pad:
+                try:
+                    pad.stdin.write("quit\n")
+                    pad.stdin.flush()
+                    pad.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pad.kill()
+            out.unlink(missing_ok=True)
+            self.wait(0.8)
+            self.editor_to_front()
+            self.scrub_overlay()
+
+    def scene_ai_captions(self):
+        """Live captions of whatever is playing: here Umoja's own voice
+        (Piper, Read Aloud) reads a short update, the captions follow it,
+        and Summarize hands the transcript to the assistant."""
+        if not self.dry:
+            for method in ("ToggleCaptions", "Speak", "TestAction"):
+                if not self.bus.has_method(OVERLAY, method):
+                    log(f"  no Overlay.{method} (install newer debs), skipping")
+                    return
+            if not shutil.which("parec"):
+                log("  captions need parec (pulseaudio-utils), skipping")
+                return
+        caption = ("Live captions of anything playing, here Umoja's own read-aloud voice; "
+                   "Summarize hands the transcript to the assistant.")
+
+        def caught():
+            _on, text = self.test_action("captions-text")
+            t = text.lower()
+            return text if sum(w in t for w in CAPTION_WORDS) >= 4 else None
+
+        self.demo_flag(True)
+        try:
+            for attempt in range(1, (1 if self.dry else 2) + 1):
+                self.check_screen()
+                self.recorder.start("ai-captions")
+                self.bus.call(OVERLAY, "ToggleCaptions")
+                if not self.dry and not self.wait_for(lambda: self.test_action("captions-text")[0], 5):
+                    log("  ! captions didn't turn on")
+                    self.recorder.discard()
+                    return
+                self.wait(1.0)
+                self.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (CAPTIONED,)))
+                # The voice may be loading the first time; the reading takes ~10 s.
+                heard = None if self.dry else self.wait_for(caught, 40)
+                if self.dry:
+                    self.wait(12)
+                if heard or self.dry:
+                    break
+                log(f"  ! the captions didn't catch the reading (try {attempt}): "
+                    f"{self.test_action('captions-text')[1]!r}")
+                self.bus.call(OVERLAY, "StopSpeaking", quiet=True)
+                self.bus.call(OVERLAY, "ToggleCaptions")
+                self.recorder.discard()
+                self.wait(2.0)
+            else:
+                return
+            self.wait(4.0)  # the rest of the sentence
+            self.shot("ai-captions", "Live captions, as it talks.")
+            self.events.clear()
+            pressed = time.monotonic()
+            ok, _ = (True, "") if self.dry else self.test_action("captions-summarize")
+            if ok and not self.dry:
+                self.until = lambda: any(e[0] == "AnswerFinished" for e in self.events)
+                try:
+                    self.wait(self.opts.answer_timeout)
+                finally:
+                    self.until = None
+                done = next((e for e in self.events if e[0] == "AnswerFinished"), None)
+                if done:
+                    self.recorder.waited(pressed, done[2])
+                    log(f"       summary: {done[1][0][:160]!r}")
+            self.wait(1.5)
+            self.shot("ai-captions-summary", "Summarize: what was said, in a line or two.")
+            self.recorder.stop(caption)
+        finally:
+            self.bus.call(OVERLAY, "StopSpeaking", quiet=True)
+            if self.dry or self.test_action("captions-text")[0]:
+                self.bus.call(OVERLAY, "ToggleCaptions", quiet=True)
+            self.demo_flag(False)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.wait(0.8)
+            self.scrub_overlay()
+
+    @staticmethod
+    def opencode_installed():
+        return bool(shutil.which("opencode") or Path("/snap/bin/opencode").exists())
+
+    @staticmethod
+    def opencode_on_cloud():
+        """Whether umoja-agent-setup gave OpenCode the assistant's cloud model."""
+        try:
+            conf = json.loads((Path(GLib.get_user_config_dir()) / "opencode" / "opencode.json").read_text())
+        except (OSError, ValueError):
+            return False
+        return "umoja" in (conf.get("provider") or {})
+
+    def confirm_loop(self, question, done, seconds, shot=None):
+        """Ask, then allow every "Allow Umoja to do this?" prompt (and say yes
+        to a yes/no question) until done() is true. `shot(n, label)` films
+        each prompt. Returns whether done() came true."""
+        flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
+        self.events.clear()
+        log(f"  ask  {question!r}")
+        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (question, flags)))
+        acted = time.monotonic() + self.typing_time(question)
+        if self.dry:
+            self.wait(self.opts.answer_wait)
+            return True
+        seen, allowed, replies = 0, 0, 0
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self.until = lambda: len(self.events) > seen or done()
+            try:
+                self.wait(min(2.0, max(0.1, deadline - time.monotonic())))
+            finally:
+                self.until = None
+            if done():
+                self.recorder.waited(acted, time.monotonic())
+                return True
+            new, seen = self.events[seen:], len(self.events)
+            for name, params, when in new:
+                self.recorder.waited(acted, when)
+                if name == "ConfirmShown":
+                    allowed += 1
+                    self.wait(1.4)
+                    if shot:
+                        shot(allowed, params[0])
+                    self.wait(0.6)
+                    self.bus.call(OVERLAY, "AnswerConfirm", GLib.Variant("(b)", (True,)))
+                    acted = time.monotonic()
+                    log(f"       allowed: {params[0]}")
+                elif name == "AnswerFinished":
+                    answer, _steps = params
+                    if answer.strip().endswith("?") and replies < 2:
+                        replies += 1
+                        self.wait(1.0)
+                        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", ("Yes", flags)))
+                        acted = time.monotonic() + self.typing_time("Yes")
+                    else:
+                        log(f"       answer: {answer[:160]!r}")
+        return done()
+
+    def scene_ai_opencode(self):
+        """The coding agent, all from Ask Umoja: install OpenCode (it comes
+        set up on the assistant's cloud model, no sign-in), then hand it a
+        job: a hello world GTK app in Rust. Nothing is built; the clip ends
+        on the code in Text Editor."""
+        projects = (self.demo_dir or Path.home() / DEMO_DIR_NAME) / "Projects"
+        if not self.dry:
+            if not self.can_ask_with or not self.bus.has_method(OVERLAY, "AnswerConfirm"):
+                log("  this overlay can't answer prompts for the demo (AnswerConfirm), skipping")
+                return
+            if not self.demo_dir:
+                log(f"  needs the tour's own folder (~/{DEMO_DIR_NAME} made by this run), skipping")
+                return
+            s = settings("org.umoja.shell")
+            if not s or s.get_string("assistant-backend") != "cloud":
+                log("  the assistant isn't on a cloud model, so OpenCode would need a sign-in, skipping")
+                return
+            if self.opencode_installed() and self.opts.reinstall_agent:
+                if subprocess.run(["sudo", "-n", "snap", "remove", "opencode"], capture_output=True).returncode == 0:
+                    log("  removed OpenCode first, to film its install")
+        install = not self.opencode_installed() or self.dry
+        if not install:
+            log("  OpenCode is already installed: filming the coding job only (--reinstall-agent films the install)")
+        project = projects / OPENCODE_PROJECT
+        main_rs = project / "src" / "main.rs"
+        if not self.dry:
+            if project.exists():
+                shutil.rmtree(project, ignore_errors=True)
+            projects.mkdir(parents=True, exist_ok=True)
+            (projects / "opencode.json").write_text(json.dumps(OPENCODE_RULES, indent=2) + "\n")
+        before = {w[0] for w in self.windows()} if not self.dry else set()
+        caption = ("“Install OpenCode”, then “use OpenCode to make a hello world GTK app in Rust”: "
+                   "it comes set up on your model, and writes the project.")
+        self.editor_to_front()
+        self.demo_flag(True)
+        self.recorder.start("ai-opencode")
+        try:
+            if install:
+                def install_shot(n, label):
+                    if n == 1:
+                        self.shot("ai-opencode-install", "OpenCode isn't installed: Umoja offers its snap, "
+                                  "and connects it to your desktop and your model.")
+
+                ok = self.confirm_loop(
+                    "Install OpenCode", lambda: self.opencode_installed() and self.opencode_on_cloud(),
+                    self.opts.answer_timeout * 5, install_shot)
+                if not ok:
+                    log("  ! OpenCode wasn't installed and set up, leaving ai-opencode out")
+                    self.recorder.discard()
+                    return
+                self.wait(3.0)  # the terminal's last lines
+                self.shot("ai-opencode-installed", "Installed, connected to Umoja's tools and signed in "
+                          "with the assistant's cloud model.")
+                # Close the install terminal ("Press Enter to close").
+                for w in self.windows():
+                    if w[0] not in before:
+                        self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (w[0],)), quiet=True)
+                self.bus.call(OVERLAY, "Hide", quiet=True)
+                self.wait(1.2)
+                before = {w[0] for w in self.windows()} if not self.dry else set()
+            self.scrub_overlay()
+
+            def written():
+                try:
+                    return "gtk" in main_rs.read_text().lower() and (project / "Cargo.toml").exists()
+                except OSError:
+                    return False
+
+            # The full path: the agent starts in that folder, where its rules
+            # file is (a folder it can't find means the home folder).
+            task = (f"Use OpenCode to create a hello world GTK 4 app in Rust called {OPENCODE_PROJECT} "
+                    f"in {projects}. Don't compile it.")
+            ok = self.confirm_loop(task, written, self.opts.answer_timeout * 6)
+            if not ok:
+                log(f"  ! OpenCode didn't write {main_rs}, leaving ai-opencode out "
+                    f"(look for a stray ~/{OPENCODE_PROJECT})")
+                self.recorder.discard()
+                return
+            # Let it finish writing (and say what it did) before the shot.
+            state = {"last": None, "since": time.monotonic()}
+
+            def settled():
+                if self.dry:
+                    return True
+                files = sorted((str(p), p.stat().st_size) for p in project.rglob("*") if p.is_file()) \
+                    if not self.dry else []
+                if files != state["last"]:
+                    state["last"], state["since"] = files, time.monotonic()
+                return time.monotonic() - state["since"] > 8
+            t0 = time.monotonic()
+            self.wait_for(settled, 90)
+            self.recorder.waited(t0, time.monotonic())
+            self.shot("ai-opencode-agent", "OpenCode at work in a terminal, on the assistant's model.")
+            # The code, in Text Editor.
+            if not self.dry:
+                try:
+                    DesktopAppInfo.new("org.gnome.TextEditor.desktop").launch_uris(
+                        [Gio.File.new_for_path(str(main_rs)).get_uri()], None)
+                except (GLib.Error, TypeError, AttributeError) as e:
+                    log(f"  ! couldn't open {main_rs.name} in Text Editor: {e}")
+            self.wait(2.5)
+            self.editor_to_front()
+            self.wait(1.5)
+            self.shot("ai-opencode", f"{OPENCODE_PROJECT}/src/main.rs: a GTK 4 window saying Hello, World.")
+            self.recorder.stop(caption)
+        finally:
+            self.demo_flag(False)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.wait(0.8)
+            # The agent's terminal (and anything else this scene opened).
+            for w in self.windows():
+                if w[0] not in before and w[0] not in self.opened:
+                    self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (w[0],)), quiet=True)
+            self.wait(0.8)
+            self.editor_to_front()
+            self.scrub_overlay()
 
     def scene_ai_install(self):
         self.ask("ai-install", f"I need {self.opts.app}",
@@ -1523,6 +2090,9 @@ class Demo:
             "ask-umoja": "Ask Umoja: type-ahead",
             "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
             "ai-btop": "Ask Umoja: install and run btop",
+            "ai-opencode": "Coding agent: OpenCode",
+            "ai-setups": "Assistant: saved setups", "ai-rewrite": "Rewrite selected text",
+            "ai-captions": "Live captions",
             "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
             "ai-reply": "Assistant: reply to a notification",
             "ai-troubleshoot": "Assistant: troubleshooting",
@@ -1568,7 +2138,7 @@ class Demo:
             # A leading "/" makes GitHub resolve links from the repository
             # root, so the same links work in snippet.md and in README.md.
             base = "/" + base
-        hero = [s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview", "ai-install")
+        hero = [s for s in ("ai-btop", "ai-opencode", "ai-tiling", "ai-settings", "overview", "ai-install")
                 if s in self.shots][:4]
         snippet = ["## Screenshots", ""]
         lead = next((s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview")
@@ -1721,6 +2291,8 @@ def main():
                    help="ask the local model instead of the configured backend")
     p.add_argument("--no-typing", action="store_true", help="don't type questions out letter by letter")
     p.add_argument("--app", default="VLC", help="app for the \"I need ...\" install ask (default VLC; never installed)")
+    p.add_argument("--reinstall-agent", action="store_true",
+                   help="remove OpenCode first (sudo -n snap remove) so ai-opencode films its install")
     p.add_argument("--no-trailer", action="store_true", help="don't stitch the clips into videos/trailer.mp4")
     p.add_argument("--trailer-only", action="store_true",
                    help="just rebuild videos/trailer.mp4 from the clips of an earlier run in --out")
