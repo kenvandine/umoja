@@ -222,8 +222,8 @@ fn welcome_page(ui: &Rc<Ui>) -> gtk::Box {
     p.append(&heading("Welcome to Umoja"));
     p.append(&body(
         "Umoja is Ubuntu with a new desktop: fast, simple, and with an \
-         assistant that runs on this computer.\n\nInstalling takes a few \
-         minutes and replaces everything on the disk you choose.",
+         assistant that runs on this computer.\n\nInstalling takes about a \
+         minute and replaces everything on the disk you choose.",
     ));
     let try_it = button("Try Umoja", "flat");
     let install = button("Install Umoja", "suggested");
@@ -520,8 +520,7 @@ fn progress_page(ui: &Rc<Ui>) -> gtk::Box {
     p.append(&ui.progress_label);
     p.append(&ui.progress_bar);
     p.append(&body(
-        "This takes a few minutes. You can keep using the live session \
-         meanwhile.",
+        "This takes about a minute.",
     ));
     p
 }
