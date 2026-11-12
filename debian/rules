@@ -126,6 +126,10 @@ endif
 	install -D -m 0644 data/lightdm-umoja-greeter-x11.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter-x11.desktop
 	install -D -m 0644 data/lightdm/60-umoja.conf $(GREETER)/usr/share/lightdm/lightdm.conf.d/60-umoja.conf
 	install -D -m 0644 data/pam/umoja-greeter $(GREETER)/etc/pam.d/umoja-greeter
+	install -D -m 0644 data/greeter/umoja-wait-for-snaps.service \
+		$(GREETER)/usr/lib/systemd/system/umoja-wait-for-snaps.service
+	install -D -m 0644 data/greeter/lightdm-wait-for-snaps.conf \
+		$(GREETER)/usr/lib/systemd/system/lightdm.service.d/umoja-wait-for-snaps.conf
 
 override_dh_install-indep:
 	dh_install -i

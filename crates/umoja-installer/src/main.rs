@@ -223,8 +223,7 @@ fn welcome_page(ui: &Rc<Ui>) -> gtk::Box {
     p.append(&body(
         "Umoja is Ubuntu with a new desktop: fast, simple, and with an \
          assistant that runs on this computer.\n\nInstalling takes a few \
-         minutes and replaces everything on the disk you choose. Or try it \
-         first: nothing is changed until you install.",
+         minutes and replaces everything on the disk you choose.",
     ));
     let try_it = button("Try Umoja", "flat");
     let install = button("Install Umoja", "suggested");
@@ -239,6 +238,8 @@ fn welcome_page(ui: &Rc<Ui>) -> gtk::Box {
             ui.stack.set_visible_child_name("disk");
         });
     }
+    // "Try Umoja" is off for now: the live session isn't ready to be used.
+    try_it.set_visible(false);
     p.append(&actions(Some(&try_it), &install));
     p
 }

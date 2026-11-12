@@ -150,12 +150,12 @@ loadfont unicode
 set menu_color_normal=white/black
 set menu_color_highlight=black/light-gray
 
-menuentry "Try or install Umoja" {
+menuentry "Install Umoja" {
 	set gfxpayload=keep
 	linux /casper/vmlinuz $LIVE_ARGS quiet splash ---
 	initrd /casper/initrd
 }
-menuentry "Try or install Umoja (safe graphics)" {
+menuentry "Install Umoja (safe graphics)" {
 	set gfxpayload=keep
 	linux /casper/vmlinuz $LIVE_ARGS nomodeset quiet splash ---
 	initrd /casper/initrd
