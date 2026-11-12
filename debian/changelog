@@ -1,3 +1,22 @@
+umoja-desktop (2026.46.7) stonking; urgency=medium
+
+  * Installer ISO: a new Umoja installer (umoja-installer +
+    umoja-install) and live ISO built from the Imagecraft disk image.
+    Erases one disk: EFI, /boot, LUKS2 root unlocked by the login
+    password, signed shim and GRUB so Secure Boot stays on; installs in
+    seconds and shows how long it took. New ubuntu-umoja-desktop
+    metapackage (Ubuntu Desktop without GNOME Shell, plus Showtime and
+    Snapshot) and umoja-archive-keyring for the PPA. Umoja boot and
+    disk-unlock screen (Plymouth theme with the dotted umoja wordmark).
+    First boot holds the login screen until the seeded snaps are ready.
+    Image: no Alacritty, setuid bits kept (lock screen unlock works),
+    English language support, DNS and command-not-found. Greeter login
+    card sits under the release mascot; lock screen always gets the
+    keyboard; translated home folders (Documents, Downloads...) are
+    created at login.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Thu, 12 Nov 2026 22:11:05 +0000
+
 umoja-desktop (2026.46.6) stonking; urgency=medium
 
   * Ask Umoja: a floating type-ahead card (the Copilot key or a tap of
