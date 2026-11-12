@@ -443,7 +443,7 @@ mod tests {
     fn valid(s: &str) -> String {
         let out = body_to_markup(s);
         assert!(
-            gtk::pango::parse_markup(&out, '\0').is_ok(),
+            gtk4::pango::parse_markup(&out, '\0').is_ok(),
             "invalid markup {out:?} from {s:?}"
         );
         out

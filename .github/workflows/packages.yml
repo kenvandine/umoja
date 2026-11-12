@@ -8,7 +8,11 @@
 #   ppa:ken-vandine/umoja-edge, which depends on ppa:ken-vandine/umoja.
 #   Edge versions are the latest release tag plus the commits since it:
 #   2026.46.3+git<N>.<sha>~<series>1, so they always sort above that
-#   release and below the next one.
+#   release and below the next one. An edge upload waits until Launchpad has
+#   no umoja-desktop build in flight in the edge PPA: uploading a newer
+#   version supersedes the old source, and the old build's binaries are then
+#   rejected ("Unable to find source publication ..."). A newer push cancels
+#   the waiting run, so only the latest main is uploaded.
 # - Every run builds the user guide PDF (artifact "user-guide"); releases
 #   attach it to the GitHub release for their tag.
 # - Manual runs: pick the series and whether to upload. With "release" the
@@ -142,6 +146,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.upload)
     runs-on: ubuntu-24.04
     container: ${{ inputs.image || 'ubuntu:26.10' }}
+    timeout-minutes: 330
     permissions:
       contents: write
     outputs:
@@ -151,7 +156,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git devscripts dput gnupg \
-            debhelper cargo rustc pkgconf
+            debhelper cargo rustc pkgconf python3
 
       - uses: actions/checkout@v4
         with:
@@ -235,6 +240,43 @@ jobs:
           debsign -k"${{ steps.gpg.outputs.keyid }}" \
             -p"gpg --batch --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/passphrase" \
             ../umoja-desktop_*_source.changes
+
+      # See the note at the top: never supersede an edge build in flight.
+      - name: Wait for edge builds in flight
+        if: steps.version.outputs.ppa == env.EDGE_PPA
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, sys, time, urllib.parse, urllib.request
+          archive = "https://api.launchpad.net/devel/~ken-vandine/+archive/ubuntu/umoja-edge"
+          states = ["Needs building", "Currently building",
+                    "Gathering build output", "Uploading build"]
+          def in_flight():
+              found = []
+              for state in states:
+                  q = urllib.parse.urlencode({"ws.op": "getBuildRecords",
+                      "source_name": "umoja-desktop", "build_state": state,
+                      "ws.size": "20"})
+                  with urllib.request.urlopen(f"{archive}?{q}", timeout=60) as r:
+                      for b in json.load(r)["entries"]:
+                          found.append(f"{b['title']} ({state})")
+              return found
+          deadline = time.time() + 5 * 3600
+          while True:
+              try:
+                  builds = in_flight()
+              except Exception as e:
+                  print(f"::warning::Could not ask Launchpad about builds ({e}); uploading anyway")
+                  sys.exit(0)
+              if not builds:
+                  print("No umoja-desktop builds in flight in the edge PPA")
+                  sys.exit(0)
+              if time.time() > deadline:
+                  print("::warning::Edge builds still in flight after 5 h; uploading anyway")
+                  sys.exit(0)
+              print("Waiting for: " + "; ".join(builds), flush=True)
+              time.sleep(120)
+          PY
 
       - name: Upload to Launchpad
         run: dput "${{ steps.version.outputs.ppa }}" ../umoja-desktop_*_source.changes
