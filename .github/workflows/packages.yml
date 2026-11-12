@@ -257,17 +257,27 @@ jobs:
                   q = urllib.parse.urlencode({"ws.op": "getBuildRecords",
                       "source_name": "umoja-desktop", "build_state": state,
                       "ws.size": "20"})
-                  with urllib.request.urlopen(f"{archive}?{q}", timeout=60) as r:
+                  req = urllib.request.Request(f"{archive}?{q}",
+                      headers={"User-Agent": "umoja-packages-workflow"})
+                  with urllib.request.urlopen(req, timeout=120) as r:
                       for b in json.load(r)["entries"]:
                           found.append(f"{b['title']} ({state})")
               return found
           deadline = time.time() + 5 * 3600
+          errors = 0
           while True:
               try:
                   builds = in_flight()
+                  errors = 0
               except Exception as e:
-                  print(f"::warning::Could not ask Launchpad about builds ({e}); uploading anyway")
-                  sys.exit(0)
+                  # The API answers 503 now and then; keep asking for a while.
+                  errors += 1
+                  if errors >= 10:
+                      print(f"::warning::Could not ask Launchpad about builds ({e}); uploading anyway")
+                      sys.exit(0)
+                  print(f"Launchpad API error ({e}), retrying", flush=True)
+                  time.sleep(60)
+                  continue
               if not builds:
                   print("No umoja-desktop builds in flight in the edge PPA")
                   sys.exit(0)
