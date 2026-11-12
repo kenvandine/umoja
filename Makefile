@@ -16,7 +16,7 @@ LEMONADE_ARCHES ?= x64 arm64
 LEMONADE_BASE := https://github.com/lemonade-sdk/lemonade/releases/download/v$(LEMONADE_VERSION)
 VENDOR := vendor
 
-.PHONY: guide bump-version bump-lemonade all build test check vendor vendor-cargo vendor-lemonade vendor-keyrings deb source-package nested greeter-preview greeter-nested clean
+.PHONY: guide bump-version bump-lemonade all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
 
 all: build
 
@@ -36,11 +36,7 @@ check:
 test:
 	$(CARGO) test -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver
 
-vendor: vendor-cargo vendor-lemonade vendor-keyrings
-
-# Signing keys of the Umoja PPAs, for umoja-archive-keyring.
-vendor-keyrings:
-	packaging/fetch-ppa-keys $(VENDOR)/keyrings
+vendor: vendor-cargo vendor-lemonade
 
 # cargo-vendor-filterer (if installed) drops Windows/macOS-only crates,
 # which shrinks the PPA source upload by a few hundred MB.

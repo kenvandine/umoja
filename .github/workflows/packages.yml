@@ -18,8 +18,8 @@
 # - Manual runs: pick the series and whether to upload. With "release" the
 #   debian/changelog version is uploaded as a release and tagged v<version>.
 #
-# Launchpad builds offline, so the source package carries vendored crates,
-# the embedded Lemonade build and the PPA signing keys (`make vendor`).
+# Launchpad builds offline, so the source package carries vendored crates
+# and the embedded Lemonade build (`make vendor`).
 #
 # The "Meta package lists" job warns when Ubuntu's ubuntu-desktop-minimal
 # changes, so ubuntu-umoja-desktop can follow (packaging/meta/update).

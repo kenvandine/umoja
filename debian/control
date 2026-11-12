@@ -137,7 +137,5 @@ Description: Package source and signing key for the Umoja PPA
  Umoja and its patched Mir keep updating after install. Mir packages from
  the PPA are pinned above the Ubuntu archive's, since Umoja needs its
  patches. If the PPA is already configured (add-apt-repository), the
- existing source is left alone.
- .
- The edge PPA's key is included too, for testers who add
- ppa:ken-vandine/umoja-edge.
+ existing source is left alone. The edge PPA is never enabled by this
+ package.

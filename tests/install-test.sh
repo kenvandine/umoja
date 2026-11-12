@@ -68,9 +68,9 @@ step "Umoja PPA source"
 suite=$(. /etc/os-release && echo "$VERSION_CODENAME")
 grep -q "^Suites: $suite\$" /etc/apt/sources.list.d/umoja.sources 2>/dev/null \
     && pass "umoja.sources added for $suite" || fail "umoja.sources missing or wrong suite"
-for k in umoja-archive-keyring.asc umoja-edge-archive-keyring.asc; do
-    grep -q 'BEGIN PGP PUBLIC KEY BLOCK' /usr/share/keyrings/$k && pass "$k installed" || fail "$k missing"
-done
+grep -q 'BEGIN PGP PUBLIC KEY BLOCK' /usr/share/keyrings/umoja-archive-keyring.asc \
+    && pass "PPA signing key installed" || fail "PPA signing key missing"
+grep -q umoja-edge /etc/apt/sources.list.d/*.sources 2>/dev/null && fail "edge PPA enabled" || pass "edge PPA not enabled"
 [ -r /etc/apt/preferences.d/umoja-mir.pref ] && pass "Mir pin installed" || fail "Mir pin missing"
 
 step "Shared libraries"
