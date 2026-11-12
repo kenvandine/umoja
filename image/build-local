@@ -47,7 +47,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 VERSION=$(dpkg-parsechangelog -l debian/changelog -S Version)
 HASH=$(git rev-parse --short=8 HEAD)
 git diff --quiet HEAD -- . ':!image/local-debs' 2>/dev/null || HASH="$HASH.dirty"
-ISO_NAME="ubuntu-umoja-desktop-v${VERSION}+${HASH}$([ $AUTO = 1 ] && echo -autoinstall)_amd64.iso"
+AUTO_FLAG=() AUTO_SUFFIX=
+if [ $AUTO = 1 ]; then AUTO_FLAG=(--autoinstall); AUTO_SUFFIX=-autoinstall; fi
+ISO_NAME="ubuntu-umoja-desktop-v${VERSION}+${HASH}${AUTO_SUFFIX}_amd64.iso"
 DEBS=$OUT/debs LOGS=$OUT/logs
 mkdir -p "$DEBS" "$LOGS"
 
@@ -119,7 +121,7 @@ fi
 
 # 3. ISO --------------------------------------------------------------------
 step "Building the ISO (needs root; log: $LOGS/iso.log)"
-sudo "$ROOT/image/iso/build" $([ $AUTO = 1 ] && echo --autoinstall) \
+sudo "$ROOT/image/iso/build" "${AUTO_FLAG[@]}" \
     "$ROOT/image/umoja.img" "$DEBS" "$OUT/$ISO_NAME" 2>&1 | tee "$LOGS/iso.log"
 [ "${PIPESTATUS[0]}" = 0 ] || die "ISO build failed"
 sudo chown "$(id -u):$(id -g)" "$OUT/$ISO_NAME"
