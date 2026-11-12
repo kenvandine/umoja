@@ -42,10 +42,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# In the automatic (CI) install, copy everything to the kernel log too, so
-# it reaches the serial console.
+# In the automatic (CI) install, copy everything to the kernel log too, at
+# error level so the console prints it and it reaches the serial log.
 if grep -qw umoja.autoinstall /proc/cmdline 2>/dev/null && [ -w /dev/kmsg ]; then
-    exec > >(tee >(sed -u 's/^/umoja-install: /' > /dev/kmsg)) 2>&1
+    exec > >(tee >(sed -u 's/^/<3>umoja-install: /' > /dev/kmsg)) 2>&1
 fi
 
 die() { echo "ERROR $*" >&2; exit 1; }
@@ -212,15 +212,17 @@ findmnt -R "$TARGET" || true
 ls -la "$TARGET/boot" "$TARGET/boot/efi" || true
 in_target findmnt /boot/efi || true
 in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-    --bootloader-id=ubuntu --uefi-secure-boot --force-extra-removable --recheck \
+    --bootloader-id=ubuntu --uefi-secure-boot --recheck \
     || echo "grub-install failed ($?); putting the boot loader in place by hand"
 in_target update-grub
 echo "EFI partition after grub-install:"
 find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
 
-# grub-install has been seen to succeed in this chroot yet write nothing
-# to the EFI partition. Put the signed boot chain there ourselves (the
-# same files the live ISO boots with), so the disk always starts:
+# Ubuntu's grub-install fills EFI/BOOT by default and has no
+# --force-extra-removable (passing it made grub-install fail, leaving the
+# EFI partition empty). Should it ever leave anything out, put the missing
+# parts of the signed boot chain there ourselves (the same files the live
+# ISO boots with), so the disk always starts:
 #   EFI/ubuntu  shim -> grubx64.efi, which reads EFI/ubuntu/grub.cfg
 #   EFI/BOOT    the same, for firmware that has no boot entry for us
 pick() { for f in "$@"; do [ -s "$f" ] && { echo "$f"; return; }; done; }
