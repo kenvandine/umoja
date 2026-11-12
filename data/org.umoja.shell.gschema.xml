@@ -71,6 +71,30 @@
         connection. Changing it re-embeds the index.
       </description>
     </key>
+    <key name="speech-voice" type="s">
+      <default>'en_GB-alan-medium'</default>
+      <summary>Piper voice used to read answers aloud</summary>
+      <description>
+        A voice from rhasspy/piper-voices, named language_REGION-name-quality
+        (for example en_US-lessac-medium). It downloads on first use. Piper
+        comes from the piper-tts snap; without it speech-dispatcher speaks
+        instead. The screen reader (Orca) keeps its own voice.
+      </description>
+    </key>
+    <key name="speech-rate" type="d">
+      <range min="0.5" max="2.0"/>
+      <default>1.0</default>
+      <summary>How fast answers are read aloud (1.0 is normal)</summary>
+    </key>
+    <key name="speak-answers" type="b">
+      <default>false</default>
+      <summary>Read every Ask Umoja answer aloud</summary>
+      <description>
+        Off by default; the speaker button under an answer reads it on
+        request. Skipped while a screen reader is running, since it reads
+        answers already.
+      </description>
+    </key>
     <key name="dictation-hotkey" type="as">
       <default>[]</default>
       <summary>Extra shortcut to toggle Myna voice dictation</summary>

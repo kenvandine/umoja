@@ -21,6 +21,7 @@ mod myna;
 mod screencast;
 mod screenshot;
 mod shortcuts;
+mod speech;
 mod spread;
 mod texpane;
 mod view;
@@ -80,6 +81,11 @@ const IFACE_XML: &str = r#"
       <arg name="answered" type="b" direction="out"/>
     </method>
     <method name="ShowClipboard"/>
+    <!-- Read text aloud in Umoja's voice (Piper); StopSpeaking ends it. -->
+    <method name="Speak">
+      <arg type="s" name="text" direction="in"/>
+    </method>
+    <method name="StopSpeaking"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
     <method name="ShowCopyTextUI"/>
@@ -448,6 +454,17 @@ fn export(
                         grid.hide();
                         methods.ask_with(&question, flags & 1 != 0, flags & 2 != 0)
                     }
+                    "Speak" => {
+                        let Some((text,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (s)",
+                            );
+                            return;
+                        };
+                        methods.speak(&text)
+                    }
+                    "StopSpeaking" => methods.stop_speaking(),
                     "ShowClipboard" => {
                         spread.hide();
                         grid.hide();
