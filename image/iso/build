@@ -104,12 +104,19 @@ fi
 if [ -x /usr/lib/snapd/snap-preseed ] && [ -f "$TARGET/var/lib/snapd/seed/seed.yaml" ]; then
     step "Preseeding snaps"
     mount --bind "$TARGET" "$TARGET"
+    # snap-preseed insists on these inside the chroot.
+    mount -t proc proc "$TARGET/proc"
+    mount -t sysfs sys "$TARGET/sys"
+    mount -t securityfs securityfs "$TARGET/sys/kernel/security"
+    mount --bind /dev "$TARGET/dev"
+    mount --make-rslave "$TARGET/dev"
     if /usr/lib/snapd/snap-preseed "$TARGET"; then
         echo "snaps preseeded"
     else
         echo "WARNING: snap preseeding failed; the first boot will set up the snaps" >&2
         /usr/lib/snapd/snap-preseed --reset "$TARGET" || true
     fi
+    umount "$TARGET/dev" "$TARGET/sys/kernel/security" "$TARGET/sys" "$TARGET/proc"
     umount "$TARGET"
 fi
 mksquashfs "$TARGET" "$ISO/casper/umoja.squashfs" -noappend -comp zstd -Xcompression-level 19 -quiet
