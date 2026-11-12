@@ -42,6 +42,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# In the automatic (CI) install, copy everything to the kernel log too, so
+# it reaches the serial console.
+if grep -qw umoja.autoinstall /proc/cmdline 2>/dev/null && [ -w /dev/kmsg ]; then
+    exec > >(tee >(sed -u 's/^/umoja-install: /' > /dev/kmsg)) 2>&1
+fi
+
 die() { echo "ERROR $*" >&2; exit 1; }
 START_NS=$(date +%s%N)
 progress() { # also logs the time since the start, for tuning
@@ -191,6 +197,20 @@ else
 fi
 
 progress 94 "Installing the boot loader"
+# GRUB must land on the EFI partition itself. Make sure that is what is
+# mounted at /boot/efi, here and as the chroot sees it.
+esp_mounted() {
+    [ "$(findmnt -no SOURCE "$TARGET/boot/efi" 2>/dev/null | tail -n1)" = "$(part 1)" ]
+}
+if ! esp_mounted; then
+    echo "EFI partition not mounted at $TARGET/boot/efi; mounting it again"
+    mkdir -p "$TARGET/boot/efi"
+    mount "$(part 1)" "$TARGET/boot/efi"
+fi
+esp_mounted || die "can't mount the EFI partition $(part 1)"
+findmnt -R "$TARGET" || true
+ls -la "$TARGET/boot" "$TARGET/boot/efi" || true
+in_target findmnt /boot/efi || true
 in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --bootloader-id=ubuntu --uefi-secure-boot --force-extra-removable --recheck
 in_target update-grub
@@ -198,6 +218,7 @@ in_target update-grub
 for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI; do
     [ -s "$TARGET/boot/efi/$f" ] || die "boot loader missing from the EFI partition: $f"
 done
+esp_mounted || die "the EFI partition was unmounted during the boot loader install"
 find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
 in_target efibootmgr -v 2>/dev/null || true
 
@@ -213,5 +234,16 @@ umount "$TARGET/boot"
 umount "$TARGET"
 cryptsetup close "$MAPPER"
 sync
+# Look at the EFI partition fresh from the disk, as the firmware will.
+CHECK=$(mktemp -d)
+mount -o ro "$(part 1)" "$CHECK"
+missing=
+for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI; do
+    [ -s "$CHECK/$f" ] || missing="$missing $f"
+done
+find "$CHECK" -type f | sed "s|^$CHECK|ESP:|"
+umount "$CHECK"
+rmdir "$CHECK"
+[ -z "$missing" ] || die "the EFI partition is missing$missing after unmounting"
 trap - EXIT
 progress 100 "Done"
