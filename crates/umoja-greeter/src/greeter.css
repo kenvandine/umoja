@@ -28,12 +28,11 @@ window.umoja-greeter {
   text-shadow: 0 1px 6px alpha(#000000, 0.35);
 }
 
-/* Frosted-glass login card. */
+/* Frosted-glass login bubble under the mascot (ui.rs places it and sets
+   the margin that leaves room for the shadow). */
 .login-card {
-  /* Margin leaves room for the shadow inside the fade-in revealer. */
-  margin: 64px;
-  padding: 32px 32px 20px 32px;
-  border-radius: 28px;
+  padding: 18px 18px 18px 22px;
+  border-radius: 24px;
   background-color: alpha(#1a0d15, 0.42);
   /* The wallpaper is sharp, so frost just the card (GTK >= 4.24). */
   backdrop-filter: blur(12px);
@@ -46,9 +45,8 @@ window.umoja-greeter {
   border-radius: 999px;
 }
 .user-name {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
-  margin-top: 6px;
 }
 /* Shell scale: a 44 px field with 14 px corners, like the overview's
    search entry, and a 36 px button inside it. */
@@ -82,8 +80,8 @@ window.umoja-greeter {
 }
 .fingerprint-hint {
   color: #ffffff;
-  opacity: 0.75;
-  font-size: 0.95em;
+  opacity: 0.72;
+  font-size: 0.9em;
 }
 .session-button {
   opacity: 0.8;
@@ -103,11 +101,11 @@ window.umoja-greeter {
 
 /* Other accounts along the bottom. */
 .user-strip {
-  margin-bottom: 40px;
+  margin-bottom: 24px;
 }
 .user-chip {
-  padding: 8px 12px;
-  border-radius: 14px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
   color: #ffffff;
   opacity: 0.75;
   transition: opacity 200ms ease, background-color 200ms ease;

@@ -2,8 +2,8 @@
 //!
 //! Ubuntu's default wallpaper (warty-final-ubuntu.png) fills the screen,
 //! sharp and gently dimmed, with a large lock-screen clock in the corner, a
-//! frosted-glass login card in the middle, and the other accounts as a row
-//! of avatars underneath.
+//! frosted-glass login bubble just under the release mascot (which is left
+//! uncovered), and the other accounts as a row of pills along the bottom.
 //!
 //! Fingerprint login works like GDM's: the `umoja-greeter` PAM service
 //! (data/pam) asks fprintd first, so for a user with enrolled fingers PAM
@@ -90,10 +90,14 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     overlay.set_opacity(0.0);
 
     // Card ------------------------------------------------------------------
-    let avatar = adw::Avatar::new(128, None, true);
+    let avatar = adw::Avatar::new(64, None, true);
     avatar.add_css_class("user-avatar");
-    avatar.set_halign(gtk::Align::Center);
-    let name = gtk::Label::builder().css_classes(["user-name"]).build();
+    avatar.set_valign(gtk::Align::Center);
+    let name = gtk::Label::builder()
+        .css_classes(["user-name"])
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
     let entry = gtk::PasswordEntry::builder()
         .show_peek_icon(true)
         .placeholder_text(i18n::shell("Password"))
@@ -111,7 +115,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
 
     let message = gtk::Label::builder()
         .wrap(true)
-        .justify(gtk::Justification::Center)
+        .xalign(0.0)
         .css_classes(["message"])
         .build();
     let message_revealer = gtk::Revealer::builder()
@@ -123,26 +127,36 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         .icon_name("emblem-system-symbolic")
         .tooltip_text(i18n::shell("Session"))
         .css_classes(["circular", "flat", "session-button"])
-        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
         .visible(sessions.len() > 1)
         .build();
 
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    // A short horizontal bubble under the release mascot (which sits in the
+    // middle of the wallpaper): avatar | name, password, hints | session.
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 20);
     card.add_css_class("login-card");
     card.set_halign(gtk::Align::Center);
-    card.set_valign(gtk::Align::Center);
-    card.set_width_request(380);
-    card.append(&avatar);
-    card.append(&name);
-    card.append(&pill);
+    card.set_valign(gtk::Align::Start);
+    // Room for the card's shadow inside the fade-in revealer.
+    card.set_margin_top(CARD_SHADOW_MARGIN);
+    card.set_margin_bottom(CARD_SHADOW_MARGIN);
+    card.set_margin_start(CARD_SHADOW_MARGIN);
+    card.set_margin_end(CARD_SHADOW_MARGIN);
+    let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    fields.set_width_request(340);
+    fields.set_valign(gtk::Align::Center);
+    fields.append(&name);
+    fields.append(&pill);
     let fp_hint = gtk::Label::builder()
         .wrap(true)
-        .justify(gtk::Justification::Center)
+        .xalign(0.0)
         .css_classes(["fingerprint-hint"])
         .visible(false)
         .build();
-    card.append(&fp_hint);
-    card.append(&message_revealer);
+    fields.append(&fp_hint);
+    fields.append(&message_revealer);
+    card.append(&avatar);
+    card.append(&fields);
     card.append(&session_menu);
 
     let card_reveal = gtk::Revealer::builder()
@@ -150,7 +164,7 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         .transition_duration(450)
         .child(&card)
         .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
         .build();
     overlay.add_overlay(&card_reveal);
 
@@ -189,6 +203,24 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     user_strip.set_halign(gtk::Align::Center);
     user_strip.set_valign(gtk::Align::End);
     overlay.add_overlay(&user_strip);
+
+    {
+        let card_reveal = card_reveal.clone();
+        let user_strip = user_strip.clone();
+        overlay.connect_get_child_position(move |overlay, child| {
+            if child != card_reveal.upcast_ref::<gtk::Widget>() {
+                return None;
+            }
+            let (w, h) = (overlay.width(), overlay.height());
+            let strip_h = if user_strip.is_visible() && user_strip.first_child().is_some() {
+                // Includes the strip's CSS margin.
+                user_strip.preferred_size().1.height()
+            } else {
+                0
+            };
+            Some(card_rect(w, h, &child.preferred_size().1, strip_h))
+        });
+    }
 
     window.set_content(Some(&overlay));
 
@@ -364,12 +396,35 @@ fn session_popover(state: &Rc<State>) -> gtk::Popover {
     gtk::Popover::builder().child(&list).build()
 }
 
+/// The wallpaper's mascot fills the middle 40% of the image's height
+/// (warty-final-ubuntu.png, every release so far).
+const MASCOT_HALF_HEIGHT: f32 = 0.2;
+/// Clear space between the mascot and the card.
+const MASCOT_GAP: i32 = 24;
+const CARD_SHADOW_MARGIN: i32 = 48;
+
+/// Places the login card just below the mascot, centred, without letting it
+/// run into the user strip or off the bottom of the screen.
+fn card_rect(w: i32, h: i32, nat: &gtk::Requisition, strip_h: i32) -> gtk::gdk::Rectangle {
+    let cw = nat.width().min(w);
+    let ch = nat.height().min(h);
+    // The backdrop is a "cover" fit of a 16:9 image, so on wide screens it
+    // overflows top and bottom and the mascot is taller than 40% of `h`.
+    let image_h = (h as f32).max(w as f32 * 9.0 / 16.0);
+    let mascot_bottom = (h as f32 / 2.0 + image_h * MASCOT_HALF_HEIGHT) as i32;
+    let want = mascot_bottom + MASCOT_GAP - CARD_SHADOW_MARGIN;
+    // The visible card (inside the shadow margin) stays MASCOT_GAP above
+    // the user strip.
+    let max = (h - strip_h - MASCOT_GAP - ch + CARD_SHADOW_MARGIN).max(0);
+    gtk::gdk::Rectangle::new((w - cw) / 2, want.min(max), cw, ch)
+}
+
 fn build_user_strip(state: &Rc<State>) {
     if state.users.len() < 2 {
         return;
     }
     for (i, u) in state.users.iter().enumerate() {
-        let avatar = adw::Avatar::new(56, Some(&u.display_name), true);
+        let avatar = adw::Avatar::new(32, Some(&u.display_name), true);
         avatar.set_custom_image(
             u.image
                 .as_ref()
@@ -380,7 +435,7 @@ fn build_user_strip(state: &Rc<State>) {
             .label(&u.display_name)
             .css_classes(["caption"])
             .build();
-        let col = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let col = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         col.append(&avatar);
         col.append(&label);
         let b = gtk::Button::builder()
