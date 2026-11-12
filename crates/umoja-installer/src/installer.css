@@ -34,17 +34,33 @@ window.umoja-installer {
 }
 
 /* Fields like the login card's password pill. */
-entry.field, .field > text, dropdown.field > button {
+/* One box per field: style the entry (or the dropdown's button) and keep
+   the text node inside it bare, or the two stack into a box in a box. */
+entry.field, dropdown.field > button {
   min-height: 40px;
+  padding: 0 12px;
   border-radius: 12px;
   background-color: alpha(#ffffff, 0.10);
   border: 1px solid alpha(#ffffff, 0.16);
   box-shadow: none;
+  outline: none;
   color: #ffffff;
 }
-entry.field:focus-within, dropdown.field > button:focus {
-  border-color: #E95420;
+entry.field > text {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
   outline: none;
+}
+entry.field > image {
+  opacity: 0.7;
+}
+entry.field:focus-within, dropdown.field > button:focus-visible {
+  border-color: #E95420;
+  box-shadow: 0 0 0 1px #E95420;
 }
 
 .pill-button {
