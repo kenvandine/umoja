@@ -25,6 +25,7 @@ mod api;
 pub mod assistant;
 mod bubbles;
 mod list;
+mod markup;
 mod quick_reply;
 pub mod quiet;
 mod server;

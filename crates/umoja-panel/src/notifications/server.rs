@@ -279,21 +279,10 @@ fn image_data(v: &glib::Variant) -> Option<gdk::Texture> {
 /// Largest side kept of a notification's image-data, in pixels.
 const MAX_IMAGE: i32 = 144;
 
-/// Bodies may carry a small markup subset (b, i, u, a, img). Keep what
-/// Pango accepts, drop <img>, and escape anything malformed.
+/// Bodies may carry a small markup subset (b, i, u, a, img) and often
+/// carry plain HTML; turn either into markup we can show.
 pub fn sanitize_body(body: &str) -> String {
-    let mut s = body.to_string();
-    while let Some(start) = s.find("<img") {
-        match s[start..].find('>') {
-            Some(end) => s.replace_range(start..start + end + 1, ""),
-            None => break,
-        }
-    }
-    if gtk::pango::parse_markup(&s, '\0').is_ok() {
-        s
-    } else {
-        glib::markup_escape_text(body).to_string()
-    }
+    super::markup::body_to_markup(body)
 }
 
 #[cfg(test)]
@@ -304,6 +293,10 @@ mod tests {
     fn bodies_are_sanitized() {
         assert_eq!(sanitize_body("<b>bold</b> text"), "<b>bold</b> text");
         assert_eq!(sanitize_body("a <img src=\"x.png\"/> b"), "a  b");
+        assert_eq!(
+            sanitize_body("<a href=\"https://mail.google.com/\">mail.google.com</a>\n\nHi"),
+            "mail.google.com\n\nHi"
+        );
         assert_eq!(sanitize_body("1 < 2 & 3"), "1 &lt; 2 &amp; 3");
     }
 
