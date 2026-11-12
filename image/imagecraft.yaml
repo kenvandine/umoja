@@ -106,9 +106,17 @@ parts:
   seed-snaps:
     after: [desktop]
     plugin: snap-preseed
-    # Ubuntu Desktop 26.10's seeded snaps (bases and runtimes come along).
+    # Ubuntu Desktop 26.10's seeded snaps. prepare-image wants every base
+    # and default content provider listed explicitly.
     snap-preseed-snaps:
       - snapd
+      - bare
+      - core22
+      - core24
+      - gtk-common-themes
+      - gnome-42-2204
+      - gnome-46-2404
+      - mesa-2404
       - firefox
       - snap-store
       - firmware-updater
