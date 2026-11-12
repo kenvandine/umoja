@@ -70,7 +70,7 @@ gsettings reset org.umoja.shell screenshot-names
 | `assistant-idle-unload` | `10` | Minutes before an idle local model is unloaded (0 keeps it loaded) |
 | `lemonade-model` | `'Qwen3-4B-Instruct-2507-GGUF'` | The local model (set by the model picker) |
 | `cloud-base-url`, `cloud-model` | `''` | The cloud model (set on the Cloud page) |
-| `ai-agent` | `''` | The coding agent for coding jobs: `claude`, `codex`, `copilot`, `agy` (Antigravity), `opencode`, `gemini` or `none` |
+| `ai-agent` | `''` | Your coding agent (Ask Umoja's model button, **Coding agent**; `''` means the first one installed): `claude`, `codex`, `copilot`, `agy` (Antigravity), `opencode`, `gemini` or `none` |
 | `ask-umoja-alt-tap` | `true` | A tap of Alt opens Ask Umoja, until a Copilot key is seen |
 | `screensaver-enabled` | `true` | Show the screensaver before the screen blanks |
 | `screensaver-duration` | `300` | Seconds the screensaver runs before the screen turns off |

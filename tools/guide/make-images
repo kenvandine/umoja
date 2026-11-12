@@ -54,6 +54,9 @@ CROPS = {
     "ai-tiling": ("ai-tiling", None),
     "ai-btop-running": ("ai-btop-running", None),
     "screensaver": ("screensaver", None),
+    # The coding agent (ai-opencode). Whole screens until the crops are set.
+    "ai-opencode-default": ("ai-opencode-default", None),
+    "ai-opencode": ("ai-opencode", None),
 }
 
 FULL_WIDTH = 1600

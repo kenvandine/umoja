@@ -147,14 +147,59 @@ always stay on your computer. See [Privacy](09-privacy-and-settings.md).
 
 A small local model isn't the right tool for writing code. If you have a
 coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode or
-Gemini CLI), the assistant offers to hand coding jobs to it: "write me a
-script that renames my photos by date". The agent opens in a terminal with
-your request, already set up to use Umoja's desktop tools.
+Gemini CLI), the assistant hands coding jobs to it. The agent opens in a
+terminal with your request as its first message, already set up to use
+Umoja's desktop tools, and it asks you before it changes anything.
 
-Pick your agent under **Coding agent** in the assistant's model button.
-If it isn't installed yet, **Install** installs it and signs you in. If it
-isn't signed in, **Sign In** opens its own sign-in, which uses your
-browser. OpenCode comes from its snap. The others come from their makers'
-own installers, just for you. You can also ask the assistant: "install
-Codex". If the assistant uses a cloud model, OpenCode is set up to use the
-same one.
+#### Choosing your coding agent
+
+Umoja sends coding jobs to one agent, your default. To pick it:
+
+1. Open Ask Umoja (tap Alt, or the Copilot key).
+2. Click the round model button at the bottom of the card.
+3. At the bottom of the menu, choose an agent from **Coding agent**.
+
+![Ask Umoja's model menu, with OpenCode picked as the coding agent](images/ai-opencode-default.png)
+
+Under the list, Umoja says what that agent still needs:
+
+- **Install**: it isn't installed yet. Umoja installs it in a terminal
+  (OpenCode from its snap, the others with their makers' own installers,
+  just for you), connects it to Umoja's tools and signs you in. Installing
+  a snap asks for your password.
+- **Sign In**: it's installed but not signed in. This opens the agent's
+  own sign-in, which uses your browser or shows a code. Umoja never sees
+  your password or token.
+- Nothing: it's ready.
+
+Until you pick one, the first agent Umoja finds installed is used. Pick
+**None** to turn the hand-off off. You can also ask the assistant to
+"install OpenCode".
+
+If the assistant uses a cloud model when OpenCode is set up, OpenCode gets
+the same model and your key, so it works without signing in.
+
+#### Using your coding agent
+
+Ask for a coding job in your own words, in Ask Umoja, without naming the
+agent:
+
+- "Write me a script that renames my photos by date"
+- "Write an app in Rust: a hello world GTK 4 window, in a new project
+  called hello-gtk in my Projects folder. Don't compile it."
+
+The assistant asks before it hands the job over. Click **Allow**, and your
+coding agent opens in a terminal, in the folder you named (or your home
+folder), and starts on the job. From there you talk to the agent itself.
+
+When your question looks like a coding job, Ask Umoja also shows a
+**Continue in** chip with your agent's name (for example **Continue in
+OpenCode**). Click it to send the question straight to the agent, without
+the assistant.
+
+![The project OpenCode wrote, open in Text Editor: a GTK 4 window that says Hello, World](images/ai-opencode.png)
+
+To use another agent for one job, name it: "have Codex fix the failing
+test in ~/src/app". Your choice of coding agent stays as it is. To open
+your agent with a keyboard shortcut, set `ai-agent-hotkey` (see
+[Settings](09-privacy-and-settings.md)).
