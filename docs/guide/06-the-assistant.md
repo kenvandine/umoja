@@ -115,7 +115,8 @@ Trash. That's why those ask first.
 ## Choosing the model
 
 The assistant runs on an AI model **on your own computer** by default.
-Click the round model button at the bottom of the card to choose another.
+Click the gear button at the bottom right of the card (**Assistant model and
+voice**) to choose another.
 
 **This Computer** lists the models that fit your computer's memory. The
 one marked **Best for this computer** is a good balance of speed and
@@ -156,7 +157,8 @@ Umoja's desktop tools, and it asks you before it changes anything.
 Umoja sends coding jobs to one agent, your default. To pick it:
 
 1. Open Ask Umoja (tap Alt, or the Copilot key).
-2. Click the round model button at the bottom of the card.
+2. Click the gear button at the bottom right of the card (**Assistant model
+   and voice**).
 3. At the bottom of the menu, choose an agent from **Coding agent**.
 
 ![Ask Umoja's model menu, with OpenCode picked as the coding agent](images/ai-opencode-default.png)

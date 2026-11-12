@@ -180,7 +180,7 @@ If you'd rather use a larger hosted model, the assistant can talk to any
 service with an OpenAI-compatible API: OpenRouter, OpenAI, or a server on
 your own network.
 
-1. Open Ask Umoja, click the model button at the bottom of the card, and
+1. Open Ask Umoja, click the gear button at the bottom right of the card, and
    choose **Cloud**.
 2. Fill in:
    - **Server URL**: the API's base URL, for example
