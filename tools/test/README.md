@@ -58,8 +58,10 @@ The exit status is 1 if any check failed.
 | `setups` | Tiles two small GNOME apps, saves them as setup "Feature Test 4711", closes them, brings the setup back from Ask Umoja, and compares the tiles. |
 | `automations` | Asks for an automation in plain words that runs two minutes from now, waits, and checks that it ran. |
 | `captions` | Speaks a known sentence (with `espeak-ng` or `spd-say`), checks the live captions, and asks for a summary. |
-| `read-aloud` | Calls `Speak` on Ask Umoja with a known sentence, checks that Piper runs with the chosen voice (Alan by default; the first run downloads it), records the speakers, checks there was speech and that Whisper hears its words, then checks that `StopSpeaking` stops it. |
+| `read-aloud` | Asks for an answer that is a known sentence, presses its **Read Aloud** button, checks that it turns into a stop button and that Piper runs with the chosen voice (Alan by default; the first run downloads it), records the speakers and checks that Whisper hears the sentence. Then checks that pressing the button again, and `StopSpeaking`, stop it. |
 | `read-aloud-assistant` | Asks the assistant to read a sentence out loud and checks that it used `read_aloud` and that the speech was heard the same way. |
+| `voice-picker` | Opens the **Voice** page of the assistant settings, checks the list, searches, picks another voice (downloading it with a progress bar), hears its sample, switches back and removes the other voice. |
+| `speech-settings` | Turns on **Read every answer aloud** and checks an answer is read out by itself, then checks that speed 1.6 reads the same sentence clearly faster. |
 | `activity-recall` | Turns recall on for a moment, shows a window with a unique title and sends a notification, then asks the assistant to find both. It is skipped if recall is already on, so your history is never touched. |
 | `user-guide` | Opens the User Guide from Ask Umoja and checks that a viewer window appears. |
 
@@ -78,6 +80,10 @@ The exit status is 1 if any check failed.
   contains `4711`, so leftovers are easy to spot.
 - Its windows are a small GTK app, [`testpad.py`](testpad.py), and a few
   stock GNOME apps (Calculator, Characters, Clocks, Weather, Fonts).
+
+Clips are recorded on the empty last workspace, so your own windows (and
+whatever they show) stay out of them, and notifications earlier tests sent
+are closed before each clip starts.
 
 ## What it needs
 

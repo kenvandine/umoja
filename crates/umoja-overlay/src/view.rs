@@ -2086,7 +2086,9 @@ impl Overlay {
 
     /// Press a button or read state that the rows don't cover (feature test):
     /// "replace", "undo", "attach-selection", "attachments", "answer",
-    /// "captions-summarize", "captions-text".
+    /// "captions-summarize", "captions-text", "read-aloud",
+    /// "read-aloud-state", "voice-page", "settings-close", "voice-rows",
+    /// "voice-state", "voice-pick:KEY", "voice-remove:KEY", "voice-search:TEXT".
     pub fn test_action(self: &Rc<Self>, action: &str) -> (bool, String) {
         let press = |b: &RefCell<Option<glib::WeakRef<gtk::Button>>>| match b.borrow().as_ref().and_then(|w| w.upgrade()) {
             Some(b) if b.is_sensitive() => {
@@ -2112,6 +2114,38 @@ impl Overlay {
             "captions-text" => {
                 let t = crate::captions::transcript();
                 (crate::captions::is_running(), t)
+            }
+            // The speaker button under an answer.
+            "read-aloud" => {
+                let b = &self.speak_button;
+                if b.is_visible() && b.is_sensitive() {
+                    b.emit_clicked();
+                    (true, b.tooltip_text().map(|t| t.to_string()).unwrap_or_default())
+                } else {
+                    (false, String::new())
+                }
+            }
+            "read-aloud-state" => (
+                self.speak_serial.get() % 2 == 1,
+                format!(
+                    "{}|{}",
+                    self.speak_button.icon_name().unwrap_or_default(),
+                    self.speak_button.tooltip_text().unwrap_or_default()
+                ),
+            ),
+            "voice-page" => (crate::model_picker::show_page("voice"), String::new()),
+            "settings-close" => {
+                crate::model_picker::close();
+                (true, String::new())
+            }
+            "voice-rows" => crate::voice_picker::test_rows(),
+            "voice-state" => crate::voice_picker::test_state(),
+            a if a.starts_with("voice-pick:") => (crate::voice_picker::test_pick(&a[11..]), String::new()),
+            a if a.starts_with("voice-remove:") => {
+                (crate::voice_picker::test_remove(&a[13..]), String::new())
+            }
+            a if a.starts_with("voice-search:") => {
+                (crate::voice_picker::test_search(&a[13..]), String::new())
             }
             _ => (false, format!("unknown action {action}")),
         }

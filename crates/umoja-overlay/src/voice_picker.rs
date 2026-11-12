@@ -18,6 +18,76 @@ use crate::speech::{self, VoiceInfo};
 /// Rows shown at most; searching narrows the rest down.
 const MAX_ROWS: usize = 150;
 
+thread_local! {
+    /// The page, for the feature test's hooks.
+    static PAGE: RefCell<std::rc::Weak<VoicePage>> = RefCell::new(std::rc::Weak::new());
+}
+
+fn page() -> Option<Rc<VoicePage>> {
+    PAGE.with(|p| p.borrow().upgrade())
+}
+
+/// Feature test: the voices listed now, one key per line.
+pub fn test_rows() -> (bool, String) {
+    let Some(p) = page() else { return (false, String::new()) };
+    let rows: Vec<String> = p.shown().into_iter().map(|v| v.key).collect();
+    (!rows.is_empty(), rows.join("\n"))
+}
+
+/// Feature test: "current=…;downloading=…;piper=yes|no;downloaded=a,b".
+pub fn test_state() -> (bool, String) {
+    let Some(p) = page() else { return (false, String::new()) };
+    let dir = p.dir.borrow().clone();
+    let downloaded: Vec<String> = p
+        .voices
+        .borrow()
+        .iter()
+        .filter(|v| dir.as_deref().is_some_and(|d| speech::is_downloaded(d, &v.key)))
+        .map(|v| v.key.clone())
+        .collect();
+    let downloading = p.downloading.borrow().as_ref().map(|(k, b)| format!("{k}@{:.2}", b.fraction()));
+    (
+        true,
+        format!(
+            "current={};downloading={};piper={};downloaded={};status={}",
+            speech::current_voice(),
+            downloading.unwrap_or_default(),
+            if dir.is_some() { "yes" } else { "no" },
+            downloaded.join(","),
+            p.status.text()
+        ),
+    )
+}
+
+/// Feature test: activate a voice's row, as a click does.
+pub fn test_pick(key: &str) -> bool {
+    let Some(p) = page() else { return false };
+    if !p.voices.borrow().iter().any(|v| v.key == key) {
+        return false;
+    }
+    p.pick(key);
+    true
+}
+
+/// Feature test: the bin button of a downloaded voice.
+pub fn test_remove(key: &str) -> bool {
+    let Some(p) = page() else { return false };
+    let Some(dir) = p.dir.borrow().clone() else { return false };
+    if key == speech::current_voice() || !speech::is_downloaded(&dir, key) {
+        return false;
+    }
+    speech::delete_voice(&dir, key);
+    p.fill();
+    true
+}
+
+/// Feature test: type into the search entry.
+pub fn test_search(text: &str) -> bool {
+    let Some(p) = page() else { return false };
+    p.search.set_text(text);
+    true
+}
+
 pub struct VoicePage {
     pub page: gtk::Box,
     banner: gtk::Box,
@@ -140,6 +210,7 @@ impl VoicePage {
             downloading: RefCell::default(),
             _settings: settings,
         });
+        PAGE.with(|p| p.replace(Rc::downgrade(&this)));
         let weak = Rc::downgrade(&this);
         this.search.connect_search_changed(move |_| {
             if let Some(p) = weak.upgrade() {
