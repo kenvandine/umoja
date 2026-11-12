@@ -1012,7 +1012,7 @@ def t_automations(run):
     run.log(f"  waiting {max(0, due):.0f} s for {hhmm}")
     if due > 20:
         run.recorder.stop()
-        run.wait(due - 8)
+        run.wait(due - 3)
         run.recorder.start("automations-fired")
     got = run.wait(max(0, (at.replace(second=0) - datetime.datetime.now()).total_seconds()) + 45,
                    lambda: any(marker in n[3] or marker in n[4] for n in run.notifications()))
@@ -1394,12 +1394,13 @@ def t_speech_settings(run):
     run.wait(1.5)
     if shown:
         run.shot("fast", "Speed moved to 1.6, read-every-answer off again")
-    run.action("settings-close")
-    run.hide()
+    # The Voice page stays open while it reads, so the clip shows the speed.
     listener = Listener(run, "speech-rate-fast")
     t0 = time.monotonic()
     run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
     fast, _ = heard_speech(run, listener, voice, t0, "at speed 1.6", SPOKEN_WORDS, 3)
+    run.action("settings-close")
+    run.hide()
     run.check(normal > 0 and fast < normal * 0.85, "speed 1.6 is clearly quicker",
               f"{normal:.1f} s at 1.0, {fast:.1f} s at 1.6")
 
