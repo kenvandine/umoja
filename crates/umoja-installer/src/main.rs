@@ -52,6 +52,9 @@ struct Ui {
     log: RefCell<Vec<String>>,
     /// An install is under way (or done): never start a second one.
     running: std::cell::Cell<bool>,
+    /// When the install started, for "Installed in 1:42" on the last page.
+    started: std::cell::Cell<Option<Instant>>,
+    done_time: gtk::Label,
 }
 
 fn main() -> glib::ExitCode {
@@ -181,6 +184,8 @@ fn build(app: &adw::Application, preview: bool) {
         error_label: body(""),
         log: RefCell::new(vec![]),
         running: std::cell::Cell::new(false),
+        started: std::cell::Cell::new(None),
+        done_time: gtk::Label::builder().css_classes(["install-time"]).build(),
     });
 
     stack.add_named(&welcome_page(&ui), Some("welcome"));
@@ -515,6 +520,20 @@ fn progress_page(ui: &Rc<Ui>) -> gtk::Box {
 fn done_page(ui: &Rc<Ui>) -> gtk::Box {
     let p = page();
     p.append(&heading("Umoja is installed"));
+    let time = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .halign(gtk::Align::Center)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
+    time.append(&ui.done_time);
+    time.append(
+        &gtk::Label::builder()
+            .label("from Erase and install to done")
+            .css_classes(["install-time-caption"])
+            .build(),
+    );
+    p.append(&time);
     p.append(&body(
         "Restart, remove the installation medium when asked, and type \
          your password to unlock the disk.",
@@ -585,6 +604,7 @@ fn run(ui: &Rc<Ui>) {
     }
     ui.stack.set_visible_child_name("progress");
     ui.progress_bar.set_fraction(0.0);
+    ui.started.set(Some(Instant::now()));
     let a = ui.answers.borrow().clone();
     let Some(disk) = a.disk.clone() else {
         ui.running.set(false);
@@ -608,7 +628,7 @@ fn run(ui: &Rc<Ui>) {
                 "Installing the boot loader"
             });
             if p >= 1.0 {
-                ui.stack.set_visible_child_name("done");
+                show_done(&ui);
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Continue
@@ -702,7 +722,7 @@ fn run(ui: &Rc<Ui>) {
         }
         let ok = proc.wait_check_future().await.is_ok();
         if ok {
-            ui.stack.set_visible_child_name("done");
+            show_done(&ui);
             if ui.auto {
                 let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
             }
@@ -783,4 +803,20 @@ fn sample_word() -> Option<art::Word> {
         let y = (r as f64 * CELL + CELL / 2.0) as usize;
         x < sw && y < sh && data[y * stride + x] > 110
     }))
+}
+
+/// "1:42", "48s": how long the install took, Omarchy style.
+fn duration_text(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    }
+}
+
+fn show_done(ui: &Rc<Ui>) {
+    let secs = ui.started.get().map(|t| t.elapsed().as_secs()).unwrap_or(0);
+    tracing::info!(seconds = secs, "installed");
+    ui.done_time.set_label(&format!("Installed in {}", duration_text(secs)));
+    ui.stack.set_visible_child_name("done");
 }

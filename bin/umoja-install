@@ -43,7 +43,11 @@ while [ $# -gt 0 ]; do
 done
 
 die() { echo "ERROR $*" >&2; exit 1; }
-progress() { echo "PROGRESS $1 $2"; }
+START_NS=$(date +%s%N)
+progress() { # also logs the time since the start, for tuning
+    echo "[+$(( ($(date +%s%N) - START_NS) / 1000000 ))ms] $2"
+    echo "PROGRESS $1 $2"
+}
 
 [ "$(id -u)" = 0 ] || die "must run as root"
 [ -b "$DISK" ] || die "$DISK is not a block device"
@@ -171,7 +175,11 @@ in_target useradd --create-home --shell /bin/bash --comment "$FULLNAME" \
 printf '%s:%s\n' "$USERNAME" "$PASSWORD" | in_target chpasswd
 
 progress 88 "Building the boot image"
-if in_target sh -c 'command -v dracut' >/dev/null; then
+if [ -f "$TARGET/etc/dracut.conf.d/90-umoja.conf" ]; then
+    # The image's initrd is already generic and can unlock LUKS
+    # (image/imagecraft.yaml); rd.luks.name above tells it which disk.
+    echo "initrd from the image is generic with crypt; not rebuilding"
+elif in_target sh -c 'command -v dracut' >/dev/null; then
     for k in "$TARGET"/lib/modules/*; do
         kver=$(basename "$k")
         # Generic (not host-only): dracut can't judge the hardware from a

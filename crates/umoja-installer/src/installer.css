@@ -127,3 +127,15 @@ progressbar.install-progress > trough > progress {
   border-radius: 999px;
   background-image: linear-gradient(to right, #E95420, #77216F);
 }
+
+/* "Installed in 1:42" on the last page. */
+.install-time {
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  color: #E95420;
+}
+.install-time-caption {
+  font-size: 13px;
+  opacity: 0.6;
+}

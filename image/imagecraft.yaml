@@ -87,6 +87,11 @@ parts:
       set -eux
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
+      # Generic initrds that can unlock LUKS: the installer then doesn't
+      # have to rebuild one (bin/umoja-install), and kernel updates keep
+      # working on any disk layout.
+      mkdir -p /etc/dracut.conf.d
+      printf 'hostonly="no"\nadd_dracutmodules+=" crypt "\n' > /etc/dracut.conf.d/90-umoja.conf
       # Local debs first, so they win over the PPA's.
       local=$(ls /var/cache/umoja-local-debs/*.deb 2>/dev/null || true)
       # Firefox and Thunderbird come as seeded snaps (snap-preseed below);
