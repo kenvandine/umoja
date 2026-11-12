@@ -23,6 +23,8 @@ pub enum Kind {
     Clipboard,
     Window { app_id: String, title: String },
     Area,
+    /// What live captions heard.
+    Transcript,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +47,7 @@ impl Attachment {
             Kind::Clipboard => "edit-paste-symbolic",
             Kind::Window { .. } => "focus-windows-symbolic",
             Kind::Area => "screenshot-recorded-symbolic",
+            Kind::Transcript => "media-record-symbolic",
         }
     }
 
@@ -61,6 +64,7 @@ impl Attachment {
                 }
             }
             Kind::Area => i18n::umoja("Screen area"),
+            Kind::Transcript => i18n::umoja("What was said"),
         }
     }
 
@@ -74,6 +78,7 @@ impl Attachment {
                 "Text read (OCR) from the window the user is in, app \"{app_id}\", titled \"{title}\""
             ),
             Kind::Area => "Text read (OCR) from an area of the screen the user picked".into(),
+            Kind::Transcript => "A transcript (live captions, may contain mistakes) of audio the computer played".into(),
         }
     }
 }

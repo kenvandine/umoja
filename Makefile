@@ -16,7 +16,7 @@ LEMONADE_ARCHES ?= x64 arm64
 LEMONADE_BASE := https://github.com/lemonade-sdk/lemonade/releases/download/v$(LEMONADE_VERSION)
 VENDOR := vendor
 
-.PHONY: bump-version bump-lemonade all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
+.PHONY: guide bump-version bump-lemonade all build test check vendor vendor-cargo vendor-lemonade deb source-package nested greeter-preview greeter-nested clean
 
 all: build
 
@@ -86,6 +86,10 @@ greeter-nested:
 	WAYLAND_DISPLAY=$${WAYLAND_DISPLAY:-wayland-0} \
 	  UMOJA_GREETER="$(CURDIR)/target/debug/umoja-greeter --preview" \
 	  ./target/debug/umoja-mir --platform-display-libs=mir:wayland --wayland-host=$${WAYLAND_DISPLAY:-wayland-0}
+
+# The user guide as a PDF (needs pandoc and weasyprint).
+guide:
+	tools/guide/build-pdf --out umoja-user-guide.pdf
 
 clean:
 	$(CARGO) clean

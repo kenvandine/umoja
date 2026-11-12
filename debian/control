@@ -23,7 +23,13 @@ Build-Depends: debhelper-compat (= 13),
                libcanberra-dev,
                libglib2.0-dev,
                libglib2.0-bin,
-               libssl3t64
+               libssl3t64,
+               python3,
+               pandoc <!nodoc>,
+               weasyprint <!nodoc>,
+               fonts-ubuntu <!nodoc>,
+               fonts-noto-color-emoji <!nodoc>,
+               fonts-dejavu-core <!nodoc>
 Standards-Version: 4.7.0
 Homepage: https://github.com/kenvandine/umoja
 Vcs-Git: https://github.com/kenvandine/umoja.git

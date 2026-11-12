@@ -26,6 +26,7 @@ pub mod assistant;
 mod bubbles;
 mod list;
 mod quick_reply;
+pub mod quiet;
 mod server;
 
 use std::cell::{Cell, RefCell};
@@ -185,9 +186,29 @@ type ReplyListener = Box<dyn Fn(u32)>;
 /// What the shell does when one of its own notifications' actions is
 /// picked (there is no D-Bus sender to tell).
 type ActionHandler = Rc<dyn Fn(&str)>;
+/// Open the clock menu's message list (org.umoja.Panel, which this
+/// process serves).
+fn open_message_list() {
+    gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
+        let Ok(conn) = conn else { return };
+        conn.call(
+            Some(umoja_common::dbus::PANEL_BUS_NAME),
+            umoja_common::dbus::PANEL_OBJECT_PATH,
+            umoja_common::dbus::PANEL_INTERFACE,
+            "OpenMenu",
+            Some(&("calendar",).to_variant()),
+            None,
+            gio::DBusCallFlags::NONE,
+            1000,
+            gio::Cancellable::NONE,
+            |_| {},
+        );
+    });
+}
+
 /// A row of org.umoja.Compositor `GetWindowsMru`: (id, app_id, title,
 /// x, y, width, height, flags).
-type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
+pub(crate) type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
 
 /// Shared state between the D-Bus server, the banners and the message list.
 pub struct Center {
@@ -208,6 +229,15 @@ pub struct Center {
     /// the message list, so they'd cover (and take the clicks of) the rows
     /// beneath. As gnome-shell's bannerBlocked, none show meanwhile.
     banners_blocked: Cell<bool>,
+    /// Automatic Do Not Disturb: why banners are held back right now
+    /// (`quiet::RECORDING`, `quiet::FULLSCREEN`), and every reason seen
+    /// since it began.
+    quiet: Cell<u8>,
+    quiet_seen: Cell<u8>,
+    /// Notifications whose banner was held back meanwhile.
+    held: RefCell<Vec<u32>>,
+    /// Banners waiting on a fresh fullscreen check (see `notify`).
+    pending_banner: RefCell<HashMap<u32, Note>>,
 }
 
 impl Center {
@@ -224,6 +254,10 @@ impl Center {
             reply_listeners: RefCell::default(),
             handlers: RefCell::default(),
             banners_blocked: Cell::new(false),
+            quiet: Cell::new(0),
+            quiet_seen: Cell::new(0),
+            held: RefCell::default(),
+            pending_banner: RefCell::default(),
         });
         if let Some(s) = &center.settings {
             let weak = Rc::downgrade(&center);
@@ -245,7 +279,54 @@ impl Center {
         }
         server::own_name(center.clone());
         api::own_name(center.clone());
+        quiet::start(&center);
         center
+    }
+
+    /// Hold banners back for `reason` (or stop). When nothing holds them
+    /// any more, one banner says how many arrived meanwhile.
+    pub fn set_quiet(self: &Rc<Self>, reason: u8, on: bool) {
+        let before = self.quiet.get();
+        let now = if on { before | reason } else { before & !reason };
+        if now == before {
+            return;
+        }
+        tracing::info!(quiet = now, "automatic Do Not Disturb");
+        self.quiet.set(now);
+        self.quiet_seen.set(self.quiet_seen.get() | now);
+        if now != 0 {
+            if before == 0 {
+                self.bubbles.hide_all_but_critical();
+            }
+            return;
+        }
+        let reasons = self.quiet_seen.replace(0);
+        let held: Vec<u32> = self.held.borrow_mut().drain(..).collect();
+        let count = {
+            let notes = self.notes.borrow();
+            held.iter().filter(|id| notes.iter().any(|n| n.id == **id)).count()
+        };
+        if count == 0 || !self.banners_enabled() {
+            return;
+        }
+        let (title, body) = quiet::summary(count, reasons);
+        let weak = Rc::downgrade(self);
+        let id = std::rc::Rc::new(Cell::new(0u32));
+        let own = id.clone();
+        let nid = self.notify_with_actions(
+            &title,
+            &body,
+            "preferences-system-notifications-symbolic",
+            &[("default", "Show")],
+            move |_| {
+                if let Some(c) = weak.upgrade() {
+                    // The summary has done its job once the list is open.
+                    c.close(own.get(), CloseReason::Dismissed);
+                }
+                open_message_list();
+            },
+        );
+        id.set(nid);
     }
 
     pub fn connect_changed(&self, f: impl Fn() + 'static) {
@@ -463,6 +544,20 @@ impl Center {
             return note.id;
         }
 
+        // Activity recall (opt-in): new messages, not progress or OSD bubbles.
+        if existing.is_none() && note.sync_tag.is_none() && note.value.is_none() {
+            let body = gtk::pango::parse_markup(&note.body, '\0')
+                .map(|(_, t, _)| t.to_string())
+                .unwrap_or_else(|_| note.body.clone());
+            umoja_common::recall::add(umoja_common::recall::Entry {
+                at: note.time.to_unix(),
+                kind: umoja_common::recall::Kind::Notification,
+                app: note.app_name.clone(),
+                text: format!("{}: {}", note.summary, body),
+                secs: None,
+            });
+        }
+
         {
             let mut notes = self.notes.borrow_mut();
             notes.retain(|n| n.id != note.id);
@@ -487,7 +582,35 @@ impl Center {
         let show_banner = !quiet_update
             && !self.banners_blocked.get()
             && (critical || (self.banners_enabled() && policy.show_banners));
-        if show_banner {
+        // Automatic Do Not Disturb holds back all but critical banners.
+        let held = show_banner && !critical && self.quiet.get() != 0;
+        if held {
+            self.held.borrow_mut().push(note.id);
+        } else if show_banner && !critical && quiet::enabled() {
+            // The fullscreen watcher hears of a window going fullscreen a
+            // little late (WindowsChanged is coalesced), so a notification
+            // in that moment would still pop up over the game or video.
+            // Ask the compositor now; it only delays the banner by a
+            // round trip.
+            let first = self.pending_banner.borrow_mut().insert(note.id, note.clone()).is_none();
+            if first {
+                let weak = Rc::downgrade(self);
+                let id = note.id;
+                quiet::fullscreen_now(move |fullscreen| {
+                    let Some(c) = weak.upgrade() else { return };
+                    // Closed meanwhile: nothing to show. Replaced: show the latest.
+                    let Some(note) = c.pending_banner.borrow_mut().remove(&id) else { return };
+                    if fullscreen {
+                        c.set_quiet(quiet::FULLSCREEN, true);
+                    }
+                    if c.quiet.get() != 0 {
+                        c.held.borrow_mut().push(note.id);
+                    } else if !c.banners_blocked.get() {
+                        c.bubbles.show(&note);
+                    }
+                });
+            }
+        } else if show_banner {
             self.bubbles.show(&note);
         }
         self.schedule_expiry(&note);
@@ -552,6 +675,7 @@ impl Center {
             before != notes.len()
         };
         self.unseen.borrow_mut().remove(&id);
+        self.pending_banner.borrow_mut().remove(&id);
         self.handlers.borrow_mut().remove(&id);
         let in_bubble = self.bubbles.remove(id);
         if let Some(src) = self.expiry.borrow_mut().remove(&id) {

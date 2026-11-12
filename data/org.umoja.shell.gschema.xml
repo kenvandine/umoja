@@ -152,6 +152,49 @@
         Seconds. 0 keeps the screensaver running until you come back.
       </description>
     </key>
+    <key name="auto-do-not-disturb" type="b">
+      <default>true</default>
+      <summary>Hold back notifications while recording or in full screen</summary>
+      <description>
+        Don't show notification banners while the screen is being recorded or
+        a fullscreen window (a game, a video, a presentation) has the focus.
+        They still go to the message list, critical ones still show, and
+        afterwards one banner says how many arrived.
+      </description>
+    </key>
+    <key name="screenshot-names" type="b">
+      <default>true</default>
+      <summary>Name screenshots after what they show</summary>
+      <description>
+        After a screenshot is saved from the screenshot UI, read its text and
+        let the local model add a few words to its file name ("Screenshot From
+        2026-11-12 10-04-33 – Invoice from Acme.png"). Runs on this computer
+        only; the name stays as it was if there is no text or no model.
+      </description>
+    </key>
+    <key name="captions-model" type="s">
+      <default>"Whisper-Base"</default>
+      <summary>Speech model for live captions</summary>
+      <description>
+        The Lemonade Whisper model live captions transcribe with. It is
+        downloaded the first time captions are turned on.
+      </description>
+    </key>
+    <key name="activity-recall" type="b">
+      <default>false</default>
+      <summary>Keep a text-only activity timeline</summary>
+      <description>
+        Record, on this computer only, which window was in front (app and
+        title), files opened and notifications received, so Ask Umoja can
+        answer "what was that page I had open yesterday?". No screenshots
+        and no keystrokes. Stored in ~/.local/share/umoja/recall.
+      </description>
+    </key>
+    <key name="activity-recall-days" type="u">
+      <range min="1" max="90"/>
+      <default>14</default>
+      <summary>Days the activity timeline is kept</summary>
+    </key>
     <key name="crash-notifications" type="b">
       <default>true</default>
       <summary>Tell me when an app crashes</summary>

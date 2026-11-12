@@ -1,0 +1,376 @@
+#!/usr/bin/python3
+"""Draw the user guide's diagrams as SVG (docs/guide/images/*.svg).
+
+Plain SVG with a light card behind it, so the pictures read the same on
+GitHub (light or dark) and in the PDF. Edit the scenes below and run
+
+    tools/guide/make-diagrams [--out docs/guide/images]
+"""
+
+import argparse
+from html import escape
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+ORANGE = "#E95420"
+AUBERGINE = "#77216F"
+INK = "#2c2c2c"
+MUTED = "#6b6b6b"
+CARD = "#fbf9f8"
+LINE = "#d8d2cf"
+SOFT = "#f3e9e4"
+SCREEN = "#3b1f38"
+WINDOW = "#e9e5e3"
+FONT = "Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif"
+
+
+class Svg:
+    def __init__(self, w, h, title):
+        self.w, self.h, self.title = w, h, title
+        self.parts = []
+
+    def add(self, s):
+        self.parts.append(s)
+
+    def rect(self, x, y, w, h, fill=CARD, stroke=LINE, r=12, sw=2, extra=""):
+        self.add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}" stroke="{stroke}" stroke-width="{sw}" {extra}/>')
+
+    def text(self, x, y, s, size=18, fill=INK, weight="normal", anchor="middle", italic=False):
+        style = ' font-style="italic"' if italic else ""
+        lines = s.split("\n")
+        for i, line in enumerate(lines):
+            dy = (i - (len(lines) - 1) / 2) * size * 1.25
+            self.add(
+                f'<text x="{x}" y="{y + dy:.1f}" font-family="{FONT}" font-size="{size}" fill="{fill}" '
+                f'font-weight="{weight}" text-anchor="{anchor}" dominant-baseline="central"{style}>{escape(line)}</text>'
+            )
+
+    def box(self, x, y, w, h, title, sub=None, fill="#ffffff", stroke=LINE, title_fill=INK, size=19):
+        self.rect(x, y, w, h, fill=fill, stroke=stroke)
+        if sub:
+            self.text(x + w / 2, y + h / 2 - 14, title, size=size, weight="bold", fill=title_fill)
+            self.text(x + w / 2, y + h / 2 + 16, sub, size=size - 4, fill=MUTED)
+        else:
+            self.text(x + w / 2, y + h / 2, title, size=size, weight="bold", fill=title_fill)
+
+    def key(self, x, y, label, w=None, size=17):
+        w = w or max(44, 12 + len(label) * size * 0.62)
+        self.add(f'<rect x="{x}" y="{y}" width="{w:.0f}" height="36" rx="7" fill="#ffffff" stroke="{INK}" stroke-width="1.6"/>')
+        self.add(f'<rect x="{x + 2}" y="{y + 30}" width="{w - 4:.0f}" height="4" rx="2" fill="{LINE}"/>')
+        self.text(x + w / 2, y + 16, label, size=size, weight="bold")
+        return w
+
+    def keys(self, x, y, combo, size=17):
+        """'Super+Shift+A' as key caps; returns the width used."""
+        cx = x
+        for i, k in enumerate(combo.split("+")):
+            if i:
+                self.text(cx + 9, y + 17, "+", size=size, fill=MUTED)
+                cx += 18
+            cx += self.key(cx, y, k, size=size)
+        return cx - x
+
+    def arrow(self, x1, y1, x2, y2, color=MUTED, label=None, dashed=False):
+        dash = ' stroke-dasharray="7 6"' if dashed else ""
+        self.add(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{color}" stroke-width="2.5" marker-end="url(#ah)"{dash}/>')
+        if label:
+            self.text((x1 + x2) / 2, (y1 + y2) / 2 - 14, label, size=15, fill=MUTED, italic=True)
+
+    def render(self):
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {self.w} {self.h}" width="{self.w}" height="{self.h}" role="img" aria-label="{escape(self.title)}">\n'
+            f"<title>{escape(self.title)}</title>\n"
+            f'<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+            f'<path d="M0,0 L10,5 L0,10 z" fill="{MUTED}"/></marker></defs>\n'
+            f'<rect x="1" y="1" width="{self.w - 2}" height="{self.h - 2}" rx="18" fill="{CARD}" stroke="{LINE}" stroke-width="2"/>\n'
+            + "\n".join(self.parts)
+            + "\n</svg>\n"
+        )
+
+
+def screen(s, x, y, w, h, bar=True):
+    s.rect(x, y, w, h, fill=SCREEN, stroke=INK, r=10, sw=3)
+    if bar:
+        s.add(f'<rect x="{x + 3}" y="{y + 3}" width="{w - 6}" height="14" rx="6" fill="#1d0f1c"/>')
+
+
+def win(s, x, y, w, h, label="", fill=WINDOW):
+    s.rect(x, y, w, h, fill=fill, stroke="#b9b1ad", r=6, sw=1.5)
+    s.add(f'<rect x="{x}" y="{y}" width="{w}" height="12" rx="5" fill="#cfc8c5"/>')
+    if label:
+        s.text(x + w / 2, y + h / 2 + 6, label, size=14, fill=INK, weight="bold")
+
+
+def four_keys():
+    s = Svg(1000, 330, "Four keys to remember")
+    s.text(500, 40, "Four keys get you everywhere", size=26, weight="bold")
+    rows = [
+        ("Copilot", "or tap Alt", "Ask Umoja", "launch, switch, change settings, ask anything"),
+        ("Super", None, "Activities overview", "every window and workspace; type to search"),
+        ("Print", None, "Screenshot", "a selection, the screen or a window; or record"),
+        ("Super+/", None, "Shortcuts guide", "every keyboard shortcut, searchable"),
+    ]
+    for i, (k, alt, what, sub) in enumerate(rows):
+        y = 80 + i * 60
+        w = s.keys(60, y, k)
+        if alt:
+            s.text(60 + w + 16, y + 17, alt, size=15, fill=MUTED, anchor="start", italic=True)
+        s.arrow(300, y + 18, 360, y + 18)
+        s.text(380, y + 8, what, size=19, weight="bold", anchor="start", fill=AUBERGINE)
+        s.text(380, y + 30, sub, size=15, fill=MUTED, anchor="start")
+    return s
+
+
+def desktop_parts():
+    s = Svg(1000, 560, "The parts of the desktop")
+    screen(s, 60, 60, 880, 440, bar=False)
+    s.add(f'<rect x="63" y="63" width="874" height="26" rx="8" fill="#1d0f1c"/>')
+    s.text(500, 76, "Thu 12 Nov  10:04", size=14, fill="#ffffff")
+    for i in range(4):
+        s.add(f'<circle cx="{86 + i * 14}" cy="76" r="{5 if i else 6}" fill="{"#ffffff" if i == 0 else "#a58aa2"}"/>')
+    s.text(880, 76, "◉  ▾", size=14, fill="#ffffff")
+    s.rect(72, 130, 46, 330, fill="#26122a", stroke="#26122a", r=12)
+    for i in range(6):
+        s.add(f'<rect x="80" y="{142 + i * 46}" width="30" height="30" rx="7" fill="{[ORANGE, "#c7a54b", "#4a90d9", "#5fa05a", "#9b59b6", "#888"][i]}"/>')
+    s.text(95, 440, "⋮⋮", size=16, fill="#ffffff")
+    win(s, 200, 130, 380, 260, "Files")
+    win(s, 520, 190, 360, 240, "Text Editor")
+    notes = [
+        (100, 76, 200, 30, "Workspaces: click for the overview"),
+        (500, 76, 500, 30, "Clock: calendar, events and notifications"),
+
+        (880, 76, 840, 30, "Status: Quick Settings"),
+        (118, 300, 190, 530, "Dock: favourites and running apps"),
+        (95, 440, 470, 530, "Show Apps: the app grid"),
+        (700, 310, 790, 530, "Windows"),
+    ]
+    for x1, y1, x2, y2, label in notes:
+        s.add(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2 + (12 if y2 < y1 else -12)}" stroke="{ORANGE}" stroke-width="2"/>')
+        s.add(f'<circle cx="{x1}" cy="{y1}" r="5" fill="{ORANGE}"/>')
+        s.text(x2, y2, label, size=16, weight="bold", fill=AUBERGINE)
+    return s
+
+
+def tiling():
+    s = Svg(1000, 470, "Tiling windows")
+    s.text(500, 38, "Snap windows to halves and quarters", size=26, weight="bold")
+    cells = [
+        ("Left half", "Super+Left", [(0, 0, 0.5, 1)]),
+        ("Right half", "Super+Right", [(0.5, 0, 0.5, 1)]),
+        ("Top-left quarter", "Super+KP 7", [(0, 0, 0.5, 0.5)]),
+        ("Maximize", "Super+Up", [(0, 0, 1, 1)]),
+    ]
+    for i, (name, combo, rects) in enumerate(cells):
+        x = 40 + i * 235
+        screen(s, x, 70, 210, 140)
+        for rx, ry, rw, rh in rects:
+            s.rect(x + 6 + rx * 198, 88 + ry * 116, rw * 198 - 4, rh * 116 - 4, fill=ORANGE, stroke=ORANGE, r=5, sw=1, extra='fill-opacity="0.85"')
+        s.text(x + 105, 232, name, size=17, weight="bold")
+        kw = 0
+        # centre the key caps under the screen
+        tmp = Svg(10, 10, "")
+        kw = tmp.keys(0, 0, combo, size=14)
+        s.keys(x + 105 - kw / 2, 250, combo, size=14)
+    s.text(500, 330, "Or drag a window by its title bar:", size=19, weight="bold")
+    s.text(500, 362, "to the left or right edge for a half, into a corner for a quarter, to the top to maximize.", size=16, fill=MUTED)
+    s.text(500, 392, "Pause at the top edge for the layout picker; drop the window on the tile you want.", size=16, fill=MUTED)
+    s.text(500, 432, "Tiled side by side? Drag the line between them to resize both.", size=16, fill=MUTED)
+    return s
+
+
+def workspaces():
+    s = Svg(1000, 360, "Workspaces")
+    s.text(500, 38, "Workspaces come and go as you need them", size=26, weight="bold")
+    labels = ["Workspace 1", "Workspace 2", "Workspace 3", "(empty)"]
+    for i, lab in enumerate(labels):
+        x = 50 + i * 235
+        screen(s, x, 80, 200, 130)
+        if i == 0:
+            win(s, x + 14, 104, 100, 80, "Mail")
+            win(s, x + 90, 120, 96, 76, "Web")
+        elif i == 1:
+            win(s, x + 20, 104, 160, 92, "Code")
+        elif i == 2:
+            win(s, x + 40, 110, 120, 84, "Music")
+        else:
+            s.text(x + 100, 150, "+", size=40, fill="#a58aa2")
+        s.text(x + 100, 232, lab, size=16, weight="bold" if i < 3 else "normal", fill=INK if i < 3 else MUTED)
+        if i < 3:
+            s.arrow(x + 204, 145, x + 231, 145)
+    w = s.keys(60, 270, "Super+Page Down")
+    s.text(60 + w + 12, 288, "next workspace", size=15, fill=MUTED, anchor="start")
+    w = s.keys(470, 270, "Super+Shift+Page Down")
+    s.text(470 + w + 12, 288, "take the window along", size=15, fill=MUTED, anchor="start")
+    s.text(500, 336, "There is always one empty workspace at the end; an empty one in the middle closes by itself.", size=15, fill=MUTED)
+    return s
+
+
+def ask_flow():
+    s = Svg(1000, 520, "How Ask Umoja works")
+    s.text(500, 38, "What happens when you type into Ask Umoja", size=26, weight="bold")
+    s.box(380, 70, 240, 70, "You type", "“dark”, “12*7”, “party”…", fill="#ffffff", stroke=ORANGE)
+    s.arrow(450, 140, 220, 200)
+    s.arrow(550, 140, 780, 200)
+    s.box(40, 205, 360, 120, "Instant rows", "apps · switches · Settings pages\nsums · emoji · files · setups", fill=SOFT, stroke=LINE)
+    s.text(220, 345, "No AI model involved: well under a second", size=15, fill=MUTED, italic=True)
+    s.box(600, 205, 360, 120, "Ask Umoja row (or Tab)", "the assistant reads your request", fill=SOFT, stroke=LINE)
+    s.arrow(780, 325, 780, 380)
+    s.box(600, 385, 360, 60, "Uses desktop tools", None, fill="#ffffff", size=17)
+    s.text(780, 465, "Asks first before anything that matters", size=15, fill=AUBERGINE, weight="bold")
+    s.text(780, 490, "Shows each step, with Undo when it can", size=15, fill=MUTED)
+    s.arrow(400, 265, 595, 265, dashed=True, label="Tab hands a row to it")
+    s.box(40, 385, 360, 60, "Enter runs the row", None, fill="#ffffff", size=17)
+    s.arrow(220, 325, 220, 380)
+    return s
+
+
+def privacy():
+    s = Svg(1000, 470, "What stays on your computer")
+    s.text(500, 38, "Where your requests go", size=26, weight="bold")
+    s.rect(40, 70, 600, 370, fill="#ffffff", stroke=AUBERGINE, r=16, sw=3)
+    s.text(340, 100, "Your computer", size=20, weight="bold", fill=AUBERGINE)
+    items = [
+        ("Local AI model", "assistant, digests, replies, crash help"),
+        ("Whisper", "live captions"),
+        ("OCR", "copy text, screenshot names"),
+        ("File index", "find files by what they're about"),
+        ("Activity timeline", "only if you turn it on"),
+    ]
+    for i, (a, b) in enumerate(items):
+        s.box(70, 125 + i * 60, 540, 50, "", None)
+        s.text(90, 150 + i * 60, a, size=17, weight="bold", anchor="start")
+        s.text(590, 150 + i * 60, b, size=15, fill=MUTED, anchor="end")
+    s.rect(700, 150, 260, 150, fill=SOFT, stroke=LINE, r=16)
+    s.text(830, 190, "Cloud model", size=20, weight="bold")
+    s.text(830, 230, "Only if you choose it,\nonly the assistant's\nconversation", size=15, fill=MUTED)
+    s.arrow(612, 150, 696, 200, dashed=True)
+    s.text(830, 340, "Everything else never\nleaves the computer.", size=16, fill=AUBERGINE, weight="bold")
+    return s
+
+
+def automations():
+    s = Svg(1000, 430, "Automations")
+    s.text(500, 38, "Automations: When something happens, do this", size=26, weight="bold")
+    s.text(500, 74, "Say it in Ask Umoja: “when I plug in my monitor, open my Coding setup and turn on dark style”", size=16, fill=MUTED, italic=True)
+    s.box(40, 110, 280, 260, "", None, fill="#ffffff", stroke=ORANGE)
+    s.text(180, 135, "When…", size=20, weight="bold", fill=ORANGE)
+    whens = ["I log in", "it's 9:00 on weekdays", "a monitor is plugged in", "the charger is unplugged", "I join “Home Wi-Fi”", "Spotify opens", "my headphones connect"]
+    for i, w in enumerate(whens):
+        s.text(60, 168 + i * 29, "• " + w, size=15, anchor="start")
+    s.arrow(325, 240, 395, 240)
+    s.box(400, 110, 280, 260, "", None, fill="#ffffff", stroke=AUBERGINE)
+    s.text(540, 135, "Do…", size=20, weight="bold", fill=AUBERGINE)
+    dos = ["open a setup or apps", "dark style, Night Light", "Do Not Disturb", "volume, brightness", "power mode", "Wi-Fi, Bluetooth", "show a reminder"]
+    for i, w in enumerate(dos):
+        s.text(420, 168 + i * 29, "• " + w, size=15, anchor="start")
+    s.box(720, 110, 240, 120, "You confirm once", "Umoja shows the rule\nbefore saving it", fill=SOFT)
+    s.box(720, 250, 240, 120, "Then it just runs", "even with Ask Umoja\nclosed", fill=SOFT)
+    s.text(500, 400, "Only low-risk actions can be automated: nothing that deletes, installs or logs you out.", size=15, fill=MUTED)
+    return s
+
+
+def setups():
+    s = Svg(1000, 330, "Setups")
+    s.text(500, 38, "Setups: your window arrangements, by name", size=26, weight="bold")
+    screen(s, 50, 80, 260, 170)
+    win(s, 58, 100, 120, 142, "Editor")
+    win(s, 182, 100, 120, 70, "Terminal")
+    win(s, 182, 172, 120, 70, "Docs")
+    s.text(180, 280, "Arrange your windows", size=16, weight="bold")
+    s.arrow(315, 165, 425, 165, label="“save as Coding”")
+    s.box(430, 115, 140, 100, "Coding", "saved", fill=SOFT)
+    s.arrow(575, 165, 685, 165, label="type “Coding”")
+    screen(s, 690, 80, 260, 170)
+    win(s, 698, 100, 120, 142, "Editor")
+    win(s, 822, 100, 120, 70, "Terminal")
+    win(s, 822, 172, 120, 70, "Docs")
+    s.text(820, 280, "Apps open and snap into place", size=16, weight="bold")
+    s.text(500, 312, "Apps that aren't running are started; windows go to their workspace and tile.", size=15, fill=MUTED)
+    return s
+
+
+def captions():
+    s = Svg(1000, 300, "Live captions")
+    s.text(500, 38, "Live captions: what's playing, as text", size=26, weight="bold")
+    steps = [
+        ("Sound out", "a call, a video"),
+        ("Phrases", "cut at pauses"),
+        ("Whisper", "on this computer"),
+        ("Caption bubble", "near the bottom"),
+        ("Summarize", "in Ask Umoja"),
+    ]
+    for i, (a, b) in enumerate(steps):
+        x = 30 + i * 192
+        s.box(x, 90, 170, 100, a, b, fill="#ffffff" if i != 2 else SOFT, stroke=ORANGE if i == 4 else LINE, size=18)
+        if i < 4:
+            s.arrow(x + 172, 140, x + 190, 140)
+    s.text(500, 240, "Nothing is recorded to disk, and no audio leaves the computer.", size=16, fill=MUTED)
+    s.text(500, 268, "Turn it on: type “captions” in Ask Umoja. Close the bubble to stop.", size=16, fill=AUBERGINE, weight="bold")
+    return s
+
+
+def quiet():
+    s = Svg(1000, 290, "Automatic Do Not Disturb")
+    s.text(500, 38, "Notifications wait while you're presenting or playing", size=26, weight="bold")
+    s.box(40, 80, 260, 110, "Recording the screen", "with the screenshot tool", fill="#ffffff")
+    s.box(40, 200, 260, 70, "A fullscreen window", None, fill="#ffffff", size=17)
+    s.arrow(305, 170, 355, 170)
+    s.box(360, 110, 240, 120, "Banners wait", "they still go to\nthe message list", fill=SOFT, stroke=ORANGE)
+    s.arrow(605, 170, 715, 170, label="afterwards")
+    s.box(720, 110, 240, 120, "One summary", "“3 notifications\nwhile you were busy”", fill="#ffffff")
+    return s
+
+
+def undo():
+    s = Svg(1000, 250, "Undo")
+    s.text(500, 38, "Every change the assistant makes can be put back", size=26, weight="bold")
+    s.box(40, 80, 250, 110, "“make it dark,\nturn the volume to 20”", None, fill="#ffffff", size=16)
+    s.arrow(295, 135, 345, 135)
+    s.box(350, 80, 240, 110, "Done", "✓ Dark Style  ✓ Volume 20%\n[ Undo ]", fill=SOFT)
+    s.arrow(595, 135, 725, 135, label="Undo, or “undo”")
+    s.box(730, 80, 230, 110, "Back as it was", "light style, volume 65%", fill="#ffffff", stroke=ORANGE)
+    s.text(500, 222, "Settings, volume, brightness, Wi-Fi, Bluetooth, power mode and window moves are remembered for a day.", size=15, fill=MUTED)
+    return s
+
+
+def rewrite():
+    s = Svg(1000, 270, "Rewrite selected text")
+    s.text(500, 38, "Rewrite text in any app", size=26, weight="bold")
+    s.box(40, 80, 240, 120, "1. Select text", "in mail, chat, a doc", fill="#ffffff")
+    s.arrow(285, 140, 345, 140)
+    s.box(350, 80, 300, 120, "2. Open Ask Umoja", "Fix spelling · Shorter · Friendlier\nMore formal · Translate · your own", fill=SOFT)
+    s.arrow(655, 140, 715, 140)
+    s.box(720, 80, 240, 120, "3. Replace", "the new text is typed\nin place of yours", fill="#ffffff", stroke=ORANGE)
+    s.text(500, 236, "Uses the assistant's model; with a local model the text never leaves the computer.", size=15, fill=MUTED)
+    return s
+
+
+SCENES = {
+    "four-keys": four_keys,
+    "desktop-parts": desktop_parts,
+    "tiling": tiling,
+    "workspaces": workspaces,
+    "ask-flow": ask_flow,
+    "privacy": privacy,
+    "automations": automations,
+    "setups": setups,
+    "captions": captions,
+    "auto-dnd": quiet,
+    "undo": undo,
+    "rewrite": rewrite,
+}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--out", type=Path, default=ROOT / "docs/guide/images")
+    a = p.parse_args()
+    a.out.mkdir(parents=True, exist_ok=True)
+    for name, scene in SCENES.items():
+        (a.out / f"{name}.svg").write_text(scene().render())
+    print(f"wrote {len(SCENES)} diagrams to {a.out}")
+
+
+if __name__ == "__main__":
+    main()

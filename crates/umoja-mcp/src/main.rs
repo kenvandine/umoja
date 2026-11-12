@@ -3,11 +3,12 @@
 //!     umoja-mcp                 serve MCP on stdin/stdout
 //!     umoja-mcp --dry-run       confirm as usual, but change nothing
 //!     umoja-mcp --list          print the tools
+//!     umoja-mcp --automations   run the user's automations (a session service)
 //!     umoja-mcp call NAME [JSON]  run one tool (risky ones ask with a dialog)
 
 use serde_json::{Value, json};
 
-const USAGE: &str = "usage: umoja-mcp [--dry-run] | --list | call NAME [JSON-ARGUMENTS]";
+const USAGE: &str = "usage: umoja-mcp [--dry-run] | --list | --automations | call NAME [JSON-ARGUMENTS]";
 
 fn main() {
     // stdout carries the protocol: logs go to stderr.
@@ -21,6 +22,7 @@ fn main() {
             let dry = args.first().is_some_and(|a| a == "--dry-run");
             ctx.block_on(umoja_mcp::server::serve_stdio(umoja_mcp::registry(), dry));
         }
+        Some("--automations") => ctx.block_on(umoja_mcp::automations::serve()),
         Some("--list") => {
             for t in umoja_mcp::registry() {
                 let risk = umoja_mcp::server::risk_name((t.risk)(&json!({})));

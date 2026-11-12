@@ -35,7 +35,7 @@ set_volume, set_audio_device, set_brightness, media_control, set_do_not_disturb,
 set_night_light, set_airplane_mode, connect_wifi, bluetooth_device, open_url (web pages and \
 web searches), open_in_terminal (command-line programs, in the user's own terminal; never \
 name a terminal app), open_folder, set_wallpaper, empty_trash, clear_folder, eject_drive, force_quit_app, \
-check_updates, install_updates, copy_to_clipboard, and date_time or system_info for facts \
+check_updates, install_updates, copy_to_clipboard, calendar_events (the user's meetings and events), and date_time or system_info for facts \
 about now and this computer. Those tools ask the user themselves when needed. For \
 settings, call list_settings to find the right one and its current value, then change_setting \
 in the same answer; don't stop to ask. \"Show X\" or \"turn on X\" means set it to true. For \
@@ -44,7 +44,7 @@ one rather than switching the feature off. When the user replies to a question y
 no, sure, the other one), do what you offered in the earlier turn. For windows, pass the app name as window (e.g. \
 arrange_window with window \"terminal\" and position \"left\"). Never invent tool results. If you called a tool, \
 reply in one short sentence saying what it did. For questions, answer in at most four short \
-sentences of practical guidance. For coding jobs (writing a script or program, changing code in \
+sentences of practical guidance. For \"when X happens, do Y\" or \"every day at...\" requests, call create_automation. To save or bring back a set of windows (\"save this as Coding\", \"set up for writing\"), use save_setup, define_setup or open_setup. When the user says undo or put it back, call undo. For \"what was that page/file/message from earlier\" questions, call recall_activity. When the user wants help learning the desktop, the manual or the guide, call open_user_guide. For coding jobs (writing a script or program, changing code in \
 a project, fixing a build), don't write the code yourself: call hand_off_to_agent with the whole \
 task, and if no agent is installed, say so in one sentence. Write plain text: no Markdown, no \
 backticks, no bold.";
@@ -67,6 +67,9 @@ pub trait Ui {
     fn confirm(&self, label: &str, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>>;
     /// True once the question was replaced or the window closed.
     fn cancelled(&self) -> bool;
+    /// Step `id` changed something that can be put back: offer Undo for
+    /// journal entry `undo_id` (see umoja-mcp's undo module).
+    fn undoable(&self, _id: usize, _undo_id: u64) {}
 }
 
 /// A question plus optional context (selected text, window contents...)
@@ -383,6 +386,9 @@ async fn run_mcp(mcp: &McpClient, name: &str, args: Value, id: usize, ui: &Rc<dy
             StepState::Done
         },
     );
+    if let Some(u) = r.undo.filter(|_| !r.is_error) {
+        ui.undoable(id, u);
+    }
     r.text
 }
 

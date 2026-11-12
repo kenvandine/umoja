@@ -78,7 +78,12 @@ impl ClockButton {
         menu.add_css_class("date-menu");
         let list = Rc::new(crate::notifications::MessageList::new(center));
         menu.append(&list.widget());
-        menu.append(&calendar);
+        // The calendar, and the selected day's events under it.
+        let side = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        side.append(&calendar);
+        let events = crate::events::Events::new(&calendar);
+        side.append(&events.widget());
+        menu.append(&side);
         let popover = gtk::Popover::builder()
             .child(&menu)
             .has_arrow(false)
@@ -102,6 +107,7 @@ impl ClockButton {
                 if let Ok(now) = glib::DateTime::now_local() {
                     calendar.select_day(&now);
                 }
+                events.refresh(true);
                 list.opened();
             });
         }

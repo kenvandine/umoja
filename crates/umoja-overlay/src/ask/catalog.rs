@@ -26,6 +26,7 @@ pub enum Local {
     ScreenRecordingUi,
     ClipboardHistory,
     AskAboutWindow,
+    Captions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +126,26 @@ const fn settings(
 }
 
 pub const CATALOG: &[Instant] = &[
+    control(
+        "user-guide",
+        "User Guide",
+        &["guide", "help", "manual", "documentation", "docs", "how to", "tutorial", "learn"],
+        "help-browser-symbolic",
+        Run::Call {
+            tool: "open_user_guide",
+            args: "{}",
+        },
+    ),
+    control(
+        "undo",
+        "Undo Last Change",
+        &["undo", "put back", "revert", "change back", "go back"],
+        "edit-undo-symbolic",
+        Run::Call {
+            tool: "undo",
+            args: "{}",
+        },
+    ),
     control(
         "dark-style",
         "Dark Style",
@@ -285,6 +306,13 @@ pub const CATALOG: &[Instant] = &[
         &["this window", "explain", "read", "what's on screen"],
         "focus-windows-symbolic",
         Run::Local(Local::AskAboutWindow),
+    ),
+    control(
+        "captions",
+        "Live Captions",
+        &["captions", "subtitles", "transcribe", "transcript", "what are they saying"],
+        "media-view-subtitles-symbolic",
+        Run::Local(Local::Captions),
     ),
     control(
         "empty-trash",

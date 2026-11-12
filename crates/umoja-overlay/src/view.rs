@@ -11,7 +11,7 @@
 
 use crate::appgrid;
 use crate::ask::{
-    self, calc,
+    self, calc, emoji, rewrite,
     catalog::{self, Instant, Local, Run},
 };
 use crate::assistant::agent::{self, Question, Reply, StepState, Ui as _};
@@ -77,6 +77,11 @@ enum Item {
     },
     /// A calculator result; Enter copies it.
     Sum(String),
+    /// An emoji; Enter types it into the app the user was in.
+    Emoji {
+        glyph: &'static str,
+        name: &'static str,
+    },
     File(Hit),
     /// Hand `question` to the assistant.
     Ask {
@@ -85,6 +90,28 @@ enum Item {
         sub: String,
     },
     Web(String),
+    /// Rewrite the selected text (`instruction` is a preset's or the
+    /// typed words); the answer can then replace it in the app.
+    Rewrite {
+        instruction: String,
+        label: String,
+    },
+    /// A named setup (umoja-mcp's open_setup).
+    Setup(String),
+}
+
+/// Names of the saved setups (`~/.config/umoja/setups.json`, written by
+/// umoja-mcp's setups tools).
+fn setup_names() -> Vec<String> {
+    let path = glib::user_config_dir().join("umoja").join("setups.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| s["name"].as_str().map(String::from))
+        .collect()
 }
 
 impl Item {
@@ -174,6 +201,10 @@ pub struct Overlay {
     pending: gtk::Box,
     pending_label: gtk::Label,
     attachments: RefCell<Vec<Attachment>>,
+    /// The newest Replace the Selection and Undo buttons, for the
+    /// feature test (tools/test) to press.
+    last_replace: RefCell<Option<glib::WeakRef<gtk::Button>>>,
+    last_undo: RefCell<Option<glib::WeakRef<gtk::Button>>>,
     /// The window the user was in when the overlay opened.
     last_window: RefCell<Option<FocusedWindow>>,
     shots: RefCell<Weak<ScreenshotUi>>,
@@ -547,6 +578,8 @@ impl Overlay {
             pending,
             pending_label,
             attachments: RefCell::default(),
+            last_replace: RefCell::default(),
+            last_undo: RefCell::default(),
             last_window: RefCell::default(),
             shots: RefCell::new(Weak::new()),
             history: clipboard::history(),
@@ -885,6 +918,22 @@ impl Overlay {
         } else {
             self.show()
         }
+    }
+
+    /// Live captions of what the computer is playing; "Summarize" brings
+    /// the transcript back here as context.
+    pub fn toggle_captions(self: &Rc<Self>) {
+        let Some(app) = self.window.application() else { return };
+        let weak = Rc::downgrade(self);
+        crate::captions::toggle(
+            &app,
+            Rc::new(move |text: String| {
+                let Some(o) = weak.upgrade() else { return };
+                o.show();
+                o.add_attachment(Attachment::new(Kind::Transcript, text));
+                o.ask(&i18n::umoja("Summarize what was said, with any decisions and to-dos"));
+            }),
+        );
     }
 
     pub fn toggle_dictation(&self) {
@@ -1301,6 +1350,28 @@ impl Overlay {
                 },
                 i18n::umoja("With what you attached"),
             ));
+            // Only selected text: offer to rewrite it in place.
+            let only_selection = matches!(self.attachments.borrow().as_slice(), [a] if a.kind == Kind::Selection);
+            if only_selection {
+                if text.is_empty() {
+                    for (_, title, instruction) in rewrite::PRESETS {
+                        out.push(Entry::Item(Item::Rewrite {
+                            instruction: instruction.to_string(),
+                            label: i18n::umoja(title),
+                        }));
+                    }
+                } else {
+                    let row = Entry::Item(Item::Rewrite {
+                        instruction: text.to_string(),
+                        label: i18n::umoja("Rewrite it: “%s”").replace("%s", text),
+                    });
+                    if rewrite::looks_like_instruction(text) {
+                        out.insert(0, row);
+                    } else {
+                        out.push(row);
+                    }
+                }
+            }
             return out;
         }
         let focus = self.focused_app();
@@ -1409,6 +1480,12 @@ impl Overlay {
                 scored.push((s + bonus, Item::Instant { item, intent }));
             }
         }
+        for name in setup_names() {
+            let s = ask::score(&name, &["setup", "layout", "workspace", "set up"], &words);
+            if s > 0 {
+                scored.push((s + 1, Item::Setup(name)));
+            }
+        }
         // Stable: equal scores keep apps, then actions, then the catalog.
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
         let best = scored.first().map(|(s, _)| *s);
@@ -1434,6 +1511,19 @@ impl Overlay {
         );
         let questionish = lemonade::looks_like_question(text) || hits.is_empty();
         let file_first = crate::files::looks_like_file_search(text);
+        // Emoji: first when asked for ("emoji heart", ":tada"), else a
+        // couple after the other matches ("party").
+        let mut hits = hits;
+        if let Some((_, mode)) = emoji::parse(text) {
+            let rows = emoji::search(text)
+                .into_iter()
+                .map(|(glyph, name)| Item::Emoji { glyph, name });
+            if mode == emoji::Mode::Explicit {
+                out.extend(rows.map(Entry::Item));
+            } else {
+                hits.extend(rows.take(2));
+            }
+        }
         if ask::ask_first(questionish && !file_first, best, text) {
             out.push(ask_item);
             out.extend(files.into_iter().map(Entry::Item));
@@ -1564,7 +1654,22 @@ impl Overlay {
                 i18n::umoja("Answer"),
             ),
             Item::File(h) => (h.name.clone(), h.detail.clone(), i18n::umoja("File")),
+            Item::Emoji { name, .. } => (
+                capitalize(name),
+                i18n::umoja("Enter types it"),
+                i18n::umoja("Emoji"),
+            ),
             Item::Ask { label, sub, .. } => (label.clone(), sub.clone(), i18n::umoja("Ask")),
+            Item::Setup(name) => (
+                i18n::umoja("Set Up “%s”").replace("%s", name),
+                i18n::umoja("Opens its apps and puts each window in its place"),
+                i18n::umoja("Setup"),
+            ),
+            Item::Rewrite { label, .. } => (
+                label.clone(),
+                i18n::umoja("Then replace the selection with it"),
+                i18n::umoja("Rewrite"),
+            ),
             Item::Web(q) => (
                 i18n::umoja("Search the web for “%s”").replace("%s", q),
                 String::new(),
@@ -1588,12 +1693,21 @@ impl Overlay {
                 &crate::ask::catalog::icon_names(item.icon),
             )),
             Item::Sum(_) => gtk::Image::from_icon_name("accessories-calculator-symbolic"),
+            Item::Emoji { .. } => gtk::Image::new(),
             Item::File(h) => gtk::Image::from_gicon(&crate::files::file_icon(&h.path)),
             Item::Ask { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "starred-symbolic",
                 "dialog-question-symbolic",
             ])),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
+            Item::Setup(_) => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+                "view-grid-symbolic",
+                "focus-windows-symbolic",
+            ])),
+            Item::Rewrite { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+                "document-edit-symbolic",
+                "edit-symbolic",
+            ])),
         };
         icon.set_pixel_size(match item {
             Item::App(_) | Item::Action { .. } | Item::File(_) => 28,
@@ -1611,7 +1725,15 @@ impl Overlay {
         icon_box.set_hexpand(false);
         icon.set_hexpand(true);
         icon.set_halign(gtk::Align::Center);
-        icon_box.append(&icon);
+        if let Item::Emoji { glyph, .. } = item {
+            let l = gtk::Label::new(Some(glyph));
+            l.add_css_class("ask-emoji");
+            l.set_hexpand(true);
+            l.set_accessible_role(gtk::AccessibleRole::Presentation);
+            icon_box.append(&l);
+        } else {
+            icon_box.append(&icon);
+        }
 
         let texts = gtk::Box::new(gtk::Orientation::Vertical, 1);
         texts.set_hexpand(true);
@@ -1707,6 +1829,7 @@ impl Overlay {
                 self.announce(&i18n::umoja("Copied %s").replace("%s", &v));
                 self.hide();
             }
+            Item::Emoji { glyph, .. } => self.type_into_app(glyph.to_string()),
             Item::File(h) => {
                 let ctx = WidgetExt::display(&self.window).app_launch_context();
                 match crate::files::open(&h.path, Some(ctx.upcast_ref())) {
@@ -1715,6 +1838,8 @@ impl Overlay {
                 }
             }
             Item::Ask { question, .. } => self.ask(&question),
+            Item::Rewrite { instruction, .. } => self.rewrite(&instruction),
+            Item::Setup(name) => self.call_tool("open_setup", serde_json::json!({ "name": name }), None),
             Item::Web(q) => {
                 let ctx = WidgetExt::display(&self.window).app_launch_context();
                 match gio::AppInfo::launch_default_for_uri(&ask::web_search_url(&q), Some(&ctx)) {
@@ -1723,6 +1848,21 @@ impl Overlay {
                 }
             }
         }
+    }
+
+    /// Hide, then type `text` into the window the user was in. If it
+    /// can't be typed it is copied instead.
+    fn type_into_app(self: &Rc<Self>, text: String) {
+        self.hide();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            if let Err(e) = crate::typer::type_into_focused(text.clone()).await {
+                tracing::warn!(error = %e, "couldn't type into the focused window; copying");
+                if let Some(o) = weak.upgrade() {
+                    o.copy_text(&text);
+                }
+            }
+        });
     }
 
     fn run_instant(self: &Rc<Self>, item: &'static Instant, intent: Option<bool>) {
@@ -1744,6 +1884,10 @@ impl Overlay {
                     }
                     Local::ClipboardHistory => self.clip_button.set_active(true),
                     Local::AskAboutWindow => self.attach_window(),
+                    Local::Captions => {
+                        self.hide();
+                        self.toggle_captions();
+                    }
                 }
             }
             Run::Toggle { tool, state } => {
@@ -1909,6 +2053,68 @@ impl Overlay {
             }
             answer
         })
+    }
+
+    /// The rows showing, as (kind, title, subtitle), for the feature test.
+    pub fn test_rows(&self) -> Vec<(String, String, String)> {
+        let items = self.items.borrow().clone();
+        items
+            .iter()
+            .flatten()
+            .map(|item| {
+                let (title, sub, kind) = self.describe(item);
+                (kind, title, sub)
+            })
+            .collect()
+    }
+
+    /// Run the `index`th row (headings not counted), as Enter on it would.
+    pub fn test_activate(self: &Rc<Self>, index: u32) -> bool {
+        let pos = self
+            .items
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.is_some())
+            .nth(index as usize)
+            .map(|(i, _)| i);
+        let Some(pos) = pos else { return false };
+        self.select(Some(pos));
+        self.activate_selected();
+        true
+    }
+
+    /// Press a button or read state that the rows don't cover (feature test):
+    /// "replace", "undo", "attach-selection", "attachments", "answer",
+    /// "captions-summarize", "captions-text".
+    pub fn test_action(self: &Rc<Self>, action: &str) -> (bool, String) {
+        let press = |b: &RefCell<Option<glib::WeakRef<gtk::Button>>>| match b.borrow().as_ref().and_then(|w| w.upgrade()) {
+            Some(b) if b.is_sensitive() => {
+                b.emit_clicked();
+                (true, b.label().map(|l| l.to_string()).unwrap_or_default())
+            }
+            _ => (false, String::new()),
+        };
+        match action {
+            "replace" => press(&self.last_replace),
+            "undo" => press(&self.last_undo),
+            "attach-selection" => {
+                self.attach_selection();
+                (!self.attachments.borrow().is_empty(), String::new())
+            }
+            "attachments" => {
+                let a = self.attachments.borrow();
+                let text = a.iter().map(|a| format!("{:?}: {}", a.kind, a.text)).collect::<Vec<_>>().join("\n");
+                (!a.is_empty(), text)
+            }
+            "answer" => (true, self.answer_text.borrow().clone()),
+            "captions-summarize" => (crate::captions::summarize_now(), String::new()),
+            "captions-text" => {
+                let t = crate::captions::transcript();
+                (crate::captions::is_running(), t)
+            }
+            _ => (false, format!("unknown action {action}")),
+        }
     }
 
     /// Answer the confirmation that is showing, as if Allow or Cancel was
@@ -2150,6 +2356,89 @@ impl Overlay {
         });
     }
 
+    /// Rewrite the attached selection as `instruction` says, then offer
+    /// to put the result in its place.
+    fn rewrite(self: &Rc<Self>, instruction: &str) {
+        let Some(text) = self
+            .attachments
+            .borrow()
+            .iter()
+            .find(|a| a.kind == Kind::Selection)
+            .map(|a| a.text.clone())
+        else {
+            return;
+        };
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.end_conversation();
+        self.reset_card();
+        *self.asked_text.borrow_mut() = self.entry.text().to_string();
+        self.stack.set_visible(false);
+        self.answer.set_text(&i18n::umoja("Thinking…"));
+
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": rewrite::system_prompt(instruction, &context::user_language())}),
+            serde_json::json!({"role": "user", "content": context::truncate_chars(&text, context::MAX_CONTEXT_CHARS)}),
+        ];
+        let (tx, rx) = async_channel::unbounded();
+        let client = LemonadeClient::new();
+        RUNTIME.spawn(async move { client.stream_chat(messages, Vec::new(), tx).await });
+
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let mut reply = String::new();
+            while let Ok(ev) = rx.recv().await {
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation {
+                    return;
+                }
+                match ev {
+                    ChatEvent::Text(d) => {
+                        reply.push_str(&d);
+                        o.answer.set_text(&rewrite::clean_reply(&reply));
+                    }
+                    ChatEvent::ToolCalls(_) => {}
+                    ChatEvent::Done => {
+                        let shown = rewrite::clean_reply(&reply);
+                        o.answer.set_text(&shown);
+                        o.copy_button.set_visible(!shown.is_empty());
+                        o.announce(&shown);
+                        *o.answer_text.borrow_mut() = shown.clone();
+                        if !shown.is_empty() {
+                            o.chips.append(&o.replace_chip(shown));
+                            o.chips.set_visible(true);
+                        }
+                        return;
+                    }
+                    ChatEvent::Error(e) => {
+                        o.answer.set_text(&e);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /// "Replace" under a rewrite: type it over the selection in the app.
+    fn replace_chip(self: &Rc<Self>, text: String) -> gtk::Widget {
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.append(&gtk::Image::from_icon_name("edit-paste-symbolic"));
+        content.append(&gtk::Label::new(Some(&i18n::umoja("Replace the Selection"))));
+        let b = gtk::Button::builder()
+            .child(&content)
+            .css_classes(["suggested-action", "pill"])
+            .tooltip_text(i18n::umoja("Types this over the text you selected"))
+            .build();
+        let weak = Rc::downgrade(self);
+        b.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.type_into_app(text.clone());
+            }
+        });
+        *self.last_replace.borrow_mut() = Some(b.downgrade());
+        b.upcast()
+    }
+
     fn reset_card(&self) {
         self.cancel_confirm();
         self.assistant.set_visible(true);
@@ -2158,13 +2447,16 @@ impl Overlay {
         self.show_answer_actions(false);
         self.stop_speaking();
         self.answer_text.borrow_mut().clear();
-        for b in [
-            self.chips.upcast_ref::<gtk::Widget>(),
-            self.steps.upcast_ref(),
-        ] {
-            while let Some(c) = b.first_child() {
-                c.unparent();
-            }
+        // Through each container's own remove: a FlowBox keeps its own list
+        // of children, and unparenting them behind its back left freed
+        // widgets in it that the next layout measured (overlay SIGSEGV in
+        // gtk_widget_get_visible, seen when a question followed an answer
+        // with chips).
+        while let Some(c) = self.chips.first_child() {
+            self.chips.remove(&c);
+        }
+        while let Some(c) = self.steps.first_child() {
+            self.steps.remove(&c);
         }
         self.steps.set_visible(false);
     }
@@ -2997,6 +3289,45 @@ impl agent::Ui for OverlayUi {
     fn cancelled(&self) -> bool {
         self.live().is_none()
     }
+
+    fn undoable(&self, id: usize, undo_id: u64) {
+        if self.live().is_none() {
+            return;
+        }
+        let rows = self.rows.borrow();
+        let Some((row, _)) = rows.get(&id) else { return };
+        let button = gtk::Button::with_label(&i18n::umoja("Undo"));
+        if let Some(o) = self.live() {
+            *o.last_undo.borrow_mut() = Some(button.downgrade());
+        }
+        button.add_css_class("flat");
+        button.add_css_class("assistant-undo");
+        button.set_valign(gtk::Align::Center);
+        button.set_tooltip_text(Some(&i18n::umoja("Put this back the way it was")));
+        let row_weak = row.downgrade();
+        button.connect_clicked(move |b| {
+            b.set_sensitive(false);
+            let b = b.clone();
+            let row = row_weak.clone();
+            glib::spawn_future_local(async move {
+                match mcp::undo(undo_id).await {
+                    Ok(_) => {
+                        b.set_label(&i18n::umoja("Undone"));
+                        b.set_tooltip_text(None);
+                        if let Some(r) = row.upgrade() {
+                            r.add_css_class("undone");
+                        }
+                    }
+                    Err(e) => {
+                        b.set_sensitive(true);
+                        b.set_tooltip_text(Some(&e));
+                        b.add_css_class("error");
+                    }
+                }
+            });
+        });
+        row.append(&button);
+    }
 }
 
 /// The overlay's side of the assistant's capture tools.
@@ -3117,3 +3448,11 @@ fn join_label(title: &str, kind: &str, sub: &str) -> String {
 }
 
 pub(crate) use umoja_common::terminal::{needs_terminal, spawn_in_terminal};
+
+/// "party popper" → "Party popper".
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+        .unwrap_or_default()
+}
