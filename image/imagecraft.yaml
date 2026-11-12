@@ -87,6 +87,11 @@ parts:
       set -eux
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
+      # The rootfs part's copy into the overlay drops setuid/setgid bits
+      # (unix_chkpwd, passwd, su, mount...), which broke unlocking the lock
+      # screen. Reinstall everything it put there so dpkg sets the modes
+      # again; the guard below fails the build if any are still missing.
+      apt-get install -y --reinstall $(dpkg-query -W -f '${binary:Package}\n')
       # Generic initrds that can unlock LUKS: the installer then doesn't
       # have to rebuild one (bin/umoja-install), and kernel updates keep
       # working on any disk layout.
@@ -119,6 +124,13 @@ parts:
       # Umoja must not have brought GNOME Shell back.
       for p in gnome-shell mutter gdm3 budgie-desktop gnome-terminal alacritty; do
         if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
+      done
+      # setuid/setgid helpers must keep their bits (see the reinstall above).
+      for f in /usr/sbin/unix_chkpwd /usr/bin/chage; do
+        [ -g "$f" ] || { echo "$f lost setgid" >&2; exit 1; }
+      done
+      for f in /usr/bin/passwd /usr/bin/su /usr/bin/mount /usr/bin/umount /usr/bin/sudo /usr/bin/pkexec; do
+        [ -u "$(readlink -f "$f")" ] || { echo "$f lost setuid" >&2; exit 1; }
       done
       # Ptyxis is the one terminal. apport-gtk wants "gnome-terminal |
       # x-terminal-emulator", and apt is free to pick any provider for it.
