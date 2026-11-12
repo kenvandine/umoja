@@ -125,6 +125,7 @@ parts:
       - gnome-46-2404
       - gnome-core26
       - mesa-2404
+      - mesa-2604
       - firefox
       - snap-store
       - firmware-updater
