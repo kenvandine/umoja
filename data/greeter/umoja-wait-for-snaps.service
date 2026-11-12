@@ -7,6 +7,8 @@ Documentation=https://github.com/kenvandine/umoja
 # Later boots return at once. lightdm only Wants this, so a failure or the
 # timeout below never keeps anyone from logging in.
 ConditionPathExists=/var/lib/snapd/seed/seed.yaml
+# Not in the installer's live session: it doesn't need the snaps to install.
+ConditionKernelCommandLine=!boot=casper
 Wants=snapd.socket
 After=snapd.socket snapd.service
 Before=lightdm.service display-manager.service plymouth-quit.service plymouth-quit-wait.service
