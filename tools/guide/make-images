@@ -39,6 +39,8 @@ CROPS = {
     "ai-settings": ("ai-settings", (620, 90, 1340, 390)),
     "ai-troubleshoot": ("ai-troubleshoot", (40, 60, 1880, 420)),
     "ai-reply": ("ai-reply", (740, 40, 1200, 440)),
+    "ai-opencode-default": ("ai-opencode-default", (1035, 590, 1480, 1062)),
+    "ai-opencode": ("ai-opencode", (1078, 242, 1894, 852)),
     "quick-settings": ("quick-settings", (1520, 20, 1920, 340)),
     "date-menu": ("calendar", (600, 20, 1360, 580)),
     "notifications": ("notifications", (770, 30, 1150, 430)),
@@ -54,9 +56,6 @@ CROPS = {
     "ai-tiling": ("ai-tiling", None),
     "ai-btop-running": ("ai-btop-running", None),
     "screensaver": ("screensaver", None),
-    # The coding agent (ai-opencode). Whole screens until the crops are set.
-    "ai-opencode-default": ("ai-opencode-default", None),
-    "ai-opencode": ("ai-opencode", None),
 }
 
 FULL_WIDTH = 1600
