@@ -120,8 +120,10 @@ parts:
       - snapd
       - bare
       - core24
+      - core26
       - gtk-common-themes
       - gnome-46-2404
+      - gnome-core26
       - mesa-2404
       - firefox
       - snap-store
