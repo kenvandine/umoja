@@ -95,11 +95,13 @@ jobs:
 
       - name: Install LXD and Imagecraft
         run: |
-          sudo snap install lxd
+          # The snap store sometimes times out (HTTP 408); retry.
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep 30; done; return 1; }
+          retry sudo snap install lxd
           sudo lxd waitready
           sudo lxd init --auto
           sudo usermod -aG lxd "$USER"
-          sudo snap install imagecraft --classic
+          retry sudo snap install imagecraft --classic
           imagecraft version
 
       - name: Build the image
