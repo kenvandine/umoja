@@ -147,8 +147,9 @@ parts:
       sed -i -E 's|^(\s*channel:).*$|\1 latest/stable/ubuntu-26.10|' \
         "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
       grep -n 'channel:' "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
-    organize:
-      "var/*": (overlay)/var/
+    # No organize into (overlay): that copy happens after this part's
+    # overlay layer is captured, so the seed never reached the image.
+    # Staged normally, var/lib/snapd/seed is primed into the rootfs.
 
   system-config:
     after: [seed-snaps]
