@@ -102,6 +102,12 @@ jobs:
           retry sudo snap install lxd
           sudo lxd waitready
           sudo lxd init --auto
+          # Docker on the runner sets the FORWARD policy to DROP, which cuts
+          # LXD containers off the network (as canonical/setup-lxd works
+          # around).
+          sudo iptables -P FORWARD ACCEPT
+          sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT || true
+          sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true
           sudo usermod -aG lxd "$USER"
           retry sudo snap install imagecraft --classic
           imagecraft version
