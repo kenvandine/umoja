@@ -147,6 +147,13 @@ package), which **replaces GDM with LightDM** from the next boot. If you'd
 rather keep GDM, install with `sudo apt install --no-install-recommends
 umoja-desktop` and add any recommended packages you want by hand.
 
+`ubuntu-umoja-desktop` is the whole Umoja desktop without GNOME Shell:
+Ubuntu Desktop's default apps and settings with Umoja and its login screen
+in place of GNOME Shell and GDM, plus Showtime and Snapshot. It's what the
+Umoja installer image installs, and it also adds the PPA as a package
+source (`umoja-archive-keyring`). On a machine that only has an Ubuntu
+server or minimal install, use `sudo apt install ubuntu-umoja-desktop`.
+
 Then reboot (the login screen switch needs one; without `umoja-greeter`,
 logging out is enough), choose **Umoja** as the session on the login
 screen, and log in. The first time, Umoja downloads a local AI model in the

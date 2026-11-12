@@ -1,0 +1,39 @@
+#!/bin/sh
+# Download the signing keys of Umoja's PPAs into vendor/keyrings, for the
+# umoja-archive-keyring package. Run by `make vendor` (CI and laptops have
+# network; Launchpad builders don't, so the keys travel in the source
+# package like the vendored crates).
+#
+# Launchpad reports each PPA's key fingerprint over HTTPS; the key itself
+# comes from keyserver.ubuntu.com and is checked against that fingerprint.
+set -eu
+
+OUT=${1:-vendor/keyrings}
+mkdir -p "$OUT"
+
+fetch() {
+    ppa=$1 file=$2
+    fpr=$(curl -fsSL --retry 5 --retry-all-errors \
+        "https://api.launchpad.net/devel/~ken-vandine/+archive/ubuntu/$ppa" |
+        python3 -c 'import json, sys; print(json.load(sys.stdin)["signing_key_fingerprint"])')
+    case "$fpr" in
+        [0-9A-F]*) ;;
+        *) echo "fetch-ppa-keys: no signing key fingerprint for ppa:ken-vandine/$ppa" >&2; exit 1 ;;
+    esac
+    tmp=$(mktemp)
+    curl -fsSL --retry 5 --retry-all-errors -o "$tmp" \
+        "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$fpr"
+    if command -v gpg >/dev/null 2>&1; then
+        got=$(gpg --show-keys --with-colons "$tmp" 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}')
+        if [ "$got" != "$fpr" ]; then
+            echo "fetch-ppa-keys: keyserver returned $got for $fpr" >&2
+            rm -f "$tmp"; exit 1
+        fi
+    fi
+    mv "$tmp" "$OUT/$file"
+    chmod 0644 "$OUT/$file"
+    echo "ppa:ken-vandine/$ppa key $fpr -> $OUT/$file"
+}
+
+fetch umoja umoja-archive-keyring.asc
+fetch umoja-edge umoja-edge-archive-keyring.asc

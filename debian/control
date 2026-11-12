@@ -74,6 +74,8 @@ Recommends: umoja-greeter,
             libsecret-tools,
             tesseract-ocr,
             systemd-coredump
+Provides: polkit-1-auth-agent,
+          notification-daemon
 Description: AI-native, Rust-based desktop shell for Ubuntu
  Umoja is a resilient, modern desktop environment built in Rust, powered by
  Mir and GTK4. It features seamless GNOME/Ubuntu settings fidelity,
@@ -82,6 +84,10 @@ Description: AI-native, Rust-based desktop shell for Ubuntu
  The Lemonade server is bundled privately under /usr/lib/umoja/lemonade and
  runs per user on 127.0.0.1:13345, so it does not conflict with a system
  lemonade-server package on its default port 13305.
+ .
+ umoja-panel is the session's polkit authentication agent and notification
+ server, which is what lets update-manager, update-notifier and
+ nm-connection-editor install without GNOME Shell.
 
 Package: umoja-greeter
 Architecture: any
@@ -105,3 +111,33 @@ Description: GTK4 LightDM greeter for Umoja
  On a fresh install this package makes LightDM the default display manager
  in place of GDM; the change takes effect at the next boot. Removing the
  package restores the previous display manager.
+
+Package: ubuntu-umoja-desktop
+Architecture: all
+Depends: ${misc:Depends},
+         ${umoja:Depends},
+         umoja-desktop (>= ${source:Version}),
+         umoja-greeter (>= ${source:Version}),
+         umoja-archive-keyring
+Recommends: ${umoja:Recommends}
+Description: Ubuntu with the Umoja desktop (metapackage)
+ Everything Ubuntu Desktop installs by default, with Umoja in place of
+ GNOME Shell: the Umoja shell and greeter instead of gnome-shell, gdm3 and
+ the Ubuntu GNOME session. GNOME apps, Settings, portals, Yaru and the
+ Ubuntu defaults stay. Also adds Showtime and Snapshot.
+ .
+ The lists follow ubuntu-desktop-minimal; packaging/meta/update in the
+ Umoja source refreshes them.
+
+Package: umoja-archive-keyring
+Architecture: all
+Depends: ${misc:Depends}
+Description: Package source and signing key for the Umoja PPA
+ Adds ppa:ken-vandine/umoja as a package source, with its signing key, so
+ Umoja and its patched Mir keep updating after install. Mir packages from
+ the PPA are pinned above the Ubuntu archive's, since Umoja needs its
+ patches. If the PPA is already configured (add-apt-repository), the
+ existing source is left alone.
+ .
+ The edge PPA's key is included too, for testers who add
+ ppa:ken-vandine/umoja-edge.

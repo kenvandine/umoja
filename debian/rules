@@ -18,6 +18,8 @@ endif
 LEMONADE_SRC := vendor/lemonade/$(LEMONADE_ARCH)
 DESKTOP := debian/umoja-desktop
 GREETER := debian/umoja-greeter
+KEYRING := debian/umoja-archive-keyring
+META := packaging/meta/ubuntu-umoja-desktop
 
 %:
 	dh $@
@@ -105,6 +107,22 @@ endif
 	install -D -m 0644 data/lightdm-umoja-greeter-x11.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter-x11.desktop
 	install -D -m 0644 data/lightdm/60-umoja.conf $(GREETER)/usr/share/lightdm/lightdm.conf.d/60-umoja.conf
 	install -D -m 0644 data/pam/umoja-greeter $(GREETER)/etc/pam.d/umoja-greeter
+
+override_dh_install-indep:
+	dh_install -i
+	# PPA keys come from `make vendor` (packaging/fetch-ppa-keys).
+	for k in umoja-archive-keyring.asc umoja-edge-archive-keyring.asc; do \
+	  test -s vendor/keyrings/$$k || { echo "missing vendor/keyrings/$$k; run 'make vendor-keyrings'" >&2; exit 1; }; \
+	  install -D -m 0644 vendor/keyrings/$$k $(KEYRING)/usr/share/keyrings/$$k; \
+	done
+	install -D -m 0644 data/apt/umoja.sources.in $(KEYRING)/usr/share/umoja-archive-keyring/umoja.sources.in
+	install -D -m 0644 data/apt/umoja-mir.pref $(KEYRING)/etc/apt/preferences.d/umoja-mir.pref
+
+override_dh_gencontrol:
+	# ubuntu-umoja-desktop's lists, one dependency per line (packaging/meta/update).
+	echo "umoja:Depends=$$(paste -sd, $(META).depends | sed 's/,/, /g')" >> debian/ubuntu-umoja-desktop.substvars
+	echo "umoja:Recommends=$$(paste -sd, $(META).recommends | sed 's/,/, /g')" >> debian/ubuntu-umoja-desktop.substvars
+	dh_gencontrol
 
 override_dh_shlibdeps:
 	# lemond gets normal shlib deps; its downloaded/bundled backends under

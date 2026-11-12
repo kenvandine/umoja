@@ -1,0 +1,10 @@
+# Umoja needs its patched Mir (2.28.0-4umojaN: hybrid GPUs, blur,
+# screencast, Xwayland fixes). Keep Mir from the Umoja PPAs even if the
+# Ubuntu archive later carries a higher version.
+Package: mir-* mirtest-* libmir*
+Pin: release o=LP-PPA-ken-vandine-umoja
+Pin-Priority: 1001
+
+Package: mir-* mirtest-* libmir*
+Pin: release o=LP-PPA-ken-vandine-umoja-edge
+Pin-Priority: 1001
