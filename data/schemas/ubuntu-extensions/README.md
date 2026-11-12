@@ -14,3 +14,10 @@ next to Umoja the extension's own schemas are used, as before.
 
 To refresh, extract a newer `gnome-shell-ubuntu-extensions` deb and copy
 `usr/share/glib-2.0/schemas/*` here.
+
+`org.gnome.shell.gschema.xml` and `org.gnome.shell.ubuntu.gschema.xml` come
+from gnome-shell-common 51.0-2ubuntu3, and
+`10_ubuntu-settings-shell.gschema.override` holds the `org.gnome.shell`
+sections of ubuntu-settings 26.10.1 (the dock's pinned apps,
+`favorite-apps`), unchanged. They go into the same fallback directory, so
+without GNOME Shell the dock still gets Ubuntu's pins.

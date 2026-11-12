@@ -36,6 +36,13 @@ Comment: GSettings schemas and dock defaults copied unchanged from
  appindicators GPL-2+, tiling-assistant GPL-2).
 License: GPL-3
 
+Files: data/schemas/ubuntu-extensions/org.gnome.shell*.gschema.xml
+       data/schemas/ubuntu-extensions/10_ubuntu-settings-shell.gschema.override
+Copyright: 2008-2025 The GNOME Shell authors; Canonical Ltd.
+Comment: Copied unchanged from gnome-shell-common (GPL-2+) and
+ ubuntu-settings (GPL-2+).
+License: GPL-2.0-or-later
+
 Files: vendor/cargo/*
 Copyright: The respective crate authors
 License: various

@@ -1,0 +1,12 @@
+# The org.gnome.shell sections of ubuntu-settings 26.10.1's
+# 10_ubuntu-settings.gschema.override, unchanged: without GNOME Shell the
+# system copy of that file can't apply them (no schema to override).
+
+[org.gnome.shell]
+# This is overriden for the Ubuntu session later
+favorite-apps = [ 'ubuntu-desktop-bootstrap_ubuntu-desktop-bootstrap.desktop', 'firefox_firefox.desktop', 'org.gnome.Evolution.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Rhythmbox3.desktop', 'libreoffice-writer.desktop', 'snap-store_snap-store.desktop', 'org.gnome.Yelp.desktop' ]
+
+[org.gnome.shell:ubuntu]
+always-show-log-out = true
+favorite-apps = [ 'ubuntu-desktop-bootstrap_ubuntu-desktop-bootstrap.desktop', 'firefox_firefox.desktop', 'thunderbird_thunderbird.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Rhythmbox3.desktop', 'libreoffice-writer.desktop', 'snap-store_snap-store.desktop', 'org.gnome.Yelp.desktop' ]
+start-in-overview = false
