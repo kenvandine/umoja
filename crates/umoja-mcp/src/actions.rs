@@ -436,7 +436,7 @@ async fn press_media_key(key: &str) -> Result<(), String> {
 
 // ---- volume ---------------------------------------------------------------------
 
-fn is_mic(a: &Value) -> bool {
+pub(crate) fn is_mic(a: &Value) -> bool {
     arg_str(a, "device").is_some_and(|d| {
         let d = d.to_lowercase();
         d.starts_with("mic") || d == "input" || d == "source"
@@ -507,6 +507,29 @@ async fn set_volume(a: Value) -> Outcome {
     }
     let what = if mic { "Microphone" } else { "Volume" };
     Outcome::ok(if muted { format!("{what} is muted ({pct}%)") } else { format!("{what} is at {pct}%") })
+}
+
+/// (percent, muted) of the default speaker or microphone.
+pub(crate) async fn volume_now(mic: bool) -> Option<(u32, bool)> {
+    blocking(move || -> Result<(u32, bool), String> {
+        let mut c = crate::pulse::Client::connect()?;
+        let d = c.default_device(mic)?;
+        Ok((d.percent(), d.muted))
+    })
+    .await
+    .ok()?
+    .ok()
+}
+
+/// The description of the default output (or input) device.
+pub(crate) async fn default_device_name(input: bool) -> Option<String> {
+    blocking(move || -> Result<String, String> {
+        let mut c = crate::pulse::Client::connect()?;
+        Ok(c.default_device(input)?.description)
+    })
+    .await
+    .ok()?
+    .ok()
 }
 
 // ---- sound devices ----------------------------------------------------------------
@@ -597,6 +620,13 @@ fn backlight() -> Option<Backlight> {
         min = 0;
     }
     (min < max).then_some(Backlight { name, dir, min, max })
+}
+
+/// The screen brightness now, in percent.
+pub(crate) fn brightness_now() -> Option<u64> {
+    let b = backlight()?;
+    let now = read_int(&b.dir.join("brightness"))?;
+    Some((((now - b.min) * 100) as f64 / (b.max - b.min) as f64).round().clamp(0.0, 100.0) as u64)
 }
 
 /// The new raw value for `level`% or a 10% step from `now`.

@@ -25,6 +25,7 @@ pub mod pulse;
 pub mod server;
 pub mod settings;
 pub mod tool;
+pub mod undo;
 
 pub use tool::{Outcome, Risk, Tool};
 
@@ -37,6 +38,7 @@ const PROVIDERS: &[fn() -> Vec<Tool>] = &[
     files::tools,
     notifications::tools,
     diagnostics::tools,
+    undo::tools,
 ];
 
 /// All tools, in registration order.

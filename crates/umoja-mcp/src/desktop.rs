@@ -426,6 +426,32 @@ pub(crate) async fn set_bluetooth(a: Value) -> String {
     }
 }
 
+// ---- state readers (undo) ----------------------------------------------------------
+
+pub(crate) async fn wifi_enabled() -> Option<bool> {
+    let c = system_bus().await.ok()?;
+    get_prop(&c, NM, NM_PATH, NM, "WirelessEnabled").await.ok()?.get::<bool>()
+}
+
+pub(crate) async fn bluetooth_powered() -> Option<bool> {
+    let c = system_bus().await.ok()?;
+    bt_adapter(&c).await.ok().map(|(_, p)| p)
+}
+
+pub(crate) async fn power_profile() -> Option<String> {
+    let c = system_bus().await.ok()?;
+    power_mode(&c).await.ok().map(|(_, p)| p).filter(|p| !p.is_empty())
+}
+
+/// The 0-based workspace window `id` is on (`None` when it is on all).
+pub(crate) async fn window_workspace(id: u64) -> Option<u32> {
+    let v = compositor_call("GetWindowWorkspaces", None, Some("(a(ti))")).await.ok()?;
+    let (rows,) = v.get::<(Vec<(u64, i32)>,)>()?;
+    rows.into_iter()
+        .find(|(w, _)| *w == id)
+        .and_then(|(_, ws)| u32::try_from(ws).ok())
+}
+
 // ---- status -----------------------------------------------------------------------
 
 async fn desktop_status() -> String {
@@ -470,11 +496,11 @@ async fn desktop_status() -> String {
 // ---- windows ------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
-struct Win {
-    id: u64,
-    app_id: String,
-    title: String,
-    flags: u32,
+pub(crate) struct Win {
+    pub(crate) id: u64,
+    pub(crate) app_id: String,
+    pub(crate) title: String,
+    pub(crate) flags: u32,
     /// The app's names from its .desktop file ("Files" for
     /// org.gnome.Nautilus), so "put Files on the left" finds it.
     names: Vec<String>,
@@ -505,12 +531,12 @@ fn squash(s: &str) -> String {
         .collect()
 }
 
-const FOCUSED: u32 = 1;
-const MINIMIZED: u32 = 2;
-const CURRENT_WORKSPACE: u32 = 4;
-const MAXIMIZED: u32 = 8;
-const FULLSCREEN: u32 = 16;
-const TILED: u32 = 32;
+pub(crate) const FOCUSED: u32 = 1;
+pub(crate) const MINIMIZED: u32 = 2;
+pub(crate) const CURRENT_WORKSPACE: u32 = 4;
+pub(crate) const MAXIMIZED: u32 = 8;
+pub(crate) const FULLSCREEN: u32 = 16;
+pub(crate) const TILED: u32 = 32;
 
 thread_local! {
     /// Short numbers handed to the model by list_windows → compositor ids.
@@ -588,7 +614,7 @@ async fn windows() -> Result<Vec<Win>, String> {
         .collect())
 }
 
-async fn workspaces() -> Option<(u32, u32)> {
+pub(crate) async fn workspaces() -> Option<(u32, u32)> {
     let v = compositor_call("GetWorkspaces", None, Some("(uu)")).await.ok()?;
     v.get::<(u32, u32)>().filter(|(_, n)| *n > 0)
 }
@@ -644,6 +670,10 @@ fn pick_window<'a>(wins: &'a [Win], a: &Value) -> Option<&'a Win> {
         _ => String::new(),
     };
     let want = want.trim_start_matches('#').trim();
+    // "id:<compositor id>", as undo records it (short numbers are per process).
+    if let Some(id) = want.strip_prefix("id:").and_then(|n| n.trim().parse::<u64>().ok()) {
+        return wins.iter().find(|w| w.id == id);
+    }
     if want.is_empty() || want.eq_ignore_ascii_case("focused") || want.eq_ignore_ascii_case("current") {
         return wins.iter().find(|w| w.flags & FOCUSED != 0).or(wins.first());
     }
@@ -663,7 +693,7 @@ fn pick_window<'a>(wins: &'a [Win], a: &Value) -> Option<&'a Win> {
         .or_else(|| wins.iter().find(|w| w.title.to_lowercase().contains(&q)))
 }
 
-async fn with_window(a: &Value) -> Result<Win, String> {
+pub(crate) async fn with_window(a: &Value) -> Result<Win, String> {
     let wins = windows().await?;
     if wins.is_empty() {
         return Err("no windows are open".into());

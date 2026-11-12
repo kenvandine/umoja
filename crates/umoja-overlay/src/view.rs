@@ -2894,6 +2894,42 @@ impl agent::Ui for OverlayUi {
     fn cancelled(&self) -> bool {
         self.live().is_none()
     }
+
+    fn undoable(&self, id: usize, undo_id: u64) {
+        if self.live().is_none() {
+            return;
+        }
+        let rows = self.rows.borrow();
+        let Some((row, _)) = rows.get(&id) else { return };
+        let button = gtk::Button::with_label(&i18n::umoja("Undo"));
+        button.add_css_class("flat");
+        button.add_css_class("assistant-undo");
+        button.set_valign(gtk::Align::Center);
+        button.set_tooltip_text(Some(&i18n::umoja("Put this back the way it was")));
+        let row_weak = row.downgrade();
+        button.connect_clicked(move |b| {
+            b.set_sensitive(false);
+            let b = b.clone();
+            let row = row_weak.clone();
+            glib::spawn_future_local(async move {
+                match mcp::undo(undo_id).await {
+                    Ok(_) => {
+                        b.set_label(&i18n::umoja("Undone"));
+                        b.set_tooltip_text(None);
+                        if let Some(r) = row.upgrade() {
+                            r.add_css_class("undone");
+                        }
+                    }
+                    Err(e) => {
+                        b.set_sensitive(true);
+                        b.set_tooltip_text(Some(&e));
+                        b.add_css_class("error");
+                    }
+                }
+            });
+        });
+        row.append(&button);
+    }
 }
 
 /// The overlay's side of the assistant's capture tools.

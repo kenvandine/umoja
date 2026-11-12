@@ -106,6 +106,15 @@ window.umoja-overlay {
 .assistant-step.declined {
   color: alpha(#ffffff, 0.5);
 }
+.assistant-step.undone > label {
+  color: alpha(#ffffff, 0.5);
+  text-decoration-line: line-through;
+}
+.assistant-undo {
+  min-height: 24px;
+  padding: 0 10px;
+  color: @accent_color;
+}
 .files-heading {
   color: alpha(#ffffff, 0.8);
   margin-left: 6px;

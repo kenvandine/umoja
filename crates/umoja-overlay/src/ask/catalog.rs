@@ -126,6 +126,16 @@ const fn settings(
 
 pub const CATALOG: &[Instant] = &[
     control(
+        "undo",
+        "Undo Last Change",
+        &["undo", "put back", "revert", "change back", "go back"],
+        "edit-undo-symbolic",
+        Run::Call {
+            tool: "undo",
+            args: "{}",
+        },
+    ),
+    control(
         "dark-style",
         "Dark Style",
         &["dark", "theme", "night mode", "light mode", "appearance"],

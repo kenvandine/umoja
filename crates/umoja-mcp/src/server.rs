@@ -13,7 +13,9 @@
 //! Besides the standard methods the server answers `umoja/describe`
 //! (`{name, arguments}` → `{label, risk}`), so a client can show a progress
 //! line before a call. Tool results carry `_meta` with `umoja/hide` (the
-//! tool put something in front of the user) and `umoja/declined`.
+//! tool put something in front of the user), `umoja/declined`, and
+//! `umoja/undo` (`{id, label}`) for a change that can be put back with
+//! `umoja/undo` (`{id}`), see [`crate::undo`].
 
 use crate::tool::{Outcome, Risk, Tool};
 use gio::prelude::*;
@@ -149,6 +151,12 @@ impl Server {
                 };
                 Ok(json!({"label": label, "risk": risk_name(risk)}))
             }
+            // Undo a change a tool result offered (`_meta["umoja/undo"]`).
+            "umoja/undo" => {
+                let id = params.get("id").and_then(Value::as_u64);
+                let o = crate::undo::apply(id).await;
+                Ok(json!({"ok": !o.is_error, "text": o.text}))
+            }
             m if m.starts_with("notifications/") => Ok(Value::Null),
             "resources/list" => Ok(json!({"resources": []})),
             "prompts/list" => Ok(json!({"prompts": []})),
@@ -195,7 +203,7 @@ impl Server {
             let label = tool.describe(&args);
             match self.confirm(tool.name, &label, detail.as_deref(), risk).await {
                 Ok(true) => {}
-                Ok(false) => return CallResult { outcome: Outcome::ok(DECLINED), declined: true },
+                Ok(false) => return CallResult { outcome: Outcome::ok(DECLINED), declined: true, undo: None },
                 Err(e) => return CallResult::from(Outcome::err(e)),
             }
         }
@@ -203,7 +211,19 @@ impl Server {
         if self.dry_run && !tool.read_only {
             return CallResult::from(Outcome::ok("done"));
         }
-        CallResult::from((tool.run)(args).await)
+        // Note how to put it back before it changes anything.
+        let inverse = if tool.read_only || tool.name == "undo" {
+            None
+        } else {
+            crate::undo::capture(tool.name, &args).await
+        };
+        let label = tool.describe(&args);
+        let outcome = (tool.run)(args).await;
+        let undo = match inverse {
+            Some(inv) if !outcome.is_error => Some((crate::undo::record(&label, inv), label)),
+            _ => None,
+        };
+        CallResult { outcome, declined: false, undo }
     }
 
     async fn confirm(&self, tool: &str, label: &str, detail: Option<&str>, risk: Risk) -> Result<bool, String> {
@@ -252,11 +272,13 @@ impl Server {
 pub struct CallResult {
     pub outcome: Outcome,
     pub declined: bool,
+    /// (journal id, what was done) when the change can be undone.
+    pub undo: Option<(u64, String)>,
 }
 
 impl From<Outcome> for CallResult {
     fn from(outcome: Outcome) -> Self {
-        Self { outcome, declined: false }
+        Self { outcome, declined: false, undo: None }
     }
 }
 
@@ -266,6 +288,9 @@ fn result_json(r: CallResult) -> Value {
         "isError": r.outcome.is_error,
         "_meta": {"umoja/hide": r.outcome.hide, "umoja/declined": r.declined},
     });
+    if let Some((id, label)) = r.undo {
+        v["_meta"]["umoja/undo"] = json!({"id": id, "label": label});
+    }
     if let Some(d @ Value::Object(_)) = r.outcome.data {
         v["structuredContent"] = d;
     }

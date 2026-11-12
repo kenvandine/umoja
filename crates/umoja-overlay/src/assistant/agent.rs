@@ -67,6 +67,9 @@ pub trait Ui {
     fn confirm(&self, label: &str, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>>;
     /// True once the question was replaced or the window closed.
     fn cancelled(&self) -> bool;
+    /// Step `id` changed something that can be put back: offer Undo for
+    /// journal entry `undo_id` (see umoja-mcp's undo module).
+    fn undoable(&self, _id: usize, _undo_id: u64) {}
 }
 
 /// A question plus optional context (selected text, window contents...)
@@ -383,6 +386,9 @@ async fn run_mcp(mcp: &McpClient, name: &str, args: Value, id: usize, ui: &Rc<dy
             StepState::Done
         },
     );
+    if let Some(u) = r.undo.filter(|_| !r.is_error) {
+        ui.undoable(id, u);
+    }
     r.text
 }
 
