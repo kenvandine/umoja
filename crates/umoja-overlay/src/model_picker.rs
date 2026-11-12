@@ -178,6 +178,36 @@ async fn server_models(mem_gb: f64) -> Option<(Vec<ModelInfo>, HashSet<String>)>
     Some((pick(entries, mem_gb), downloaded))
 }
 
+thread_local! {
+    /// The settings button, for [`show_page`].
+    static BUTTON: std::cell::RefCell<Option<glib::WeakRef<gtk::MenuButton>>> =
+        const { std::cell::RefCell::new(None) };
+    /// The page the popover should open on next (instead of the model's).
+    static OPEN_ON: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Open the settings popover on a page ("local", "cloud" or "voice").
+/// False when the button isn't on screen (Ask Umoja is closed).
+pub fn show_page(page: &'static str) -> bool {
+    let Some(b) = BUTTON.with(|b| b.borrow().as_ref().and_then(|w| w.upgrade())) else {
+        return false;
+    };
+    if !b.is_mapped() {
+        return false;
+    }
+    OPEN_ON.with(|o| o.set(Some(page)));
+    b.popdown();
+    b.popup();
+    true
+}
+
+/// Close the settings popover.
+pub fn close() {
+    if let Some(b) = BUTTON.with(|b| b.borrow().as_ref().and_then(|w| w.upgrade())) {
+        b.popdown();
+    }
+}
+
 pub fn button() -> gtk::MenuButton {
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -294,12 +324,14 @@ pub fn button() -> gtk::MenuButton {
         .popover(&popover)
         .build();
 
+    BUTTON.with(|b| b.replace(Some(button.downgrade())));
     popover.connect_show(move |popover| {
-        stack.set_visible_child_name(if backend::current().cloud {
+        let page = OPEN_ON.with(|o| o.take()).unwrap_or(if backend::current().cloud {
             "cloud"
         } else {
             "local"
         });
+        stack.set_visible_child_name(page);
         cloud.load();
         voice.load();
         let list = list.clone();

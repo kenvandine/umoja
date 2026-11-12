@@ -495,11 +495,44 @@ class Run:
             OVERLAY[0], OVERLAY[2], None, OVERLAY[1], None, Gio.DBusSignalFlags.NONE,
             lambda _c, _s, _p, _i, name, params: self.events.append((name, params.unpack(), time.monotonic())))
         self.flag(True)
+        self.use_empty_workspace()
         # Banners on for the run (Do Not Disturb would hide what we test).
         n = settings("org.gnome.desktop.notifications")
         if n and not n.get_boolean("show-banners"):
             n.set_boolean("show-banners", True)
             self.cleanups.append(("Do Not Disturb back on", lambda: n.set_boolean("show-banners", False)))
+
+    def use_empty_workspace(self):
+        """Run on the empty last workspace, so the clips show only what the
+        tests open (not your own windows, which may be private)."""
+        res = self.bus.call(COMPOSITOR, "GetWorkspaces", None, "(uu)", quiet=True)
+        if not res:
+            self.log("! can't read workspaces: your windows may show in the clips")
+            return
+        cur, count = res  # (current, count), 0-based
+        last = count - 1
+        rows = self.bus.call(COMPOSITOR, "GetWindowWorkspaces", None, "(a(ti))", quiet=True)
+        busy = {ws for _, ws in (rows[0] if rows else [])}
+        if last in busy:
+            self.log("! the last workspace isn't empty: your windows may show in the clips")
+            return
+        if last != cur:
+            self.bus.call(COMPOSITOR, "ShowWorkspace", GLib.Variant("(u)", (last,)))
+            self.wait(1.0)
+            self.cleanups.insert(0, ("back to your workspace",
+                                     lambda: self.bus.call(COMPOSITOR, "ShowWorkspace", GLib.Variant("(u)", (cur,)))))
+            self.log(f"running on empty workspace {last + 1} (yours is {cur + 1})")
+
+    def clear_test_banners(self):
+        """Close notifications earlier tests sent, so none shows up in the
+        next clip."""
+        closed = 0
+        for n in self.notifications():
+            if any("4711" in str(f) or f == "Umoja test" for f in n[1:5]):
+                self.bus.call(NOTIFY, "CloseNotification", GLib.Variant("(u)", (n[0],)), quiet=True)
+                closed += 1
+        if closed:
+            self.wait(1.0)
 
     def teardown(self):
         self.recorder.stop()
@@ -538,6 +571,7 @@ class Run:
                 try:
                     self.check_screen()
                     self.hide()
+                    self.clear_test_banners()
                     if name not in ("auto-dnd-recording",):
                         self.recorder.start(name)
                     fn(self)
@@ -1160,8 +1194,9 @@ def read_aloud_ready(run):
         raise Skip("no default sound output to listen to (pactl get-default-sink)")
 
 
-def heard_speech(run, listener, voice, started, what):
-    """Wait for Piper to speak and finish, then check what was heard."""
+def heard_speech(run, listener, voice, started, what, words=SPOKEN_WORDS, need=4):
+    """Wait for Piper to speak and finish, then check what was heard.
+    Returns (seconds of sound, transcript)."""
     # The first time, the voice downloads (about 60 MB) before Piper starts.
     seen = run.wait(180, piper_voice_running)
     run.check(seen is not None, f"Piper started {what}", seen or "no piper process within 180 s")
@@ -1176,40 +1211,67 @@ def heard_speech(run, listener, voice, started, what):
     run.note(f"sound for {secs:.1f} s, peak {peak:.2f} (audio/{listener.path.name})")
     run.check(secs >= 2.0, "the speakers played speech", f"{secs:.1f} s of sound, peak {peak:.2f}")
     text = transcribe(listener.path) if secs >= 1.0 else ""
-    hits = [w for w in SPOKEN_WORDS if w in text.lower()]
-    run.check(len(hits) >= 4, "Whisper understands what was said (four of its words)",
+    hits = [w for w in words if w in text.lower()]
+    run.check(len(hits) >= need, f"Whisper understands what was said ({need} of its words)",
               f"{text!r}, matched {hits}")
+    return secs, text
 
 
-@test("read-aloud", "Read aloud in Piper's Alan voice, heard through the speakers")
+def current_voice():
+    s = settings("org.umoja.shell")
+    if s and s.props.settings_schema.has_key("speech-voice"):
+        return s.get_string("speech-voice")
+    return "en_GB-alan-medium"
+
+
+VOICES = Path.home() / "snap/piper-tts/common/voices"
+
+
+@test("read-aloud", "Read Aloud button under an answer, in Piper's Alan voice")
 def t_read_aloud(run):
     read_aloud_ready(run)
-    s = settings("org.umoja.shell")
-    voice = s.get_string("speech-voice") if s and s.props.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
+    if not run.action("read-aloud-state")[1]:
+        raise Skip("the overlay has no read-aloud test hook: install debs from main")
+    voice = current_voice()
     run.note(f"voice {voice}")
-    voices = Path.home() / "snap/piper-tts/common/voices"
-    run.note("voice already downloaded" if (voices / f"{voice}.onnx").exists()
+    run.note("voice already downloaded" if (VOICES / f"{voice}.onnx").exists()
              else "voice not downloaded yet: this run downloads it")
+    answer, _, _ = run.ask(f"Reply with exactly this text and nothing else: {SPOKEN}")
+    run.check(sum(w in answer.lower() for w in SPOKEN_WORDS) >= 6, "the answer is the sentence", answer[:200])
+    run.shot("answer", "The answer, with the speaker button next to Copy")
     listener = Listener(run, "read-aloud")
     t0 = time.monotonic()
-    run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
-    heard_speech(run, listener, voice, t0, "after Speak")
-    run.check((voices / f"{voice}.onnx").exists() and (voices / f"{voice}.onnx.json").exists(),
-              f"{voice} is in {voices}")
-    # Stop works: start again and stop after a moment.
+    ok, tip = run.action("read-aloud")
+    run.check(ok, "the Read Aloud button was pressed", tip)
+    run.wait(1.0)
+    playing, state = run.action("read-aloud-state")
+    run.shot("speaking", "While it speaks: the button is a stop button")
+    run.check(playing and "stop" in state, "the button turned into a stop button", state)
+    heard_speech(run, listener, voice, t0, "after the button")
+    run.check(run.wait(5, lambda: not run.action("read-aloud-state")[0]) is not None,
+              "the button is a speaker again when it's done", run.action("read-aloud-state")[1])
+    run.check((VOICES / f"{voice}.onnx").exists() and (VOICES / f"{voice}.onnx.json").exists(),
+              f"{voice} is in {VOICES}")
+    # Pressing it again while speaking stops it.
+    run.action("read-aloud")
+    run.wait(20, piper_voice_running)
+    run.wait(1.0)
+    run.action("read-aloud")
+    run.check(run.wait(5, lambda: piper_voice_running() is None and not speech_playing()) is not None,
+              "pressing it again stops the speech")
+    # And the D-Bus way (what the read_aloud tool uses).
     run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
     run.wait(20, piper_voice_running)
     run.wait(1.0)
     run.bus.call(OVERLAY, "StopSpeaking")
-    run.check(run.wait(5, lambda: piper_voice_running() is None) is not None or piper_voice_running() is None,
+    run.check(run.wait(5, lambda: piper_voice_running() is None and not speech_playing()) is not None,
               "StopSpeaking stops it")
 
 
 @test("read-aloud-assistant", "Asking the assistant to read something out loud")
 def t_read_aloud_assistant(run):
     read_aloud_ready(run)
-    s = settings("org.umoja.shell")
-    voice = s.get_string("speech-voice") if s and s.props.settings_schema.has_key("speech-voice") else "en_GB-alan-medium"
+    voice = current_voice()
     listener = Listener(run, "read-aloud-assistant")
     t0 = time.monotonic()
     answer, steps, _ = run.ask(f"Read this out loud, word for word: {SPOKEN}")
@@ -1217,6 +1279,86 @@ def t_read_aloud_assistant(run):
     run.check(any("read_aloud" in st or "Read aloud" in st for st in steps), "the assistant used read_aloud",
               steps)
     heard_speech(run, listener, voice, t0, "from the assistant")
+
+
+SAMPLE_WORDS = ("hello", "this", "how", "sound")
+
+
+@test("voice-picker", "Pick another voice in the Voice page, hear its sample, switch back, remove it")
+def t_voice_picker(run):
+    read_aloud_ready(run)
+    if not run.action("voice-state")[1] and not run.bus.has_method(OVERLAY, "Speak"):
+        raise Skip("no Voice page")
+    s = settings("org.umoja.shell")
+    before = current_voice()
+    other = "en_US-lessac-medium" if before != "en_US-lessac-medium" else "en_GB-alan-medium"
+    had_other = (VOICES / f"{other}.onnx").exists()
+    run.cleanups.append(("speech-voice", lambda: s.set_string("speech-voice", before)))
+    if not had_other:
+        run.cleanups.append((f"removed {other}", lambda: [
+            (VOICES / f"{other}.{e}").unlink(missing_ok=True) for e in ("onnx", "onnx.json")]))
+    run.bus.call(OVERLAY, "ToggleAsk")
+    run.wait(1.0)
+    run.check(run.action("voice-page")[0], "the settings popover opened on Voice")
+    rows = run.wait(60, lambda: (lambda r: r[1] if r[0] else None)(run.action("voice-rows")))
+    run.shot("page", "The Voice page: voices in your language, the one in use first")
+    run.check(rows and rows.splitlines()[0] == before, f"{before} is listed first", (rows or "")[:300])
+    run.check(rows and "en_GB-alan-medium" in rows, "Alan is listed")
+    run.action(f"voice-search:{other.split('-')[1]}")
+    run.wait(1.0)
+    run.shot("search", f"Searching for {other.split('-')[1]}")
+    listener = Listener(run, "voice-picker-sample")
+    t0 = time.monotonic()
+    run.check(run.action(f"voice-pick:{other}")[0], f"picked {other}")
+    if not had_other:
+        mid = run.wait(60, lambda: (lambda st: st if "downloading=" + other in st else None)(run.action("voice-state")[1]))
+        run.shot("downloading", f"{other} downloading, with its progress bar")
+        run.check(mid is not None, "it shows the download", mid)
+    done = run.wait(240, lambda: (lambda st: st if f"current={other};" in st else None)(run.action("voice-state")[1]))
+    run.check(done is not None, f"{other} is the voice once downloaded", run.action("voice-state")[1])
+    run.check(s.get_string("speech-voice") == other, "speech-voice changed", s.get_string("speech-voice"))
+    heard_speech(run, listener, other, t0, "for the sample", SAMPLE_WORDS, 2)
+    run.shot("picked", f"{other} picked and downloaded")
+    # Back to the voice we had, then remove the other one.
+    run.action("voice-search:")
+    run.check(run.action(f"voice-pick:{before}")[0], f"picked {before} again")
+    run.check(run.wait(10, lambda: s.get_string("speech-voice") == before) is not None, f"{before} is the voice again")
+    run.wait(20, piper_voice_running)
+    run.wait(20, lambda: piper_voice_running() is None and not speech_playing())
+    if not had_other:
+        run.check(run.action(f"voice-remove:{other}")[0], f"removed {other}")
+        run.check(not (VOICES / f"{other}.onnx").exists(), f"{other}'s files are gone")
+        run.shot("removed", f"{other} removed")
+    run.action("settings-close")
+
+
+@test("speech-settings", "Read every answer aloud, and a faster speed")
+def t_speech_settings(run):
+    read_aloud_ready(run)
+    s = settings("org.umoja.shell")
+    if not (s and s.props.settings_schema.has_key("speak-answers")):
+        raise Skip("no speak-answers key")
+    auto, rate = s.get_boolean("speak-answers"), s.get_double("speech-rate")
+    run.cleanups.append(("speak-answers and speech-rate", lambda: (s.set_boolean("speak-answers", auto),
+                                                                  s.set_double("speech-rate", rate))))
+    s.set_double("speech-rate", 1.0)
+    s.set_boolean("speak-answers", True)
+    Gio.Settings.sync()
+    voice = current_voice()
+    listener = Listener(run, "speak-answers")
+    t0 = time.monotonic()
+    answer, _, _ = run.ask(f"Reply with exactly this text and nothing else: {SPOKEN}")
+    run.shot("answer", "With “Read every answer aloud” on, the answer is read out by itself")
+    normal, _ = heard_speech(run, listener, voice, t0, "for the answer by itself")
+    s.set_boolean("speak-answers", False)
+    s.set_double("speech-rate", 1.6)
+    Gio.Settings.sync()
+    listener = Listener(run, "speech-rate-fast")
+    t0 = time.monotonic()
+    run.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (SPOKEN,)))
+    fast, _ = heard_speech(run, listener, voice, t0, "at speed 1.6", SPOKEN_WORDS, 3)
+    run.check(normal > 0 and fast < normal * 0.85, "speed 1.6 is clearly quicker",
+              f"{normal:.1f} s at 1.0, {fast:.1f} s at 1.6")
 
 
 @test("activity-recall", "Activity recall finds a window title and a notification")
