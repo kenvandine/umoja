@@ -185,7 +185,7 @@ menuentry "Install Umoja (safe graphics)" {
 GRUBCFG
     if [ $AUTO = 1 ]; then cat <<GRUBCFG
 menuentry "Install automatically (erases the first disk)" {
-	linux /casper/vmlinuz $LIVE_ARGS umoja.autoinstall noprompt console=tty1 console=ttyS0 ---
+	linux /casper/vmlinuz $LIVE_ARGS umoja.autoinstall noprompt noeject console=tty1 console=ttyS0 ---
 	initrd /casper/initrd
 }
 GRUBCFG
