@@ -1,0 +1,24 @@
+#!/bin/sh
+# Refresh data/apt/keyrings/umoja-archive-keyring.asc, the signing key of
+# ppa:ken-vandine/umoja shipped by umoja-archive-keyring. Only needed if
+# Launchpad ever rotates the key; builds use the committed file.
+#
+# Launchpad reports the PPA's key fingerprint over HTTPS; the key itself
+# comes from keyserver.ubuntu.com and is checked against that fingerprint.
+set -eu
+
+OUT=data/apt/keyrings/umoja-archive-keyring.asc
+fpr=$(curl -fsSL --retry 5 --retry-all-errors -H 'Accept: application/json' \
+    https://api.launchpad.net/devel/~ken-vandine/+archive/ubuntu/umoja |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["signing_key_fingerprint"])')
+tmp=$(mktemp)
+curl -fsSL --retry 5 --retry-all-errors -o "$tmp" \
+    "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$fpr"
+got=$(gpg --show-keys --with-colons "$tmp" | awk -F: '/^fpr:/ {print $10; exit}')
+if [ "$got" != "$fpr" ]; then
+    echo "fetch-ppa-keys: keyserver returned $got for $fpr" >&2
+    rm -f "$tmp"; exit 1
+fi
+mv "$tmp" "$OUT"
+chmod 0644 "$OUT"
+echo "ppa:ken-vandine/umoja key $fpr -> $OUT"

@@ -1,0 +1,214 @@
+#!/bin/bash
+# Build the Umoja live/installer ISO from the Imagecraft disk image.
+#
+#   sudo image/iso/build [--autoinstall] IMAGE.img DEBS_DIR OUTPUT.iso
+#
+# IMAGE.img   image/umoja.img from `imagecraft pack` (image/README.md)
+# DEBS_DIR    holds umoja-installer_*.deb (and optionally newer Umoja debs)
+# --autoinstall  boot straight into an unattended install onto the first
+#             disk (account umoja / umoja-install), for CI. Never ship it.
+#
+# The ISO carries two squashfs layers, as Ubuntu's does:
+#   casper/umoja.squashfs        the system that gets installed: the disk
+#                                image's root, minus its test account
+#   casper/umoja.live.squashfs   live-only additions on top: casper, the
+#                                installer, autologin into Umoja
+# casper stacks them (layerfs-path=umoja.live.squashfs); the installer
+# copies only umoja.squashfs. Boot is UEFI only, through Ubuntu's signed
+# shim and GRUB, so Secure Boot stays on.
+#
+# Needs root (loop devices, chroot) and: xorriso, mtools, dosfstools,
+# squashfs-tools.
+
+set -euo pipefail
+# Do all the mounting in a private mount namespace, so nothing here can
+# reach the host's own mounts (it once unmounted the host's /dev/pts).
+if [ "$(id -u)" = 0 ] && [ -z "${UMOJA_ISO_UNSHARED:-}" ]; then
+    UMOJA_ISO_UNSHARED=1 exec unshare --mount --propagation private "$0" "$@"
+fi
+
+AUTO=0
+if [ "${1:-}" = --autoinstall ]; then AUTO=1; shift; fi
+[ $# -eq 3 ] || { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+IMAGE=$(realpath "$1"); DEBS=$(realpath "$2"); OUT=$(realpath -m "$3")
+[ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
+for t in xorriso mksquashfs mcopy mkfs.vfat losetup; do
+    command -v "$t" >/dev/null || { echo "missing $t" >&2; exit 1; }
+done
+ls "$DEBS"/umoja-installer_*.deb >/dev/null || { echo "no umoja-installer deb in $DEBS" >&2; exit 1; }
+
+WORK=$(mktemp -d "${TMPDIR:-/var/tmp}/umoja-iso.XXXXXX")
+IMG_MNT=$WORK/image TARGET=$WORK/target UPPER=$WORK/upper OVL=$WORK/ovl LIVE=$WORK/live ISO=$WORK/iso
+mkdir -p "$IMG_MNT" "$TARGET" "$UPPER" "$OVL" "$LIVE" "$ISO/casper" "$ISO/boot/grub" "$ISO/EFI/boot" "$ISO/.disk"
+LOOP=
+
+cleanup() {
+    set +e
+    for m in run dev/pts dev proc sys; do mountpoint -q "$LIVE/$m" && umount -l "$LIVE/$m"; done
+    mountpoint -q "$LIVE" && umount -l "$LIVE"
+    mountpoint -q "$IMG_MNT" && umount -l "$IMG_MNT"
+    [ -n "$LOOP" ] && losetup -d "$LOOP"
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+step() { echo "==> $*"; }
+
+step "Reading the disk image"
+LOOP=$(losetup -Pf --show -r "$IMAGE")
+udevadm settle 2>/dev/null || true
+ROOT_PART=$(lsblk -nrpo NAME,LABEL "$LOOP" | awk '$2=="umoja-root"{print $1}')
+[ -n "$ROOT_PART" ] || ROOT_PART=${LOOP}p2
+mount -o ro "$ROOT_PART" "$IMG_MNT"
+cp -a "$IMG_MNT/." "$TARGET/"
+umount "$IMG_MNT"; losetup -d "$LOOP"; LOOP=
+
+KVER=$(ls "$TARGET/lib/modules" | sort -V | tail -1)
+[ -f "$TARGET/boot/vmlinuz-$KVER" ] || { echo "no kernel in the image" >&2; exit 1; }
+
+step "Target layer"
+# The VM image's test account is not for real installs.
+if chroot "$TARGET" getent passwd umoja >/dev/null; then
+    chroot "$TARGET" userdel -r umoja 2>/dev/null || chroot "$TARGET" userdel umoja
+fi
+: > "$TARGET/etc/machine-id"
+# Preseed the seeded snaps, as Ubuntu's images do: snapd's first-boot work
+# (installing every seeded snap) is done here, so the first boot only
+# finishes the last steps and "Getting your apps ready" takes seconds.
+# Uses this machine's snapd tool on the image's own snapd; if it can't,
+# the ISO still works and the first boot just takes longer.
+if [ -x /usr/lib/snapd/snap-preseed ] && [ -f "$TARGET/var/lib/snapd/seed/seed.yaml" ]; then
+    step "Preseeding snaps"
+    mount --bind "$TARGET" "$TARGET"
+    if /usr/lib/snapd/snap-preseed "$TARGET"; then
+        echo "snaps preseeded"
+    else
+        echo "WARNING: snap preseeding failed; the first boot will set up the snaps" >&2
+        /usr/lib/snapd/snap-preseed --reset "$TARGET" || true
+    fi
+    umount "$TARGET"
+fi
+mksquashfs "$TARGET" "$ISO/casper/umoja.squashfs" -noappend -comp zstd -Xcompression-level 19 -quiet
+
+step "Live layer"
+mount -t overlay overlay -o "lowerdir=$TARGET,upperdir=$UPPER,workdir=$OVL" "$LIVE"
+mount -t proc proc "$LIVE/proc"
+mount -t sysfs sys "$LIVE/sys"
+mount --bind /dev "$LIVE/dev"
+# Slave, so mounting and lazily unmounting dev/pts below never propagates
+# back to the host's /dev (that unmounted the host's /dev/pts, after which
+# sudo fails with "unable to open pty").
+mount --make-rslave "$LIVE/dev"
+mount --bind /dev/pts "$LIVE/dev/pts"
+# /run is a tmpfs, so DNS for apt lives there and never reaches the layer.
+mount -t tmpfs tmpfs "$LIVE/run"
+mkdir -p "$LIVE/run/systemd/resolve"
+cat /etc/resolv.conf > "$LIVE/run/systemd/resolve/stub-resolv.conf"
+printf '#!/bin/sh\nexit 101\n' > "$LIVE/usr/sbin/policy-rc.d"; chmod +x "$LIVE/usr/sbin/policy-rc.d"
+mkdir -p "$LIVE/tmp/debs"; cp "$DEBS"/*.deb "$LIVE/tmp/debs/"
+
+chroot "$LIVE" env DEBIAN_FRONTEND=noninteractive sh -eux -c '
+    apt-get update
+    # casper builds its initrd with initramfs-tools (the installed system
+    # keeps dracut; this is the live layer only).
+    apt-get install -y --no-install-recommends casper /tmp/debs/*.deb
+'
+rm -rf "$LIVE/tmp/debs" "$LIVE/usr/sbin/policy-rc.d"
+
+cat > "$LIVE/etc/casper.conf" <<'CASPER'
+export USERNAME="umoja"
+export USERFULLNAME="Umoja"
+export HOST="umoja"
+export BUILD_SYSTEM="Ubuntu"
+export FLAVOUR="Umoja"
+CASPER
+mkdir -p "$LIVE/etc/lightdm/lightdm.conf.d"
+cat > "$LIVE/etc/lightdm/lightdm.conf.d/90-umoja-live.conf" <<'LIGHTDM'
+# Live session: straight into Umoja, with the installer on top.
+[Seat:*]
+autologin-user=umoja
+autologin-user-timeout=0
+autologin-session=umoja
+LIGHTDM
+# First-login setup is for installed systems.
+mkdir -p "$LIVE/etc/systemd/user"
+ln -sf /dev/null "$LIVE/etc/systemd/user/umoja-agent-setup.service"
+# The live session only runs the installer: no top panel. umoja-tray-ready
+# waits for the panel's tray, so it goes too, or autostart (the installer)
+# would wait 30 s for it.
+for unit in umoja-panel.service umoja-tray-ready.service; do
+    ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
+done
+
+chroot "$LIVE" update-initramfs -c -k "$KVER"
+cp "$LIVE/boot/initrd.img-$KVER" "$ISO/casper/initrd"
+cp "$TARGET/boot/vmlinuz-$KVER" "$ISO/casper/vmlinuz"
+rm -f "$LIVE/boot/initrd.img-$KVER"*
+chroot "$LIVE" apt-get clean
+
+for m in run dev/pts dev proc sys; do umount -l "$LIVE/$m"; done
+umount "$LIVE"
+mksquashfs "$UPPER" "$ISO/casper/umoja.live.squashfs" -noappend -comp zstd -Xcompression-level 19 -quiet
+
+step "Boot files"
+EFI_SRC=$TARGET
+pick() { for f in "$@"; do [ -f "$f" ] && { echo "$f"; return; }; done; echo "missing: $*" >&2; exit 1; }
+SHIM=$(pick "$EFI_SRC"/usr/lib/shim/shimx64.efi.signed.latest "$EFI_SRC"/usr/lib/shim/shimx64.efi.signed)
+MOK=$(pick "$EFI_SRC"/usr/lib/shim/mmx64.efi.signed "$EFI_SRC"/usr/lib/shim/mmx64.efi)
+GRUB=$(pick "$EFI_SRC"/usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed)
+cp "$SHIM" "$ISO/EFI/boot/bootx64.efi"
+cp "$MOK" "$ISO/EFI/boot/mmx64.efi"
+cp "$GRUB" "$ISO/EFI/boot/grubx64.efi"
+
+VERSION=$(sed -n 's/^VERSION_ID="\(.*\)"/\1/p' "$TARGET/etc/os-release")
+STAMP=$(date -u +%Y%m%d)
+echo "Umoja $VERSION \"$(sed -n 's/^VERSION_CODENAME=//p' "$TARGET/etc/os-release")\" - amd64 ($STAMP)" > "$ISO/.disk/info"
+
+LIVE_ARGS="boot=casper layerfs-path=umoja.live.squashfs"
+{
+    echo "set timeout=$([ $AUTO = 1 ] && echo 1 || echo 5)"
+    echo "set default=$([ $AUTO = 1 ] && echo 2 || echo 0)"
+    cat <<GRUBCFG
+loadfont unicode
+set menu_color_normal=white/black
+set menu_color_highlight=black/light-gray
+
+menuentry "Install Umoja" {
+	set gfxpayload=keep
+	linux /casper/vmlinuz $LIVE_ARGS quiet splash ---
+	initrd /casper/initrd
+}
+menuentry "Install Umoja (safe graphics)" {
+	set gfxpayload=keep
+	linux /casper/vmlinuz $LIVE_ARGS nomodeset quiet splash ---
+	initrd /casper/initrd
+}
+GRUBCFG
+    if [ $AUTO = 1 ]; then cat <<GRUBCFG
+menuentry "Install automatically (erases the first disk)" {
+	linux /casper/vmlinuz $LIVE_ARGS umoja.autoinstall noprompt noeject console=tty1 console=ttyS0 ---
+	initrd /casper/initrd
+}
+GRUBCFG
+    fi
+    cat <<'GRUBCFG'
+menuentry "UEFI firmware settings" {
+	fwsetup
+}
+GRUBCFG
+} > "$ISO/boot/grub/grub.cfg"
+
+# The EFI system partition image El Torito and USB boot from.
+mkfs.vfat -C -n UMOJA_EFI "$WORK/efi.img" 8192 >/dev/null
+mmd -i "$WORK/efi.img" ::/EFI ::/EFI/boot
+mcopy -i "$WORK/efi.img" "$ISO"/EFI/boot/*.efi ::/EFI/boot/
+
+step "ISO"
+mkdir -p "$(dirname "$OUT")"
+xorriso -as mkisofs \
+    -iso-level 3 -full-iso9660-filenames -joliet -joliet-long -rational-rock \
+    -volid "UMOJA_${VERSION//./}" \
+    -appended_part_as_gpt \
+    -append_partition 2 C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$WORK/efi.img" \
+    -e --interval:appended_partition_2:all:: -no-emul-boot \
+    -output "$OUT" "$ISO"
+ls -l "$OUT"

@@ -1,0 +1,7 @@
+# Umoja: ppa:ken-vandine/umoja (tagged releases).
+# Installed by umoja-archive-keyring; @SUITE@ is filled in on install.
+Types: deb
+URIs: https://ppa.launchpadcontent.net/ken-vandine/umoja/ubuntu/
+Suites: @SUITE@
+Components: main
+Signed-By: /usr/share/keyrings/umoja-archive-keyring.asc

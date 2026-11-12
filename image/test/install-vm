@@ -1,0 +1,101 @@
+#!/bin/bash
+# End-to-end install test: boot an --autoinstall ISO (image/iso/build) in
+# QEMU with Secure Boot on, let it install onto a blank disk and power
+# off, then boot the installed disk, type the disk password and save
+# screenshots of what comes up.
+#
+#   image/test/install-vm umoja-auto.iso out-dir [install-timeout-seconds]
+#
+# Needs qemu-system-x86, ovmf and imagemagick; uses KVM when /dev/kvm is
+# usable. Leaves out-dir/disk.qcow2 (the installed system) behind.
+set -euo pipefail
+
+ISO=$(realpath "${1:?ISO}")
+OUT=$(realpath -m "${2:?output directory}")
+TIMEOUT=${3:-2400}
+PASSWORD=umoja-install
+mkdir -p "$OUT"
+
+CODE=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd
+cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd "$OUT/vars.fd"
+qemu-img create -q -f qcow2 "$OUT/disk.qcow2" 40G
+
+accel=tcg
+[ -w /dev/kvm ] && accel=kvm
+qmp="$OUT/qmp.sock"
+
+vm() { # extra qemu args...
+    rm -f "$qmp"
+    qemu-system-x86_64 \
+        -machine q35,smm=on,accel=$accel -cpu max -smp 4 -m 6G \
+        -global driver=cfi.pflash01,property=secure,value=on \
+        -drive if=pflash,format=raw,unit=0,readonly=on,file="$CODE" \
+        -drive if=pflash,format=raw,unit=1,file="$OUT/vars.fd" \
+        -drive file="$OUT/disk.qcow2",format=qcow2,if=virtio \
+        -device virtio-vga -display none \
+        -nic user,model=virtio-net-pci \
+        -qmp unix:"$qmp",server,nowait "$@" &
+    pid=$!
+}
+trap 'kill ${pid:-0} 2>/dev/null || true' EXIT
+
+qmp_cmd() { # json command...
+    python3 - "$qmp" "$@" <<'PY'
+import json, socket, sys, time
+for _ in range(50):
+    try:
+        s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); break
+    except OSError:
+        time.sleep(0.2)
+f = s.makefile("rw"); f.readline()
+for cmd in [{"execute": "qmp_capabilities"}] + [json.loads(c) for c in sys.argv[2:]]:
+    f.write(json.dumps(cmd) + "\n"); f.flush(); f.readline()
+    time.sleep(0.05)
+PY
+}
+
+shot() {
+    qmp_cmd "{\"execute\": \"screendump\", \"arguments\": {\"filename\": \"$OUT/$1.ppm\"}}" || return 0
+    if command -v convert >/dev/null; then
+        convert "$OUT/$1.ppm" "$OUT/$1.png" && rm -f "$OUT/$1.ppm"
+    fi
+    echo "screenshot $1"
+}
+
+type_text() { # text, then Enter
+    local cmds=() c key
+    for ((i = 0; i < ${#1}; i++)); do
+        c=${1:i:1}
+        case "$c" in -) key=minus ;; *) key=$c ;; esac
+        cmds+=("{\"execute\":\"send-key\",\"arguments\":{\"keys\":[{\"type\":\"qcode\",\"data\":\"$key\"}]}}")
+    done
+    cmds+=('{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"ret"}]}}')
+    qmp_cmd "${cmds[@]}"
+}
+
+echo "== installing (accel=$accel)"
+vm -drive file="$ISO",media=cdrom,readonly=on -boot order=d -serial file:"$OUT/install-serial.log"
+t=0
+while kill -0 $pid 2>/dev/null; do
+    sleep 30; t=$((t + 30))
+    case $t in 60|120|240|480|900) shot "install-${t}s" ;; esac
+    if [ $t -ge "$TIMEOUT" ]; then
+        shot install-timeout
+        echo "install did not finish in ${TIMEOUT}s" >&2
+        exit 1
+    fi
+done
+wait $pid || true
+echo "installer powered off after ~${t}s"
+
+echo "== booting the installed disk"
+vm -serial file:"$OUT/boot-serial.log"
+sleep 45
+shot unlock-prompt
+type_text "$PASSWORD"
+for at in 60 120 240; do
+    sleep $((at - ${prev:-0})); prev=$at
+    kill -0 $pid 2>/dev/null || { echo "installed system powered off" >&2; exit 1; }
+    shot "installed-${at}s"
+done
+echo "done; screenshots in $OUT"

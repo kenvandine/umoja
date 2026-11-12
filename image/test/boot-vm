@@ -1,0 +1,60 @@
+#!/bin/bash
+# Boot the Umoja disk image in QEMU with UEFI Secure Boot on (Microsoft
+# keys enrolled, like a stock laptop) and save screenshots of the screen.
+#
+#   image/test/boot-vm umoja.img out-dir [seconds]
+#
+# Needs qemu-system-x86, ovmf and imagemagick (for PNGs); uses KVM when
+# /dev/kvm is usable. The image itself is not changed (snapshot=on).
+set -euo pipefail
+
+IMG=$(realpath "${1:?disk image}")
+OUT=$(realpath -m "${2:?output directory}")
+SECS=${3:-240}
+mkdir -p "$OUT"
+
+CODE=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd
+VARS_TEMPLATE=/usr/share/OVMF/OVMF_VARS_4M.ms.fd
+cp "$VARS_TEMPLATE" "$OUT/vars.fd"
+
+accel=tcg
+[ -w /dev/kvm ] && accel=kvm
+
+qmp="$OUT/qmp.sock"
+qemu-system-x86_64 \
+    -machine q35,smm=on,accel=$accel -cpu max -smp 4 -m 4G \
+    -global driver=cfi.pflash01,property=secure,value=on \
+    -drive if=pflash,format=raw,unit=0,readonly=on,file="$CODE" \
+    -drive if=pflash,format=raw,unit=1,file="$OUT/vars.fd" \
+    -drive file="$IMG",format=raw,if=virtio,snapshot=on \
+    -device virtio-vga -display none \
+    -nic user,model=virtio-net-pci \
+    -serial file:"$OUT/serial.log" \
+    -qmp unix:"$qmp",server,nowait &
+pid=$!
+trap 'kill $pid 2>/dev/null || true' EXIT
+
+shot() {
+    python3 - "$qmp" "$OUT/$1.ppm" <<'PY'
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+f = s.makefile("rw")
+f.readline()
+for cmd in ({"execute": "qmp_capabilities"},
+            {"execute": "screendump", "arguments": {"filename": sys.argv[2]}}):
+    f.write(json.dumps(cmd) + "\n"); f.flush(); f.readline()
+PY
+    if command -v convert >/dev/null; then
+        convert "$OUT/$1.ppm" "$OUT/$1.png" && rm -f "$OUT/$1.ppm"
+    fi
+    echo "screenshot $1 at ${2}s"
+}
+
+elapsed=0
+for at in 30 60 120 $SECS; do
+    sleep $((at - elapsed)); elapsed=$at
+    kill -0 $pid 2>/dev/null || { echo "QEMU exited early" >&2; exit 1; }
+    shot "boot-${at}s" "$at"
+done
+echo "accel=$accel; serial log: $OUT/serial.log"

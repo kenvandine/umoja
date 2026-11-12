@@ -12,6 +12,10 @@ pass() { echo "PASS: $*" | tee -a "$LOG"; }
 
 export XDG_RUNTIME_DIR=$(mktemp -d /tmp/umoja-runtime.XXXXXX)
 export XDG_CURRENT_DESKTOP=Umoja:ubuntu:GNOME XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=Umoja
+# As bin/umoja-session does without GNOME Shell: umoja-desktop's copy of
+# the Ubuntu Dock schemas.
+[ -e /usr/share/glib-2.0/schemas/org.gnome.shell.extensions.dash-to-dock.gschema.xml ] \
+    || export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:/usr/share/umoja/gsettings"
 export NO_AT_BRIDGE=1 RUST_LOG=info
 # No systemd --user in a container: start the shell pieces by hand below.
 export UMOJA_NO_SESSION_TARGET=1 UMOJA_NO_XWAYLAND=1
@@ -32,6 +36,9 @@ expect() { # schema key value
 expect org.gnome.shell.extensions.dash-to-dock dock-position "'LEFT'"
 # Umoja's own override (data/90_umoja.gschema.override): a floating dock.
 expect org.gnome.shell.extensions.dash-to-dock extend-height false
+# Ubuntu's pinned apps (ubuntu-settings), also without GNOME Shell.
+fav=$(gsettings get org.gnome.shell favorite-apps 2>&1)
+[[ "$fav" == *firefox_firefox.desktop* ]] && pass "dock pins Ubuntu's favorite apps" || fail "org.gnome.shell favorite-apps is $fav"
 expect org.gnome.desktop.interface gtk-theme "'Yaru'"
 expect org.gnome.desktop.interface icon-theme "'Yaru'"
 expect org.gnome.desktop.interface font-name "'Ubuntu Sans 11'"

@@ -1,0 +1,11 @@
+[Plymouth Theme]
+Name=Umoja Text
+Description=Text mode boot screen (safe graphics, no frame buffer)
+ModuleName=ubuntu-text
+
+[ubuntu-text]
+title=Umoja
+black=0x000000
+white=0xffffff
+brown=0xff4012
+blue=0x988592

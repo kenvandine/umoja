@@ -34,6 +34,18 @@ if [ -z "${XCURSOR_SIZE:-}" ]; then
     export XCURSOR_SIZE
 fi
 
+# Without GNOME Shell (ubuntu-umoja-desktop), the Ubuntu Dock and Tiling
+# Assistant schemas come from umoja-desktop's own copy. Appended, so a
+# system copy always wins.
+UMOJA_GSETTINGS=/usr/share/umoja/gsettings
+if [ ! -e /usr/share/glib-2.0/schemas/org.gnome.shell.extensions.dash-to-dock.gschema.xml ] \
+    && [ -d "$UMOJA_GSETTINGS" ]; then
+    case ":${XDG_DATA_DIRS:-}:" in
+        *":$UMOJA_GSETTINGS:"*) ;;
+        *) export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:$UMOJA_GSETTINGS" ;;
+    esac
+fi
+
 SESSION_VARS="XCURSOR_THEME XCURSOR_SIZE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE QT_QPA_PLATFORM MOZ_ENABLE_WAYLAND"
 [ -n "${GTK_IM_MODULE:-}" ] && SESSION_VARS="$SESSION_VARS GTK_IM_MODULE QT_IM_MODULE XMODIFIERS"
 
@@ -55,10 +67,14 @@ done
 
 # Ensure the D-Bus user session and systemd --user see the session variables.
 # shellcheck disable=SC2086
-systemctl --user import-environment $SESSION_VARS $LOCALE_VARS
+# XDG_DATA_DIRS is imported but never unset on exit: the user manager had
+# its own value first, and the appended directory is harmless elsewhere.
+IMPORT_VARS="$SESSION_VARS $LOCALE_VARS"
+[ -n "${XDG_DATA_DIRS:-}" ] && IMPORT_VARS="$IMPORT_VARS XDG_DATA_DIRS"
+systemctl --user import-environment $IMPORT_VARS
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    dbus-update-activation-environment --systemd $SESSION_VARS $LOCALE_VARS
+    dbus-update-activation-environment --systemd $IMPORT_VARS
 fi
 
 # The XDG autostart generator only runs when the user manager starts or

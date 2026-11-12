@@ -1,0 +1,35 @@
+#!/bin/sh
+# Add the Umoja PPA as a package source, unless it is already configured
+# (for example with add-apt-repository ppa:ken-vandine/umoja), so apt
+# doesn't warn about a source listed twice.
+set -e
+
+SOURCES=/etc/apt/sources.list.d/umoja.sources
+TEMPLATE=/usr/share/umoja-archive-keyring/umoja.sources.in
+
+already_configured() {
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -r "$f" ] && [ "$f" != "$SOURCES" ] || continue
+        grep -Eq '^[^#]*(ppa\.launchpadcontent\.net|ppa\.launchpad\.net)/ken-vandine/umoja/' "$f" && return 0
+    done
+    return 1
+}
+
+case "$1" in
+configure)
+    suite=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+    if [ -z "$suite" ]; then
+        echo "umoja-archive-keyring: unknown Ubuntu release, not adding the Umoja PPA" >&2
+    elif already_configured; then
+        rm -f "$SOURCES"
+    else
+        sed "s/@SUITE@/$suite/" "$TEMPLATE" > "$SOURCES.tmp"
+        chmod 0644 "$SOURCES.tmp"
+        mv "$SOURCES.tmp" "$SOURCES"
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

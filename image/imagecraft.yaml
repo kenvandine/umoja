@@ -1,0 +1,236 @@
+# Umoja root image: Ubuntu 26.10 with ubuntu-umoja-desktop (Umoja instead
+# of GNOME Shell), built with Imagecraft. Phase 2 of the installer ISO plan:
+# the same root filesystem later becomes the ISO's filesystem.squashfs,
+# which the Umoja installer copies onto the disk.
+#
+#   image/prepare && cd image && imagecraft pack   # -> umoja.img (GPT: ESP + ext4)
+#
+# See image/README.md for booting it in QEMU and for building against
+# not-yet-published debs (local-debs/).
+name: umoja
+version: "26.10"
+summary: Ubuntu 26.10 with the Umoja desktop
+description: |
+  A bootable disk image of Ubuntu 26.10 with the Umoja desktop instead of
+  GNOME Shell: ubuntu-umoja-desktop from ppa:ken-vandine/umoja, Ubuntu's
+  signed shim and GRUB (Secure Boot stays on), and the snaps Ubuntu
+  Desktop seeds. For testing in a VM; the installer ISO is built from the
+  same root filesystem.
+base: bare
+build-base: ubuntu@26.10
+
+platforms:
+  amd64:
+
+volumes:
+  umoja:
+    schema: gpt
+    structure:
+      - name: efi
+        type: C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+        filesystem: vfat
+        role: system-boot
+        filesystem-label: UEFI
+        size: 1G
+      - name: rootfs
+        type: 0FC63DAF-8483-4772-8E79-3D69D8477DE4
+        filesystem: ext4
+        filesystem-label: umoja-root
+        role: system-data
+        size: 16G
+
+filesystems:
+  default:
+    - device: (volume/umoja/rootfs)
+      mount: /
+    - device: (volume/umoja/efi)
+      mount: /boot/efi/
+
+parts:
+  rootfs:
+    plugin: mmdebstrap
+    mmdebstrap-suite: stonking
+    mmdebstrap-variant: minbase
+    mmdebstrap-packages: [apt, ca-certificates]
+    override-build: |
+      craftctl default
+      mkdir -p $CRAFT_PART_INSTALL/boot/efi
+    organize:
+      "*": (overlay)/
+
+  # Ubuntu's archive plus the Umoja PPA, with the PPA's signing key and the
+  # Mir pin, exactly as umoja-archive-keyring installs them (image/prepare
+  # copies the key and pin from data/apt).
+  apt-config:
+    after: [rootfs]
+    plugin: dump
+    source: apt
+    organize:
+      ubuntu.sources: (overlay)/etc/apt/sources.list.d/ubuntu.sources
+      umoja.sources: (overlay)/etc/apt/sources.list.d/umoja.sources
+      umoja-archive-keyring.asc: (overlay)/usr/share/keyrings/umoja-archive-keyring.asc
+      umoja-mir.pref: (overlay)/etc/apt/preferences.d/umoja-mir.pref
+
+  # Debs that aren't on the PPA yet (image/local-debs/*.deb, for example a
+  # pull request's build). Empty when building from the PPA alone.
+  local-debs:
+    after: [apt-config]
+    plugin: dump
+    source: local-debs
+    organize:
+      "*": (overlay)/var/cache/umoja-local-debs/
+
+  desktop:
+    after: [local-debs]
+    plugin: nil
+    override-overlay: |
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # The rootfs part's copy into the overlay drops setuid/setgid bits
+      # (unix_chkpwd, passwd, su, mount...), which broke unlocking the lock
+      # screen. Reinstall everything it put there so dpkg sets the modes
+      # again; the guard below fails the build if any are still missing.
+      apt-get install -y --reinstall $(dpkg-query -W -f '${binary:Package}\n')
+      # Generic initrds that can unlock LUKS: the installer then doesn't
+      # have to rebuild one (bin/umoja-install), and kernel updates keep
+      # working on any disk layout.
+      mkdir -p /etc/dracut.conf.d
+      printf 'hostonly="no"\nadd_dracutmodules+=" crypt "\n' > /etc/dracut.conf.d/90-umoja.conf
+      # Local debs first, so they win over the PPA's.
+      local=$(ls /var/cache/umoja-local-debs/*.deb 2>/dev/null || true)
+      # Firefox and Thunderbird come as seeded snaps (snap-preseed below);
+      # their transitional debs would try to reach snapd in the chroot.
+      # ubuntu-minimal and ubuntu-standard are the base every Ubuntu
+      # image starts from (systemd-resolved, ping, netbase, ...);
+      # ubuntu-desktop-minimal doesn't pull them in itself.
+      apt-get install -y --install-recommends \
+        ubuntu-minimal ubuntu-standard \
+        linux-generic shim-signed grub-efi-amd64-signed grub2-common \
+        cryptsetup \
+        ubuntu-umoja-desktop $local \
+        firefox- thunderbird- gnome-terminal- alacritty-
+      rm -rf /var/cache/umoja-local-debs
+      # Language packs and dictionaries for the default language, as
+      # Ubuntu's installer adds them; without them Language Support asks
+      # to finish installing English on first use.
+      apt-get install -y language-pack-en language-pack-gnome-en
+      missing=$(check-language-support -l en)
+      [ -z "$missing" ] || apt-get install -y $missing
+      # Refresh once more now that command-not-found is installed: its apt
+      # hook builds the database behind "Command 'x' not found, but can be
+      # installed with ...".
+      apt-get update
+      # Umoja must not have brought GNOME Shell back.
+      for p in gnome-shell mutter gdm3 budgie-desktop gnome-terminal alacritty; do
+        if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
+      done
+      # setuid/setgid helpers must keep their bits (see the reinstall above).
+      for f in /usr/sbin/unix_chkpwd /usr/bin/chage; do
+        [ -g "$f" ] || { echo "$f lost setgid" >&2; exit 1; }
+      done
+      for f in /usr/bin/passwd /usr/bin/su /usr/bin/mount /usr/bin/umount /usr/bin/sudo /usr/bin/pkexec; do
+        [ -u "$(readlink -f "$f")" ] || { echo "$f lost setuid" >&2; exit 1; }
+      done
+      # Ptyxis is the one terminal. apport-gtk wants "gnome-terminal |
+      # x-terminal-emulator", and apt is free to pick any provider for it.
+      extra=$(dpkg-query -W -f '${db:Status-Status} ${Package} ${Provides}\n' \
+        | awk '$1 == "installed" && /x-terminal-emulator/ && $2 != "ptyxis" { print $2 }')
+      if [ -n "$extra" ]; then echo "extra terminals installed: $extra" >&2; exit 1; fi
+      # Umoja's boot and unlock screen (ubuntu-umoja-desktop) must be the
+      # default, and the initrds must carry it: rebuild them now that every
+      # package is in.
+      [ "$(readlink -f /etc/alternatives/default.plymouth)" = /usr/share/plymouth/themes/umoja/umoja.plymouth ]
+      for k in /lib/modules/*; do
+        kver=$(basename "$k")
+        dracut --force "/boot/initrd.img-$kver" "$kver"
+      done
+      apt-get clean
+
+  seed-snaps:
+    after: [desktop]
+    plugin: snap-preseed
+    # Ubuntu Desktop 26.10's seeded snaps. prepare-image wants every base
+    # and default content provider listed explicitly.
+    snap-preseed-snaps:
+      - snapd
+      - bare
+      - core24
+      - core26
+      - gtk-common-themes
+      - gnome-46-2404
+      - gnome-core26
+      - mesa-2404
+      - mesa-2604
+      - firefox
+      - snap-store
+      - firmware-updater
+      - desktop-security-center
+      - prompting-client
+      - snapd-desktop-integration
+    # Download from latest/stable, but have every snap track Ubuntu's
+    # release branch, as Ubuntu Desktop does. A closed or expired branch
+    # falls back to latest/stable on refresh; prepare-image itself
+    # refuses one, hence the rewrite instead of --channel.
+    override-build: |
+      craftctl default
+      sed -i -E 's|^(\s*channel:).*$|\1 latest/stable/ubuntu-26.10|' \
+        "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
+      grep -n 'channel:' "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
+    # No organize into (overlay): that copy happens after this part's
+    # overlay layer is captured, so the seed never reached the image.
+    # Staged normally, var/lib/snapd/seed is primed into the rootfs.
+
+  system-config:
+    after: [seed-snaps]
+    plugin: nil
+    overlay-script: |
+      set -eux
+      cat > $CRAFT_OVERLAY/etc/fstab <<'FSTAB'
+      LABEL=umoja-root  /          ext4  defaults,errors=remount-ro  0  1
+      LABEL=UEFI        /boot/efi  vfat  umask=0077                  0  1
+      FSTAB
+      echo umoja > $CRAFT_OVERLAY/etc/hostname
+      printf '127.0.0.1 localhost\n127.0.1.1 umoja\n' > $CRAFT_OVERLAY/etc/hosts
+      echo 'LANG=en_US.UTF-8' > $CRAFT_OVERLAY/etc/default/locale
+      # A fresh machine-id on first boot.
+      : > $CRAFT_OVERLAY/etc/machine-id
+      rm -f $CRAFT_OVERLAY/var/lib/dbus/machine-id
+      # Quiet boot with the Ubuntu splash, like Ubuntu Desktop.
+      cat > $CRAFT_OVERLAY/etc/default/grub <<'GRUB'
+      GRUB_DEFAULT=0
+      GRUB_TIMEOUT_STYLE=hidden
+      GRUB_TIMEOUT=0
+      GRUB_DISTRIBUTOR=Umoja
+      GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+      GRUB_CMDLINE_LINUX=""
+      GRUB
+
+  system-setup:
+    after: [system-config]
+    plugin: nil
+    override-overlay: |
+      set -eux
+      locale-gen en_US.UTF-8 || true
+      systemctl enable NetworkManager.service || true
+      systemctl enable systemd-resolved.service
+
+  # VM test image only: a login for the greeter. The installer replaces
+  # this with the user's own account.
+  test-user:
+    after: [system-setup]
+    plugin: nil
+    override-overlay: |
+      set -eux
+      useradd -m -s /bin/bash -G sudo,adm -c "Umoja" umoja
+      echo 'umoja:umoja' | chpasswd
+
+  # Last, outside the chroot (which mounts its own resolv.conf): point
+  # name resolution at systemd-resolved, as on Ubuntu Desktop.
+  resolv-conf:
+    after: [test-user]
+    plugin: nil
+    overlay-script: |
+      set -eux
+      rm -f $CRAFT_OVERLAY/etc/resolv.conf
+      ln -s ../run/systemd/resolve/stub-resolv.conf $CRAFT_OVERLAY/etc/resolv.conf

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install Umoja
+Exec=umoja-installer
+Icon=system-software-install
+Terminal=false
+NoDisplay=true
+OnlyShowIn=Umoja;
+X-GNOME-Autostart-Phase=Applications

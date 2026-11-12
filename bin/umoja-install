@@ -1,0 +1,307 @@
+#!/bin/bash
+# umoja-install: put Umoja on a disk. The installer app runs this as root
+# (pkexec or sudo) from the live session; it can also run by hand.
+#
+#   umoja-install --disk /dev/nvme0n1 --user ken --full-name "Ken" \
+#                 --hostname ken-laptop --timezone America/New_York < password
+#
+# The password comes on stdin (one line): it is the login password and
+# also unlocks the disk. Everything on --disk is erased:
+#
+#   1  1 GiB  EFI system partition (vfat, "UEFI")
+#   2  2 GiB  /boot (ext4, "umoja-boot"), unencrypted so GRUB can read it
+#   3  rest   LUKS2, holding the root file system (ext4, "umoja-root")
+#
+# The root file system is the target layer of the live medium
+# (casper/umoja.squashfs), the same tree as the Umoja disk image. GRUB
+# comes from Ubuntu's signed packages, so Secure Boot stays on.
+#
+# Progress goes to stdout as "PROGRESS <percent> <what>" lines; anything
+# else on stdout/stderr is log. Exit status 0 means a bootable install.
+
+set -euo pipefail
+
+DISK= USERNAME= FULLNAME= HOSTNAME_= TIMEZONE=UTC
+SQUASHFS=${UMOJA_SQUASHFS:-}
+TARGET=/target
+MAPPER=umoja-root
+
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --disk) DISK=$2; shift ;;
+        --user) USERNAME=$2; shift ;;
+        --full-name) FULLNAME=$2; shift ;;
+        --hostname) HOSTNAME_=$2; shift ;;
+        --timezone) TIMEZONE=$2; shift ;;
+        --squashfs) SQUASHFS=$2; shift ;;
+        -h|--help) usage ;;
+        *) echo "unknown option $1" >&2; usage 2 >&2 ;;
+    esac
+    shift
+done
+
+# In the automatic (CI) install, copy everything to the kernel log too, at
+# error level so the console prints it and it reaches the serial log.
+if grep -qw umoja.autoinstall /proc/cmdline 2>/dev/null && [ -w /dev/kmsg ]; then
+    exec > >(tee >(sed -u 's/^/<3>umoja-install: /' > /dev/kmsg)) 2>&1
+fi
+
+die() { echo "ERROR $*" >&2; exit 1; }
+START_NS=$(date +%s%N)
+mark() { echo "[+$(( ($(date +%s%N) - START_NS) / 1000000 ))ms] $*"; }
+progress() { # also logs the time since the start, for tuning
+    mark "$2"
+    echo "PROGRESS $1 $2"
+}
+
+[ "$(id -u)" = 0 ] || die "must run as root"
+[ -b "$DISK" ] || die "$DISK is not a block device"
+[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "invalid user name '$USERNAME'"
+[ -n "$HOSTNAME_" ] || HOSTNAME_="$USERNAME-umoja"
+[[ "$HOSTNAME_" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] || die "invalid computer name '$HOSTNAME_'"
+[ -e "/usr/share/zoneinfo/$TIMEZONE" ] || die "unknown time zone '$TIMEZONE'"
+[ -d /sys/firmware/efi ] || die "this computer did not start in UEFI mode; Umoja needs UEFI"
+
+if [ -z "$SQUASHFS" ]; then
+    for f in /cdrom/casper/umoja.squashfs /run/live/medium/casper/umoja.squashfs; do
+        [ -f "$f" ] && SQUASHFS=$f && break
+    done
+fi
+[ -f "$SQUASHFS" ] || die "can't find the Umoja file system (casper/umoja.squashfs)"
+
+IFS= read -r PASSWORD || true
+[ -n "$PASSWORD" ] || die "no password on stdin"
+
+# /dev/sda -> /dev/sda1, /dev/nvme0n1 -> /dev/nvme0n1p1
+part() { case "$DISK" in *[0-9]) echo "${DISK}p$1" ;; *) echo "${DISK}$1" ;; esac; }
+
+cleanup() {
+    set +e
+    [ -n "${VOLUME_KEY:-}" ] && rm -f "$VOLUME_KEY"
+    for m in sys/firmware/efi/efivars sys proc dev/pts dev run boot/efi boot ""; do
+        mountpoint -q "$TARGET/$m" && umount -l "$TARGET/$m"
+    done
+    [ -e "/dev/mapper/$MAPPER" ] && cryptsetup close "$MAPPER"
+}
+trap cleanup EXIT
+
+progress 1 "Preparing the disk"
+cleanup
+# Let go of anything on the disk (swap, auto-mounted partitions).
+for p in $(lsblk -nrpo NAME "$DISK" | tail -n +2); do
+    swapoff "$p" 2>/dev/null || true
+    umount -l "$p" 2>/dev/null || true
+done
+wipefs -af "$DISK"
+sgdisk --zap-all \
+       -n1:0:+1G -t1:ef00 -c1:UEFI \
+       -n2:0:+2G -t2:8300 -c2:umoja-boot \
+       -n3:0:0   -t3:8309 -c3:umoja \
+       "$DISK"
+partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" || true
+udevadm settle -t 10 || true
+for i in 1 2 3; do
+    for _ in $(seq 40); do [ -b "$(part $i)" ] && break; sleep 0.25; done
+    [ -b "$(part $i)" ] || die "partition $(part $i) did not appear"
+done
+mark "  partitions ready"
+
+progress 3 "Encrypting the disk"
+# The volume key is made here and handed to both luksFormat and open, so
+# the slow password hashing (argon2id, Ubuntu's default cost) runs once,
+# for the keyslot, instead of again to open the disk. It lives only in
+# /run (RAM) and is removed straight away.
+VOLUME_KEY=$(mktemp -p /run umoja-vk.XXXXXX)
+head -c 64 /dev/urandom > "$VOLUME_KEY"
+# Format the small partitions while the hashing keeps a CPU busy.
+# No discard pass: it is slow on big disks and the partitions are new.
+( mkfs.vfat -F 32 -n UEFI "$(part 1)" >/dev/null
+  mkfs.ext4 -q -F -E nodiscard -L umoja-boot "$(part 2)" ) &
+SMALL_FS=$!
+printf '%s' "$PASSWORD" | cryptsetup luksFormat --type luks2 --batch-mode \
+    --label umoja --volume-key-file="$VOLUME_KEY" --key-size 512 \
+    --key-file=- "$(part 3)"
+mark "  luksFormat done"
+cryptsetup open --volume-key-file="$VOLUME_KEY" "$(part 3)" "$MAPPER"
+rm -f "$VOLUME_KEY"
+mark "  open done"
+mkfs.ext4 -q -F -E nodiscard,lazy_itable_init=1 \
+    -L umoja-root "/dev/mapper/$MAPPER"
+mark "  mkfs root done"
+wait "$SMALL_FS" || die "formatting the EFI or /boot partition failed"
+mark "  small partitions done"
+
+mkdir -p "$TARGET"
+mount "/dev/mapper/$MAPPER" "$TARGET"
+mkdir -p "$TARGET/boot"
+mount "$(part 2)" "$TARGET/boot"
+mkdir -p "$TARGET/boot/efi"
+mount "$(part 1)" "$TARGET/boot/efi"
+
+progress 8 "Copying Umoja"
+# unsquashfs -percentage prints one number per update.
+unsquashfs -f -d "$TARGET" -processors "$(nproc)" -percentage "$SQUASHFS" | while read -r pct; do
+    case "$pct" in ''|*[!0-9]*) continue ;; esac
+    progress $((8 + pct * 72 / 100)) "Copying Umoja"
+done
+[ -x "$TARGET/usr/bin/umoja-session" ] || die "copy incomplete"
+
+progress 81 "Setting up the system"
+LUKS_UUID=$(blkid -s UUID -o value "$(part 3)")
+BOOT_UUID=$(blkid -s UUID -o value "$(part 2)")
+EFI_UUID=$(blkid -s UUID -o value "$(part 1)")
+cat > "$TARGET/etc/fstab" <<EOF
+# <file system>          <mount point>  <type>  <options>                   <dump> <pass>
+/dev/mapper/$MAPPER      /              ext4    defaults,errors=remount-ro  0      1
+UUID=$BOOT_UUID  /boot          ext4    defaults                    0      2
+UUID=$EFI_UUID           /boot/efi      vfat    umask=0077                  0      1
+EOF
+echo "$MAPPER UUID=$LUKS_UUID none luks,discard" > "$TARGET/etc/crypttab"
+chmod 0600 "$TARGET/etc/crypttab"
+
+echo "$HOSTNAME_" > "$TARGET/etc/hostname"
+cat > "$TARGET/etc/hosts" <<EOF
+127.0.0.1 localhost
+127.0.1.1 $HOSTNAME_
+
+::1     ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+EOF
+ln -sf "/usr/share/zoneinfo/$TIMEZONE" "$TARGET/etc/localtime"
+echo "$TIMEZONE" > "$TARGET/etc/timezone"
+# A fresh identity on first boot.
+: > "$TARGET/etc/machine-id"
+rm -f "$TARGET/var/lib/dbus/machine-id"
+
+# Unlock the root on boot (dracut reads rd.luks.*; initramfs-tools reads
+# /etc/crypttab).
+sed -i -E "s|^#?GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"rd.luks.name=$LUKS_UUID=$MAPPER\"|" \
+    "$TARGET/etc/default/grub"
+grep -q '^GRUB_CMDLINE_LINUX=' "$TARGET/etc/default/grub" \
+    || echo "GRUB_CMDLINE_LINUX=\"rd.luks.name=$LUKS_UUID=$MAPPER\"" >> "$TARGET/etc/default/grub"
+
+for m in dev dev/pts proc sys run; do
+    mount --bind "/$m" "$TARGET/$m"
+    # Slave, so unmounting these later never reaches the live system's own
+    # mounts (a shared /dev would lose its /dev/pts).
+    mount --make-rslave "$TARGET/$m"
+done
+[ -d /sys/firmware/efi/efivars ] && mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars"
+in_target() { chroot "$TARGET" "$@"; }
+
+progress 84 "Creating your account"
+groups=
+for g in adm cdrom sudo dip plugdev lpadmin users; do
+    in_target getent group "$g" >/dev/null && groups="$groups${groups:+,}$g"
+done
+in_target useradd --create-home --shell /bin/bash --comment "$FULLNAME" \
+    ${groups:+--groups "$groups"} "$USERNAME"
+printf '%s:%s\n' "$USERNAME" "$PASSWORD" | in_target chpasswd
+
+progress 88 "Building the boot image"
+if [ -f "$TARGET/etc/dracut.conf.d/90-umoja.conf" ]; then
+    # The image's initrd is already generic and can unlock LUKS
+    # (image/imagecraft.yaml); rd.luks.name above tells it which disk.
+    echo "initrd from the image is generic with crypt; not rebuilding"
+elif in_target sh -c 'command -v dracut' >/dev/null; then
+    for k in "$TARGET"/lib/modules/*; do
+        kver=$(basename "$k")
+        # Generic (not host-only): dracut can't judge the hardware from a
+        # chroot, and the disk may move to another machine anyway.
+        in_target dracut --force --no-hostonly --add crypt "/boot/initrd.img-$kver" "$kver"
+    done
+else
+    in_target update-initramfs -u -k all
+fi
+
+progress 94 "Installing the boot loader"
+# GRUB must land on the EFI partition itself. Make sure that is what is
+# mounted at /boot/efi, here and as the chroot sees it.
+esp_mounted() {
+    [ "$(findmnt -no SOURCE "$TARGET/boot/efi" 2>/dev/null | tail -n1)" = "$(part 1)" ]
+}
+if ! esp_mounted; then
+    echo "EFI partition not mounted at $TARGET/boot/efi; mounting it again"
+    mkdir -p "$TARGET/boot/efi"
+    mount "$(part 1)" "$TARGET/boot/efi"
+fi
+esp_mounted || die "can't mount the EFI partition $(part 1)"
+findmnt -R "$TARGET" || true
+ls -la "$TARGET/boot" "$TARGET/boot/efi" || true
+in_target findmnt /boot/efi || true
+in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    --bootloader-id=ubuntu --uefi-secure-boot \
+    || echo "grub-install failed ($?); putting the boot loader in place by hand"
+mark "  done: grub-install"
+in_target update-grub
+mark "  done: update-grub"
+echo "EFI partition after grub-install:"
+find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
+
+# Ubuntu's grub-install fills EFI/BOOT by default and has no
+# --force-extra-removable (passing it made grub-install fail, leaving the
+# EFI partition empty). Should it ever leave anything out, put the missing
+# parts of the signed boot chain there ourselves (the same files the live
+# ISO boots with), so the disk always starts:
+#   EFI/ubuntu  shim -> grubx64.efi, which reads EFI/ubuntu/grub.cfg
+#   EFI/BOOT    the same, for firmware that has no boot entry for us
+pick() { for f in "$@"; do [ -s "$f" ] && { echo "$f"; return; }; done; }
+SHIM=$(pick "$TARGET"/usr/lib/shim/shimx64.efi.signed.latest "$TARGET"/usr/lib/shim/shimx64.efi.signed)
+MOK=$(pick "$TARGET"/usr/lib/shim/mmx64.efi.signed "$TARGET"/usr/lib/shim/mmx64.efi)
+GRUB=$(pick "$TARGET"/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed)
+[ -n "$SHIM" ] && [ -n "$GRUB" ] || die "signed shim or GRUB missing from the system"
+[ -s "$TARGET/boot/grub/grub.cfg" ] || die "update-grub wrote no /boot/grub/grub.cfg"
+for dir in ubuntu BOOT; do
+    d="$TARGET/boot/efi/EFI/$dir"
+    mkdir -p "$d"
+    shim_name=shimx64.efi
+    [ "$dir" = BOOT ] && shim_name=BOOTX64.EFI
+    [ -s "$d/$shim_name" ] || cp "$SHIM" "$d/$shim_name"
+    [ -s "$d/grubx64.efi" ] || cp "$GRUB" "$d/grubx64.efi"
+    [ -z "$MOK" ] || [ -s "$d/mmx64.efi" ] || cp "$MOK" "$d/mmx64.efi"
+    [ -s "$d/grub.cfg" ] || printf '%s\n' \
+        "search.fs_uuid $BOOT_UUID root" \
+        "set prefix=(\$root)'/grub'" \
+        'configfile $prefix/grub.cfg' > "$d/grub.cfg"
+done
+# A firmware boot entry is nice to have; EFI/BOOT works without one.
+if ! in_target efibootmgr 2>/dev/null | grep -qi ubuntu; then
+    in_target efibootmgr -c -d "$DISK" -p 1 -L ubuntu -l '\EFI\ubuntu\shimx64.efi' >/dev/null 2>&1 || true
+fi
+sync
+# The firmware must find these, or the disk won't start.
+for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/ubuntu/grub.cfg EFI/BOOT/BOOTX64.EFI EFI/BOOT/grubx64.efi; do
+    [ -s "$TARGET/boot/efi/$f" ] || die "boot loader missing from the EFI partition: $f"
+done
+esp_mounted || die "the EFI partition was unmounted during the boot loader install"
+find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
+in_target efibootmgr -v 2>/dev/null || true
+
+progress 99 "Finishing"
+# Plain (not lazy) unmounts, so anything left unwritten shows up as an
+# error instead of a disk that won't boot.
+for m in sys/firmware/efi/efivars sys proc dev/pts dev run; do
+    mountpoint -q "$TARGET/$m" && umount -l "$TARGET/$m"
+done
+sync
+umount "$TARGET/boot/efi"
+umount "$TARGET/boot"
+umount "$TARGET"
+cryptsetup close "$MAPPER"
+sync
+# Look at the EFI partition fresh from the disk, as the firmware will.
+CHECK=$(mktemp -d)
+mount -o ro "$(part 1)" "$CHECK"
+missing=
+for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI EFI/BOOT/grubx64.efi; do
+    [ -s "$CHECK/$f" ] || missing="$missing $f"
+done
+find "$CHECK" -type f | sed "s|^$CHECK|ESP:|"
+umount "$CHECK"
+rmdir "$CHECK"
+[ -z "$missing" ] || die "the EFI partition is missing$missing after unmounting"
+trap - EXIT
+progress 100 "Done"

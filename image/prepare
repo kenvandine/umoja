@@ -1,0 +1,10 @@
+#!/bin/sh
+# Copy the PPA key and Mir pin that umoja-archive-keyring ships into
+# image/apt, so the image gets exactly the same apt setup. Run before
+# `imagecraft pack`.
+set -eu
+cd "$(dirname "$0")"
+cp ../data/apt/keyrings/umoja-archive-keyring.asc apt/
+cp ../data/apt/umoja-mir.pref apt/
+mkdir -p local-debs
+echo "image/apt ready; $(ls local-debs/*.deb 2>/dev/null | wc -l) local debs in image/local-debs"

@@ -1,0 +1,22 @@
+[Unit]
+Description=Finish setting up apps (snap seeding) before the login screen
+Documentation=https://github.com/kenvandine/umoja
+# On first boot snapd installs the seeded snaps (Firefox, the App Center,
+# ...). Showing the login screen before that finishes gives a first session
+# with half the dock missing, so the boot screen stays up until it's done.
+# Later boots return at once. lightdm only Wants this, so a failure or the
+# timeout below never keeps anyone from logging in.
+ConditionPathExists=/var/lib/snapd/seed/seed.yaml
+# Not in the installer's live session: it doesn't need the snaps to install.
+ConditionKernelCommandLine=!boot=casper
+Wants=snapd.socket
+After=snapd.socket snapd.service
+Before=lightdm.service display-manager.service plymouth-quit.service plymouth-quit-wait.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/bin/plymouth display-message --text=Getting\x20your\x20apps\x20ready…
+ExecStart=/usr/bin/snap wait system seed.loaded
+ExecStartPost=-/usr/bin/plymouth display-message --text=
+TimeoutStartSec=15min

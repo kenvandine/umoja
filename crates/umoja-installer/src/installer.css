@@ -1,0 +1,141 @@
+/* The screensaver's dots drift behind; everything here floats on them. */
+window.umoja-installer {
+  background-color: #12040f;
+  color: #ffffff;
+}
+
+/* A frosted card, like the login card and the notification bubbles. */
+.installer-card {
+  margin: 48px;
+  padding: 32px 36px 24px 36px;
+  border-radius: 28px;
+  background-color: alpha(#1a0d15, 0.55);
+  backdrop-filter: blur(16px);
+  border: 1px solid alpha(#ffffff, 0.14);
+  box-shadow: 0 24px 64px alpha(#000000, 0.45), inset 0 1px 0 alpha(#ffffff, 0.08);
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.page-body {
+  font-size: 15px;
+  opacity: 0.88;
+}
+.page-body.warning, .warning {
+  color: #ffb4a0;
+  opacity: 1;
+}
+.field-label {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+/* Fields like the login card's password pill. */
+/* One box per field: style the entry (or the dropdown's button) and keep
+   the text node inside it bare, or the two stack into a box in a box. */
+entry.field, dropdown.field > button {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background-color: alpha(#ffffff, 0.10);
+  border: 1px solid alpha(#ffffff, 0.16);
+  box-shadow: none;
+  outline: none;
+  color: #ffffff;
+}
+entry.field > text {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+entry.field > image {
+  opacity: 0.7;
+}
+entry.field:focus-within, dropdown.field > button:focus-visible {
+  border-color: #E95420;
+  box-shadow: 0 0 0 1px #E95420;
+}
+
+.pill-button {
+  min-height: 40px;
+  padding: 0 22px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.pill-button.suggested {
+  background-color: #E95420;
+  color: #ffffff;
+}
+.pill-button.suggested:hover {
+  background-color: shade(#E95420, 1.08);
+}
+.pill-button.destructive {
+  background-color: #c01c28;
+  color: #ffffff;
+}
+.pill-button.flat {
+  background: none;
+  color: alpha(#ffffff, 0.85);
+}
+.pill-button.flat:hover {
+  background-color: alpha(#ffffff, 0.08);
+}
+.pill-button:disabled {
+  opacity: 0.45;
+}
+
+.disk-list {
+  background: none;
+}
+.disk-list row {
+  border-radius: 14px;
+  margin: 3px 0;
+  background-color: alpha(#ffffff, 0.06);
+  border: 1px solid transparent;
+}
+.disk-list row:selected {
+  background-color: alpha(#E95420, 0.22);
+  border-color: #E95420;
+}
+.disk-row {
+  padding: 12px 16px;
+}
+.disk-name {
+  font-weight: 600;
+}
+.disk-path {
+  font-size: 12px;
+  opacity: 0.6;
+  font-family: monospace;
+}
+
+/* Ubuntu orange to aubergine, like the screensaver's palette. */
+progressbar.install-progress > trough {
+  min-height: 10px;
+  border-radius: 999px;
+  background-color: alpha(#ffffff, 0.12);
+}
+progressbar.install-progress > trough > progress {
+  min-height: 10px;
+  border-radius: 999px;
+  background-image: linear-gradient(to right, #E95420, #77216F);
+}
+
+/* "Installed in 1:42" on the last page. */
+.install-time {
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  color: #E95420;
+}
+.install-time-caption {
+  font-size: 13px;
+  opacity: 0.6;
+}

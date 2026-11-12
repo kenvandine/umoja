@@ -18,6 +18,9 @@ endif
 LEMONADE_SRC := vendor/lemonade/$(LEMONADE_ARCH)
 DESKTOP := debian/umoja-desktop
 GREETER := debian/umoja-greeter
+INSTALLER := debian/umoja-installer
+KEYRING := debian/umoja-archive-keyring
+META := packaging/meta/ubuntu-umoja-desktop
 
 %:
 	dh $@
@@ -38,7 +41,7 @@ endif
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# GTK crates need a display to run; test the headless logic only.
-	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver
+	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver -p umoja-installer
 endif
 
 override_dh_auto_clean:
@@ -53,6 +56,15 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/umoja-files $(DESKTOP)/usr/bin/umoja-files
 	install -D -m 0755 target/release/umoja-mcp $(DESKTOP)/usr/bin/umoja-mcp
 	install -D -m 0755 target/release/umoja-screensaver $(DESKTOP)/usr/bin/umoja-screensaver
+ifeq ($(DEB_HOST_ARCH),amd64)
+	# The installer, for the live ISO only.
+	install -D -m 0755 target/release/umoja-installer $(INSTALLER)/usr/bin/umoja-installer
+	install -D -m 0755 bin/umoja-install $(INSTALLER)/usr/libexec/umoja-installer/umoja-install
+	install -D -m 0644 data/installer/umoja-installer.desktop \
+		$(INSTALLER)/usr/share/applications/umoja-installer.desktop
+	install -D -m 0644 data/installer/umoja-installer-autostart.desktop \
+		$(INSTALLER)/etc/xdg/autostart/umoja-installer.desktop
+endif
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
 	install -D -m 0755 bin/umoja-agent-setup $(DESKTOP)/usr/bin/umoja-agent-setup
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
@@ -74,6 +86,15 @@ endif
 	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
 	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
 	install -D -m 0644 data/90_umoja.gschema.override $(DESKTOP)/usr/share/glib-2.0/schemas/90_umoja.gschema.override
+	# Ubuntu's extension schemas (dock, tiling, appindicator, desktop icons)
+	# with Ubuntu's and Umoja's dock defaults, for systems without GNOME
+	# Shell. umoja-session adds this directory to XDG_DATA_DIRS only when
+	# gnome-shell-ubuntu-extensions isn't installed. Overrides for schemas
+	# that live elsewhere are skipped by glib-compile-schemas.
+	install -d $(DESKTOP)/usr/share/umoja/gsettings/glib-2.0/schemas
+	install -m 0644 data/schemas/ubuntu-extensions/*.gschema.xml data/schemas/ubuntu-extensions/*.gschema.override \
+		data/90_umoja.gschema.override $(DESKTOP)/usr/share/umoja/gsettings/glib-2.0/schemas/
+	glib-compile-schemas $(DESKTOP)/usr/share/umoja/gsettings/glib-2.0/schemas
 
 	# systemd user units, D-Bus activation and portal registration
 	install -d $(DESKTOP)/usr/lib/systemd/user
@@ -105,6 +126,33 @@ endif
 	install -D -m 0644 data/lightdm-umoja-greeter-x11.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter-x11.desktop
 	install -D -m 0644 data/lightdm/60-umoja.conf $(GREETER)/usr/share/lightdm/lightdm.conf.d/60-umoja.conf
 	install -D -m 0644 data/pam/umoja-greeter $(GREETER)/etc/pam.d/umoja-greeter
+	install -D -m 0644 data/greeter/umoja-wait-for-snaps.service \
+		$(GREETER)/usr/lib/systemd/system/umoja-wait-for-snaps.service
+	install -D -m 0644 data/greeter/lightdm-wait-for-snaps.conf \
+		$(GREETER)/usr/lib/systemd/system/lightdm.service.d/umoja-wait-for-snaps.conf
+
+override_dh_install-indep:
+	dh_install -i
+	# The release PPA's signing key, committed in the repo
+	# (packaging/fetch-ppa-keys refreshes it if Launchpad ever rotates it).
+	install -D -m 0644 data/apt/keyrings/umoja-archive-keyring.asc \
+		$(KEYRING)/usr/share/keyrings/umoja-archive-keyring.asc
+	install -D -m 0644 data/apt/umoja.sources.in $(KEYRING)/usr/share/umoja-archive-keyring/umoja.sources.in
+	install -D -m 0644 data/apt/umoja-mir.pref $(KEYRING)/etc/apt/preferences.d/umoja-mir.pref
+	# Boot and disk-unlock screen: Ubuntu's BGRT theme with Umoja's wordmark.
+	install -D -m 0644 data/plymouth/umoja/umoja.plymouth \
+		debian/ubuntu-umoja-desktop/usr/share/plymouth/themes/umoja/umoja.plymouth
+	install -D -m 0644 data/plymouth/umoja/watermark.png \
+		debian/ubuntu-umoja-desktop/usr/share/plymouth/themes/umoja/watermark.png
+	install -D -m 0644 data/plymouth/umoja-text/umoja-text.plymouth \
+		debian/ubuntu-umoja-desktop/usr/share/plymouth/themes/umoja-text/umoja-text.plymouth
+
+
+override_dh_gencontrol:
+	# ubuntu-umoja-desktop's lists, one dependency per line (packaging/meta/update).
+	echo "umoja:Depends=$$(paste -sd, $(META).depends | sed 's/,/, /g')" >> debian/ubuntu-umoja-desktop.substvars
+	echo "umoja:Recommends=$$(paste -sd, $(META).recommends | sed 's/,/, /g')" >> debian/ubuntu-umoja-desktop.substvars
+	dh_gencontrol
 
 override_dh_shlibdeps:
 	# lemond gets normal shlib deps; its downloaded/bundled backends under

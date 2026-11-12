@@ -76,6 +76,8 @@ Recommends: umoja-greeter,
             systemd-coredump,
             xdg-user-dirs,
             xdg-user-dirs-gtk
+Provides: polkit-1-auth-agent,
+          notification-daemon
 Description: AI-native, Rust-based desktop shell for Ubuntu
  Umoja is a resilient, modern desktop environment built in Rust, powered by
  Mir and GTK4. It features seamless GNOME/Ubuntu settings fidelity,
@@ -84,6 +86,15 @@ Description: AI-native, Rust-based desktop shell for Ubuntu
  The Lemonade server is bundled privately under /usr/lib/umoja/lemonade and
  runs per user on 127.0.0.1:13345, so it does not conflict with a system
  lemonade-server package on its default port 13305.
+ .
+ umoja-panel is the session's polkit authentication agent and notification
+ server, which is what lets update-manager, update-notifier and
+ nm-connection-editor install without GNOME Shell.
+ .
+ Without GNOME Shell, the Ubuntu Dock and Tiling Assistant settings that
+ Umoja and Settings > Ubuntu Desktop use have no schemas, so umoja-desktop
+ carries a copy in /usr/share/umoja/gsettings, used only when
+ gnome-shell-ubuntu-extensions isn't installed.
 
 Package: umoja-greeter
 Architecture: any
@@ -107,3 +118,61 @@ Description: GTK4 LightDM greeter for Umoja
  On a fresh install this package makes LightDM the default display manager
  in place of GDM; the change takes effect at the next boot. Removing the
  package restores the previous display manager.
+
+Package: umoja-installer
+Architecture: amd64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         umoja-desktop (= ${binary:Version}),
+         cryptsetup,
+         dosfstools,
+         e2fsprogs,
+         gdisk,
+         parted,
+         squashfs-tools,
+         util-linux
+Description: Umoja installer for the live session
+ Puts Umoja on a disk from the Umoja live ISO: a few questions (disk,
+ account, password, time zone) on a card over the screensaver's dots,
+ then the whole disk is set up with an EFI partition, /boot and a LUKS2
+ encrypted root that the login password unlocks. Ubuntu's signed boot
+ loader keeps Secure Boot on.
+ .
+ This package belongs on the live medium only: it starts the installer
+ when the live session starts.
+
+Package: ubuntu-umoja-desktop
+Architecture: all
+Depends: ${misc:Depends},
+         ${umoja:Depends},
+         umoja-desktop (>= ${source:Version}),
+         umoja-greeter (>= ${source:Version}),
+         umoja-archive-keyring
+Recommends: ${umoja:Recommends}
+Conflicts: budgie-desktop,
+           gdm3,
+           gnome-shell
+Description: Ubuntu with the Umoja desktop (metapackage)
+ Everything Ubuntu Desktop installs by default, with Umoja in place of
+ GNOME Shell: the Umoja shell and greeter instead of gnome-shell, gdm3 and
+ the Ubuntu GNOME session. GNOME apps, Settings, portals, Yaru and the
+ Ubuntu defaults stay. Also adds Showtime and Snapshot, and makes Umoja's
+ boot and disk-unlock screen (Plymouth theme) the default.
+ .
+ The lists follow ubuntu-desktop-minimal; packaging/meta/update in the
+ Umoja source refreshes them. It conflicts with gnome-shell, gdm3 and
+ budgie-desktop because xdg-desktop-portal-gnome recommends
+ "gnome-shell | budgie-desktop", which would otherwise bring back GNOME
+ Shell, GDM and the Ubuntu GNOME session, or the Budgie desktop. To keep
+ GNOME or Budgie next to Umoja, install umoja-desktop instead.
+
+Package: umoja-archive-keyring
+Architecture: all
+Depends: ${misc:Depends}
+Description: Package source and signing key for the Umoja PPA
+ Adds ppa:ken-vandine/umoja as a package source, with its signing key, so
+ Umoja and its patched Mir keep updating after install. Mir packages from
+ the PPA are pinned above the Ubuntu archive's, since Umoja needs its
+ patches. If the PPA is already configured (add-apt-repository), the
+ existing source is left alone. The edge PPA is never enabled by this
+ package.

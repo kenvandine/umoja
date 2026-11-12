@@ -21,6 +21,9 @@
 # Launchpad builds offline, so the source package carries vendored crates
 # and the embedded Lemonade build (`make vendor`).
 #
+# The "Meta package lists" job warns when Ubuntu's ubuntu-desktop-minimal
+# changes, so ubuntu-umoja-desktop can follow (packaging/meta/update).
+#
 # Required repository secrets:
 #   PPA_GPG_PRIVATE_KEY  ASCII-armoured secret key registered with Launchpad
 #   PPA_GPG_PASSPHRASE   its passphrase (may be empty)
@@ -63,6 +66,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  meta:
+    name: Meta package lists
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare with Ubuntu's ubuntu-desktop-minimal
+        run: packaging/meta/update --check --series "$SERIES"
+
   binary:
     name: Build .debs (${{ matrix.arch }})
     strategy:
@@ -127,9 +138,9 @@ jobs:
           name: debs-${{ matrix.arch }}
           path: dist
 
-      # Stock ubuntu-desktop-minimal with Recommends, then our debs, then a
+      # ubuntu-umoja-desktop with Recommends (no GNOME Shell), then a
       # headless session with screenshots (see tests/install-test.sh).
-      - name: Install on ubuntu-desktop-minimal and run headless
+      - name: Install ubuntu-umoja-desktop and run headless
         run: tests/install-test.sh dist install-test
 
       - uses: actions/upload-artifact@v4

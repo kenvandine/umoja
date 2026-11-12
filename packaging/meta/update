@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Regenerate the Umoja meta package's dependency lists from Ubuntu's.
+
+ubuntu-umoja-desktop is what the Umoja installer installs (there is one
+selection, no minimal/extended split). It mirrors ubuntu-desktop-minimal,
+minus the GNOME Shell session (DROP below), plus ADD. debian/rules reads
+the lists from packaging/meta/ubuntu-umoja-desktop.depends and .recommends.
+
+  packaging/meta/update            rewrite the lists from the archive
+  packaging/meta/update --check    exit 1 if Ubuntu's lists changed
+
+Uses the series in debian/changelog unless --series is given.
+"""
+import argparse
+import lzma
+import re
+import sys
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+
+# Ubuntu packages Umoja replaces. Everything else Ubuntu Desktop ships stays.
+DROP = {
+    "gdm3": "umoja-greeter (LightDM) is the display manager",
+    "gnome-shell": "umoja-mir + umoja-panel/dock/overlay are the shell",
+    "gnome-shell-ubuntu-extensions": "GNOME Shell extensions",
+    "ubuntu-session": "the GNOME Shell session; umoja-desktop ships the Umoja session",
+    "yaru-theme-gnome-shell": "GNOME Shell theme",
+    "gnome-remote-desktop": "needs Mutter for remote sessions",
+    "gnome-initial-setup": "runs as a GNOME Shell mode; umoja-agent-setup covers first login",
+}
+
+# Added on top of ubuntu-desktop-minimal (they are only in ubuntu-desktop).
+ADD = {
+    "Recommends": ["gnome-snapshot", "showtime"],
+}
+
+# Recommended by Ubuntu, but made hard dependencies here.
+PROMOTE = {
+    # apport-gtk Depends "gnome-terminal | x-terminal-emulator": unless the
+    # default terminal is a dependency, apt satisfies that with
+    # gnome-terminal instead.
+    "ptyxis": "Ubuntu Desktop's terminal",
+}
+
+PACKAGES = {
+    "ubuntu-umoja-desktop": "ubuntu-desktop-minimal",
+}
+
+
+def series() -> str:
+    first = (ROOT / "debian/changelog").read_text().splitlines()[0]
+    return first.split(")")[1].split(";")[0].split()[0]
+
+
+def archive_stanzas(suite: str, arch: str) -> dict[str, dict[str, str]]:
+    url = f"http://archive.ubuntu.com/ubuntu/dists/{suite}/main/binary-{arch}/Packages.xz"
+    with urllib.request.urlopen(url, timeout=120) as r:
+        text = lzma.decompress(r.read()).decode()
+    out = {}
+    for block in text.split("\n\n"):
+        fields = dict(re.findall(r"^([A-Za-z-]+): (.*)$", block, re.M))
+        if fields.get("Package") in PACKAGES.values():
+            out[fields["Package"]] = fields
+    return out
+
+
+def split(field: str) -> list[str]:
+    return [d.strip() for d in field.split(",") if d.strip()] if field else []
+
+
+def first_name(dep: str) -> str:
+    return re.split(r"[ (:|]", dep, maxsplit=1)[0]
+
+
+def lists(stanzas) -> dict[str, str]:
+    files = {}
+    for ours, theirs in PACKAGES.items():
+        s = stanzas[theirs]
+        for field in ("Depends", "Recommends"):
+            deps = [d for d in split(s.get(field, ""))
+                    if first_name(d) not in DROP and not first_name(d).startswith("ubuntu-desktop")]
+            deps += ADD.get(field, [])
+            if field == "Depends":
+                deps += PROMOTE
+            else:
+                deps = [d for d in deps if first_name(d) not in PROMOTE]
+            files[f"{ours}.{field.lower()}"] = "\n".join(sorted(set(deps))) + "\n"
+    return files
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--series")
+    ap.add_argument("--arch", default="amd64")
+    args = ap.parse_args()
+    suite = args.series or series()
+    stanzas = archive_stanzas(suite, args.arch)
+    missing = set(PACKAGES.values()) - set(stanzas)
+    if missing:
+        sys.exit(f"{', '.join(sorted(missing))} not found in {suite}")
+    changed = []
+    for name, content in lists(stanzas).items():
+        path = HERE / name
+        if not path.exists() or path.read_text() != content:
+            changed.append(name)
+            if not args.check:
+                path.write_text(content)
+    versions = ", ".join(f"{p} {stanzas[p]['Version']}" for p in PACKAGES.values())
+    if args.check and changed:
+        print(f"Ubuntu's meta package changed ({versions}): {', '.join(changed)}.")
+        print("Run packaging/meta/update and review the diff.")
+        return 1
+    print(f"{suite}: {versions}; " + (f"updated {', '.join(changed)}" if changed else "no changes"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

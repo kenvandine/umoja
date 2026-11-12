@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install Umoja
+Comment=Put Umoja on this computer's disk
+Exec=umoja-installer
+Icon=system-software-install
+Terminal=false
+Categories=System;
+Keywords=install;installer;setup;

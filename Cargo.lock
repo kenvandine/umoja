@@ -2444,6 +2444,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "umoja-installer"
+version = "2026.46.6"
+dependencies = [
+ "gtk4",
+ "libadwaita",
+ "libc",
+ "serde",
+ "serde_json",
+ "tracing",
+ "umoja-common",
+]
+
+[[package]]
 name = "umoja-mcp"
 version = "2026.46.6"
 dependencies = [
