@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+# The spinner frames the postinst linked in.
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    find /usr/share/plymouth/themes/umoja -maxdepth 1 -type l -delete 2>/dev/null || true
+    rmdir /usr/share/plymouth/themes/umoja 2>/dev/null || true
+fi
+
+#DEBHELPER#
+
+exit 0

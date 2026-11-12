@@ -154,7 +154,8 @@ Description: Ubuntu with the Umoja desktop (metapackage)
  Everything Ubuntu Desktop installs by default, with Umoja in place of
  GNOME Shell: the Umoja shell and greeter instead of gnome-shell, gdm3 and
  the Ubuntu GNOME session. GNOME apps, Settings, portals, Yaru and the
- Ubuntu defaults stay. Also adds Showtime and Snapshot.
+ Ubuntu defaults stay. Also adds Showtime and Snapshot, and makes Umoja's
+ boot and disk-unlock screen (Plymouth theme) the default.
  .
  The lists follow ubuntu-desktop-minimal; packaging/meta/update in the
  Umoja source refreshes them. It conflicts with gnome-shell, gdm3 and

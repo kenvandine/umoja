@@ -1,0 +1,60 @@
+[Plymouth Theme]
+Name=Umoja
+Description=The firmware's logo with a spinner and the Umoja wordmark (Ubuntu's BGRT theme with Umoja's wordmark)
+ModuleName=two-step
+
+[two-step]
+Font=Ubuntu Sans 12
+TitleFont=Ubuntu Sans Light 30
+# The spinner's frames, linked in by ubuntu-umoja-desktop's postinst, and
+# Umoja's watermark.png.
+ImageDir=/usr/share/plymouth/themes/umoja
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.382
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.7
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.96
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x000000
+BackgroundEndColor=0x000000
+ProgressBarBackgroundColor=0x606060
+ProgressBarForegroundColor=0xffffff
+DialogClearsFirmwareBackground=true
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+UseFirmwareBackground=true
+
+[shutdown]
+UseEndAnimation=false
+UseFirmwareBackground=true
+
+[reboot]
+UseEndAnimation=false
+UseFirmwareBackground=true
+
+[updates]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Installing Updates...
+SubTitle=Do not turn off your computer
+
+[system-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Upgrading System...
+SubTitle=Do not turn off your computer
+
+[firmware-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Upgrading Firmware...
+SubTitle=Do not turn off your computer

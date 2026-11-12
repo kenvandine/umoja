@@ -1,0 +1,38 @@
+#!/bin/sh
+# Make Umoja's Plymouth themes the default boot and disk-unlock screens.
+set -e
+
+THEMES=/usr/share/plymouth/themes
+
+link_spinner_frames() {
+    # The umoja theme is the spinner theme's frames with our watermark.
+    [ -d "$THEMES/spinner" ] || return 1
+    for f in "$THEMES"/spinner/*.png; do
+        name=$(basename "$f")
+        [ "$name" = watermark.png ] && continue
+        ln -sfn "../spinner/$name" "$THEMES/umoja/$name"
+    done
+}
+
+if [ "$1" = configure ]; then
+    if link_spinner_frames; then
+        update-alternatives --install "$THEMES/default.plymouth" default.plymouth \
+            "$THEMES/umoja/umoja.plymouth" 150
+    fi
+    # Text mode (safe graphics) uses the ubuntu-text module, which
+    # plymouth-theme-ubuntu-text brings.
+    if [ -e "$THEMES/ubuntu-text/ubuntu-text.plymouth" ]; then
+        update-alternatives --install "$THEMES/text.plymouth" text.plymouth \
+            "$THEMES/umoja-text/umoja-text.plymouth" 150
+    fi
+    # The theme is copied into the initrd: rebuild it so the next boot
+    # shows it (a fresh install builds its initrd after this anyway).
+    if [ -z "$2" ] && command -v update-initramfs >/dev/null 2>&1 \
+        && [ -e /boot/initrd.img ]; then
+        update-initramfs -u >/dev/null 2>&1 || true
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

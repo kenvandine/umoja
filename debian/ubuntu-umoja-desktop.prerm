@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+THEMES=/usr/share/plymouth/themes
+
+if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+    update-alternatives --remove default.plymouth "$THEMES/umoja/umoja.plymouth" || true
+    update-alternatives --remove text.plymouth "$THEMES/umoja-text/umoja-text.plymouth" || true
+fi
+
+#DEBHELPER#
+
+exit 0

@@ -199,13 +199,14 @@ fn build(app: &adw::Application, preview: bool) {
     let card = gtk::Box::builder()
         .css_classes(["installer-card"])
         .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
+        // Low on the screen, so the dotted "umoja" shows above it.
+        .valign(gtk::Align::End)
         .width_request(520)
         .build();
     card.append(&stack);
 
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&backdrop()));
+    overlay.set_child(Some(&backdrop(&card)));
     overlay.add_overlay(&card);
     window.set_child(Some(&overlay));
 
@@ -741,8 +742,9 @@ fn fail(ui: &Rc<Ui>, message: &str) {
     ui.stack.set_visible_child_name("error");
 }
 
-/// The screensaver's word in dots, drifting slowly behind the card.
-fn backdrop() -> gtk::DrawingArea {
+/// The screensaver's word in dots, in the space above the card.
+fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
+    let card = card.downgrade();
     let word = Rc::new(sample_word().unwrap_or_else(|| art::word_from_mask(1, 1, |_, _| false)));
     let start = Instant::now();
     let area = gtk::DrawingArea::builder().hexpand(true).vexpand(true).build();
@@ -754,16 +756,31 @@ fn backdrop() -> gtk::DrawingArea {
         g.add_color_stop_rgb(1.0, 0.05, 0.01, 0.05);
         let _ = cr.set_source(&g);
         let _ = cr.paint();
+        // The free space above the card (it sits at the bottom, with a
+        // 48px margin), but never less than a third of the screen.
+        let card_h = card.upgrade().map(|c| c.height() as f64).unwrap_or(0.0);
+        let free = (h - card_h - 2.0 * 48.0).max(h / 3.0);
+        // art sizes the word to about a quarter of the height it is given;
+        // give it a taller box centred on the free space so the word fills
+        // about half of that space.
+        let box_h = free * 1.8;
+        let elapsed = start.elapsed().as_secs_f64();
+        // The screensaver moves the word about each cycle; here it stays
+        // centred in the free space.
+        let l = art::layout(&word, w, box_h, &art::cycle_at(elapsed, Some(4)));
+        cr.save().ok();
+        cr.translate(w / 2.0 - l.cx, free / 2.0 - l.cy);
         // The "rings" effect holds the word in place, so it stays calm.
-        let frame = art::frame(&word, w, h, start.elapsed().as_secs_f64(), Some(4));
+        let frame = art::frame(&word, w, box_h, elapsed, Some(4));
         for m in &frame.marks {
             if m.rgba.3 <= 0.005 || m.radius <= 0.1 {
                 continue;
             }
-            cr.set_source_rgba(m.rgba.0, m.rgba.1, m.rgba.2, m.rgba.3 * 0.55);
+            cr.set_source_rgba(m.rgba.0, m.rgba.1, m.rgba.2, m.rgba.3 * 0.8);
             cr.arc(m.x, m.y, m.radius, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
         }
+        cr.restore().ok();
     });
     // 30 fps is plenty for slowly drifting dots.
     let last = std::cell::Cell::new(Instant::now());

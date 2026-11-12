@@ -135,6 +135,13 @@ override_dh_install-indep:
 		$(KEYRING)/usr/share/keyrings/umoja-archive-keyring.asc
 	install -D -m 0644 data/apt/umoja.sources.in $(KEYRING)/usr/share/umoja-archive-keyring/umoja.sources.in
 	install -D -m 0644 data/apt/umoja-mir.pref $(KEYRING)/etc/apt/preferences.d/umoja-mir.pref
+	# Boot and disk-unlock screen: Ubuntu's BGRT theme with Umoja's wordmark.
+	install -D -m 0644 data/plymouth/umoja/umoja.plymouth \
+		debian/ubuntu-umoja-desktop/usr/share/plymouth/themes/umoja/umoja.plymouth
+	install -D -m 0644 data/plymouth/umoja/watermark.png \
+		debian/ubuntu-umoja-desktop/usr/share/plymouth/themes/umoja/watermark.png
+	install -D -m 0644 data/plymouth/umoja-text/umoja-text.plymouth \
+		debian/ubuntu-umoja-desktop/usr/share/plymouth/themes/umoja-text/umoja-text.plymouth
 
 
 override_dh_gencontrol:

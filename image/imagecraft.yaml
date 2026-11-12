@@ -104,7 +104,7 @@ parts:
         linux-generic shim-signed grub-efi-amd64-signed grub2-common \
         cryptsetup \
         ubuntu-umoja-desktop $local \
-        firefox- thunderbird- gnome-terminal-
+        firefox- thunderbird- gnome-terminal- alacritty-
       rm -rf /var/cache/umoja-local-debs
       # Language packs and dictionaries for the default language, as
       # Ubuntu's installer adds them; without them Language Support asks
@@ -117,8 +117,21 @@ parts:
       # installed with ...".
       apt-get update
       # Umoja must not have brought GNOME Shell back.
-      for p in gnome-shell mutter gdm3 budgie-desktop gnome-terminal; do
+      for p in gnome-shell mutter gdm3 budgie-desktop gnome-terminal alacritty; do
         if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
+      done
+      # Ptyxis is the one terminal. apport-gtk wants "gnome-terminal |
+      # x-terminal-emulator", and apt is free to pick any provider for it.
+      extra=$(dpkg-query -W -f '${db:Status-Status} ${Package} ${Provides}\n' \
+        | awk '$1 == "installed" && /x-terminal-emulator/ && $2 != "ptyxis" { print $2 }')
+      if [ -n "$extra" ]; then echo "extra terminals installed: $extra" >&2; exit 1; fi
+      # Umoja's boot and unlock screen (ubuntu-umoja-desktop) must be the
+      # default, and the initrds must carry it: rebuild them now that every
+      # package is in.
+      [ "$(readlink -f /etc/alternatives/default.plymouth)" = /usr/share/plymouth/themes/umoja/umoja.plymouth ]
+      for k in /lib/modules/*; do
+        kver=$(basename "$k")
+        dracut --force "/boot/initrd.img-$kver" "$kver"
       done
       apt-get clean
 
