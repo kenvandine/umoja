@@ -31,6 +31,7 @@ pass() { echo "PASS: $*" | tee -a "$LOG"; }
 step "Install ubuntu-umoja-desktop and the Umoja packages (with Recommends)"
 ls -1 "$DEBS"/*.deb | tee -a "$LOG"
 DEB_SET=("$DEBS"/ubuntu-umoja-desktop_*.deb "$DEBS"/umoja-archive-keyring_*.deb
+         "$DEBS"/umoja-ubuntu-dock-settings_*.deb
          "$DEBS"/umoja-desktop_*.deb "$DEBS"/umoja-greeter_*.deb)
 apt-get update -q
 # Simulate first so the log shows exactly what apt pulls in.

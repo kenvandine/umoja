@@ -88,7 +88,7 @@ jobs:
           gh run download -R "$GITHUB_REPOSITORY" "${{ steps.debs.outputs.run }}" -n debs-amd64 -D dist
           mkdir -p image/local-debs
           # Only the packages the image installs; -dbgsym and test debs stay out.
-          for p in ubuntu-umoja-desktop umoja-desktop umoja-greeter umoja-archive-keyring; do
+          for p in ubuntu-umoja-desktop umoja-desktop umoja-greeter umoja-archive-keyring umoja-ubuntu-dock-settings; do
             cp dist/${p}_*.deb image/local-debs/
           done
           ls -l image/local-debs
