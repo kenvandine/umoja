@@ -747,3 +747,7 @@ window.umoja-shortcuts {
   color: alpha(#ffffff, 0.6);
   font-size: 1.1em;
 }
+
+.ask-emoji {
+  font-size: 20px;
+}

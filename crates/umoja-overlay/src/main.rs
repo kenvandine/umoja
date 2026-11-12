@@ -23,6 +23,7 @@ mod screenshot;
 mod shortcuts;
 mod spread;
 mod texpane;
+mod typer;
 mod view;
 mod window_menu;
 

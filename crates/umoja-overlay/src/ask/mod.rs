@@ -5,6 +5,7 @@
 
 pub mod calc;
 pub mod catalog;
+pub mod emoji;
 pub mod history;
 
 /// Words that say how, not what: "turn on wifi" is about Wi-Fi.

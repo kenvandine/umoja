@@ -48,6 +48,7 @@ wayland-client = "0.31"
 # must come first or layer surfaces fall back to plain toplevels.
 wayland-backend = { version = "0.3", features = ["dlopen"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols = { version = "0.32.6", features = ["client", "staging"] }
 cc = "1.1"
 pkg-config = "0.3"

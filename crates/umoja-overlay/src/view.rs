@@ -11,7 +11,7 @@
 
 use crate::appgrid;
 use crate::ask::{
-    self, calc,
+    self, calc, emoji,
     catalog::{self, Instant, Local, Run},
 };
 use crate::assistant::agent::{self, Question, Reply, StepState, Ui as _};
@@ -74,6 +74,11 @@ enum Item {
     },
     /// A calculator result; Enter copies it.
     Sum(String),
+    /// An emoji; Enter types it into the app the user was in.
+    Emoji {
+        glyph: &'static str,
+        name: &'static str,
+    },
     File(Hit),
     /// Hand `question` to the assistant.
     Ask {
@@ -1345,6 +1350,19 @@ impl Overlay {
         );
         let questionish = lemonade::looks_like_question(text) || hits.is_empty();
         let file_first = crate::files::looks_like_file_search(text);
+        // Emoji: first when asked for ("emoji heart", ":tada"), else a
+        // couple after the other matches ("party").
+        let mut hits = hits;
+        if let Some((_, mode)) = emoji::parse(text) {
+            let rows = emoji::search(text)
+                .into_iter()
+                .map(|(glyph, name)| Item::Emoji { glyph, name });
+            if mode == emoji::Mode::Explicit {
+                out.extend(rows.map(Entry::Item));
+            } else {
+                hits.extend(rows.take(2));
+            }
+        }
         if ask::ask_first(questionish && !file_first, best, text) {
             out.push(ask_item);
             out.extend(files.into_iter().map(Entry::Item));
@@ -1475,6 +1493,11 @@ impl Overlay {
                 i18n::umoja("Answer"),
             ),
             Item::File(h) => (h.name.clone(), h.detail.clone(), i18n::umoja("File")),
+            Item::Emoji { name, .. } => (
+                capitalize(name),
+                i18n::umoja("Enter types it"),
+                i18n::umoja("Emoji"),
+            ),
             Item::Ask { label, sub, .. } => (label.clone(), sub.clone(), i18n::umoja("Ask")),
             Item::Web(q) => (
                 i18n::umoja("Search the web for “%s”").replace("%s", q),
@@ -1499,6 +1522,7 @@ impl Overlay {
                 &crate::ask::catalog::icon_names(item.icon),
             )),
             Item::Sum(_) => gtk::Image::from_icon_name("accessories-calculator-symbolic"),
+            Item::Emoji { .. } => gtk::Image::new(),
             Item::File(h) => gtk::Image::from_gicon(&crate::files::file_icon(&h.path)),
             Item::Ask { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "starred-symbolic",
@@ -1522,7 +1546,15 @@ impl Overlay {
         icon_box.set_hexpand(false);
         icon.set_hexpand(true);
         icon.set_halign(gtk::Align::Center);
-        icon_box.append(&icon);
+        if let Item::Emoji { glyph, .. } = item {
+            let l = gtk::Label::new(Some(glyph));
+            l.add_css_class("ask-emoji");
+            l.set_hexpand(true);
+            l.set_accessible_role(gtk::AccessibleRole::Presentation);
+            icon_box.append(&l);
+        } else {
+            icon_box.append(&icon);
+        }
 
         let texts = gtk::Box::new(gtk::Orientation::Vertical, 1);
         texts.set_hexpand(true);
@@ -1618,6 +1650,7 @@ impl Overlay {
                 self.announce(&i18n::umoja("Copied %s").replace("%s", &v));
                 self.hide();
             }
+            Item::Emoji { glyph, .. } => self.type_into_app(glyph.to_string()),
             Item::File(h) => {
                 let ctx = WidgetExt::display(&self.window).app_launch_context();
                 match crate::files::open(&h.path, Some(ctx.upcast_ref())) {
@@ -1634,6 +1667,21 @@ impl Overlay {
                 }
             }
         }
+    }
+
+    /// Hide, then type `text` into the window the user was in. If it
+    /// can't be typed it is copied instead.
+    fn type_into_app(self: &Rc<Self>, text: String) {
+        self.hide();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            if let Err(e) = crate::typer::type_into_focused(text.clone()).await {
+                tracing::warn!(error = %e, "couldn't type into the focused window; copying");
+                if let Some(o) = weak.upgrade() {
+                    o.copy_text(&text);
+                }
+            }
+        });
     }
 
     fn run_instant(self: &Rc<Self>, item: &'static Instant, intent: Option<bool>) {
@@ -3050,3 +3098,11 @@ fn join_label(title: &str, kind: &str, sub: &str) -> String {
 }
 
 pub(crate) use umoja_common::terminal::{needs_terminal, spawn_in_terminal};
+
+/// "party popper" → "Party popper".
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+        .unwrap_or_default()
+}
