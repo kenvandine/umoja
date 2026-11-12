@@ -212,10 +212,43 @@ findmnt -R "$TARGET" || true
 ls -la "$TARGET/boot" "$TARGET/boot/efi" || true
 in_target findmnt /boot/efi || true
 in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-    --bootloader-id=ubuntu --uefi-secure-boot --force-extra-removable --recheck
+    --bootloader-id=ubuntu --uefi-secure-boot --force-extra-removable --recheck \
+    || echo "grub-install failed ($?); putting the boot loader in place by hand"
 in_target update-grub
+echo "EFI partition after grub-install:"
+find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
+
+# grub-install has been seen to succeed in this chroot yet write nothing
+# to the EFI partition. Put the signed boot chain there ourselves (the
+# same files the live ISO boots with), so the disk always starts:
+#   EFI/ubuntu  shim -> grubx64.efi, which reads EFI/ubuntu/grub.cfg
+#   EFI/BOOT    the same, for firmware that has no boot entry for us
+pick() { for f in "$@"; do [ -s "$f" ] && { echo "$f"; return; }; done; }
+SHIM=$(pick "$TARGET"/usr/lib/shim/shimx64.efi.signed.latest "$TARGET"/usr/lib/shim/shimx64.efi.signed)
+MOK=$(pick "$TARGET"/usr/lib/shim/mmx64.efi.signed "$TARGET"/usr/lib/shim/mmx64.efi)
+GRUB=$(pick "$TARGET"/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed)
+[ -n "$SHIM" ] && [ -n "$GRUB" ] || die "signed shim or GRUB missing from the system"
+[ -s "$TARGET/boot/grub/grub.cfg" ] || die "update-grub wrote no /boot/grub/grub.cfg"
+for dir in ubuntu BOOT; do
+    d="$TARGET/boot/efi/EFI/$dir"
+    mkdir -p "$d"
+    shim_name=shimx64.efi
+    [ "$dir" = BOOT ] && shim_name=BOOTX64.EFI
+    [ -s "$d/$shim_name" ] || cp "$SHIM" "$d/$shim_name"
+    [ -s "$d/grubx64.efi" ] || cp "$GRUB" "$d/grubx64.efi"
+    [ -z "$MOK" ] || [ -s "$d/mmx64.efi" ] || cp "$MOK" "$d/mmx64.efi"
+    [ -s "$d/grub.cfg" ] || printf '%s\n' \
+        "search.fs_uuid $BOOT_UUID root" \
+        "set prefix=(\$root)'/grub'" \
+        'configfile $prefix/grub.cfg' > "$d/grub.cfg"
+done
+# A firmware boot entry is nice to have; EFI/BOOT works without one.
+if ! in_target efibootmgr 2>/dev/null | grep -qi ubuntu; then
+    in_target efibootmgr -c -d "$DISK" -p 1 -L ubuntu -l '\EFI\ubuntu\shimx64.efi' >/dev/null 2>&1 || true
+fi
+sync
 # The firmware must find these, or the disk won't start.
-for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI; do
+for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/ubuntu/grub.cfg EFI/BOOT/BOOTX64.EFI EFI/BOOT/grubx64.efi; do
     [ -s "$TARGET/boot/efi/$f" ] || die "boot loader missing from the EFI partition: $f"
 done
 esp_mounted || die "the EFI partition was unmounted during the boot loader install"
@@ -238,7 +271,7 @@ sync
 CHECK=$(mktemp -d)
 mount -o ro "$(part 1)" "$CHECK"
 missing=
-for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI; do
+for f in EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/BOOT/BOOTX64.EFI EFI/BOOT/grubx64.efi; do
     [ -s "$CHECK/$f" ] || missing="$missing $f"
 done
 find "$CHECK" -type f | sed "s|^$CHECK|ESP:|"
