@@ -546,16 +546,12 @@ fn done_page(ui: &Rc<Ui>) -> gtk::Box {
         "Restart, remove the installation medium when asked, and type \
          your password to unlock the disk.",
     ));
-    let later = button("Keep trying", "flat");
+    // Only Restart: the live session is just for installing.
     let restart = button("Restart now", "suggested");
-    {
-        let ui = ui.clone();
-        later.connect_clicked(move |_| ui.window.close());
-    }
     restart.connect_clicked(|_| {
         let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
     });
-    p.append(&actions(Some(&later), &restart));
+    p.append(&actions(None, &restart));
     p
 }
 
@@ -565,12 +561,13 @@ fn error_page(ui: &Rc<Ui>) -> gtk::Box {
     ui.error_label.add_css_class("warning");
     ui.error_label.set_selectable(true);
     p.append(&ui.error_label);
-    let close = button("Close", "flat");
+    // Closing would leave an empty live session (no panel), so offer to
+    // power off instead.
+    let close = button("Power off", "flat");
     let again = button("Start over", "suggested");
-    {
-        let ui = ui.clone();
-        close.connect_clicked(move |_| ui.window.close());
-    }
+    close.connect_clicked(|_| {
+        let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
+    });
     {
         let ui = ui.clone();
         again.connect_clicked(move |_| ui.stack.set_visible_child_name("welcome"));
