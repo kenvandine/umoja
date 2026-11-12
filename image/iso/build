@@ -116,6 +116,12 @@ LIGHTDM
 # First-login setup is for installed systems.
 mkdir -p "$LIVE/etc/systemd/user"
 ln -sf /dev/null "$LIVE/etc/systemd/user/umoja-agent-setup.service"
+# The live session only runs the installer: no top panel. umoja-tray-ready
+# waits for the panel's tray, so it goes too, or autostart (the installer)
+# would wait 30 s for it.
+for unit in umoja-panel.service umoja-tray-ready.service; do
+    ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
+done
 
 chroot "$LIVE" update-initramfs -c -k "$KVER"
 cp "$LIVE/boot/initrd.img-$KVER" "$ISO/casper/initrd"

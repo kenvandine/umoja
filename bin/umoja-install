@@ -50,8 +50,9 @@ fi
 
 die() { echo "ERROR $*" >&2; exit 1; }
 START_NS=$(date +%s%N)
+mark() { echo "[+$(( ($(date +%s%N) - START_NS) / 1000000 ))ms] $*"; }
 progress() { # also logs the time since the start, for tuning
-    echo "[+$(( ($(date +%s%N) - START_NS) / 1000000 ))ms] $2"
+    mark "$2"
     echo "PROGRESS $1 $2"
 }
 
@@ -78,6 +79,7 @@ part() { case "$DISK" in *[0-9]) echo "${DISK}p$1" ;; *) echo "${DISK}$1" ;; esa
 
 cleanup() {
     set +e
+    [ -n "${VOLUME_KEY:-}" ] && rm -f "$VOLUME_KEY"
     for m in sys/firmware/efi/efivars sys proc dev/pts dev run boot/efi boot ""; do
         mountpoint -q "$TARGET/$m" && umount -l "$TARGET/$m"
     done
@@ -93,27 +95,43 @@ for p in $(lsblk -nrpo NAME "$DISK" | tail -n +2); do
     umount -l "$p" 2>/dev/null || true
 done
 wipefs -af "$DISK"
-sgdisk --zap-all "$DISK"
-sgdisk -n1:0:+1G -t1:ef00 -c1:UEFI \
+sgdisk --zap-all \
+       -n1:0:+1G -t1:ef00 -c1:UEFI \
        -n2:0:+2G -t2:8300 -c2:umoja-boot \
        -n3:0:0   -t3:8309 -c3:umoja \
        "$DISK"
 partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" || true
-udevadm settle
+udevadm settle -t 10 || true
 for i in 1 2 3; do
-    for _ in $(seq 20); do [ -b "$(part $i)" ] && break; sleep 0.5; done
+    for _ in $(seq 40); do [ -b "$(part $i)" ] && break; sleep 0.25; done
     [ -b "$(part $i)" ] || die "partition $(part $i) did not appear"
 done
+mark "  partitions ready"
 
-progress 3 "Formatting"
-mkfs.vfat -F 32 -n UEFI "$(part 1)"
-mkfs.ext4 -q -F -L umoja-boot "$(part 2)"
-
-progress 5 "Encrypting the disk"
+progress 3 "Encrypting the disk"
+# The volume key is made here and handed to both luksFormat and open, so
+# the slow password hashing (argon2id, Ubuntu's default cost) runs once,
+# for the keyslot, instead of again to open the disk. It lives only in
+# /run (RAM) and is removed straight away.
+VOLUME_KEY=$(mktemp -p /run umoja-vk.XXXXXX)
+head -c 64 /dev/urandom > "$VOLUME_KEY"
+# Format the small partitions while the hashing keeps a CPU busy.
+# No discard pass: it is slow on big disks and the partitions are new.
+( mkfs.vfat -F 32 -n UEFI "$(part 1)" >/dev/null
+  mkfs.ext4 -q -F -E nodiscard -L umoja-boot "$(part 2)" ) &
+SMALL_FS=$!
 printf '%s' "$PASSWORD" | cryptsetup luksFormat --type luks2 --batch-mode \
-    --label umoja --key-file=- "$(part 3)"
-printf '%s' "$PASSWORD" | cryptsetup open --key-file=- "$(part 3)" "$MAPPER"
-mkfs.ext4 -q -F -L umoja-root "/dev/mapper/$MAPPER"
+    --label umoja --volume-key-file="$VOLUME_KEY" --key-size 512 \
+    --key-file=- "$(part 3)"
+mark "  luksFormat done"
+cryptsetup open --volume-key-file="$VOLUME_KEY" "$(part 3)" "$MAPPER"
+rm -f "$VOLUME_KEY"
+mark "  open done"
+mkfs.ext4 -q -F -E nodiscard,lazy_itable_init=1 \
+    -L umoja-root "/dev/mapper/$MAPPER"
+mark "  mkfs root done"
+wait "$SMALL_FS" || die "formatting the EFI or /boot partition failed"
+mark "  small partitions done"
 
 mkdir -p "$TARGET"
 mount "/dev/mapper/$MAPPER" "$TARGET"
@@ -124,7 +142,7 @@ mount "$(part 1)" "$TARGET/boot/efi"
 
 progress 8 "Copying Umoja"
 # unsquashfs -percentage prints one number per update.
-unsquashfs -f -d "$TARGET" -percentage "$SQUASHFS" | while read -r pct; do
+unsquashfs -f -d "$TARGET" -processors "$(nproc)" -percentage "$SQUASHFS" | while read -r pct; do
     case "$pct" in ''|*[!0-9]*) continue ;; esac
     progress $((8 + pct * 72 / 100)) "Copying Umoja"
 done
@@ -215,9 +233,11 @@ findmnt -R "$TARGET" || true
 ls -la "$TARGET/boot" "$TARGET/boot/efi" || true
 in_target findmnt /boot/efi || true
 in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-    --bootloader-id=ubuntu --uefi-secure-boot --recheck \
+    --bootloader-id=ubuntu --uefi-secure-boot \
     || echo "grub-install failed ($?); putting the boot loader in place by hand"
+mark "  done: grub-install"
 in_target update-grub
+mark "  done: update-grub"
 echo "EFI partition after grub-install:"
 find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
 
