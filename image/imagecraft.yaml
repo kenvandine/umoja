@@ -114,9 +114,6 @@ parts:
   seed-snaps:
     after: [desktop]
     plugin: snap-preseed
-    # Ubuntu's release branch, as Ubuntu Desktop 26.10 seeds; the store
-    # falls back to latest/stable for snaps without one.
-    snap-preseed-channel: latest/stable/ubuntu-26.10
     # Ubuntu Desktop 26.10's seeded snaps. prepare-image wants every base
     # and default content provider listed explicitly.
     snap-preseed-snaps:
