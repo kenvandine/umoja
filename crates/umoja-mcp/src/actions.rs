@@ -440,7 +440,10 @@ async fn read_aloud(a: Value) -> Outcome {
         .await
     {
         Ok(_) if stop => Outcome::ok("Stopped reading."),
-        Ok(_) => Outcome::ok("Reading it aloud now. Don't repeat the text in your answer."),
+        Ok(_) => Outcome::ok(
+            "Reading it aloud now. Answer with one short sentence saying so (\"Reading it out now.\"), \
+             nothing else: don't repeat the text and don't bring up other topics.",
+        ),
         Err(e) => Outcome::err(format!("could not read aloud: {e}")),
     }
 }
