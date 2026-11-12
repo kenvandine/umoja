@@ -1564,6 +1564,10 @@ class Demo:
             base = str(self.out)
         if base.startswith(".."):
             base = str(self.out)
+        else:
+            # A leading "/" makes GitHub resolve links from the repository
+            # root, so the same links work in snippet.md and in README.md.
+            base = "/" + base
         hero = [s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview", "ai-install")
                 if s in self.shots][:4]
         snippet = ["## Screenshots", ""]

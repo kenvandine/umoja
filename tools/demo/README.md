@@ -68,8 +68,8 @@ GIF). The output directory gets:
   (assistant tiling, drag tiling, settings, install, updates, reply,
   overview, workspaces, notifications, troubleshooting, screensaver), each
   captioned, in real time (`--no-trailer` to skip).
-- `snippet.md`: a short gallery with paths from the repository root, to paste
-  into the top-level README.
+- `snippet.md`: a short gallery with root-relative links (`/docs/demo/...`),
+  so it renders both on its own and pasted into the top-level README.
 - `images/`, `videos/`.
 
 It writes to `docs/demo/` in this checkout by default (`--out DIR` to
