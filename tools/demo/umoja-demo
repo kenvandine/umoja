@@ -133,6 +133,21 @@ REWRITE_TEXT = ("hey priya, cant make the 3pm review today, something came up. "
 CAPTIONED = ("Hi everyone, a quick update from the design team. The Umoja launch moves "
              "to Thursday at three o'clock, and the new screenshots are due on Wednesday.")
 CAPTION_WORDS = ("update", "design", "launch", "thursday", "three", "screenshots", "wednesday")
+# ai-opencode: the project OpenCode is asked to make, in the tour folder's
+# Projects (so it goes away afterwards).
+OPENCODE_PROJECT = "hello-gtk"
+# The folder's own OpenCode rules: write files and run cargo new, nothing
+# else (no builds, no downloads). The tour can't answer OpenCode's own
+# permission prompts, so nothing in this job may need one.
+OPENCODE_RULES = {
+    "$schema": "https://opencode.ai/config.json",
+    "permission": {
+        "edit": "allow",
+        "webfetch": "deny",
+        "bash": {"*": "deny", "cargo new*": "allow", "cargo init*": "allow", "mkdir*": "allow",
+                 "ls*": "allow", "cat*": "allow"},
+    },
+}
 TESTPAD = Path(__file__).resolve().parent.parent / "test" / "testpad.py"
 # Night Light, toggled by the settings ask and put back afterwards.
 NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
@@ -154,7 +169,7 @@ ASK_TYPEAHEAD = [
 # only because ai-reply and ai-summary need its bubbles. ("assistant" in
 # --only/--skip means ask-umoja and all ai-* scenes.)
 SCENES = [
-    "ask-umoja", "ai-btop", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
+    "ask-umoja", "ai-btop", "ai-opencode", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
     "ai-install", "ai-updates", "ai-troubleshoot",
     "notifications", "ai-reply", "ai-summary",
     "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
@@ -174,7 +189,7 @@ CAPTION_CHARS = 100
 REPO_URL = "github.com/kenvandine/umoja"
 
 # ai-install is left out: ai-btop already shows an install, all the way.
-TRAILER = ["ask-umoja", "ai-btop", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
+TRAILER = ["ask-umoja", "ai-btop", "ai-opencode", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
            "ai-updates", "ai-troubleshoot", "notifications", "ai-reply", "ai-summary",
            "tiling", "overview", "workspaces", "screensaver"]
 
@@ -1683,6 +1698,182 @@ class Demo:
             self.wait(0.8)
             self.scrub_overlay()
 
+    @staticmethod
+    def opencode_installed():
+        return bool(shutil.which("opencode") or Path("/snap/bin/opencode").exists())
+
+    @staticmethod
+    def opencode_on_cloud():
+        """Whether umoja-agent-setup gave OpenCode the assistant's cloud model."""
+        try:
+            conf = json.loads((Path(GLib.get_user_config_dir()) / "opencode" / "opencode.json").read_text())
+        except (OSError, ValueError):
+            return False
+        return "umoja" in (conf.get("provider") or {})
+
+    def confirm_loop(self, question, done, seconds, shot=None):
+        """Ask, then allow every "Allow Umoja to do this?" prompt (and say yes
+        to a yes/no question) until done() is true. `shot(n, label)` films
+        each prompt. Returns whether done() came true."""
+        flags = (1 if self.opts.local else 0) | (0 if self.opts.no_typing else 2)
+        self.events.clear()
+        log(f"  ask  {question!r}")
+        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (question, flags)))
+        acted = time.monotonic() + self.typing_time(question)
+        if self.dry:
+            self.wait(self.opts.answer_wait)
+            return True
+        seen, allowed, replies = 0, 0, 0
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self.until = lambda: len(self.events) > seen or done()
+            try:
+                self.wait(min(2.0, max(0.1, deadline - time.monotonic())))
+            finally:
+                self.until = None
+            if done():
+                self.recorder.waited(acted, time.monotonic())
+                return True
+            new, seen = self.events[seen:], len(self.events)
+            for name, params, when in new:
+                self.recorder.waited(acted, when)
+                if name == "ConfirmShown":
+                    allowed += 1
+                    self.wait(1.4)
+                    if shot:
+                        shot(allowed, params[0])
+                    self.wait(0.6)
+                    self.bus.call(OVERLAY, "AnswerConfirm", GLib.Variant("(b)", (True,)))
+                    acted = time.monotonic()
+                    log(f"       allowed: {params[0]}")
+                elif name == "AnswerFinished":
+                    answer, _steps = params
+                    if answer.strip().endswith("?") and replies < 2:
+                        replies += 1
+                        self.wait(1.0)
+                        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", ("Yes", flags)))
+                        acted = time.monotonic() + self.typing_time("Yes")
+                    else:
+                        log(f"       answer: {answer[:160]!r}")
+        return done()
+
+    def scene_ai_opencode(self):
+        """The coding agent, all from Ask Umoja: install OpenCode (it comes
+        set up on the assistant's cloud model, no sign-in), then hand it a
+        job: a hello world GTK app in Rust. Nothing is built; the clip ends
+        on the code in Text Editor."""
+        projects = (self.demo_dir or Path.home() / DEMO_DIR_NAME) / "Projects"
+        if not self.dry:
+            if not self.can_ask_with or not self.bus.has_method(OVERLAY, "AnswerConfirm"):
+                log("  this overlay can't answer prompts for the demo (AnswerConfirm), skipping")
+                return
+            if not self.demo_dir:
+                log(f"  needs the tour's own folder (~/{DEMO_DIR_NAME} made by this run), skipping")
+                return
+            s = settings("org.umoja.shell")
+            if not s or s.get_string("assistant-backend") != "cloud":
+                log("  the assistant isn't on a cloud model, so OpenCode would need a sign-in, skipping")
+                return
+            if self.opencode_installed() and self.opts.reinstall_agent:
+                if subprocess.run(["sudo", "-n", "snap", "remove", "opencode"], capture_output=True).returncode == 0:
+                    log("  removed OpenCode first, to film its install")
+        install = not self.opencode_installed() or self.dry
+        if not install:
+            log("  OpenCode is already installed: filming the coding job only (--reinstall-agent films the install)")
+        project = projects / OPENCODE_PROJECT
+        main_rs = project / "src" / "main.rs"
+        if not self.dry:
+            if project.exists():
+                shutil.rmtree(project, ignore_errors=True)
+            projects.mkdir(parents=True, exist_ok=True)
+            (projects / "opencode.json").write_text(json.dumps(OPENCODE_RULES, indent=2) + "\n")
+        before = {w[0] for w in self.windows()} if not self.dry else set()
+        caption = ("“Install OpenCode”, then “use OpenCode to make a hello world GTK app in Rust”: "
+                   "it comes set up on your model, and writes the project.")
+        self.editor_to_front()
+        self.demo_flag(True)
+        self.recorder.start("ai-opencode")
+        try:
+            if install:
+                def install_shot(n, label):
+                    if n == 1:
+                        self.shot("ai-opencode-install", "OpenCode isn't installed: Umoja offers its snap, "
+                                  "and connects it to your desktop and your model.")
+
+                ok = self.confirm_loop(
+                    "Install OpenCode", lambda: self.opencode_installed() and self.opencode_on_cloud(),
+                    self.opts.answer_timeout * 5, install_shot)
+                if not ok:
+                    log("  ! OpenCode wasn't installed and set up, leaving ai-opencode out")
+                    self.recorder.discard()
+                    return
+                self.wait(3.0)  # the terminal's last lines
+                self.shot("ai-opencode-installed", "Installed, connected to Umoja's tools and signed in "
+                          "with the assistant's cloud model.")
+                # Close the install terminal ("Press Enter to close").
+                for w in self.windows():
+                    if w[0] not in before:
+                        self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (w[0],)), quiet=True)
+                self.bus.call(OVERLAY, "Hide", quiet=True)
+                self.wait(1.2)
+                before = {w[0] for w in self.windows()} if not self.dry else set()
+            self.scrub_overlay()
+
+            def written():
+                try:
+                    return "gtk" in main_rs.read_text().lower() and (project / "Cargo.toml").exists()
+                except OSError:
+                    return False
+
+            # The full path: the agent starts in that folder, where its rules
+            # file is (a folder it can't find means the home folder).
+            task = (f"Use OpenCode to create a hello world GTK 4 app in Rust called {OPENCODE_PROJECT} "
+                    f"in {projects}. Don't compile it.")
+            ok = self.confirm_loop(task, written, self.opts.answer_timeout * 6)
+            if not ok:
+                log(f"  ! OpenCode didn't write {main_rs}, leaving ai-opencode out "
+                    f"(look for a stray ~/{OPENCODE_PROJECT})")
+                self.recorder.discard()
+                return
+            # Let it finish writing (and say what it did) before the shot.
+            state = {"last": None, "since": time.monotonic()}
+
+            def settled():
+                if self.dry:
+                    return True
+                files = sorted((str(p), p.stat().st_size) for p in project.rglob("*") if p.is_file()) \
+                    if not self.dry else []
+                if files != state["last"]:
+                    state["last"], state["since"] = files, time.monotonic()
+                return time.monotonic() - state["since"] > 8
+            t0 = time.monotonic()
+            self.wait_for(settled, 90)
+            self.recorder.waited(t0, time.monotonic())
+            self.shot("ai-opencode-agent", "OpenCode at work in a terminal, on the assistant's model.")
+            # The code, in Text Editor.
+            if not self.dry:
+                try:
+                    DesktopAppInfo.new("org.gnome.TextEditor.desktop").launch_uris(
+                        [Gio.File.new_for_path(str(main_rs)).get_uri()], None)
+                except (GLib.Error, TypeError, AttributeError) as e:
+                    log(f"  ! couldn't open {main_rs.name} in Text Editor: {e}")
+            self.wait(2.5)
+            self.editor_to_front()
+            self.wait(1.5)
+            self.shot("ai-opencode", f"{OPENCODE_PROJECT}/src/main.rs: a GTK 4 window saying Hello, World.")
+            self.recorder.stop(caption)
+        finally:
+            self.demo_flag(False)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.wait(0.8)
+            # The agent's terminal (and anything else this scene opened).
+            for w in self.windows():
+                if w[0] not in before and w[0] not in self.opened:
+                    self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (w[0],)), quiet=True)
+            self.wait(0.8)
+            self.editor_to_front()
+            self.scrub_overlay()
+
     def scene_ai_install(self):
         self.ask("ai-install", f"I need {self.opts.app}",
                  f"“I need {self.opts.app}”: it finds the snap or deb and asks before installing.",
@@ -1899,6 +2090,7 @@ class Demo:
             "ask-umoja": "Ask Umoja: type-ahead",
             "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
             "ai-btop": "Ask Umoja: install and run btop",
+            "ai-opencode": "Coding agent: OpenCode",
             "ai-setups": "Assistant: saved setups", "ai-rewrite": "Rewrite selected text",
             "ai-captions": "Live captions",
             "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
@@ -1946,7 +2138,7 @@ class Demo:
             # A leading "/" makes GitHub resolve links from the repository
             # root, so the same links work in snippet.md and in README.md.
             base = "/" + base
-        hero = [s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview", "ai-install")
+        hero = [s for s in ("ai-btop", "ai-opencode", "ai-tiling", "ai-settings", "overview", "ai-install")
                 if s in self.shots][:4]
         snippet = ["## Screenshots", ""]
         lead = next((s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview")
@@ -2099,6 +2291,8 @@ def main():
                    help="ask the local model instead of the configured backend")
     p.add_argument("--no-typing", action="store_true", help="don't type questions out letter by letter")
     p.add_argument("--app", default="VLC", help="app for the \"I need ...\" install ask (default VLC; never installed)")
+    p.add_argument("--reinstall-agent", action="store_true",
+                   help="remove OpenCode first (sudo -n snap remove) so ai-opencode films its install")
     p.add_argument("--no-trailer", action="store_true", help="don't stitch the clips into videos/trailer.mp4")
     p.add_argument("--trailer-only", action="store_true",
                    help="just rebuild videos/trailer.mp4 from the clips of an earlier run in --out")
