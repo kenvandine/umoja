@@ -236,6 +236,8 @@ pub struct Center {
     quiet_seen: Cell<u8>,
     /// Notifications whose banner was held back meanwhile.
     held: RefCell<Vec<u32>>,
+    /// Banners waiting on a fresh fullscreen check (see `notify`).
+    pending_banner: RefCell<HashMap<u32, Note>>,
 }
 
 impl Center {
@@ -255,6 +257,7 @@ impl Center {
             quiet: Cell::new(0),
             quiet_seen: Cell::new(0),
             held: RefCell::default(),
+            pending_banner: RefCell::default(),
         });
         if let Some(s) = &center.settings {
             let weak = Rc::downgrade(&center);
@@ -583,6 +586,30 @@ impl Center {
         let held = show_banner && !critical && self.quiet.get() != 0;
         if held {
             self.held.borrow_mut().push(note.id);
+        } else if show_banner && !critical && quiet::enabled() {
+            // The fullscreen watcher hears of a window going fullscreen a
+            // little late (WindowsChanged is coalesced), so a notification
+            // in that moment would still pop up over the game or video.
+            // Ask the compositor now; it only delays the banner by a
+            // round trip.
+            let first = self.pending_banner.borrow_mut().insert(note.id, note.clone()).is_none();
+            if first {
+                let weak = Rc::downgrade(self);
+                let id = note.id;
+                quiet::fullscreen_now(move |fullscreen| {
+                    let Some(c) = weak.upgrade() else { return };
+                    // Closed meanwhile: nothing to show. Replaced: show the latest.
+                    let Some(note) = c.pending_banner.borrow_mut().remove(&id) else { return };
+                    if fullscreen {
+                        c.set_quiet(quiet::FULLSCREEN, true);
+                    }
+                    if c.quiet.get() != 0 {
+                        c.held.borrow_mut().push(note.id);
+                    } else if !c.banners_blocked.get() {
+                        c.bubbles.show(&note);
+                    }
+                });
+            }
         } else if show_banner {
             self.bubbles.show(&note);
         }
@@ -648,6 +675,7 @@ impl Center {
             before != notes.len()
         };
         self.unseen.borrow_mut().remove(&id);
+        self.pending_banner.borrow_mut().remove(&id);
         self.handlers.borrow_mut().remove(&id);
         let in_bubble = self.bubbles.remove(id);
         if let Some(src) = self.expiry.borrow_mut().remove(&id) {

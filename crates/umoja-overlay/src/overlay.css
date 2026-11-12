@@ -258,9 +258,6 @@ window.umoja-overlay.ask-umoja {
 .umoja-overlay button.focus-chip:hover {
   background-color: alpha(#ffffff, 0.16);
 }
-.ask-attach:not(:empty) {
-  padding: 0 14px 10px 14px;
-}
 .model-status {
   padding: 0 16px 8px 16px;
 }

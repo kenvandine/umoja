@@ -7,6 +7,9 @@
 //! the date so the folder still sorts by time. Always the local model, in
 //! the background; if anything is missing (no text, no OCR, no model) the
 //! name stays as it was. `org.umoja.shell screenshot-names` turns it off.
+//!
+//! A whole-screen shot is named after the window in front: its text and
+//! title, not whatever text-heavy windows happen to sit behind it.
 
 use crate::context;
 use gio::prelude::*;
@@ -61,35 +64,68 @@ pub fn renamed(path: &Path, label: &str) -> PathBuf {
     path.with_file_name(format!("{stem} – {label}.{ext}"))
 }
 
-/// Name the screenshot at `path` in the background.
-pub fn start(path: PathBuf) {
+/// Name the screenshot at `path` in the background. `whole_screen` says
+/// the shot is of the entire screen, so it is named after the window in
+/// front rather than everything on it.
+pub fn start(path: PathBuf, whole_screen: bool) {
     if !enabled() {
         return;
     }
     glib::spawn_future_local(async move {
-        if let Err(e) = name(&path).await {
+        // Ask straight away, while the window in front is still the one
+        // that was shot.
+        let front = if whole_screen { context::focused_window().await } else { None };
+        if let Err(e) = name(&path, front).await {
             tracing::debug!(path = %path.display(), reason = %e, "screenshot keeps its name");
         }
     });
 }
 
-async fn name(path: &Path) -> Result<(), String> {
+/// What the model is told about the shot: the window in front, if known,
+/// then the text read from it.
+pub fn describe(front: Option<&context::FocusedWindow>, text: &str) -> String {
+    let text = context::truncate_chars(text, MAX_TEXT);
+    match front {
+        Some(w) => format!(
+            "The screenshot is of the whole screen; name it after the window in front, app \"{}\", titled \"{}\". Text read from that window:\n{text}",
+            w.app_id, w.title
+        ),
+        None => text,
+    }
+}
+
+async fn name(path: &Path, front: Option<context::FocusedWindow>) -> Result<(), String> {
     let p = path.to_path_buf();
+    let rect = front.as_ref().map(|w| w.rect);
     let text = context::blocking(move || {
         if !context::ocr_available() {
             return Err("no OCR".to_string());
         }
-        context::ocr_file(&p).map_err(|e| e.message())
+        // The window in front, captured again right away (its text is what
+        // the shot is about); the whole file if that gives nothing.
+        let squash = |t: String| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some(rect) = rect {
+            if let Ok(img) = context::capture(Some(rect)) {
+                if let Ok(t) = context::ocr_file(&img.0) {
+                    let t = squash(t);
+                    if t.chars().count() >= 8 {
+                        return Ok((t, true));
+                    }
+                }
+            }
+        }
+        context::ocr_file(&p).map(|t| (squash(t), false)).map_err(|e| e.message())
     })
     .await?;
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (text, from_front) = text;
     if text.chars().count() < 8 {
         return Err("too little text".into());
     }
+    let front = front.filter(|_| from_front);
     let client = LemonadeClient::for_endpoint(umoja_common::assistant_backend::Endpoint::local(), None);
     let messages = vec![
         serde_json::json!({"role": "system", "content": PROMPT}),
-        serde_json::json!({"role": "user", "content": context::truncate_chars(&text, MAX_TEXT)}),
+        serde_json::json!({"role": "user", "content": describe(front.as_ref(), &text)}),
     ];
     let (tx, rx) = async_channel::unbounded();
     RUNTIME.spawn(async move { client.stream_chat(messages, Vec::new(), tx).await });
@@ -131,6 +167,18 @@ mod tests {
         assert_eq!(clean("one two three four five six seven eight").as_deref(), Some("one two three four five six"));
         assert_eq!(clean("Screenshot"), None);
         assert_eq!(clean("  \n "), None);
+    }
+
+    #[test]
+    fn whole_screen_names_the_front_window() {
+        let w = context::FocusedWindow {
+            app_id: "org.gnome.TextEditor".into(),
+            title: "invoice.txt".into(),
+            rect: (0, 0, 10, 10),
+        };
+        let d = describe(Some(&w), "Invoice 42 from Acme");
+        assert!(d.contains("titled \"invoice.txt\"") && d.ends_with("Invoice 42 from Acme"));
+        assert_eq!(describe(None, "just text"), "just text");
     }
 
     #[test]

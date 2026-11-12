@@ -171,7 +171,8 @@ class Pad:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         line = self.proc.stdout.readline().strip()
         if line != "ready":
-            raise Skip("the test pad didn't start (needs gir1.2-gtk-4.0)")
+            self.proc.kill()
+            raise Skip(f"the test pad didn't start (got {line!r}; it needs gir1.2-gtk-4.0)")
         self.cmd("title", self.title)
         self.id = run.wait_for(lambda: run.window_id(title=self.title), 10, "the pad's window")
 
@@ -179,6 +180,20 @@ class Pad:
         self.proc.stdin.write(" ".join(words) + "\n")
         self.proc.stdin.flush()
         self.proc.stdout.readline()
+
+    def settled_text(self, seconds, changed_from):
+        """Wait for the text to change and then stop changing (typing takes a
+        while), and return it."""
+        state = {"last": None, "since": time.monotonic()}
+
+        def done():
+            now = self.text()
+            if now != state["last"]:
+                state["last"], state["since"] = now, time.monotonic()
+                return None
+            return now if now != changed_from and time.monotonic() - state["since"] >= 1.0 else None
+
+        return self.run.wait(seconds, done) or (state["last"] if state["last"] != changed_from else None)
 
     def text(self):
         try:
@@ -196,6 +211,8 @@ class Pad:
         self.run.wait(0.6)
 
     def close(self):
+        if self.proc.poll() is not None:
+            return
         try:
             self.cmd("quit")
             self.proc.wait(timeout=5)
@@ -359,8 +376,23 @@ class Run:
     # ---- Ask Umoja -------------------------------------------------------
 
     def ask_type(self, text):
+        """Type into Ask Umoja and wait for its rows to settle: the search
+        runs a moment after the text changes, so the first rows read can
+        still be the previous query's."""
         self.bus.call(OVERLAY, "AskType", GLib.Variant("(sb)", (text, False)))
-        return self.wait(4, lambda: self.rows() or None) or []
+        self.wait(0.4)
+        state = {"last": None, "since": time.monotonic()}
+
+        def settled():
+            now = self.rows()
+            if now != state["last"]:
+                state["last"], state["since"] = now, time.monotonic()
+                return None
+            return now if now and time.monotonic() - state["since"] >= 0.5 else None
+
+        rows = self.wait(5, settled) or state["last"] or []
+        self.wait(0.2)  # let the frame with these rows reach the screen
+        return rows
 
     def rows(self):
         res = self.bus.call(OVERLAY, "AskRows", None, "(a(sss))", quiet=True)
@@ -501,6 +533,9 @@ class Run:
                 finally:
                     self.recorder.stop()
                     self.hide()
+                    for pad in self.pads:  # each test starts with no pads
+                        pad.close()
+                    self.pads = []
                 if self.current["status"] != "skip":
                     self.current["status"] = "pass" if all(c["ok"] for c in self.current["checks"]) else "fail"
                 self.current["seconds"] = round(time.monotonic() - t0, 1)
@@ -644,7 +679,7 @@ def t_emoji(run):
         return
     before = pad.text()
     run.activate(i)
-    got = run.wait(6, lambda: pad.text() != before and pad.text())
+    got = pad.settled_text(6, before)
     run.shot("typed", "The emoji typed into the test pad")
     run.check(got and any(ord(c) > 0x2000 for c in got[len(before):]), "an emoji was typed into the app",
               repr(got))
@@ -692,7 +727,7 @@ def t_rewrite(run):
     run.shot("answer", "The rewritten text, with Replace the Selection")
     ok, _ = run.action("replace")
     run.check(ok, "Replace the Selection was there to press")
-    got = run.wait(8, lambda: pad.text() != original and pad.text())
+    got = pad.settled_text(20, original)
     run.shot("replaced", "The test pad after Replace")
     run.check(bool(got) and "bought" in (got or "").lower() and "buyed" not in (got or ""),
               "the corrected text replaced the selection in the app", repr(got))

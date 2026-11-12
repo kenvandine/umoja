@@ -104,6 +104,34 @@ async fn watch_recording(conn: &gio::DBusConnection, center: Weak<Center>) {
     }
 }
 
+/// Ask the compositor right now whether the focused window is fullscreen.
+/// No answer (no compositor, an error) counts as not fullscreen.
+pub fn fullscreen_now(done: impl FnOnce(bool) + 'static) {
+    glib::spawn_future_local(async move {
+        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+            return done(false);
+        };
+        let reply = conn
+            .call_future(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                dbus::COMPOSITOR_OBJECT_PATH,
+                dbus::COMPOSITOR_INTERFACE,
+                "GetWindowsMru",
+                None,
+                Some(glib::VariantTy::new("(a(tssiiiiu))").unwrap()),
+                gio::DBusCallFlags::NONE,
+                500,
+            )
+            .await;
+        let flags: Vec<u32> = reply
+            .ok()
+            .and_then(|v| v.get::<(Vec<super::WindowRow>,)>())
+            .map(|(rows,)| rows.iter().map(|r| r.7).collect())
+            .unwrap_or_default();
+        done(focused_fullscreen(&flags));
+    });
+}
+
 fn watch_fullscreen(conn: &gio::DBusConnection, center: Weak<Center>) {
     let check = {
         let conn = conn.clone();

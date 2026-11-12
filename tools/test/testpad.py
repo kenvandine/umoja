@@ -21,14 +21,17 @@ import sys
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/dev/null"
 
 
 class Pad(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id="org.umoja.FeatureTestPad")
+        # NON_UNIQUE: a test may open two pads, and a second one must not
+        # just hand over to the first and exit.
+        super().__init__(application_id="org.umoja.FeatureTestPad",
+                         flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.win = None
         self.view = None
 
