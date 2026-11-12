@@ -426,6 +426,26 @@ pub(crate) async fn set_bluetooth(a: Value) -> String {
     }
 }
 
+// ---- helpers for setups -------------------------------------------------------------
+
+pub(crate) fn is_position(p: &str) -> bool {
+    position_code(p).is_some()
+}
+
+pub(crate) async fn tile(id: u64, position: &str) -> Result<(), String> {
+    let code = position_code(position).ok_or("unknown position")?;
+    compositor_call("TileWindow", Some((id, code).to_variant()), None).await.map(|_| ())
+}
+
+/// Put window `id` on workspace `index` (0-based) without following it.
+pub(crate) async fn send_to_workspace(id: u64, index: u32) -> Result<(), String> {
+    compositor_call("SendWindowToWorkspace", Some((id, index).to_variant()), None).await.map(|_| ())
+}
+
+pub(crate) async fn show_workspace(index: u32) -> Result<(), String> {
+    compositor_call("ShowWorkspace", Some((index,).to_variant()), None).await.map(|_| ())
+}
+
 // ---- state readers (undo) ----------------------------------------------------------
 
 pub(crate) async fn wifi_enabled() -> Option<bool> {
@@ -597,7 +617,7 @@ async fn compositor_call(method: &str, args: Option<glib::Variant>, reply: Optio
     })
 }
 
-async fn windows() -> Result<Vec<Win>, String> {
+pub(crate) async fn windows() -> Result<Vec<Win>, String> {
     let v = compositor_call("GetWindowsMru", None, Some("(a(tssiiiiu))")).await?;
     let (rows,) = v
         .get::<(Vec<(u64, String, String, i32, i32, i32, i32, u32)>,)>()

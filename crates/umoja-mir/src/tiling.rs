@@ -240,6 +240,11 @@ impl TilingState {
         self.windows.remove(&id);
     }
 
+    /// (window id, tile action) for every tiled window.
+    pub fn tiles(&self) -> Vec<(u64, u32)> {
+        self.windows.iter().map(|(id, (a, _))| (*id, *a as u32)).collect()
+    }
+
     /// Window `id` was resized to `new`. Returns the neighbours that shared a
     /// border with it and their new rectangles, and records all new sizes.
     pub fn resized(&mut self, id: u64, new: Rect) -> Vec<(u64, Rect)> {

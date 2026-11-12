@@ -43,6 +43,11 @@ fn tiling() -> std::sync::MutexGuard<'static, TilingState> {
     TILING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// (window id, `tiling::Action`) for every tiled window (D-Bus GetWindowTiles).
+pub fn window_tiles() -> Vec<(u64, u32)> {
+    tiling().tiles()
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_lookup_binding(keysym: u32, modifiers: u32) -> u32 {
     if crate::greeter::enabled() {

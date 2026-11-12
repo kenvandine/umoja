@@ -709,6 +709,13 @@ impl Compositor {
             .unwrap_or_default()
     }
 
+    /// (window id, tile) for every tiled window: the `tiling::Action`
+    /// numbers (1 left, 2 right, 7-10 quarters, 28/29 top/bottom half).
+    /// Named setups (umoja-mcp) save these.
+    async fn get_window_tiles(&self) -> Vec<(u64, u32)> {
+        crate::ffi::window_tiles()
+    }
+
     /// Switch to workspace `index` without the switcher popup (overview).
     async fn show_workspace(&self, index: u32) {
         let _ =

@@ -25,6 +25,7 @@ pub mod notifications;
 pub mod pulse;
 pub mod server;
 pub mod settings;
+pub mod setups;
 pub mod tool;
 pub mod undo;
 
@@ -38,6 +39,7 @@ const PROVIDERS: &[fn() -> Vec<Tool>] = &[
     settings::tools,
     files::tools,
     calendar::tools,
+    setups::tools,
     notifications::tools,
     diagnostics::tools,
     undo::tools,

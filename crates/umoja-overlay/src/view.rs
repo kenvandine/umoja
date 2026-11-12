@@ -93,6 +93,22 @@ enum Item {
         instruction: String,
         label: String,
     },
+    /// A named setup (umoja-mcp's open_setup).
+    Setup(String),
+}
+
+/// Names of the saved setups (`~/.config/umoja/setups.json`, written by
+/// umoja-mcp's setups tools).
+fn setup_names() -> Vec<String> {
+    let path = glib::user_config_dir().join("umoja").join("setups.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| s["name"].as_str().map(String::from))
+        .collect()
 }
 
 impl Item {
@@ -1353,6 +1369,12 @@ impl Overlay {
                 scored.push((s + bonus, Item::Instant { item, intent }));
             }
         }
+        for name in setup_names() {
+            let s = ask::score(&name, &["setup", "layout", "workspace", "set up"], &words);
+            if s > 0 {
+                scored.push((s + 1, Item::Setup(name)));
+            }
+        }
         // Stable: equal scores keep apps, then actions, then the catalog.
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
         let best = scored.first().map(|(s, _)| *s);
@@ -1527,6 +1549,11 @@ impl Overlay {
                 i18n::umoja("Emoji"),
             ),
             Item::Ask { label, sub, .. } => (label.clone(), sub.clone(), i18n::umoja("Ask")),
+            Item::Setup(name) => (
+                i18n::umoja("Set Up “%s”").replace("%s", name),
+                i18n::umoja("Opens its apps and puts each window in its place"),
+                i18n::umoja("Setup"),
+            ),
             Item::Rewrite { label, .. } => (
                 label.clone(),
                 i18n::umoja("Then replace the selection with it"),
@@ -1562,6 +1589,10 @@ impl Overlay {
                 "dialog-question-symbolic",
             ])),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
+            Item::Setup(_) => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+                "view-grid-symbolic",
+                "focus-windows-symbolic",
+            ])),
             Item::Rewrite { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "document-edit-symbolic",
                 "edit-symbolic",
@@ -1697,6 +1728,7 @@ impl Overlay {
             }
             Item::Ask { question, .. } => self.ask(&question),
             Item::Rewrite { instruction, .. } => self.rewrite(&instruction),
+            Item::Setup(name) => self.call_tool("open_setup", serde_json::json!({ "name": name }), None),
             Item::Web(q) => {
                 let ctx = WidgetExt::display(&self.window).app_launch_context();
                 match gio::AppInfo::launch_default_for_uri(&ask::web_search_url(&q), Some(&ctx)) {
