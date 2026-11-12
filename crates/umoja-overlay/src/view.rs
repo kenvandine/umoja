@@ -2355,13 +2355,16 @@ impl Overlay {
         self.question_label.set_visible(false);
         self.copy_button.set_visible(false);
         self.answer_text.borrow_mut().clear();
-        for b in [
-            self.chips.upcast_ref::<gtk::Widget>(),
-            self.steps.upcast_ref(),
-        ] {
-            while let Some(c) = b.first_child() {
-                c.unparent();
-            }
+        // Through each container's own remove: a FlowBox keeps its own list
+        // of children, and unparenting them behind its back left freed
+        // widgets in it that the next layout measured (overlay SIGSEGV in
+        // gtk_widget_get_visible, seen when a question followed an answer
+        // with chips).
+        while let Some(c) = self.chips.first_child() {
+            self.chips.remove(&c);
+        }
+        while let Some(c) = self.steps.first_child() {
+            self.steps.remove(&c);
         }
         self.steps.set_visible(false);
     }
