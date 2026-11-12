@@ -1832,7 +1832,9 @@ class Demo:
             (projects / "opencode.json").write_text(json.dumps(OPENCODE_RULES, indent=2) + "\n")
         before = {w[0] for w in self.windows()} if not self.dry else set()
         caption = ("“Install OpenCode”, make it the coding agent, then “write an app in Rust”: "
-                   "OpenCode comes set up on your model and writes the project.")
+                   "OpenCode comes set up on your model and writes the project." if install else
+                   "Make OpenCode the coding agent, then just ask: “write an app in Rust”. "
+                   "It runs on your model, with Umoja's tools, and writes the project.")
         self.editor_to_front()
         self.demo_flag(True)
         self.recorder.start("ai-opencode")
