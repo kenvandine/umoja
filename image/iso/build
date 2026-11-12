@@ -21,6 +21,11 @@
 # squashfs-tools.
 
 set -euo pipefail
+# Do all the mounting in a private mount namespace, so nothing here can
+# reach the host's own mounts (it once unmounted the host's /dev/pts).
+if [ "$(id -u)" = 0 ] && [ -z "${UMOJA_ISO_UNSHARED:-}" ]; then
+    UMOJA_ISO_UNSHARED=1 exec unshare --mount --propagation private "$0" "$@"
+fi
 
 AUTO=0
 if [ "${1:-}" = --autoinstall ]; then AUTO=1; shift; fi
