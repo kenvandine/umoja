@@ -172,8 +172,31 @@ parts:
     # release branch, as Ubuntu Desktop does. A closed or expired branch
     # falls back to latest/stable on refresh; prepare-image itself
     # refuses one, hence the rewrite instead of --channel.
+    #
+    # The store sometimes stalls mid-download with no timeout (a .partial
+    # stuck at 0 bytes for 15 minutes), so a watchdog kills prepare-image
+    # when nothing has been downloaded for 2 minutes, and it is retried.
     override-build: |
-      craftctl default
+      for attempt in 1 2 3 4; do
+        [ "$attempt" = 1 ] || { echo "seed-snaps: retry $attempt"; rm -rf "${CRAFT_PART_INSTALL:?}"/*; }
+        ( last=-1; still=0
+          while sleep 30; do
+            now=$(du -sb "$CRAFT_PART_INSTALL" 2>/dev/null | cut -f1)
+            if [ "$now" = "$last" ]; then still=$((still + 1)); else still=0; last=$now; fi
+            if [ "$still" -ge 4 ]; then
+              echo "seed-snaps: no download progress for 2 minutes; stopping prepare-image" >&2
+              pkill -f 'snap prepare-image' || true
+              still=0
+            fi
+          done ) &
+        watchdog=$!
+        ok=0
+        craftctl default && ok=1
+        kill "$watchdog" 2>/dev/null || true
+        [ "$ok" = 1 ] && break
+        [ "$attempt" = 4 ] && { echo "seed-snaps: giving up" >&2; exit 1; }
+        sleep 30
+      done
       sed -i -E 's|^(\s*channel:).*$|\1 latest/stable/ubuntu-26.10|' \
         "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
       grep -n 'channel:' "$CRAFT_PART_INSTALL/var/lib/snapd/seed/seed.yaml"
