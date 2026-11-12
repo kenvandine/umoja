@@ -95,8 +95,10 @@ jobs:
 
       - name: Install LXD and Imagecraft
         run: |
-          # The snap store sometimes times out (HTTP 408); retry.
-          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep 30; done; return 1; }
+          # The snap store sometimes times out (HTTP 408) or is unreachable
+          # for a while; keep retrying for up to ~20 minutes.
+          sudo snap wait system seed.loaded
+          retry() { for i in $(seq 1 15); do "$@" && return 0; echo "retry $i: $*"; sleep 60; done; return 1; }
           retry sudo snap install lxd
           sudo lxd waitready
           sudo lxd init --auto
