@@ -31,7 +31,6 @@ pass() { echo "PASS: $*" | tee -a "$LOG"; }
 step "Install ubuntu-umoja-desktop and the Umoja packages (with Recommends)"
 ls -1 "$DEBS"/*.deb | tee -a "$LOG"
 DEB_SET=("$DEBS"/ubuntu-umoja-desktop_*.deb "$DEBS"/umoja-archive-keyring_*.deb
-         "$DEBS"/umoja-ubuntu-dock-settings_*.deb
          "$DEBS"/umoja-desktop_*.deb "$DEBS"/umoja-greeter_*.deb)
 apt-get update -q
 # Simulate first so the log shows exactly what apt pulls in.
@@ -51,7 +50,7 @@ fi
 for p in gnome-shell mutter gdm3; do
     dpkg -s "$p" >/dev/null 2>&1 && fail "$p is installed" || pass "$p is not installed"
 done
-for p in nautilus gnome-control-center update-manager showtime gnome-snapshot umoja-ubuntu-dock-settings; do
+for p in nautilus gnome-control-center update-manager showtime gnome-snapshot; do
     dpkg -s "$p" >/dev/null 2>&1 && pass "$p installed" || fail "$p missing"
 done
 apt-get check >>"$LOG" 2>&1 && pass "apt-get check is clean" || fail "apt-get check reports broken packages"

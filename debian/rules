@@ -76,6 +76,15 @@ endif
 	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
 	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
 	install -D -m 0644 data/90_umoja.gschema.override $(DESKTOP)/usr/share/glib-2.0/schemas/90_umoja.gschema.override
+	# Ubuntu's extension schemas (dock, tiling, appindicator, desktop icons)
+	# with Ubuntu's and Umoja's dock defaults, for systems without GNOME
+	# Shell. umoja-session adds this directory to XDG_DATA_DIRS only when
+	# gnome-shell-ubuntu-extensions isn't installed. Overrides for schemas
+	# that live elsewhere are skipped by glib-compile-schemas.
+	install -d $(DESKTOP)/usr/share/umoja/gsettings/glib-2.0/schemas
+	install -m 0644 data/schemas/ubuntu-extensions/*.gschema.xml data/schemas/ubuntu-extensions/*.gschema.override \
+		data/90_umoja.gschema.override $(DESKTOP)/usr/share/umoja/gsettings/glib-2.0/schemas/
+	glib-compile-schemas $(DESKTOP)/usr/share/umoja/gsettings/glib-2.0/schemas
 
 	# systemd user units, D-Bus activation and portal registration
 	install -d $(DESKTOP)/usr/lib/systemd/user
@@ -117,10 +126,6 @@ override_dh_install-indep:
 	install -D -m 0644 data/apt/umoja.sources.in $(KEYRING)/usr/share/umoja-archive-keyring/umoja.sources.in
 	install -D -m 0644 data/apt/umoja-mir.pref $(KEYRING)/etc/apt/preferences.d/umoja-mir.pref
 
-	# Ubuntu's extension schemas, for systems without GNOME Shell.
-	install -d debian/umoja-ubuntu-dock-settings/usr/share/glib-2.0/schemas
-	install -m 0644 data/schemas/ubuntu-extensions/*.gschema.xml data/schemas/ubuntu-extensions/*.gschema.override \
-		debian/umoja-ubuntu-dock-settings/usr/share/glib-2.0/schemas/
 
 override_dh_gencontrol:
 	# ubuntu-umoja-desktop's lists, one dependency per line (packaging/meta/update).
