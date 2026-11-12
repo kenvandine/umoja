@@ -91,7 +91,11 @@ parts:
       local=$(ls /var/cache/umoja-local-debs/*.deb 2>/dev/null || true)
       # Firefox and Thunderbird come as seeded snaps (snap-preseed below);
       # their transitional debs would try to reach snapd in the chroot.
+      # ubuntu-minimal and ubuntu-standard are the base every Ubuntu
+      # image starts from (systemd-resolved, ping, netbase, ...);
+      # ubuntu-desktop-minimal doesn't pull them in itself.
       apt-get install -y --install-recommends \
+        ubuntu-minimal ubuntu-standard \
         linux-generic shim-signed grub-efi-amd64-signed grub2-common \
         cryptsetup \
         ubuntu-umoja-desktop $local \
@@ -156,6 +160,7 @@ parts:
       set -eux
       locale-gen en_US.UTF-8 || true
       systemctl enable NetworkManager.service || true
+      systemctl enable systemd-resolved.service
 
   # VM test image only: a login for the greeter. The installer replaces
   # this with the user's own account.
@@ -166,3 +171,13 @@ parts:
       set -eux
       useradd -m -s /bin/bash -G sudo,adm -c "Umoja" umoja
       echo 'umoja:umoja' | chpasswd
+
+  # Last, outside the chroot (which mounts its own resolv.conf): point
+  # name resolution at systemd-resolved, as on Ubuntu Desktop.
+  resolv-conf:
+    after: [test-user]
+    plugin: nil
+    overlay-script: |
+      set -eux
+      rm -f $CRAFT_OVERLAY/etc/resolv.conf
+      ln -s ../run/systemd/resolve/stub-resolv.conf $CRAFT_OVERLAY/etc/resolv.conf
