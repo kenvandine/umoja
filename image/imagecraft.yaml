@@ -1,0 +1,162 @@
+# Umoja root image: Ubuntu 26.10 with ubuntu-umoja-desktop (Umoja instead
+# of GNOME Shell), built with Imagecraft. Phase 2 of the installer ISO plan:
+# the same root filesystem later becomes the ISO's filesystem.squashfs,
+# which the Umoja installer copies onto the disk.
+#
+#   image/prepare && cd image && imagecraft pack   # -> umoja.img (GPT: ESP + ext4)
+#
+# See image/README.md for booting it in QEMU and for building against
+# not-yet-published debs (local-debs/).
+name: umoja
+version: "26.10"
+summary: Ubuntu 26.10 with the Umoja desktop
+description: |
+  A bootable disk image of Ubuntu 26.10 with the Umoja desktop instead of
+  GNOME Shell: ubuntu-umoja-desktop from ppa:ken-vandine/umoja, Ubuntu's
+  signed shim and GRUB (Secure Boot stays on), and the snaps Ubuntu
+  Desktop seeds. For testing in a VM; the installer ISO is built from the
+  same root filesystem.
+base: bare
+build-base: ubuntu@26.10
+
+platforms:
+  amd64:
+
+volumes:
+  umoja:
+    schema: gpt
+    structure:
+      - name: efi
+        type: C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+        filesystem: vfat
+        role: system-boot
+        filesystem-label: UEFI
+        size: 1G
+      - name: rootfs
+        type: 0FC63DAF-8483-4772-8E79-3D69D8477DE4
+        filesystem: ext4
+        filesystem-label: umoja-root
+        role: system-data
+        size: 16G
+
+filesystems:
+  default:
+    - device: (volume/umoja/rootfs)
+      mount: /
+    - device: (volume/umoja/efi)
+      mount: /boot/efi/
+
+parts:
+  rootfs:
+    plugin: mmdebstrap
+    mmdebstrap-suite: stonking
+    mmdebstrap-variant: minbase
+    mmdebstrap-packages: [apt, ca-certificates]
+    override-build: |
+      craftctl default
+      mkdir -p $CRAFT_PART_INSTALL/boot/efi
+    organize:
+      "*": (overlay)/
+
+  # Ubuntu's archive plus the Umoja PPA, with the PPA's signing key and the
+  # Mir pin, exactly as umoja-archive-keyring installs them (image/prepare
+  # copies the key and pin from data/apt).
+  apt-config:
+    after: [rootfs]
+    plugin: dump
+    source: apt
+    organize:
+      ubuntu.sources: (overlay)/etc/apt/sources.list.d/ubuntu.sources
+      umoja.sources: (overlay)/etc/apt/sources.list.d/umoja.sources
+      umoja-archive-keyring.asc: (overlay)/usr/share/keyrings/umoja-archive-keyring.asc
+      umoja-mir.pref: (overlay)/etc/apt/preferences.d/umoja-mir.pref
+
+  # Debs that aren't on the PPA yet (image/local-debs/*.deb, for example a
+  # pull request's build). Empty when building from the PPA alone.
+  local-debs:
+    after: [apt-config]
+    plugin: dump
+    source: local-debs
+    organize:
+      "*": (overlay)/var/cache/umoja-local-debs/
+
+  desktop:
+    after: [local-debs]
+    plugin: nil
+    override-overlay: |
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # Local debs first, so they win over the PPA's.
+      local=$(ls /var/cache/umoja-local-debs/*.deb 2>/dev/null || true)
+      # Firefox and Thunderbird come as seeded snaps (snap-preseed below);
+      # their transitional debs would try to reach snapd in the chroot.
+      apt-get install -y --install-recommends \
+        linux-generic shim-signed grub-efi-amd64-signed grub2-common \
+        cryptsetup \
+        ubuntu-umoja-desktop $local \
+        firefox- thunderbird-
+      rm -rf /var/cache/umoja-local-debs
+      # Umoja must not have brought GNOME Shell back.
+      for p in gnome-shell mutter gdm3; do
+        if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
+      done
+      apt-get clean
+
+  seed-snaps:
+    after: [desktop]
+    plugin: snap-preseed
+    # Ubuntu Desktop 26.10's seeded snaps (bases and runtimes come along).
+    snap-preseed-snaps:
+      - snapd
+      - firefox
+      - snap-store
+      - firmware-updater
+      - desktop-security-center
+      - prompting-client
+      - snapd-desktop-integration
+    organize:
+      "var/*": (overlay)/var/
+
+  system-config:
+    after: [seed-snaps]
+    plugin: nil
+    overlay-script: |
+      set -eux
+      cat > $CRAFT_OVERLAY/etc/fstab <<'FSTAB'
+      LABEL=umoja-root  /          ext4  defaults,errors=remount-ro  0  1
+      LABEL=UEFI        /boot/efi  vfat  umask=0077                  0  1
+      FSTAB
+      echo umoja > $CRAFT_OVERLAY/etc/hostname
+      printf '127.0.0.1 localhost\n127.0.1.1 umoja\n' > $CRAFT_OVERLAY/etc/hosts
+      echo 'LANG=en_US.UTF-8' > $CRAFT_OVERLAY/etc/default/locale
+      # A fresh machine-id on first boot.
+      : > $CRAFT_OVERLAY/etc/machine-id
+      rm -f $CRAFT_OVERLAY/var/lib/dbus/machine-id
+      # Quiet boot with the Ubuntu splash, like Ubuntu Desktop.
+      cat > $CRAFT_OVERLAY/etc/default/grub <<'GRUB'
+      GRUB_DEFAULT=0
+      GRUB_TIMEOUT_STYLE=hidden
+      GRUB_TIMEOUT=0
+      GRUB_DISTRIBUTOR=Umoja
+      GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+      GRUB_CMDLINE_LINUX=""
+      GRUB
+
+  system-setup:
+    after: [system-config]
+    plugin: nil
+    override-overlay: |
+      set -eux
+      locale-gen en_US.UTF-8 || true
+      systemctl enable NetworkManager.service || true
+
+  # VM test image only: a login for the greeter. The installer replaces
+  # this with the user's own account.
+  test-user:
+    after: [system-setup]
+    plugin: nil
+    override-overlay: |
+      set -eux
+      useradd -m -s /bin/bash -G sudo,adm -c "Umoja" umoja
+      echo 'umoja:umoja' | chpasswd

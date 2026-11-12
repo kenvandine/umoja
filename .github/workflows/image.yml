@@ -1,0 +1,136 @@
+# Build the Umoja disk image (image/imagecraft.yaml) with Imagecraft and
+# boot it in QEMU with Secure Boot on. Phase 2 of the installer ISO plan;
+# the ISO (phase 3) is built from the same root filesystem.
+#
+# Packages come from ppa:ken-vandine/umoja. Debs that aren't published
+# there yet are added from a Packages workflow run ("debs-amd64"):
+# - pull requests: the Packages run for the same commit (waits for it),
+# - Packages runs on main: that run (workflow_run),
+# - manual runs: the run id given as packages_run, or none (PPA only).
+#
+# Artifacts: umoja-image (umoja.img.zst, kept 7 days) and
+# umoja-image-boot (screenshots + serial log).
+
+name: Image
+
+on:
+  pull_request:
+    paths:
+      - image/**
+      - .github/workflows/image.yml
+      - debian/control
+      - packaging/meta/**
+  workflow_run:
+    workflows: [Packages]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      packages_run:
+        description: Packages workflow run id whose debs-amd64 to add (empty = PPA only)
+        default: ""
+
+concurrency:
+  group: image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  image:
+    name: Build and boot the image (amd64)
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || '' }}
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null || true
+          df -h /
+
+      - name: Find the debs to add
+        id: debs
+        run: |
+          run=""
+          case "${{ github.event_name }}" in
+            workflow_dispatch) run="${{ inputs.packages_run }}" ;;
+            workflow_run) run="${{ github.event.workflow_run.id }}" ;;
+            pull_request)
+              sha="${{ github.event.pull_request.head.sha }}"
+              # Wait (up to 2 hours) for this commit's Packages run.
+              for i in $(seq 1 120); do
+                line=$(gh run list -R "$GITHUB_REPOSITORY" --workflow packages.yml --commit "$sha" \
+                  --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"')
+                set -- $line
+                if [ "${2:-}" = completed ]; then
+                  [ "$3" = success ] || { echo "Packages run $1 finished: $3" >&2; exit 1; }
+                  run=$1; break
+                fi
+                echo "waiting for Packages (${line:-not started})"; sleep 60
+              done
+              [ -n "$run" ] || { echo "no Packages run for $sha" >&2; exit 1; }
+              ;;
+          esac
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Download the debs
+        if: steps.debs.outputs.run != ''
+        run: |
+          gh run download -R "$GITHUB_REPOSITORY" "${{ steps.debs.outputs.run }}" -n debs-amd64 -D dist
+          mkdir -p image/local-debs
+          # Only the packages the image installs; -dbgsym and test debs stay out.
+          for p in ubuntu-umoja-desktop umoja-desktop umoja-greeter umoja-archive-keyring; do
+            cp dist/${p}_*.deb image/local-debs/
+          done
+          ls -l image/local-debs
+
+      - name: Install LXD and Imagecraft
+        run: |
+          sudo snap install lxd
+          sudo lxd waitready
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+          sudo snap install imagecraft --classic
+          imagecraft version
+
+      - name: Build the image
+        working-directory: image
+        run: |
+          ./prepare
+          sg lxd -c 'imagecraft pack --verbose'
+          ls -l *.img
+
+      - name: Boot it with Secure Boot on
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 ovmf imagemagick
+          sudo chmod 666 /dev/kvm || true
+          image/test/boot-vm image/umoja.img boot 240
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: umoja-image-boot
+          path: boot/
+          if-no-files-found: ignore
+
+      - name: Compress the image
+        run: |
+          zstd -T0 -10 --rm image/umoja.img -o umoja.img.zst
+          ls -l umoja.img.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: umoja-image
+          path: umoja.img.zst
+          retention-days: 7
+          compression-level: 0

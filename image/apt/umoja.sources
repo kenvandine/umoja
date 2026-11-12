@@ -1,0 +1,6 @@
+# Umoja: ppa:ken-vandine/umoja (tagged releases).
+Types: deb
+URIs: https://ppa.launchpadcontent.net/ken-vandine/umoja/ubuntu/
+Suites: stonking
+Components: main
+Signed-By: /usr/share/keyrings/umoja-archive-keyring.asc

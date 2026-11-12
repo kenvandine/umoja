@@ -11,3 +11,8 @@ debian/files
 __pycache__/
 debian/umoja-archive-keyring/
 debian/ubuntu-umoja-desktop/
+/image/apt/umoja-archive-keyring.asc
+/image/apt/umoja-mir.pref
+/image/local-debs/*.deb
+/image/*.img
+/image/*.img.zst
