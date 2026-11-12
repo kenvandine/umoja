@@ -393,6 +393,7 @@ class Demo:
         self.until = None  # wait() returns early once this says so
         self.events = []  # (signal, args, time.monotonic()) from org.umoja.Overlay
         self.night_light = None
+        self.agent_before = None  # org.umoja.shell ai-agent before ai-opencode
         self.trailer = None
         self.can_ask_with = False
         self.demo_dir = None  # created by us, removed at the end
@@ -754,6 +755,10 @@ class Demo:
             time.sleep(0.5)
             self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.terminal,)), quiet=True)
         self.restore_style()
+        if self.agent_before is not None:
+            s = settings("org.umoja.shell")
+            s.set_string("ai-agent", self.agent_before)
+            Gio.Settings.sync()
         if self.banners is False:
             s = settings("org.gnome.desktop.notifications")
             s.set_boolean("show-banners", False)
@@ -1757,6 +1762,44 @@ class Demo:
                         log(f"       answer: {answer[:160]!r}")
         return done()
 
+    def make_default_agent(self):
+        """In Ask Umoja's settings, pick OpenCode as the Coding agent, on
+        camera, so the coding job goes to it without naming it. The setting
+        is put back at the end of the tour."""
+        s = settings("org.umoja.shell")
+        if not self.dry and (not s or "ai-agent" not in s.props.settings_schema.list_keys()):
+            log("  no ai-agent setting, so OpenCode stays whatever the default is")
+            return
+        if not self.dry and self.agent_before is None:
+            self.agent_before = s.get_string("ai-agent")
+            # Start from another pick so the change shows.
+            s.set_string("ai-agent", "claude")
+            Gio.Settings.sync()
+        self.bus.call(OVERLAY, "ToggleAsk")
+        self.wait(1.0)
+        ok, _ = (True, "") if self.dry else self.test_action("settings-open")
+        if not ok:
+            log("  ! couldn't open Ask Umoja's settings (needs newer debs); setting the agent directly")
+            if s:
+                s.set_string("ai-agent", "opencode")
+                Gio.Settings.sync()
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.wait(0.8)
+            return
+        self.wait(1.5)
+        if not self.dry and not self.test_action("agent-pick:opencode")[0]:
+            log("  ! OpenCode isn't in the Coding agent list; setting it directly")
+            s.set_string("ai-agent", "opencode")
+            Gio.Settings.sync()
+        self.wait(1.8)
+        self.shot("ai-opencode-default", "Ask Umoja's settings: OpenCode is now the coding agent, "
+                  "so coding jobs go to it.")
+        self.wait(0.6)
+        self.test_action("settings-close")
+        self.wait(0.6)
+        self.bus.call(OVERLAY, "Hide", quiet=True)
+        self.wait(0.8)
+
     def scene_ai_opencode(self):
         """The coding agent, all from Ask Umoja: install OpenCode (it comes
         set up on the assistant's cloud model, no sign-in), then hand it a
@@ -1788,8 +1831,8 @@ class Demo:
             projects.mkdir(parents=True, exist_ok=True)
             (projects / "opencode.json").write_text(json.dumps(OPENCODE_RULES, indent=2) + "\n")
         before = {w[0] for w in self.windows()} if not self.dry else set()
-        caption = ("“Install OpenCode”, then “use OpenCode to make a hello world GTK app in Rust”: "
-                   "it comes set up on your model, and writes the project.")
+        caption = ("“Install OpenCode”, make it the coding agent, then “write an app in Rust”: "
+                   "OpenCode comes set up on your model and writes the project.")
         self.editor_to_front()
         self.demo_flag(True)
         self.recorder.start("ai-opencode")
@@ -1818,6 +1861,7 @@ class Demo:
                 self.wait(1.2)
                 before = {w[0] for w in self.windows()} if not self.dry else set()
             self.scrub_overlay()
+            self.make_default_agent()
 
             def written():
                 try:
@@ -1825,10 +1869,11 @@ class Demo:
                 except OSError:
                     return False
 
-            # The full path: the agent starts in that folder, where its rules
+            # OpenCode isn't named: it is the default coding agent now. The
+            # full path: the agent starts in that folder, where its rules
             # file is (a folder it can't find means the home folder).
-            task = (f"Use OpenCode to create a hello world GTK 4 app in Rust called {OPENCODE_PROJECT} "
-                    f"in {projects}. Don't compile it.")
+            task = (f"Write an app in Rust: a hello world GTK 4 window, in a new project called "
+                    f"{OPENCODE_PROJECT} in {projects}. Don't compile it.")
             ok = self.confirm_loop(task, written, self.opts.answer_timeout * 6)
             if not ok:
                 log(f"  ! OpenCode didn't write {main_rs}, leaving ai-opencode out "

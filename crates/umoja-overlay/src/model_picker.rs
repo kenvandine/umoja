@@ -303,6 +303,33 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// The page the popover should open on next (instead of the model's).
     static OPEN_ON: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    /// The Coding agent row, for [`test_pick_agent`].
+    static AGENT_ROW: RefCell<std::rc::Weak<AgentRow>> = RefCell::new(std::rc::Weak::new());
+}
+
+/// Open the settings popover on its usual page (the backend in use).
+pub fn open() -> bool {
+    let cloud = backend::current().cloud;
+    show_page(if cloud { "cloud" } else { "local" })
+}
+
+/// Pick `id` in the Coding agent dropdown, as a click would (demo tour).
+/// False when the popover isn't open or Umoja doesn't list that agent.
+pub fn test_pick_agent(id: &str) -> bool {
+    let Some(row) = AGENT_ROW.with(|r| r.borrow().upgrade()) else {
+        return false;
+    };
+    if !row.root.is_mapped() {
+        return false;
+    }
+    let index = row.agents.borrow().iter().position(|a| a.id == id);
+    match index {
+        Some(i) => {
+            row.drop.set_selected(i as u32);
+            true
+        }
+        None => false,
+    }
 }
 
 /// Open the settings popover on a page ("local", "cloud" or "voice").
@@ -421,6 +448,7 @@ pub fn button() -> gtk::MenuButton {
     content.append(&switcher);
     content.append(&stack);
     let agent_row = AgentRow::new();
+    AGENT_ROW.with(|r| r.replace(Rc::downgrade(&agent_row)));
     content.append(&agent_row.root);
     popover.set_child(Some(&content));
     {

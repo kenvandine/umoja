@@ -2088,7 +2088,8 @@ impl Overlay {
     /// "replace", "undo", "attach-selection", "attachments", "answer",
     /// "captions-summarize", "captions-text", "read-aloud",
     /// "read-aloud-state", "voice-page", "settings-close", "voice-rows",
-    /// "voice-state", "voice-pick:KEY", "voice-remove:KEY", "voice-search:TEXT".
+    /// "voice-state", "voice-pick:KEY", "voice-remove:KEY", "voice-search:TEXT",
+    /// "settings-open", "agent-pick:ID" (the Coding agent dropdown).
     pub fn test_action(self: &Rc<Self>, action: &str) -> (bool, String) {
         let press = |b: &RefCell<Option<glib::WeakRef<gtk::Button>>>| match b.borrow().as_ref().and_then(|w| w.upgrade()) {
             Some(b) if b.is_sensitive() => {
@@ -2134,6 +2135,10 @@ impl Overlay {
                 ),
             ),
             "voice-page" => (crate::model_picker::show_page("voice"), String::new()),
+            "settings-open" => (crate::model_picker::open(), String::new()),
+            a if a.starts_with("agent-pick:") => {
+                (crate::model_picker::test_pick_agent(&a[11..]), String::new())
+            }
             "settings-close" => {
                 crate::model_picker::close();
                 (true, String::new())
