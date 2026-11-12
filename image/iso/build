@@ -71,6 +71,22 @@ if chroot "$TARGET" getent passwd umoja >/dev/null; then
     chroot "$TARGET" userdel -r umoja 2>/dev/null || chroot "$TARGET" userdel umoja
 fi
 : > "$TARGET/etc/machine-id"
+# Preseed the seeded snaps, as Ubuntu's images do: snapd's first-boot work
+# (installing every seeded snap) is done here, so the first boot only
+# finishes the last steps and "Getting your apps ready" takes seconds.
+# Uses this machine's snapd tool on the image's own snapd; if it can't,
+# the ISO still works and the first boot just takes longer.
+if [ -x /usr/lib/snapd/snap-preseed ] && [ -f "$TARGET/var/lib/snapd/seed/seed.yaml" ]; then
+    step "Preseeding snaps"
+    mount --bind "$TARGET" "$TARGET"
+    if /usr/lib/snapd/snap-preseed "$TARGET"; then
+        echo "snaps preseeded"
+    else
+        echo "WARNING: snap preseeding failed; the first boot will set up the snaps" >&2
+        /usr/lib/snapd/snap-preseed --reset "$TARGET" || true
+    fi
+    umount "$TARGET"
+fi
 mksquashfs "$TARGET" "$ISO/casper/umoja.squashfs" -noappend -comp zstd -Xcompression-level 19 -quiet
 
 step "Live layer"
