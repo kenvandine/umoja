@@ -11,7 +11,7 @@
 
 use crate::appgrid;
 use crate::ask::{
-    self, calc, emoji,
+    self, calc, emoji, rewrite,
     catalog::{self, Instant, Local, Run},
 };
 use crate::assistant::agent::{self, Question, Reply, StepState, Ui as _};
@@ -87,6 +87,12 @@ enum Item {
         sub: String,
     },
     Web(String),
+    /// Rewrite the selected text (`instruction` is a preset's or the
+    /// typed words); the answer can then replace it in the app.
+    Rewrite {
+        instruction: String,
+        label: String,
+    },
 }
 
 impl Item {
@@ -1217,6 +1223,28 @@ impl Overlay {
                 },
                 i18n::umoja("With what you attached"),
             ));
+            // Only selected text: offer to rewrite it in place.
+            let only_selection = matches!(self.attachments.borrow().as_slice(), [a] if a.kind == Kind::Selection);
+            if only_selection {
+                if text.is_empty() {
+                    for (_, title, instruction) in rewrite::PRESETS {
+                        out.push(Entry::Item(Item::Rewrite {
+                            instruction: instruction.to_string(),
+                            label: i18n::umoja(title),
+                        }));
+                    }
+                } else {
+                    let row = Entry::Item(Item::Rewrite {
+                        instruction: text.to_string(),
+                        label: i18n::umoja("Rewrite it: “%s”").replace("%s", text),
+                    });
+                    if rewrite::looks_like_instruction(text) {
+                        out.insert(0, row);
+                    } else {
+                        out.push(row);
+                    }
+                }
+            }
             return out;
         }
         let focus = self.focused_app();
@@ -1499,6 +1527,11 @@ impl Overlay {
                 i18n::umoja("Emoji"),
             ),
             Item::Ask { label, sub, .. } => (label.clone(), sub.clone(), i18n::umoja("Ask")),
+            Item::Rewrite { label, .. } => (
+                label.clone(),
+                i18n::umoja("Then replace the selection with it"),
+                i18n::umoja("Rewrite"),
+            ),
             Item::Web(q) => (
                 i18n::umoja("Search the web for “%s”").replace("%s", q),
                 String::new(),
@@ -1529,6 +1562,10 @@ impl Overlay {
                 "dialog-question-symbolic",
             ])),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
+            Item::Rewrite { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+                "document-edit-symbolic",
+                "edit-symbolic",
+            ])),
         };
         icon.set_pixel_size(match item {
             Item::App(_) | Item::Action { .. } | Item::File(_) => 28,
@@ -1659,6 +1696,7 @@ impl Overlay {
                 }
             }
             Item::Ask { question, .. } => self.ask(&question),
+            Item::Rewrite { instruction, .. } => self.rewrite(&instruction),
             Item::Web(q) => {
                 let ctx = WidgetExt::display(&self.window).app_launch_context();
                 match gio::AppInfo::launch_default_for_uri(&ask::web_search_url(&q), Some(&ctx)) {
@@ -2105,6 +2143,88 @@ impl Overlay {
                 }
             }
         });
+    }
+
+    /// Rewrite the attached selection as `instruction` says, then offer
+    /// to put the result in its place.
+    fn rewrite(self: &Rc<Self>, instruction: &str) {
+        let Some(text) = self
+            .attachments
+            .borrow()
+            .iter()
+            .find(|a| a.kind == Kind::Selection)
+            .map(|a| a.text.clone())
+        else {
+            return;
+        };
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.end_conversation();
+        self.reset_card();
+        *self.asked_text.borrow_mut() = self.entry.text().to_string();
+        self.stack.set_visible(false);
+        self.answer.set_text(&i18n::umoja("Thinking…"));
+
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": rewrite::system_prompt(instruction, &context::user_language())}),
+            serde_json::json!({"role": "user", "content": context::truncate_chars(&text, context::MAX_CONTEXT_CHARS)}),
+        ];
+        let (tx, rx) = async_channel::unbounded();
+        let client = LemonadeClient::new();
+        RUNTIME.spawn(async move { client.stream_chat(messages, Vec::new(), tx).await });
+
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let mut reply = String::new();
+            while let Ok(ev) = rx.recv().await {
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation {
+                    return;
+                }
+                match ev {
+                    ChatEvent::Text(d) => {
+                        reply.push_str(&d);
+                        o.answer.set_text(&rewrite::clean_reply(&reply));
+                    }
+                    ChatEvent::ToolCalls(_) => {}
+                    ChatEvent::Done => {
+                        let shown = rewrite::clean_reply(&reply);
+                        o.answer.set_text(&shown);
+                        o.copy_button.set_visible(!shown.is_empty());
+                        o.announce(&shown);
+                        *o.answer_text.borrow_mut() = shown.clone();
+                        if !shown.is_empty() {
+                            o.chips.append(&o.replace_chip(shown));
+                            o.chips.set_visible(true);
+                        }
+                        return;
+                    }
+                    ChatEvent::Error(e) => {
+                        o.answer.set_text(&e);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /// "Replace" under a rewrite: type it over the selection in the app.
+    fn replace_chip(self: &Rc<Self>, text: String) -> gtk::Widget {
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.append(&gtk::Image::from_icon_name("edit-paste-symbolic"));
+        content.append(&gtk::Label::new(Some(&i18n::umoja("Replace the Selection"))));
+        let b = gtk::Button::builder()
+            .child(&content)
+            .css_classes(["suggested-action", "pill"])
+            .tooltip_text(i18n::umoja("Types this over the text you selected"))
+            .build();
+        let weak = Rc::downgrade(self);
+        b.connect_clicked(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.type_into_app(text.clone());
+            }
+        });
+        b.upcast()
     }
 
     fn reset_card(&self) {
