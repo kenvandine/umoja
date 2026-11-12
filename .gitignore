@@ -16,3 +16,4 @@ debian/ubuntu-umoja-desktop/
 /image/local-debs/*.deb
 /image/*.img
 /image/*.img.zst
+debian/umoja-ubuntu-dock-settings/

@@ -50,7 +50,7 @@ fi
 for p in gnome-shell mutter gdm3; do
     dpkg -s "$p" >/dev/null 2>&1 && fail "$p is installed" || pass "$p is not installed"
 done
-for p in nautilus gnome-control-center update-manager showtime gnome-snapshot; do
+for p in nautilus gnome-control-center update-manager showtime gnome-snapshot umoja-ubuntu-dock-settings; do
     dpkg -s "$p" >/dev/null 2>&1 && pass "$p installed" || fail "$p missing"
 done
 apt-get check >>"$LOG" 2>&1 && pass "apt-get check is clean" || fail "apt-get check reports broken packages"

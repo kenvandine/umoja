@@ -51,6 +51,7 @@ Depends: ${shlibs:Depends},
          gnome-control-center,
          yaru-theme-gtk,
          yaru-theme-icon,
+         umoja-ubuntu-dock-settings | gnome-shell-ubuntu-extensions,
          grim,
          wf-recorder
 Recommends: umoja-greeter,
@@ -144,3 +145,16 @@ Description: Package source and signing key for the Umoja PPA
  patches. If the PPA is already configured (add-apt-repository), the
  existing source is left alone. The edge PPA is never enabled by this
  package.
+
+Package: umoja-ubuntu-dock-settings
+Architecture: all
+Depends: ${misc:Depends}
+Conflicts: gnome-shell-ubuntu-extensions
+Replaces: gnome-shell-ubuntu-extensions
+Description: Ubuntu Dock and tiling settings for Umoja without GNOME Shell
+ The GSettings schemas of Ubuntu's GNOME Shell extensions (Ubuntu Dock,
+ Tiling Assistant, AppIndicators, Desktop Icons) and Ubuntu's dock
+ defaults, copied unchanged from gnome-shell-ubuntu-extensions. Umoja and
+ Settings > Ubuntu Desktop read these keys, so systems without GNOME Shell
+ need the schemas. Where gnome-shell-ubuntu-extensions is installed, it
+ provides them instead.

@@ -117,6 +117,11 @@ override_dh_install-indep:
 	install -D -m 0644 data/apt/umoja.sources.in $(KEYRING)/usr/share/umoja-archive-keyring/umoja.sources.in
 	install -D -m 0644 data/apt/umoja-mir.pref $(KEYRING)/etc/apt/preferences.d/umoja-mir.pref
 
+	# Ubuntu's extension schemas, for systems without GNOME Shell.
+	install -d debian/umoja-ubuntu-dock-settings/usr/share/glib-2.0/schemas
+	install -m 0644 data/schemas/ubuntu-extensions/*.gschema.xml data/schemas/ubuntu-extensions/*.gschema.override \
+		debian/umoja-ubuntu-dock-settings/usr/share/glib-2.0/schemas/
+
 override_dh_gencontrol:
 	# ubuntu-umoja-desktop's lists, one dependency per line (packaging/meta/update).
 	echo "umoja:Depends=$$(paste -sd, $(META).depends | sed 's/,/, /g')" >> debian/ubuntu-umoja-desktop.substvars
