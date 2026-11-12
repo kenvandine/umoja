@@ -101,6 +101,12 @@ parts:
         ubuntu-umoja-desktop $local \
         firefox- thunderbird-
       rm -rf /var/cache/umoja-local-debs
+      # Language packs and dictionaries for the default language, as
+      # Ubuntu's installer adds them; without them Language Support asks
+      # to finish installing English on first use.
+      apt-get install -y language-pack-en language-pack-gnome-en
+      missing=$(check-language-support -l en)
+      [ -z "$missing" ] || apt-get install -y $missing
       # Refresh once more now that command-not-found is installed: its apt
       # hook builds the database behind "Command 'x' not found, but can be
       # installed with ...".
