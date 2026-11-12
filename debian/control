@@ -125,7 +125,8 @@ Depends: ${misc:Depends},
          umoja-greeter (>= ${source:Version}),
          umoja-archive-keyring
 Recommends: ${umoja:Recommends}
-Conflicts: gdm3,
+Conflicts: budgie-desktop,
+           gdm3,
            gnome-shell
 Description: Ubuntu with the Umoja desktop (metapackage)
  Everything Ubuntu Desktop installs by default, with Umoja in place of
@@ -134,10 +135,11 @@ Description: Ubuntu with the Umoja desktop (metapackage)
  Ubuntu defaults stay. Also adds Showtime and Snapshot.
  .
  The lists follow ubuntu-desktop-minimal; packaging/meta/update in the
- Umoja source refreshes them. It conflicts with gnome-shell and gdm3
- because xdg-desktop-portal-gnome recommends gnome-shell, which would
- otherwise bring GNOME Shell, GDM and the Ubuntu GNOME session back. To
- keep GNOME next to Umoja, install umoja-desktop instead.
+ Umoja source refreshes them. It conflicts with gnome-shell, gdm3 and
+ budgie-desktop because xdg-desktop-portal-gnome recommends
+ "gnome-shell | budgie-desktop", which would otherwise bring back GNOME
+ Shell, GDM and the Ubuntu GNOME session, or the Budgie desktop. To keep
+ GNOME or Budgie next to Umoja, install umoja-desktop instead.
 
 Package: umoja-archive-keyring
 Architecture: all

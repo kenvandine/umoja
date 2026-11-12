@@ -112,7 +112,7 @@ parts:
       # installed with ...".
       apt-get update
       # Umoja must not have brought GNOME Shell back.
-      for p in gnome-shell mutter gdm3; do
+      for p in gnome-shell mutter gdm3 budgie-desktop; do
         if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
       done
       apt-get clean
