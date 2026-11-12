@@ -111,10 +111,8 @@ parts:
     snap-preseed-snaps:
       - snapd
       - bare
-      - core22
       - core24
       - gtk-common-themes
-      - gnome-42-2204
       - gnome-46-2404
       - mesa-2404
       - firefox
