@@ -23,7 +23,15 @@ Before=graphical-session.target
 # A target is ordered After= everything it Wants unless told otherwise, and
 # the autostart units are After=graphical-session.target, which is after
 # us: that loop made systemd drop the autostart job. Order it after us.
+# graphical-session-pre.target is what gnome-session-pre.target pulls in:
+# the early session services enabled there (xdg-user-dirs-update, which
+# creates Documents, Music, Pictures... in the user's language;
+# gnome-keyring-daemon, gcr-ssh-agent, user-session-migration) never ran
+# without it, so a new account had no standard folders. Wants, not
+# Requires: one failing early service must not stop the session.
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
 Wants=xdg-desktop-autostart.target
 Before=xdg-desktop-autostart.target
-Wants=umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service
+Wants=umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service umoja-user-dirs-gtk.service
 StopWhenUnneeded=no

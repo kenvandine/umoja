@@ -1,0 +1,18 @@
+[Unit]
+Description=Umoja: offer to rename the standard folders after a language change
+Documentation=man:xdg-user-dirs-update(1)
+# /etc/xdg/autostart/user-dirs-update-gtk.desktop is X-systemd-skip=true
+# (gnome-session starts it itself), so the autostart generator never makes a
+# unit for it. Run it here: when the user's language changes it asks whether
+# to rename Documents, Music... to the new language's names.
+PartOf=umoja-session.target
+After=umoja-session.target umoja-panel.service xdg-user-dirs.service
+ConditionPathExists=/usr/bin/xdg-user-dirs-gtk-update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/xdg-user-dirs-gtk-update
+Slice=background.slice
+
+[Install]
+WantedBy=umoja-session.target

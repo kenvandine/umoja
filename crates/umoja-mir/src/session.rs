@@ -36,12 +36,23 @@ pub fn started(wayland_display: &str) {
         return;
     }
     std::thread::spawn(|| {
-        let vars = [
+        let mut vars = vec![
             "WAYLAND_DISPLAY",
             "DISPLAY",
             "XDG_CURRENT_DESKTOP",
             "XDG_SESSION_TYPE",
         ];
+        // The user's language as LightDM set it (from AccountsService), the
+        // way gnome-session hands its environment to systemd. Without it the
+        // user manager only has /etc/locale.conf, so xdg-user-dirs-update
+        // names the folders (Documents, Music...) in the system language and
+        // activated apps start in it too.
+        vars.extend(
+            LOCALE_VARS
+                .iter()
+                .copied()
+                .filter(|v| std::env::var_os(v).is_some()),
+        );
         run(
             "dbus-update-activation-environment",
             &[&["--systemd"][..], &vars[..]].concat(),
@@ -220,6 +231,23 @@ where
     });
     let _ = QUEUE.send(Call { method, send });
 }
+
+const LOCALE_VARS: &[&str] = &[
+    "LANG",
+    "LANGUAGE",
+    "LC_CTYPE",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_COLLATE",
+    "LC_MONETARY",
+    "LC_MESSAGES",
+    "LC_PAPER",
+    "LC_NAME",
+    "LC_ADDRESS",
+    "LC_TELEPHONE",
+    "LC_MEASUREMENT",
+    "LC_IDENTIFICATION",
+];
 
 fn run(cmd: &str, args: &[&str]) {
     match Command::new(cmd).args(args).status() {
