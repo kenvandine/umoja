@@ -9,6 +9,7 @@ pub mod agents;
 pub mod app_scope;
 pub mod apps;
 pub mod assistant_backend;
+pub mod calendar;
 #[cfg(feature = "blur")]
 pub mod blur;
 pub mod clock;

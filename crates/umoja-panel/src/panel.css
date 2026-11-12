@@ -334,6 +334,26 @@ window.umoja-panel .battery-percentage {
   background-color: @shell_fill_hover;
 }
 /* The calendar, as a lighter section beside the messages. */
+.date-events {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background-color: @shell_section;
+  color: #ffffff;
+}
+.date-events-heading {
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+.date-event {
+  padding: 4px 0 4px 8px;
+  border-left: 3px solid @accent_color;
+}
+.date-event-time {
+  font-size: smaller;
+}
+.date-events-empty {
+  color: alpha(#ffffff, 0.6);
+}
 .date-menu calendar {
   border: none;
   border-radius: 12px;

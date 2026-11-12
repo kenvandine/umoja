@@ -17,6 +17,7 @@
 
 pub mod actions;
 pub mod apps;
+pub mod calendar;
 pub mod desktop;
 pub mod diagnostics;
 pub mod files;
@@ -36,6 +37,7 @@ const PROVIDERS: &[fn() -> Vec<Tool>] = &[
     actions::tools,
     settings::tools,
     files::tools,
+    calendar::tools,
     notifications::tools,
     diagnostics::tools,
     undo::tools,

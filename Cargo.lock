@@ -2380,6 +2380,7 @@ dependencies = [
 name = "umoja-common"
 version = "2026.46.6"
 dependencies = [
+ "async-channel",
  "gdk4-wayland",
  "gettext-rs",
  "gio",
