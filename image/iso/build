@@ -70,6 +70,31 @@ step "Target layer"
 if chroot "$TARGET" getent passwd umoja >/dev/null; then
     chroot "$TARGET" userdel -r umoja 2>/dev/null || chroot "$TARGET" userdel umoja
 fi
+# Newer builds of packages the image already has (DEBS_DIR) go into the
+# installed system too, so an ISO can pick up fixes without repacking the
+# image. Packages the image doesn't have (umoja-installer) stay live-only.
+UPDATE=()
+for deb in "$DEBS"/*.deb; do
+    [ -e "$deb" ] || continue
+    pkg=$(dpkg-deb -f "$deb" Package)
+    if chroot "$TARGET" dpkg-query -W -f '${db:Status-Status}' "$pkg" 2>/dev/null | grep -qx installed; then
+        UPDATE+=("$deb")
+    fi
+done
+if [ ${#UPDATE[@]} -gt 0 ]; then
+    step "Updating the image's own packages (${#UPDATE[@]})"
+    mkdir -p "$TARGET/tmp/umoja-debs"
+    cp "${UPDATE[@]}" "$TARGET/tmp/umoja-debs/"
+    mount -t proc proc "$TARGET/proc"
+    mount --bind /dev "$TARGET/dev"
+    mount --make-rslave "$TARGET/dev"
+    printf '#!/bin/sh\nexit 101\n' > "$TARGET/usr/sbin/policy-rc.d"
+    chmod 755 "$TARGET/usr/sbin/policy-rc.d"
+    DEBIAN_FRONTEND=noninteractive chroot "$TARGET" sh -c 'dpkg -i /tmp/umoja-debs/*.deb'
+    rm -f "$TARGET/usr/sbin/policy-rc.d"
+    rm -rf "$TARGET/tmp/umoja-debs"
+    umount "$TARGET/dev" "$TARGET/proc"
+fi
 : > "$TARGET/etc/machine-id"
 # Preseed the seeded snaps, as Ubuntu's images do: snapd's first-boot work
 # (installing every seeded snap) is done here, so the first boot only
