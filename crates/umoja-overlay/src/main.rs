@@ -83,6 +83,26 @@ const IFACE_XML: &str = r#"
       <arg name="allow" type="b" direction="in"/>
       <arg name="answered" type="b" direction="out"/>
     </method>
+    <!-- Feature-test hooks (tools/test/umoja-feature-test), only while
+         $XDG_RUNTIME_DIR/umoja-demo exists. AskRows lists Ask Umoja's rows
+         as (kind, title, subtitle); AskActivate runs one (headings not
+         counted), like Enter; TestAction presses Replace the Selection
+         ("replace") or the newest Undo ("undo"), attaches the selection
+         ("attach-selection"), or reads "attachments", "answer" and
+         "captions-text", or presses captions' Summarize
+         ("captions-summarize"). -->
+    <method name="AskRows">
+      <arg name="rows" type="a(sss)" direction="out"/>
+    </method>
+    <method name="AskActivate">
+      <arg name="index" type="u" direction="in"/>
+      <arg name="done" type="b" direction="out"/>
+    </method>
+    <method name="TestAction">
+      <arg name="action" type="s" direction="in"/>
+      <arg name="ok" type="b" direction="out"/>
+      <arg name="text" type="s" direction="out"/>
+    </method>
     <method name="ShowClipboard"/>
     <method name="ShowScreenshotUI"/>
     <method name="ShowScreenRecordingUI"/>
@@ -291,6 +311,32 @@ fn export(
                             menu.hide();
                         }
                         methods.toggle()
+                    }
+                    "AskRows" | "AskActivate" | "TestAction" => {
+                        if !gtk::glib::user_runtime_dir().join("umoja-demo").exists() {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.AccessDenied",
+                                "only while $XDG_RUNTIME_DIR/umoja-demo exists",
+                            );
+                            return;
+                        }
+                        let reply = match method {
+                            "AskRows" => Some((methods.test_rows(),).to_variant()),
+                            "AskActivate" => params
+                                .get::<(u32,)>()
+                                .map(|(i,)| (methods.test_activate(i),).to_variant()),
+                            _ => params
+                                .get::<(String,)>()
+                                .map(|(a,)| methods.test_action(&a).to_variant()),
+                        };
+                        match reply {
+                            Some(v) => invocation.return_value(Some(&v)),
+                            None => invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "bad arguments",
+                            ),
+                        }
+                        return;
                     }
                     "AnswerConfirm" => {
                         let Some((allow,)) = params.get::<(bool,)>() else {

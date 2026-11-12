@@ -1,0 +1,1042 @@
+#!/usr/bin/python3
+"""Test the new desktop and AI features on a live Umoja session, on camera.
+
+Run it from a terminal inside an Umoja session (the test laptop, not a
+machine you're working on), then keep your hands off the keyboard and mouse
+until it says it's done. Each feature is driven the way a person would use
+it: through Ask Umoja's rows, the assistant, notifications and real app
+windows. Then the script checks what actually happened: the setting changed
+and changed back, the emoji landed in the app's text, the screenshot got a
+name, and so on.
+
+    tools/test/umoja-feature-test                 # everything
+    tools/test/umoja-feature-test --only emoji rewrite
+    tools/test/umoja-feature-test --list
+
+It writes, by default to ~/umoja-feature-test-<time>/:
+
+    REPORT.md         pass / fail / skip per test, every check, with pictures
+    results.json      the same, for a machine (or Claude) to read
+    images/*.png      screenshots at the moments that matter (grim)
+    videos/*.webm     a clip of each test (wf-recorder)
+    journal.txt       the session's journal for the run (umoja units)
+    log.txt           what the script did, step by step
+
+Everything goes over D-Bus and Umoja's own tools (umoja-mcp). No keyboard or
+mouse input is injected: text reaches apps only through the features under
+test. The test hooks it needs (org.umoja.Overlay AskRows, AskActivate,
+TestAction, AnswerConfirm) only answer while $XDG_RUNTIME_DIR/umoja-demo
+exists, which the script creates and removes. It holds an idle inhibitor,
+checks before every test that the screen is neither blanked nor locked, and
+puts back what it changes (dark style, Night Light, Do Not Disturb, activity
+recall, the test setup and automation). Tests that use the assistant use
+whatever model you have set up.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+from pathlib import Path
+
+try:
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+except (ImportError, ValueError):
+    sys.exit("umoja-feature-test needs PyGObject: sudo apt install python3-gi")
+
+try:  # GLib 2.86 moved DesktopAppInfo to GioUnix
+    gi.require_version("GioUnix", "2.0")
+    from gi.repository import GioUnix
+
+    DesktopAppInfo = GioUnix.DesktopAppInfo
+except (ImportError, ValueError, AttributeError):
+    DesktopAppInfo = Gio.DesktopAppInfo
+
+HERE = Path(__file__).resolve().parent
+OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
+PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
+COMPOSITOR = ("org.umoja.Compositor", "/org/umoja/Compositor", "org.umoja.Compositor")
+NOTIFICATIONS = ("org.umoja.Notifications", "/org/umoja/Notifications", "org.umoja.Notifications")
+NOTIFY = ("org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications")
+SCREENSAVER = ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver")
+CALENDAR = ("org.gnome.Shell.CalendarServer", "/org/gnome/Shell/CalendarServer", "org.gnome.Shell.CalendarServer")
+
+FOCUSED, FULLSCREEN = 1, 16
+TILE_LEFT, TILE_RIGHT = 1, 2
+MARK = "4711"  # in test titles and texts, so they're easy to find and clean up
+
+# Apps for the setups test: two that are installed and unlikely to hold work.
+SETUP_APPS = [
+    "org.gnome.Calculator.desktop",
+    "org.gnome.Characters.desktop",
+    "org.gnome.clocks.desktop",
+    "org.gnome.Weather.desktop",
+    "org.gnome.font-viewer.desktop",
+]
+
+TESTS = []
+
+
+def test(name, title):
+    def wrap(fn):
+        TESTS.append((name, title, fn))
+        return fn
+
+    return wrap
+
+
+class Skip(Exception):
+    pass
+
+
+class Stop(Exception):
+    pass
+
+
+def settings(schema):
+    src = Gio.SettingsSchemaSource.get_default()
+    return Gio.Settings.new(schema) if src and src.lookup(schema, True) else None
+
+
+# ---------------------------------------------------------------------------
+
+
+class Bus:
+    def __init__(self, log):
+        self.conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.system = None
+        self.log = log
+
+    def call(self, target, method, args=None, reply=None, timeout=10_000, quiet=False):
+        name, path, iface = target
+        try:
+            res = self.conn.call_sync(name, path, iface, method, args,
+                                      GLib.VariantType(reply) if reply else None,
+                                      Gio.DBusCallFlags.NONE, timeout, None)
+        except GLib.Error as e:
+            if not quiet:
+                self.log(f"  ! {iface}.{method}: {e.message}")
+            return None
+        return res.unpack() if res is not None else None
+
+    def prop(self, target, prop, quiet=True):
+        res = self.call(target[:2] + ("org.freedesktop.DBus.Properties",), "Get",
+                        GLib.Variant("(ss)", (target[2], prop)), "(v)", quiet=quiet)
+        return res[0] if res else None
+
+    def has_method(self, target, method):
+        name, path, iface = target
+        try:
+            res = self.conn.call_sync(name, path, "org.freedesktop.DBus.Introspectable", "Introspect",
+                                      None, GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            return False
+        info = Gio.DBusNodeInfo.new_for_xml(res.unpack()[0])
+        i = info.lookup_interface(iface)
+        return bool(i and i.lookup_method(method))
+
+    def session_locked(self):
+        try:
+            if self.system is None:
+                self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            res = self.system.call_sync(
+                "org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                "org.freedesktop.DBus.Properties", "Get",
+                GLib.Variant("(ss)", ("org.freedesktop.login1.Session", "LockedHint")),
+                GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 5000, None)
+            return bool(res.unpack()[0])
+        except GLib.Error:
+            return False
+
+
+class Pad:
+    """tools/test/testpad.py: a real GTK window whose text we can read back."""
+
+    def __init__(self, run, name):
+        self.run = run
+        self.file = Path(run.tmp) / f"{name}.txt"
+        self.title = f"Umoja test pad {name} {MARK}"
+        self.proc = subprocess.Popen(
+            [sys.executable, str(HERE / "testpad.py"), str(self.file)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        line = self.proc.stdout.readline().strip()
+        if line != "ready":
+            raise Skip("the test pad didn't start (needs gir1.2-gtk-4.0)")
+        self.cmd("title", self.title)
+        self.id = run.wait_for(lambda: run.window_id(title=self.title), 10, "the pad's window")
+
+    def cmd(self, *words):
+        self.proc.stdin.write(" ".join(words) + "\n")
+        self.proc.stdin.flush()
+        self.proc.stdout.readline()
+
+    def text(self):
+        try:
+            return self.file.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def set_title(self, title):
+        self.title = title
+        self.cmd("title", title)
+
+    def focus(self):
+        self.run.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.id,)))
+        self.cmd("present")
+        self.run.wait(0.6)
+
+    def close(self):
+        try:
+            self.cmd("quit")
+            self.proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired, BrokenPipeError):
+            self.proc.kill()
+
+
+class Recorder:
+    def __init__(self, run):
+        self.run = run
+        self.proc = None
+
+    def start(self, name):
+        if not self.run.video or not shutil.which("wf-recorder"):
+            return
+        path = self.run.out / "videos" / f"{name}.webm"
+        cmd = ["wf-recorder", "-y", "-D", "-c", "libvpx", "-x", "yuv420p", "-p", "deadline=realtime",
+               "-p", "cpu-used=8", "-p", "b=6M", "-f", str(path)]
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        if self.proc.poll() is not None:
+            self.proc = None
+            return
+        self.run.current["video"] = str(path.relative_to(self.run.out))
+
+    def stop(self):
+        if not self.proc:
+            return
+        time.sleep(1.5)  # wf-recorder drops the tail
+        self.proc.send_signal(signal.SIGINT)
+        try:
+            self.proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.proc = None
+
+
+# ---------------------------------------------------------------------------
+
+
+class Run:
+    def __init__(self, opts):
+        self.opts = opts
+        self.out = opts.out
+        (self.out / "images").mkdir(parents=True, exist_ok=True)
+        (self.out / "videos").mkdir(exist_ok=True)
+        self.logf = open(self.out / "log.txt", "w")
+        self.bus = Bus(self.log)
+        self.video = not opts.no_video
+        self.recorder = Recorder(self)
+        self.tmp = tempfile.mkdtemp(prefix="umoja-test-")
+        self.events = []
+        self.results = []
+        self.current = None
+        self.pads = []
+        self.cleanups = []
+        self.started = datetime.datetime.now()
+        self.inhibit_cookie = None
+
+    # ---- plumbing ------------------------------------------------------
+
+    def log(self, msg):
+        line = f"{datetime.datetime.now():%H:%M:%S} {msg}"
+        print(line, flush=True)
+        self.logf.write(line + "\n")
+        self.logf.flush()
+
+    def check_screen(self):
+        res = self.bus.call(SCREENSAVER, "GetActive", None, "(b)", quiet=True)
+        if res and res[0]:
+            raise Stop("the screen is blanked")
+        if self.bus.session_locked():
+            raise Stop("the session is locked")
+
+    def wait(self, seconds, until=None):
+        end = time.monotonic() + seconds
+        ctx = GLib.MainContext.default()
+        last = 0.0
+        while True:
+            while ctx.iteration(False):
+                pass
+            if until:
+                v = until()
+                if v:
+                    return v
+            now = time.monotonic()
+            if now >= end:
+                return None
+            if now - last > 1.0:
+                self.check_screen()
+                last = now
+            time.sleep(0.1)
+
+    def wait_for(self, fn, timeout, what):
+        v = self.wait(timeout, fn)
+        if not v:
+            raise AssertionError(f"timed out after {timeout:g} s waiting for {what}")
+        return v
+
+    def shot(self, name, caption):
+        path = self.out / "images" / f"{self.current['name']}-{name}.png"
+        r = subprocess.run(["grim", "-s", "1", str(path)], capture_output=True, text=True)
+        if r.returncode == 0:
+            self.current["shots"].append({"file": str(path.relative_to(self.out)), "caption": caption})
+            self.log(f"  shot {path.name}")
+        else:
+            self.log(f"  ! grim: {r.stderr.strip()}")
+
+    def check(self, ok, what, detail=""):
+        self.current["checks"].append({"ok": bool(ok), "check": what, "detail": str(detail)[:2000]})
+        self.log(f"  {'✓' if ok else '✗'} {what}" + (f": {str(detail)[:200]}" if detail else ""))
+        return bool(ok)
+
+    def note(self, text):
+        self.current["notes"].append(text)
+        self.log(f"  · {text}")
+
+    def mcp(self, tool, args=None):
+        r = subprocess.run(["umoja-mcp", "call", tool, json.dumps(args or {})],
+                           capture_output=True, text=True, timeout=120)
+        self.log(f"  mcp {tool} -> {r.returncode}: {r.stdout.strip()[:200]}")
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    def windows(self):
+        rows = self.bus.call(COMPOSITOR, "GetWindows", None, "(a(tssiiiiu))", quiet=True)
+        return rows[0] if rows else []
+
+    def window_id(self, title=None, app=None):
+        for w in self.windows():
+            if (title and w[2] == title) or (app and w[1] == app):
+                return w[0]
+        return None
+
+    def flags(self, wid):
+        return next((w[7] for w in self.windows() if w[0] == wid), 0)
+
+    def tiles(self):
+        rows = self.bus.call(COMPOSITOR, "GetWindowTiles", None, "(a(tu))", quiet=True)
+        return dict(rows[0]) if rows else {}
+
+    def notify(self, summary, body, app="Umoja test"):
+        res = self.bus.call(NOTIFY, "Notify", GLib.Variant(
+            "(susssasa{sv}i)", (app, 0, "dialog-information", summary, body, [], {}, -1)), "(u)")
+        return res[0] if res else 0
+
+    def notifications(self):
+        res = self.bus.call(NOTIFICATIONS, "GetNotifications", None, "(a(ussssx))", quiet=True)
+        return res[0] if res else []
+
+    def gset(self, schema, key, value=None):
+        s = settings(schema)
+        if not s:
+            return None
+        if value is None:
+            return s.get_value(key).unpack()
+        s.set_value(key, value)
+        Gio.Settings.sync()
+        return value
+
+    # ---- Ask Umoja -------------------------------------------------------
+
+    def ask_type(self, text):
+        self.bus.call(OVERLAY, "AskType", GLib.Variant("(sb)", (text, False)))
+        return self.wait(4, lambda: self.rows() or None) or []
+
+    def rows(self):
+        res = self.bus.call(OVERLAY, "AskRows", None, "(a(sss))", quiet=True)
+        return res[0] if res else []
+
+    def row_index(self, kind=None, title_has=None):
+        for i, (k, title, _sub) in enumerate(self.rows()):
+            if (kind is None or k == kind) and (title_has is None or title_has.lower() in title.lower()):
+                return i
+        return None
+
+    def activate(self, index):
+        res = self.bus.call(OVERLAY, "AskActivate", GLib.Variant("(u)", (index,)), "(b)")
+        return bool(res and res[0])
+
+    def action(self, name):
+        res = self.bus.call(OVERLAY, "TestAction", GLib.Variant("(s)", (name,)), "(bs)")
+        return res if res else (False, "")
+
+    def hide(self):
+        self.bus.call(OVERLAY, "Hide", quiet=True)
+        self.wait(0.8)
+
+    def ask(self, question, confirm=None, timeout=None):
+        """Ask the assistant. `confirm`: True/False answers an Allow prompt.
+        Returns (answer, steps, confirm_label)."""
+        self.events.clear()
+        self.log(f"  ask {question!r}")
+        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (question, 0)))
+        timeout = timeout or self.opts.answer_timeout
+        label = None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ev = self.wait(deadline - time.monotonic(),
+                           lambda: next((e for e in self.events if e[0] in ("AnswerFinished", "ConfirmShown")), None))
+            if not ev:
+                break
+            self.events.remove(ev)
+            if ev[0] == "ConfirmShown":
+                label = ev[1][0]
+                self.log(f"  confirm shown: {label!r}")
+                if confirm is None:
+                    return "", [], label
+                self.bus.call(OVERLAY, "AnswerConfirm", GLib.Variant("(b)", (confirm,)), "(b)")
+                continue
+            answer, steps = ev[1]
+            self.log(f"  answer: {answer[:240]!r} steps={steps}")
+            return answer, list(steps), label
+        raise AssertionError(f"the assistant didn't answer within {timeout:g} s")
+
+    # ---- setup and teardown -------------------------------------------
+
+    def flag(self, on):
+        f = Path(GLib.get_user_runtime_dir()) / "umoja-demo"
+        if on:
+            f.touch()
+        else:
+            f.unlink(missing_ok=True)
+
+    def preflight(self):
+        problems = []
+        for target, method in [(OVERLAY, "AskRows"), (OVERLAY, "TestAction"), (OVERLAY, "ToggleCaptions"),
+                               (COMPOSITOR, "GetWindowTiles"), (NOTIFICATIONS, "GetNotifications")]:
+            if not self.bus.has_method(target, method):
+                problems.append(f"{target[2]}.{method} is missing: install the debs with the new features and log in again")
+        for tool in ("grim", "umoja-mcp"):
+            if not shutil.which(tool):
+                problems.append(f"{tool} is not installed")
+        if problems:
+            for p in problems:
+                self.log(f"! {p}")
+            sys.exit(1)
+        if not shutil.which("wf-recorder"):
+            self.log("wf-recorder is missing: no videos")
+            self.video = False
+        res = self.bus.call(SCREENSAVER, "Inhibit",
+                            GLib.Variant("(ss)", ("umoja-feature-test", "Testing the desktop")), "(u)")
+        self.inhibit_cookie = res[0] if res else None
+        self.bus.conn.signal_subscribe(
+            OVERLAY[0], OVERLAY[2], None, OVERLAY[1], None, Gio.DBusSignalFlags.NONE,
+            lambda _c, _s, _p, _i, name, params: self.events.append((name, params.unpack(), time.monotonic())))
+        self.flag(True)
+        # Banners on for the run (Do Not Disturb would hide what we test).
+        n = settings("org.gnome.desktop.notifications")
+        if n and not n.get_boolean("show-banners"):
+            n.set_boolean("show-banners", True)
+            self.cleanups.append(("Do Not Disturb back on", lambda: n.set_boolean("show-banners", False)))
+
+    def teardown(self):
+        self.recorder.stop()
+        self.hide()
+        for pad in self.pads:
+            pad.close()
+        for what, fn in reversed(self.cleanups):
+            try:
+                fn()
+                self.log(f"restored: {what}")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"! could not restore {what}: {e}")
+        Gio.Settings.sync()
+        self.flag(False)
+        if self.inhibit_cookie is not None:
+            self.bus.call(SCREENSAVER, "UnInhibit", GLib.Variant("(u)", (self.inhibit_cookie,)), quiet=True)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def pad(self, name):
+        p = Pad(self, name)
+        self.pads.append(p)
+        return p
+
+    # ---- running -------------------------------------------------------
+
+    def run(self, selected):
+        self.preflight()
+        self.log(f"umoja-feature-test: {len(selected)} tests, output in {self.out}")
+        try:
+            for name, title, fn in selected:
+                self.current = {"name": name, "title": title, "status": "pass", "checks": [], "notes": [],
+                                "shots": [], "video": None, "seconds": 0}
+                self.results.append(self.current)
+                self.log(f"== {name}: {title}")
+                t0 = time.monotonic()
+                try:
+                    self.check_screen()
+                    self.hide()
+                    if name not in ("auto-dnd-recording",):
+                        self.recorder.start(name)
+                    fn(self)
+                except Skip as e:
+                    self.current["status"] = "skip"
+                    self.note(f"skipped: {e}")
+                except Stop:
+                    raise
+                except AssertionError as e:
+                    self.check(False, str(e))
+                except Exception as e:  # noqa: BLE001
+                    self.check(False, f"crashed: {e}", traceback.format_exc())
+                finally:
+                    self.recorder.stop()
+                    self.hide()
+                if self.current["status"] != "skip":
+                    self.current["status"] = "pass" if all(c["ok"] for c in self.current["checks"]) else "fail"
+                self.current["seconds"] = round(time.monotonic() - t0, 1)
+                self.log(f"   -> {self.current['status'].upper()}")
+        except Stop as e:
+            self.log(f"stopped: {e}")
+            self.current["status"] = "stopped"
+            self.current["notes"].append(f"stopped: {e}")
+        finally:
+            self.teardown()
+            self.write_report()
+
+    def write_report(self):
+        journal = subprocess.run(
+            ["journalctl", "--user", "--since", self.started.strftime("%Y-%m-%d %H:%M:%S"), "-o", "short-precise",
+             "--no-pager"], capture_output=True, text=True)
+        keep = [ln for ln in journal.stdout.splitlines() if "umoja" in ln.lower() or "lemonade" in ln.lower()]
+        (self.out / "journal.txt").write_text("\n".join(keep) + "\n")
+        version = subprocess.run(["dpkg-query", "-W", "-f", "${Version}", "umoja-desktop"],
+                                 capture_output=True, text=True).stdout.strip()
+        mir = subprocess.run(["dpkg-query", "-W", "-f", "${Version}", "libmiral7"],
+                             capture_output=True, text=True).stdout.strip()
+        summary = {
+            "started": self.started.isoformat(timespec="seconds"),
+            "umoja_desktop": version,
+            "mir": mir,
+            "backend": self.gset("org.umoja.shell", "assistant-backend") if settings("org.umoja.shell") else None,
+            "results": self.results,
+        }
+        (self.out / "results.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+        icon = {"pass": "✅", "fail": "❌", "skip": "⏭️", "stopped": "⏹️"}
+        lines = [
+            "# Umoja feature test",
+            "",
+            f"Run {summary['started']} on umoja-desktop {version or '?'} (Mir {mir or '?'}), "
+            f"assistant backend {summary['backend'] or '?'}.",
+            "",
+            "| Test | Result | Checks | Time |",
+            "| --- | --- | --- | --- |",
+        ]
+        for r in self.results:
+            ok = sum(c["ok"] for c in r["checks"])
+            lines.append(f"| [{r['name']}](#{r['name']}) {r['title']} | {icon.get(r['status'], '')} {r['status']} "
+                         f"| {ok}/{len(r['checks'])} | {r['seconds']} s |")
+        for r in self.results:
+            lines += ["", f"## {r['name']}", "", f"**{r['title']}**: {icon.get(r['status'], '')} {r['status']}", ""]
+            for c in r["checks"]:
+                lines.append(f"- {'✓' if c['ok'] else '✗'} {c['check']}"
+                             + (f"\n  ```\n  {c['detail'][:600]}\n  ```" if c["detail"] and not c["ok"] else ""))
+            for n in r["notes"]:
+                lines.append(f"- _{n}_")
+            if r["video"]:
+                lines.append(f"- video: [{Path(r['video']).name}]({r['video']})")
+            for s in r["shots"]:
+                lines += ["", f"![{s['caption']}]({s['file']})", f"_{s['caption']}_"]
+        (self.out / "REPORT.md").write_text("\n".join(lines) + "\n")
+        passed = sum(r["status"] == "pass" for r in self.results)
+        self.log(f"done: {passed}/{len(self.results)} passed. Report: {self.out / 'REPORT.md'}")
+
+
+# ---------------------------------------------------------------------------
+# The tests. Each drives one feature like a person would, then checks what
+# really happened. AssertionError fails the test; Skip skips it.
+
+
+def dark_now():
+    return settings("org.gnome.desktop.interface").get_string("color-scheme") == "prefer-dark"
+
+
+def keep_style(run):
+    s = settings("org.gnome.desktop.interface")
+    scheme, theme = s.get_string("color-scheme"), s.get_string("gtk-theme")
+
+    def back():
+        s.set_string("color-scheme", scheme)
+        s.set_string("gtk-theme", theme)
+
+    run.cleanups.append(("color scheme", back))
+
+
+@test("undo-button", "Undo button after the assistant changes a setting")
+def t_undo_button(run):
+    keep_style(run)
+    was = dark_now()
+    run.ask("Switch to light style" if was else "Switch to dark style")
+    run.check(run.wait(5, lambda: dark_now() != was), "the assistant changed the style", f"dark before: {was}")
+    run.shot("changed", "After the change, with the Undo button")
+    ok, label = run.action("undo")
+    run.check(ok, "an Undo button was there to press", label)
+    run.check(run.wait(8, lambda: dark_now() == was), "Undo put the style back")
+    run.wait(1)
+    run.shot("undone", "After Undo: the button says Undone")
+
+
+@test("undo-row", "“Undo Last Change” row in Ask Umoja")
+def t_undo_row(run):
+    keep_style(run)
+    was = dark_now()
+    code, out, err = run.mcp("set_dark_style", {"enabled": not was})
+    run.check(code == 0 and run.wait(5, lambda: dark_now() != was), "set_dark_style changed the style", out or err)
+    run.ask_type("undo")
+    i = run.row_index(title_has="Undo Last Change")
+    run.shot("rows", "Typing “undo”")
+    run.check(i is not None, "the Undo Last Change row is offered", run.rows())
+    if i is not None:
+        run.activate(i)
+        run.check(run.wait(8, lambda: dark_now() == was), "the row put the style back")
+
+
+@test("undo-words", "Saying “undo that” to the assistant")
+def t_undo_words(run):
+    s = settings("org.gnome.settings-daemon.plugins.color")
+    if not s:
+        raise Skip("no Night Light settings")
+    was = s.get_boolean("night-light-enabled")
+    run.cleanups.append(("Night Light", lambda: s.set_boolean("night-light-enabled", was)))
+    run.ask("Turn night light off" if was else "Turn night light on")
+    run.check(run.wait(5, lambda: s.get_boolean("night-light-enabled") != was), "Night Light changed")
+    run.hide()
+    answer, steps, _ = run.ask("undo that")
+    run.shot("answer", "“undo that”")
+    run.check(any("undo" in st.lower() or "back" in st.lower() for st in steps) or "back" in answer.lower(),
+              "the assistant used undo", f"steps={steps} answer={answer[:200]}")
+    run.check(run.wait(6, lambda: s.get_boolean("night-light-enabled") == was), "Night Light is back as it was")
+
+
+@test("emoji", "Emoji rows, typed into the app")
+def t_emoji(run):
+    pad = run.pad("emoji")
+    pad.cmd("text", "Party time: ")
+    pad.focus()
+    rows = run.ask_type(":party")
+    run.shot("rows", "“:party” in Ask Umoja")
+    i = run.row_index(kind="Emoji")
+    run.check(i is not None, "“:party” shows emoji rows", rows)
+    casual = run.ask_type("rocket")
+    run.check(any(k == "Emoji" for k, _t, _s in casual), "a single word (“rocket”) also offers an emoji", casual)
+    run.ask_type(":party")
+    i = run.row_index(kind="Emoji")
+    if i is None:
+        return
+    before = pad.text()
+    run.activate(i)
+    got = run.wait(6, lambda: pad.text() != before and pad.text())
+    run.shot("typed", "The emoji typed into the test pad")
+    run.check(got and any(ord(c) > 0x2000 for c in got[len(before):]), "an emoji was typed into the app",
+              repr(got))
+    if not got:
+        clip = subprocess.run(["wl-paste", "-n"], capture_output=True, text=True).stdout
+        run.note(f"clipboard after: {clip!r} (copied instead of typed?)")
+
+
+@test("rewrite", "Rewrite the selected text in place")
+def t_rewrite(run):
+    pad = run.pad("rewrite")
+    original = "i has went to the store yesterday and buyed three apple for my freind"
+    pad.cmd("text", original)
+    pad.focus()
+    pad.cmd("select")
+    run.wait(1.0)
+    run.bus.call(OVERLAY, "AskAboutScreen")
+    run.wait(1.5)
+    ok, att = run.action("attachments")
+    run.check(ok and "Selection" in att and "apple" in att, "Super+Shift+A attached the selected text", att)
+    if not ok:
+        ok, _ = run.action("attach-selection")
+    i = run.wait(4, lambda: run.row_index(kind="Rewrite", title_has="Spelling"))
+    rows = run.rows()
+    run.shot("rows", "Rewrite rows for the selected text")
+    run.check(i is not None, "the Fix Spelling and Grammar row is offered", rows)
+    if i is None:
+        return
+    run.activate(i)
+    t0 = time.monotonic()
+    last, stable = "", 0
+
+    def done():
+        nonlocal last, stable
+        _ok, ans = run.action("answer")
+        if ans and ans == last:
+            stable += 1
+        else:
+            stable, last = 0, ans
+        return ans if stable >= 6 else None
+
+    answer = run.wait(run.opts.answer_timeout, done)
+    run.check(bool(answer), "the rewrite finished", f"{time.monotonic() - t0:.1f} s")
+    run.note(f"rewrite: {answer!r}")
+    run.shot("answer", "The rewritten text, with Replace the Selection")
+    ok, _ = run.action("replace")
+    run.check(ok, "Replace the Selection was there to press")
+    got = run.wait(8, lambda: pad.text() != original and pad.text())
+    run.shot("replaced", "The test pad after Replace")
+    run.check(bool(got) and "bought" in (got or "").lower() and "buyed" not in (got or ""),
+              "the corrected text replaced the selection in the app", repr(got))
+
+
+@test("screenshot-names", "Screenshots named by what they show")
+def t_shotname(run):
+    if not settings("org.umoja.shell").get_boolean("screenshot-names"):
+        raise Skip("screenshot-names is off")
+    pad = run.pad("invoice")
+    pad.cmd("big")
+    pad.cmd("text", "INVOICE\\nAcme Corporation\\nTotal due: 1,240.00 EUR")
+    pad.focus()
+    pics = Path(GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) or Path.home() / "Pictures")
+    t0 = time.time()
+    run.bus.call(OVERLAY, "ScreenshotScreen")
+
+    def newest():
+        found = [p for p in pics.rglob("*.png") if p.stat().st_mtime >= t0 - 1]
+        return sorted(found, key=lambda p: p.stat().st_mtime)[-1] if found else None
+
+    first = run.wait(10, newest)
+    run.check(first is not None, "the screenshot was saved", str(pics))
+    named = run.wait(90, lambda: (lambda p: p if p and " – " in p.name else None)(newest()))
+    run.check(named is not None, "the file was renamed with a few words about it",
+              newest().name if newest() else "no file")
+    if named:
+        run.note(f"name: {named.name}")
+        run.check(any(w in named.name.lower() for w in ("invoice", "acme")), "the name mentions the invoice")
+        run.cleanups.append((f"test screenshot {named.name}", lambda: named.unlink(missing_ok=True)))
+    elif first:
+        run.cleanups.append(("test screenshot", lambda: first.unlink(missing_ok=True)))
+
+
+def quiet_summary(run, since, words):
+    for n in run.notifications():
+        if n[5] >= since - 1 and "new notification" in n[3] and words in n[4]:
+            return n
+    return None
+
+
+@test("auto-dnd-fullscreen", "Notifications wait while a window is full screen")
+def t_dnd_fullscreen(run):
+    if not settings("org.umoja.shell").get_boolean("auto-do-not-disturb"):
+        raise Skip("auto-do-not-disturb is off")
+    pad = run.pad("fullscreen")
+    pad.cmd("text", "Full screen: no banners should appear over this.")
+    pad.focus()
+    pad.cmd("fullscreen")
+    run.check(run.wait(5, lambda: run.flags(pad.id) & FULLSCREEN), "the pad is full screen")
+    since = int(time.time())
+    run.notify(f"Held back {MARK}", "This banner should wait until full screen ends.")
+    run.wait(1.2)
+    run.shot("during", "Full screen right after a notification: no banner expected")
+    run.check(any(f"Held back {MARK}" == n[3] for n in run.notifications()),
+              "the notification still went to the list")
+    pad.cmd("unfullscreen")
+    got = run.wait(8, lambda: quiet_summary(run, since, "full screen"))
+    run.wait(0.5)
+    run.shot("after", "After leaving full screen: one summary")
+    run.check(got is not None, "a summary notification came afterwards", got)
+
+
+@test("auto-dnd-recording", "Notifications wait while recording the screen")
+def t_dnd_recording(run):
+    if not settings("org.umoja.shell").get_boolean("auto-do-not-disturb"):
+        raise Skip("auto-do-not-disturb is off")
+    vids = Path(GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_VIDEOS) or Path.home() / "Videos")
+    t0 = time.time()
+    run.ask("Record my screen", confirm=True)
+    rec = run.wait(10, lambda: (run.bus.call(OVERLAY, "IsScreencasting", None, "(b)", quiet=True) or [False])[0])
+    run.check(rec, "a screen recording started")
+    if not rec:
+        return
+    run.hide()
+    since = int(time.time())
+    run.notify(f"Held back {MARK}", "This banner should wait until the recording stops.")
+    run.wait(1.2)
+    run.shot("during", "Recording right after a notification: no banner expected")
+    run.bus.call(OVERLAY, "StopScreencast")
+    got = run.wait(10, lambda: quiet_summary(run, since, "recording"))
+    run.wait(0.5)
+    run.shot("after", "After the recording: one summary")
+    run.check(got is not None, "a summary notification came afterwards", got)
+
+    def tidy():
+        for p in vids.rglob("*.webm"):
+            if p.stat().st_mtime >= t0:
+                p.unlink(missing_ok=True)
+
+    run.cleanups.append(("the test screencast", tidy))
+
+
+@test("calendar", "Calendar events in the date menu and for the assistant")
+def t_calendar(run):
+    has = run.bus.prop(CALENDAR, "HasCalendars")
+    run.note(f"calendar server says HasCalendars={has}")
+    code, out, err = run.mcp("calendar_events", {"start": "today", "days": 7})
+    run.check(code == 0, "calendar_events ran", out or err)
+    run.note(f"calendar_events: {out[:400]}")
+    run.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("calendar",)))
+    run.wait(3)
+    run.shot("menu", "The date menu (events under the calendar when calendars are set up)")
+    run.bus.call(PANEL, "ToggleMenu", GLib.Variant("(s)", ("calendar",)))
+    if not has:
+        run.note("no calendars set up: the events list should be hidden; add one in Online Accounts to test events")
+        return
+    answer, _steps, _ = run.ask("What's on my calendar this week?")
+    run.shot("assistant", "“What's on my calendar this week?”")
+    run.check(bool(answer.strip()), "the assistant answered about the calendar", answer[:300])
+
+
+@test("setups", "Save a setup, then bring it back from Ask Umoja")
+def t_setups(run):
+    apps = []
+    for d in SETUP_APPS:
+        try:
+            info = DesktopAppInfo.new(d)
+        except TypeError:
+            info = None
+        if info:
+            apps.append(info)
+        if len(apps) == 2:
+            break
+    if len(apps) < 2:
+        raise Skip("needs two of: " + ", ".join(SETUP_APPS))
+    ids = []
+    for info in apps:
+        app_id = info.get_id().removesuffix(".desktop")
+        if run.window_id(app=app_id):
+            raise Skip(f"{info.get_name()} is already open; close it first")
+        info.launch([], None)
+        ids.append(run.wait_for(lambda a=app_id: run.window_id(app=a), 15, info.get_name()))
+    for wid, action in zip(ids, (TILE_LEFT, TILE_RIGHT)):
+        run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (wid, action)))
+    run.wait(1.5)
+    tiles = run.tiles()
+    run.check(tiles.get(ids[0]) == TILE_LEFT and tiles.get(ids[1]) == TILE_RIGHT, "the two apps are tiled",
+              tiles)
+    name = f"Feature Test {MARK}"
+    path = Path(GLib.get_user_config_dir()) / "umoja" / "setups.json"
+
+    def drop_setup():
+        try:
+            data = json.loads(path.read_text())
+            items = data if isinstance(data, list) else data.get("setups", [])
+            kept = [s for s in items if MARK not in s.get("name", "")]
+            path.write_text(json.dumps(kept if isinstance(data, list) else {**data, "setups": kept}, indent=2))
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    run.cleanups.append(("the test setup", drop_setup))
+    code, out, err = run.mcp("save_setup", {"name": name, "workspaces": "current"})
+    run.check(code == 0, "save_setup saved it", out or err)
+    run.shot("saved", "The arrangement saved as a setup")
+    for wid in ids:
+        run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
+    run.wait(2)
+    rows = run.ask_type("feature test")
+    i = run.row_index(kind="Setup")
+    run.shot("row", "Typing the setup's name")
+    run.check(i is not None, "Ask Umoja offers the setup", rows)
+    if i is None:
+        return
+    run.activate(i)
+    app_ids = [a.get_id().removesuffix(".desktop") for a in apps]
+    back = run.wait(25, lambda: all(run.window_id(app=a) for a in app_ids))
+    run.check(back, "both apps opened again")
+    run.wait(4)
+    new = [run.window_id(app=a) for a in app_ids]
+    tiles = run.tiles()
+    run.shot("restored", "The setup brought back")
+    run.check(tiles.get(new[0]) == TILE_LEFT and tiles.get(new[1]) == TILE_RIGHT,
+              "each app went back to its half", tiles)
+    for wid in new:
+        if wid:
+            run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
+
+
+@test("automations", "An automation made in plain words, and running")
+def t_automations(run):
+    active = subprocess.run(["systemctl", "--user", "is-active", "umoja-automations"],
+                            capture_output=True, text=True).stdout.strip()
+    run.check(active == "active", "the umoja-automations service is running", active)
+    at = datetime.datetime.now() + datetime.timedelta(minutes=2)
+    hhmm = at.strftime("%H:%M")
+    marker = f"Automation test {MARK}"
+    path = Path(GLib.get_user_config_dir()) / "umoja" / "automations.json"
+
+    def drop_rule():
+        try:
+            data = json.loads(path.read_text())
+            items = data if isinstance(data, list) else data.get("rules", [])
+            kept = [r for r in items if MARK not in json.dumps(r, ensure_ascii=False)]
+            path.write_text(json.dumps(kept if isinstance(data, list) else {**data, "rules": kept}, indent=2))
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    run.cleanups.append(("the test automation", drop_rule))
+    answer, steps, label = run.ask(
+        f"Every day at {hhmm}, show me a notification titled “{marker}”", confirm=True)
+    run.shot("made", "The automation, after Allow")
+    run.check(label is not None, "Umoja asked before saving it", label)
+    saved = path.exists() and marker in path.read_text()
+    run.check(saved, "the rule was saved", path.read_text()[:600] if path.exists() else "no automations.json")
+    run.hide()
+    if not saved:
+        return
+    wait_s = max(0, (at.replace(second=0) - datetime.datetime.now()).total_seconds()) + 45
+    run.log(f"  waiting {wait_s:.0f} s for {hhmm}")
+    got = run.wait(wait_s, lambda: any(marker in n[3] or marker in n[4] for n in run.notifications()))
+    run.shot("fired", f"At {hhmm}: the automation's notification")
+    run.check(got, f"the automation ran at {hhmm}")
+
+
+@test("captions", "Live captions of what's playing")
+def t_captions(run):
+    speaker = shutil.which("espeak-ng") or shutil.which("spd-say")
+    if not speaker:
+        raise Skip("needs espeak-ng (sudo apt install espeak-ng) to make something to caption")
+    if not shutil.which("parec"):
+        run.check(False, "parec is installed (pulseaudio-utils)")
+        return
+    run.bus.call(OVERLAY, "ToggleCaptions")
+    run.check(run.wait(5, lambda: run.action("captions-text")[0]), "captions turned on")
+    sentence = ("Hello, this is a test of live captions on the Umoja desktop. "
+                "The meeting moved to Thursday at three o'clock.")
+    heard = ""
+    t0 = time.monotonic()
+    for attempt in range(6):  # the first run may download the speech model
+        subprocess.run([speaker, sentence] if speaker.endswith("espeak-ng") else [speaker, "-w", sentence],
+                       capture_output=True, timeout=60)
+        heard = run.wait(15, lambda: (lambda t: t if "thursday" in t.lower() else None)(run.action("captions-text")[1]))
+        if heard:
+            break
+        if attempt == 0:
+            run.shot("first", "Captions right after the first sentence (may be downloading the model)")
+    run.note(f"heard after {time.monotonic() - t0:.0f} s: {run.action('captions-text')[1]!r}")
+    run.shot("bubble", "The caption bubble")
+    run.check(bool(heard), "the captions caught the sentence (“Thursday”)")
+    if heard:
+        run.events.clear()
+        ok, _ = run.action("captions-summarize")
+        run.check(ok, "Summarize was pressed")
+        ev = run.wait(run.opts.answer_timeout,
+                      lambda: next((e for e in run.events if e[0] == "AnswerFinished"), None))
+        run.shot("summary", "Summarize in Ask Umoja")
+        run.check(ev is not None and "thursday" in ev[1][0].lower(), "the summary mentions Thursday",
+                  ev[1][0][:300] if ev else "no answer")
+    run.bus.call(OVERLAY, "ToggleCaptions")
+    run.check(run.wait(5, lambda: not run.action("captions-text")[0]), "captions turned off")
+
+
+@test("activity-recall", "Activity recall finds a window title and a notification")
+def t_recall(run):
+    s = settings("org.umoja.shell")
+    if s.get_boolean("activity-recall"):
+        raise Skip("activity recall is already on: not touching your timeline")
+    folder = Path(GLib.get_user_data_dir()) / "umoja" / "recall"
+    existed = folder.exists()
+    s.set_boolean("activity-recall", True)
+    Gio.Settings.sync()
+
+    def tidy():
+        s.set_boolean("activity-recall", False)
+        Gio.Settings.sync()
+        if not existed:
+            shutil.rmtree(folder, ignore_errors=True)
+        else:
+            for f in folder.glob("*.jsonl"):
+                lines = [ln for ln in f.read_text().splitlines() if MARK not in ln]
+                f.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+    run.cleanups.append(("activity recall off, test entries removed", tidy))
+    a, b = run.pad("recall-a"), run.pad("recall-b")
+    a.set_title(f"Unicorn research notes {MARK}")
+    a.focus()
+    run.wait(9)
+    b.focus()
+    run.wait(3)
+    run.notify(f"Zebra crossing {MARK}", "A notification for activity recall to find.")
+    run.wait(3)
+    code, out, _ = run.mcp("recall_activity", {"query": "unicorn"})
+    run.check(code == 0 and "Unicorn research notes" in out, "the window title is in the timeline", out)
+    code, out, _ = run.mcp("recall_activity", {"query": "zebra"})
+    run.check(code == 0 and "Zebra crossing" in out, "the notification is in the timeline", out)
+    answer, steps, _ = run.ask("What was that window about unicorns I had open a minute ago?")
+    run.shot("answer", "Asking the assistant about it")
+    run.check("unicorn" in answer.lower(), "the assistant found it", f"steps={steps} answer={answer[:300]}")
+
+
+@test("user-guide", "The User Guide opens from Ask Umoja")
+def t_guide(run):
+    pdf = Path("/usr/share/umoja/guide/umoja-user-guide.pdf")
+    run.check(pdf.exists(), "the PDF is installed", str(pdf))
+    rows = run.ask_type("user guide")
+    i = run.row_index(title_has="User Guide")
+    run.shot("rows", "Typing “user guide”")
+    run.check(i is not None, "Ask Umoja offers the User Guide", rows)
+    if i is None:
+        return
+    before = {w[0] for w in run.windows()}
+    run.activate(i)
+    new = run.wait(15, lambda: [w for w in run.windows() if w[0] not in before])
+    run.wait(2)
+    run.shot("open", "The User Guide open")
+    run.check(bool(new), "a window opened with the guide", [(w[1], w[2]) for w in new or []])
+    for w in new or []:
+        run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (w[0],)))
+
+
+# ---------------------------------------------------------------------------
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--only", nargs="+", metavar="TEST", help="run only these tests")
+    p.add_argument("--skip", nargs="+", metavar="TEST", default=[], help="leave these out")
+    p.add_argument("--list", action="store_true", help="list the tests and exit")
+    p.add_argument("--out", type=Path, help="output folder (default ~/umoja-feature-test-<time>)")
+    p.add_argument("--no-video", action="store_true", help="screenshots only")
+    p.add_argument("--answer-timeout", type=float, default=150, help="seconds to wait for the assistant")
+    p.add_argument("--countdown", type=int, default=5, help="seconds before the first test")
+    opts = p.parse_args()
+    if opts.list:
+        for name, title, _ in TESTS:
+            print(f"{name:22} {title}")
+        return
+    names = {n for n, _, _ in TESTS}
+    for n in (opts.only or []) + opts.skip:
+        if n not in names:
+            sys.exit(f"no test called {n}; see --list")
+    selected = [t for t in TESTS if (not opts.only or t[0] in opts.only) and t[0] not in opts.skip]
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        sys.exit("run this inside your Umoja session")
+    opts.out = opts.out or Path.home() / f"umoja-feature-test-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    run = Run(opts)
+    for n in range(opts.countdown, 0, -1):
+        print(f"starting in {n}… hands off the keyboard and mouse", flush=True)
+        time.sleep(1)
+    run.run(selected)
+    failed = sum(r["status"] == "fail" for r in run.results)
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

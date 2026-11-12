@@ -192,6 +192,7 @@ struct Captions {
     status: gtk::Label,
     recorder: RefCell<Option<Child>>,
     transcript: RefCell<String>,
+    summarize_button: gtk::Button,
     /// Bumped on stop, so a late phrase from the last run is dropped.
     run: std::cell::Cell<u32>,
 }
@@ -201,6 +202,29 @@ thread_local! {
 }
 
 pub type Summarize = Rc<dyn Fn(String)>;
+
+/// Whether captions are on (feature test).
+pub fn is_running() -> bool {
+    CAPTIONS.with(|c| c.borrow().as_ref().is_some_and(|c| c.recorder.borrow().is_some()))
+}
+
+/// What captions heard so far this run (feature test).
+pub fn transcript() -> String {
+    CAPTIONS.with(|c| c.borrow().as_ref().map(|c| c.transcript.borrow().clone()).unwrap_or_default())
+}
+
+/// Press Summarize (feature test). False with nothing heard yet.
+pub fn summarize_now() -> bool {
+    CAPTIONS.with(|c| {
+        c.borrow().as_ref().is_some_and(|c| {
+            let ok = !c.transcript.borrow().trim().is_empty();
+            if ok {
+                c.summarize_button.emit_clicked();
+            }
+            ok
+        })
+    })
+}
 
 /// Turn captions on or off. `summarize` gets the transcript when the user
 /// presses Summarize.
@@ -266,6 +290,7 @@ impl Captions {
             status,
             recorder: RefCell::new(None),
             transcript: RefCell::default(),
+            summarize_button: summarize_b.clone(),
             run: std::cell::Cell::new(0),
         });
         let weak = Rc::downgrade(&this);

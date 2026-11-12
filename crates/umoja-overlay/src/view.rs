@@ -198,6 +198,10 @@ pub struct Overlay {
     pending: gtk::Box,
     pending_label: gtk::Label,
     attachments: RefCell<Vec<Attachment>>,
+    /// The newest Replace the Selection and Undo buttons, for the
+    /// feature test (tools/test) to press.
+    last_replace: RefCell<Option<glib::WeakRef<gtk::Button>>>,
+    last_undo: RefCell<Option<glib::WeakRef<gtk::Button>>>,
     /// The window the user was in when the overlay opened.
     last_window: RefCell<Option<FocusedWindow>>,
     shots: RefCell<Weak<ScreenshotUi>>,
@@ -558,6 +562,8 @@ impl Overlay {
             pending,
             pending_label,
             attachments: RefCell::default(),
+            last_replace: RefCell::default(),
+            last_undo: RefCell::default(),
             last_window: RefCell::default(),
             shots: RefCell::new(Weak::new()),
             history: clipboard::history(),
@@ -1960,6 +1966,68 @@ impl Overlay {
         })
     }
 
+    /// The rows showing, as (kind, title, subtitle), for the feature test.
+    pub fn test_rows(&self) -> Vec<(String, String, String)> {
+        let items = self.items.borrow().clone();
+        items
+            .iter()
+            .flatten()
+            .map(|item| {
+                let (title, sub, kind) = self.describe(item);
+                (kind, title, sub)
+            })
+            .collect()
+    }
+
+    /// Run the `index`th row (headings not counted), as Enter on it would.
+    pub fn test_activate(self: &Rc<Self>, index: u32) -> bool {
+        let pos = self
+            .items
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.is_some())
+            .nth(index as usize)
+            .map(|(i, _)| i);
+        let Some(pos) = pos else { return false };
+        self.select(Some(pos));
+        self.activate_selected();
+        true
+    }
+
+    /// Press a button or read state that the rows don't cover (feature test):
+    /// "replace", "undo", "attach-selection", "attachments", "answer",
+    /// "captions-summarize", "captions-text".
+    pub fn test_action(self: &Rc<Self>, action: &str) -> (bool, String) {
+        let press = |b: &RefCell<Option<glib::WeakRef<gtk::Button>>>| match b.borrow().as_ref().and_then(|w| w.upgrade()) {
+            Some(b) if b.is_sensitive() => {
+                b.emit_clicked();
+                (true, b.label().map(|l| l.to_string()).unwrap_or_default())
+            }
+            _ => (false, String::new()),
+        };
+        match action {
+            "replace" => press(&self.last_replace),
+            "undo" => press(&self.last_undo),
+            "attach-selection" => {
+                self.attach_selection();
+                (!self.attachments.borrow().is_empty(), String::new())
+            }
+            "attachments" => {
+                let a = self.attachments.borrow();
+                let text = a.iter().map(|a| format!("{:?}: {}", a.kind, a.text)).collect::<Vec<_>>().join("\n");
+                (!a.is_empty(), text)
+            }
+            "answer" => (true, self.answer_text.borrow().clone()),
+            "captions-summarize" => (crate::captions::summarize_now(), String::new()),
+            "captions-text" => {
+                let t = crate::captions::transcript();
+                (crate::captions::is_running(), t)
+            }
+            _ => (false, format!("unknown action {action}")),
+        }
+    }
+
     /// Answer the confirmation that is showing, as if Allow or Cancel was
     /// clicked (tools/demo). False when none is showing.
     pub fn answer_confirm(&self, allow: bool) -> bool {
@@ -2276,6 +2344,7 @@ impl Overlay {
                 o.type_into_app(text.clone());
             }
         });
+        *self.last_replace.borrow_mut() = Some(b.downgrade());
         b.upcast()
     }
 
@@ -3122,6 +3191,9 @@ impl agent::Ui for OverlayUi {
         let rows = self.rows.borrow();
         let Some((row, _)) = rows.get(&id) else { return };
         let button = gtk::Button::with_label(&i18n::umoja("Undo"));
+        if let Some(o) = self.live() {
+            *o.last_undo.borrow_mut() = Some(button.downgrade());
+        }
         button.add_css_class("flat");
         button.add_css_class("assistant-undo");
         button.set_valign(gtk::Align::Center);
