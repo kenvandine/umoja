@@ -541,6 +541,20 @@ impl Center {
             return note.id;
         }
 
+        // Activity recall (opt-in): new messages, not progress or OSD bubbles.
+        if existing.is_none() && note.sync_tag.is_none() && note.value.is_none() {
+            let body = gtk::pango::parse_markup(&note.body, '\0')
+                .map(|(_, t, _)| t.to_string())
+                .unwrap_or_else(|_| note.body.clone());
+            umoja_common::recall::add(umoja_common::recall::Entry {
+                at: note.time.to_unix(),
+                kind: umoja_common::recall::Kind::Notification,
+                app: note.app_name.clone(),
+                text: format!("{}: {}", note.summary, body),
+                secs: None,
+            });
+        }
+
         {
             let mut notes = self.notes.borrow_mut();
             notes.retain(|n| n.id != note.id);

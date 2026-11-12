@@ -156,6 +156,21 @@
         downloaded the first time captions are turned on.
       </description>
     </key>
+    <key name="activity-recall" type="b">
+      <default>false</default>
+      <summary>Keep a text-only activity timeline</summary>
+      <description>
+        Record, on this computer only, which window was in front (app and
+        title), files opened and notifications received, so Ask Umoja can
+        answer "what was that page I had open yesterday?". No screenshots
+        and no keystrokes. Stored in ~/.local/share/umoja/recall.
+      </description>
+    </key>
+    <key name="activity-recall-days" type="u">
+      <range min="1" max="90"/>
+      <default>14</default>
+      <summary>Days the activity timeline is kept</summary>
+    </key>
     <key name="crash-notifications" type="b">
       <default>true</default>
       <summary>Tell me when an app crashes</summary>

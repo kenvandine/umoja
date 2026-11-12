@@ -496,6 +496,8 @@ pub async fn serve() {
     }
     let Ok(session) = crate::desktop::session_bus().await else { return };
     let system = crate::desktop::system_bus().await.ok();
+    // Activity recall rides along (it records only while turned on).
+    glib::spawn_future_local(crate::recall::record(session.clone()));
 
     // Monitors.
     let monitors = Rc::new(std::cell::Cell::new(monitor_count(&session).await.unwrap_or(0)));
