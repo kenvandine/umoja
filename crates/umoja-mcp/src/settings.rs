@@ -116,6 +116,7 @@ pub const CATALOG: &[Entry] = &[
     e!("show_desktop_icons", "org.gnome.shell.extensions.ding", "show-home", "Show the Home folder icon on the desktop"),
     // Umoja's own
     e!("file_search", UMOJA, "file-search-enabled", "Index the home folder so files can be found by what they're about"),
+    e!("auto_do_not_disturb", UMOJA, "auto-do-not-disturb", "Hold back notification banners while recording the screen or while a fullscreen window has the focus"),
     e!("clipboard_history", UMOJA, "clipboard-history", "Keep a clipboard history this session (in memory only)"),
     e!("dictation_shortcut", UMOJA, "dictation-hotkey", "Keyboard shortcut for voice dictation, e.g. [\"<Super>d\"]"),
     e!("ask_about_screen_shortcut", UMOJA, "ask-about-screen-hotkey", "Keyboard shortcut to ask the assistant about the screen"),

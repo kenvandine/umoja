@@ -128,6 +128,16 @@
         Seconds. 0 keeps the screensaver running until you come back.
       </description>
     </key>
+    <key name="auto-do-not-disturb" type="b">
+      <default>true</default>
+      <summary>Hold back notifications while recording or in full screen</summary>
+      <description>
+        Don't show notification banners while the screen is being recorded or
+        a fullscreen window (a game, a video, a presentation) has the focus.
+        They still go to the message list, critical ones still show, and
+        afterwards one banner says how many arrived.
+      </description>
+    </key>
     <key name="crash-notifications" type="b">
       <default>true</default>
       <summary>Tell me when an app crashes</summary>
