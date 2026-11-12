@@ -216,6 +216,7 @@ EOF
 # --- OpenCode on the assistant's cloud model ------------------------------
 
 OPENCODE_AUTH=${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json
+OPENCODE_KEY=${XDG_DATA_HOME:-$HOME/.local/share}/umoja/opencode-cloud.key
 
 shell_key() {
   gsettings get org.umoja.shell "$1" 2>/dev/null | sed -e "s/^'//" -e "s/'$//"
@@ -223,9 +224,11 @@ shell_key() {
 
 # add|remove|has. Adds a "umoja" OpenAI-compatible provider to opencode.json
 # with the cloud URL and model, and makes it the model unless the user picked
-# another one. The key goes where `opencode auth login` keeps keys
-# (auth.json, mode 0600); it reaches Python through the environment, never
-# the command line.
+# another one. The key goes in a file of its own (mode 0600) that the
+# provider reads with apiKey "{file:...}": OpenCode 2.x never sends an
+# auth.json key for a custom provider, and this keeps the secret out of
+# opencode.json, which people copy around. It reaches Python through the
+# environment, never the command line. "has" means set up with a key.
 opencode_cloud() {
   local action=$1 url="" model="" key=""
   if [[ $action == add ]]; then
@@ -237,9 +240,10 @@ opencode_cloud() {
     fi
     command -v secret-tool >/dev/null && key=$(secret-tool lookup umoja assistant-cloud kind api-key 2>/dev/null)
   fi
-  UMOJA_CLOUD_KEY=$key python3 - "$action" "$CONFIG/opencode/opencode.json" "$OPENCODE_AUTH" "$url" "$model" <<'PY'
+  UMOJA_CLOUD_KEY=$key python3 - "$action" "$CONFIG/opencode/opencode.json" "$OPENCODE_AUTH" "$url" "$model" \
+    "$OPENCODE_KEY" <<'PY'
 import json, os, sys, tempfile
-action, conf, auth, url, model = sys.argv[1:6]
+action, conf, auth, url, model, keyfile = sys.argv[1:7]
 key = os.environ.get("UMOJA_CLOUD_KEY", "")
 NAME = "Umoja cloud model"
 
@@ -266,17 +270,40 @@ def save(path, data, mode):
 c = load(conf)
 providers = c.get("provider") or {}
 ours = providers.get("umoja", {}).get("name") == NAME
+key_ref = "{file:" + keyfile + "}"
 if action == "has":
-    sys.exit(0 if ours else 1)
+    keyed = (providers.get("umoja", {}).get("options") or {}).get("apiKey") == key_ref
+    sys.exit(0 if ours and keyed and os.path.exists(keyfile) else 1)
+
+def drop_old_auth():
+    """Earlier setups put the key in auth.json, where 2.x ignores it."""
+    a = load(auth)
+    if a.pop("umoja", None) is not None:
+        if a:
+            save(auth, a, 0o600)
+        else:
+            os.remove(auth)
 mode = os.stat(conf).st_mode & 0o777 if os.path.exists(conf) else 0o644
 if action == "add":
     if "umoja" in providers and not ours:
         print("  cloud: opencode.json already has a provider called umoja; left alone", file=sys.stderr)
         sys.exit(1)
+    options = {"baseURL": url}
+    if key:
+        os.makedirs(os.path.dirname(keyfile), exist_ok=True)
+        fd = os.open(keyfile + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key.strip())
+        os.chmod(keyfile + ".new", 0o600)
+        os.replace(keyfile + ".new", keyfile)
+        options["apiKey"] = key_ref
+    else:
+        print("  cloud: no API key in the keyring; OpenCode will ask the provider without one",
+              file=sys.stderr)
     providers["umoja"] = {
         "npm": "@ai-sdk/openai-compatible",
         "name": NAME,
-        "options": {"baseURL": url},
+        "options": options,
         "models": {model: {"name": model}},
     }
     c["provider"] = providers
@@ -284,11 +311,10 @@ if action == "add":
         c["model"] = f"umoja/{model}"
     c.setdefault("$schema", "https://opencode.ai/config.json")
     save(conf, c, mode)
-    if key:
-        a = load(auth)
-        a["umoja"] = {"type": "api", "key": key}
-        save(auth, a, 0o600)
+    drop_old_auth()
 elif action == "remove":
+    if os.path.exists(keyfile):
+        os.remove(keyfile)
     if not ours:
         sys.exit(0)
     del providers["umoja"]
@@ -302,12 +328,7 @@ elif action == "remove":
         os.remove(conf)      # we created it
     else:
         save(conf, c, mode)
-    a = load(auth)
-    if a.pop("umoja", None) is not None:
-        if a:
-            save(auth, a, 0o600)
-        else:
-            os.remove(auth)
+    drop_old_auth()
 PY
 }
 

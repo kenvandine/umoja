@@ -145,7 +145,9 @@ pub const KNOWN: &[Agent] = &[
             classic: true,
         },
         login: &["auth", "login"],
-        credentials: &[".local/share/opencode/auth.json"],
+        // Its own sign-in, or the key umoja-agent-setup gave it for the
+        // assistant's cloud model.
+        credentials: &[".local/share/opencode/auth.json", ".local/share/umoja/opencode-cloud.key"],
         aliases: &["opencode", "open code"],
     },
     Agent {
@@ -473,7 +475,8 @@ mod tests {
         assert!(o.contains("&& umoja-agent-setup opencode"));
         // Skips the sign-in when setup already signed it in.
         assert!(o.ends_with(
-            "&& { [ -s \"$HOME/.local/share/opencode/auth.json\" ] || opencode auth login; }"
+            "&& { [ -s \"$HOME/.local/share/opencode/auth.json\" ] \
+             || [ -s \"$HOME/.local/share/umoja/opencode-cloud.key\" ] || opencode auth login; }"
         ));
         // Else the vendor's installer, for this user only.
         let c = CODEX.install_command().unwrap();

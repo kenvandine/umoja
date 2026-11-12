@@ -646,9 +646,10 @@ the same as for any install.
 cloud model (the **Cloud** page) when OpenCode is set up, OpenCode gets the
 same model. Umoja adds a `umoja` provider with your URL and model to
 `~/.config/opencode/opencode.json` and makes it the model, unless you
-picked another one. It puts the key from your keyring where
-`opencode auth login` keeps keys (`~/.local/share/opencode/auth.json`,
-readable only by you). `umoja-agent-setup --cloud` sets this up again,
+picked another one. It copies the key from your keyring into
+`~/.local/share/umoja/opencode-cloud.key` (readable only by you), which the
+provider reads with `"apiKey": "{file:...}"`, so the key itself never sits
+in `opencode.json`. `umoja-agent-setup --cloud` sets this up again,
 for example after you change the model, and `umoja-agent-setup --cloud --remove`
 undoes it.
 
