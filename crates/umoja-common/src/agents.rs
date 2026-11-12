@@ -231,11 +231,14 @@ impl Agent {
                 } else {
                     name.to_string()
                 };
-                // Like app installs: sudo when it needs no password (no
-                // prompt at all), else snapd asks through polkit, and sudo
-                // with a password only if there is no polkit agent.
+                // snapd asks for the password through polkit; sudo only if
+                // there is no polkit agent. While the demo tour records
+                // (its flag file exists) passwordless sudo goes first, as
+                // nobody is there to answer a polkit dialog.
                 format!(
-                    "{{ sudo -n snap install {args} 2>/dev/null || snap install {args} || sudo snap install {args}; }}"
+                    "{{ {{ [ -e \"${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}/umoja-demo\" ] \
+                     && sudo -n snap install {args} 2>/dev/null; }} \
+                     || snap install {args} || sudo snap install {args}; }}"
                 )
             }
             Install::Script { url, shell } => format!(
@@ -463,8 +466,9 @@ mod tests {
         // Snap first where the vendor or Ubuntu publishes one.
         let o = Agent::by_id("opencode").unwrap().install_command().unwrap();
         assert!(o.starts_with(
-            "{ sudo -n snap install opencode --classic 2>/dev/null || snap install opencode --classic \
-             || sudo snap install opencode --classic; }"
+            "{ { [ -e \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/umoja-demo\" ] \
+             && sudo -n snap install opencode --classic 2>/dev/null; } \
+             || snap install opencode --classic || sudo snap install opencode --classic; }"
         ));
         assert!(o.contains("&& umoja-agent-setup opencode"));
         // Skips the sign-in when setup already signed it in.
