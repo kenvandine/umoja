@@ -148,6 +148,14 @@
         only; the name stays as it was if there is no text or no model.
       </description>
     </key>
+    <key name="captions-model" type="s">
+      <default>"Whisper-Base"</default>
+      <summary>Speech model for live captions</summary>
+      <description>
+        The Lemonade Whisper model live captions transcribe with. It is
+        downloaded the first time captions are turned on.
+      </description>
+    </key>
     <key name="crash-notifications" type="b">
       <default>true</default>
       <summary>Tell me when an app crashes</summary>

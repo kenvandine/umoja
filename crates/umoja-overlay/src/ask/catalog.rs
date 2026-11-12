@@ -26,6 +26,7 @@ pub enum Local {
     ScreenRecordingUi,
     ClipboardHistory,
     AskAboutWindow,
+    Captions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +296,13 @@ pub const CATALOG: &[Instant] = &[
         &["this window", "explain", "read", "what's on screen"],
         "focus-windows-symbolic",
         Run::Local(Local::AskAboutWindow),
+    ),
+    control(
+        "captions",
+        "Live Captions",
+        &["captions", "subtitles", "transcribe", "transcript", "what are they saying"],
+        "media-view-subtitles-symbolic",
+        Run::Local(Local::Captions),
     ),
     control(
         "empty-trash",

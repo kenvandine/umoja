@@ -751,3 +751,31 @@ window.umoja-shortcuts {
 .ask-emoji {
   font-size: 20px;
 }
+
+/* Live captions: a see-through, blurred bubble near the bottom of the
+   screen, like the notification bubbles. */
+window.captions {
+  background-color: rgba(22, 22, 24, 0.72);
+  backdrop-filter: blur(12px);
+  border: 1px solid alpha(#ffffff, 0.08);
+  border-radius: 14px;
+  padding: 10px 14px 12px 14px;
+  color: #ffffff;
+}
+.captions-title {
+  font-weight: bold;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.captions-status {
+  font-size: 0.85em;
+}
+.captions-text {
+  font-size: 1.35em;
+  line-height: 1.3;
+}
+.captions-button {
+  min-height: 24px;
+  padding: 2px 8px;
+  color: #ffffff;
+}

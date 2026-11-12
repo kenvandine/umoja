@@ -8,6 +8,7 @@ mod appgrid;
 mod ask;
 mod assistant;
 mod canvas;
+mod captions;
 mod chrome;
 mod clipboard;
 mod clipwatch;
@@ -54,6 +55,7 @@ const IFACE_XML: &str = r#"
     <method name="Show"/>
     <method name="Hide"/>
     <method name="ToggleDictation"/>
+    <method name="ToggleCaptions"/>
     <method name="AskAboutScreen"/>
     <method name="LaunchAgent"/>
     <method name="Ask">
@@ -416,6 +418,7 @@ fn export(
                         grid.hide()
                     }
                     "ToggleDictation" => methods.toggle_dictation(),
+                    "ToggleCaptions" => methods.toggle_captions(),
                     "AskAboutScreen" => {
                         spread.hide();
                         grid.hide();

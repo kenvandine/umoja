@@ -895,6 +895,22 @@ impl Overlay {
         }
     }
 
+    /// Live captions of what the computer is playing; "Summarize" brings
+    /// the transcript back here as context.
+    pub fn toggle_captions(self: &Rc<Self>) {
+        let Some(app) = self.window.application() else { return };
+        let weak = Rc::downgrade(self);
+        crate::captions::toggle(
+            &app,
+            Rc::new(move |text: String| {
+                let Some(o) = weak.upgrade() else { return };
+                o.show();
+                o.add_attachment(Attachment::new(Kind::Transcript, text));
+                o.ask(&i18n::umoja("Summarize what was said, with any decisions and to-dos"));
+            }),
+        );
+    }
+
     pub fn toggle_dictation(&self) {
         self.myna.toggle();
     }
@@ -1773,6 +1789,10 @@ impl Overlay {
                     }
                     Local::ClipboardHistory => self.clip_button.set_active(true),
                     Local::AskAboutWindow => self.attach_window(),
+                    Local::Captions => {
+                        self.hide();
+                        self.toggle_captions();
+                    }
                 }
             }
             Run::Toggle { tool, state } => {
