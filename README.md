@@ -76,6 +76,21 @@ card floats over the window you're in.
   (Claude Code, for example) can use too. At login Umoja sets it up, with
   a skill describing the desktop, for the coding agents it finds.
 - **Voice dictation** through Myna, if it is installed.
+- **Rewrite selected text** in any app (fix spelling, shorter, friendlier,
+  more formal, translate, or your own words), typed back in place.
+- **Undo** for everything the assistant changes.
+- **Setups** (named window arrangements) and **automations** in plain words
+  ("when I plug in my monitor, open my Coding setup").
+- **Live captions** of whatever is playing, with Whisper on your computer,
+  and a Summarize button for meetings.
+- **Calendar events** in the date menu and for the assistant, **emoji** in
+  Ask Umoja, **screenshots named by what they show**, **automatic Do Not
+  Disturb** while recording or in full screen, and opt-in, text-only
+  **activity recall**.
+
+New to Umoja? The **[User Guide](docs/guide/README.md)** walks through
+the whole desktop, from the basics to every feature, with screenshots and
+diagrams. It's also installed as a PDF: type "guide" into Ask Umoja.
 
 See [Using the AI features](docs/ai-features.md) for how each one works,
 what the assistant asks before acting, and what stays on your computer.

@@ -9,6 +9,8 @@
 #   Edge versions are the latest release tag plus the commits since it:
 #   2026.46.3+git<N>.<sha>~<series>1, so they always sort above that
 #   release and below the next one.
+# - Every run builds the user guide PDF (artifact "user-guide"); releases
+#   attach it to the GitHub release for their tag.
 # - Manual runs: pick the series and whether to upload. With "release" the
 #   debian/changelog version is uploaded as a release and tagged v<version>.
 #
@@ -142,6 +144,8 @@ jobs:
     container: ${{ inputs.image || 'ubuntu:26.10' }}
     permissions:
       contents: write
+    outputs:
+      release: ${{ steps.version.outputs.release }}
     steps:
       - name: Install tooling
         run: |
@@ -168,6 +172,7 @@ jobs:
               exit 1
             fi
             version="${tag}~${SERIES}1"
+            echo "release=v$tag" >> "$GITHUB_OUTPUT"
           elif [[ "${{ inputs.release }}" == "true" ]]; then
             if git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
               echo "::error::v$base is already tagged; run packaging/bump-version first"
@@ -175,6 +180,7 @@ jobs:
             fi
             version="${base}~${SERIES}1"
             echo "tag=v$base" >> "$GITHUB_OUTPUT"
+            echo "release=v$base" >> "$GITHUB_OUTPUT"
           else
             # Edge: latest release tag reachable from HEAD plus commits since.
             last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)
@@ -253,3 +259,51 @@ jobs:
       - name: Clean up key
         if: always()
         run: rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/passphrase"
+
+  # The user guide as a PDF (docs/guide -> tools/guide/build-pdf). Every run
+  # keeps it as an artifact to look at; releases attach it to the GitHub
+  # release. The .debs build their own copy (debian/rules).
+  guide:
+    name: User guide PDF
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.10
+    steps:
+      - name: Install tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates pandoc weasyprint \
+            fonts-ubuntu fonts-noto-color-emoji fonts-dejavu-core dpkg-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: tools/guide/build-pdf --out umoja-user-guide.pdf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: user-guide
+          path: umoja-user-guide.pdf
+          if-no-files-found: error
+
+  guide-release:
+    name: Attach the user guide to the release
+    needs: [ppa, guide]
+    if: needs.ppa.outputs.release != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.ppa.outputs.release }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: user-guide
+
+      - name: Create the release if needed and attach the PDF
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Umoja ${TAG#v}" \
+              --notes "Install from ppa:ken-vandine/umoja. The user guide is attached as a PDF."
+          gh release upload "$TAG" umoja-user-guide.pdf --repo "$GITHUB_REPOSITORY" --clobber

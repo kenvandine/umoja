@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" width="1000" height="300" role="img" aria-label="Live captions">
+<title>Live captions</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+<rect x="1" y="1" width="998" height="298" rx="18" fill="#fbf9f8" stroke="#d8d2cf" stroke-width="2"/>
+<text x="500" y="38.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="26" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Live captions: what&#x27;s playing, as text</text>
+<rect x="30" y="90" width="170" height="100" rx="12" fill="#ffffff" stroke="#d8d2cf" stroke-width="2" />
+<text x="115.0" y="126.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="18" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Sound out</text>
+<text x="115.0" y="156.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">a call, a video</text>
+<line x1="202" y1="140" x2="220" y2="140" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="222" y="90" width="170" height="100" rx="12" fill="#ffffff" stroke="#d8d2cf" stroke-width="2" />
+<text x="307.0" y="126.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="18" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Phrases</text>
+<text x="307.0" y="156.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">cut at pauses</text>
+<line x1="394" y1="140" x2="412" y2="140" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="414" y="90" width="170" height="100" rx="12" fill="#f3e9e4" stroke="#d8d2cf" stroke-width="2" />
+<text x="499.0" y="126.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="18" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Whisper</text>
+<text x="499.0" y="156.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">on this computer</text>
+<line x1="586" y1="140" x2="604" y2="140" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="606" y="90" width="170" height="100" rx="12" fill="#ffffff" stroke="#d8d2cf" stroke-width="2" />
+<text x="691.0" y="126.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="18" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Caption bubble</text>
+<text x="691.0" y="156.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">near the bottom</text>
+<line x1="778" y1="140" x2="796" y2="140" stroke="#6b6b6b" stroke-width="2.5" marker-end="url(#ah)"/>
+<rect x="798" y="90" width="170" height="100" rx="12" fill="#ffffff" stroke="#E95420" stroke-width="2" />
+<text x="883.0" y="126.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="18" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Summarize</text>
+<text x="883.0" y="156.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">in Ask Umoja</text>
+<text x="500" y="240.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">Nothing is recorded to disk, and no audio leaves the computer.</text>
+<text x="500" y="268.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Turn it on: type “captions” in Ask Umoja. Close the bubble to stop.</text>
+</svg>

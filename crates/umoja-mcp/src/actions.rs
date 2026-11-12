@@ -135,6 +135,13 @@ pub fn tools() -> Vec<Tool> {
             }
         }),
         Tool::new(
+            "open_user_guide",
+            "Open the Umoja User Guide (a PDF covering the whole desktop: basics, windows and workspaces, screenshots, Ask Umoja, the assistant, setups, automations, privacy and every shortcut). Use when the user asks for help, the manual or the guide, or wants to learn the desktop.",
+            obj(json!({}), &[]),
+            |_| Box::pin(async move { open_user_guide().hide_if_ok() }),
+        )
+        .with_summary(|_| "Open the User Guide".into()),
+        Tool::new(
             "open_url",
             "Open a web page in the default browser, or search the web. Pass url for an address, or query to search.",
             obj(json!({
@@ -893,6 +900,23 @@ fn percent_encode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+/// The installed user guide (docs/guide as a PDF), or the guide on GitHub
+/// when it isn't installed (a development build).
+pub const USER_GUIDE: &str = "/usr/share/umoja/guide/umoja-user-guide.pdf";
+pub const USER_GUIDE_WEB: &str = "https://github.com/kenvandine/umoja/blob/main/docs/guide/README.md";
+
+fn open_user_guide() -> Outcome {
+    let uri = if std::path::Path::new(USER_GUIDE).exists() {
+        gio::File::for_path(USER_GUIDE).uri().to_string()
+    } else {
+        USER_GUIDE_WEB.to_string()
+    };
+    match gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>) {
+        Ok(()) => Outcome::ok("Opened the Umoja User Guide"),
+        Err(e) => err(e),
+    }
 }
 
 fn open_url(a: &Value) -> Outcome {

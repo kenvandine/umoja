@@ -21,6 +21,19 @@ here. While Myna records, a microphone shows in the top bar (click it to
 stop) and Myna's own pill with the voice wave shows at the bottom of the
 screen, as in Ubuntu. Ask Umoja's card also has a microphone button.
 
+For a friendlier tour of the whole desktop, with screenshots, see the
+[User Guide](guide/README.md). This page is the detailed reference.
+
+Newer features are covered in the guide: [rewriting selected
+text](guide/07-everyday-ai.md#rewrite-text-in-any-app),
+[Undo](guide/06-the-assistant.md#undo), [emoji](guide/05-ask-umoja.md#emoji),
+[setups and automations](guide/08-setups-and-automations.md), [live
+captions](guide/07-everyday-ai.md#live-captions), [calendar
+events](guide/07-everyday-ai.md#your-calendar), [automatic Do Not
+Disturb](guide/07-everyday-ai.md#automatic-do-not-disturb), [screenshot
+names](guide/04-screenshots-and-recording.md#screenshots-named-by-what-they-show)
+and [activity recall](guide/07-everyday-ai.md#activity-recall).
+
 ## Contents
 
 - [Ask Umoja](#ask-umoja)
@@ -629,6 +642,11 @@ All in the `org.umoja.shell` schema, for example
 | `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |
 | `ask-umoja-alt-tap` | `true` | A tap of Alt opens Ask Umoja, until a Copilot key is seen |
 | `ask-umoja-copilot-seen` | `false` | Set on the first Copilot key press; reset it to use Alt again |
+| `auto-do-not-disturb` | `true` | Hold notification banners while recording the screen or in full screen |
+| `screenshot-names` | `true` | Add a few words about what a screenshot shows to its file name |
+| `captions-model` | `'Whisper-Base'` | Lemonade speech model for live captions |
+| `activity-recall` | `false` | Keep the text-only activity timeline |
+| `activity-recall-days` | `14` | Days the activity timeline is kept |
 
 The embedded Lemonade server's port and memory limits are covered in
 [Embedded Lemonade](../README.md#embedded-lemonade) in the README.

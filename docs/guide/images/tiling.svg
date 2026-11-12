@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" width="1000" height="470" role="img" aria-label="Tiling windows">
+<title>Tiling windows</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+<rect x="1" y="1" width="998" height="468" rx="18" fill="#fbf9f8" stroke="#d8d2cf" stroke-width="2"/>
+<text x="500" y="38.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="26" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Snap windows to halves and quarters</text>
+<rect x="40" y="70" width="210" height="140" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="43" y="73" width="204" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="46" y="88" width="95.0" height="112" rx="5" fill="#E95420" stroke="#E95420" stroke-width="1" fill-opacity="0.85"/>
+<text x="145" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Left half</text>
+<rect x="84.94" y="250" width="55" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="86.94" y="280" width="51" height="4" rx="2" fill="#d8d2cf"/>
+<text x="112.64" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Super</text>
+<text x="149.34" y="267.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="158.34" y="250" width="47" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="160.34" y="280" width="43" height="4" rx="2" fill="#d8d2cf"/>
+<text x="181.7" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Left</text>
+<rect x="275" y="70" width="210" height="140" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="278" y="73" width="204" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="380.0" y="88" width="95.0" height="112" rx="5" fill="#E95420" stroke="#E95420" stroke-width="1" fill-opacity="0.85"/>
+<text x="380" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Right half</text>
+<rect x="315.6" y="250" width="55" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="317.6" y="280" width="51" height="4" rx="2" fill="#d8d2cf"/>
+<text x="343.3" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Super</text>
+<text x="380.0" y="267.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="389.0" y="250" width="55" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="391.0" y="280" width="51" height="4" rx="2" fill="#d8d2cf"/>
+<text x="416.7" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Right</text>
+<rect x="510" y="70" width="210" height="140" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="513" y="73" width="204" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="516" y="88" width="95.0" height="54.0" rx="5" fill="#E95420" stroke="#E95420" stroke-width="1" fill-opacity="0.85"/>
+<text x="615" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Top-left quarter</text>
+<rect x="554.94" y="250" width="55" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="556.94" y="280" width="51" height="4" rx="2" fill="#d8d2cf"/>
+<text x="582.6400000000001" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Super</text>
+<text x="619.34" y="267.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="628.34" y="250" width="47" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="630.34" y="280" width="43" height="4" rx="2" fill="#d8d2cf"/>
+<text x="651.7" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">KP 7</text>
+<rect x="745" y="70" width="210" height="140" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="748" y="73" width="204" height="14" rx="6" fill="#1d0f1c"/>
+<rect x="751" y="88" width="194" height="112" rx="5" fill="#E95420" stroke="#E95420" stroke-width="1" fill-opacity="0.85"/>
+<text x="850" y="232.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="17" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Maximize</text>
+<rect x="791.3" y="250" width="55" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="793.3" y="280" width="51" height="4" rx="2" fill="#d8d2cf"/>
+<text x="819.0" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Super</text>
+<text x="855.6999999999999" y="267.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">+</text>
+<rect x="864.6999999999999" y="250" width="44" height="36" rx="7" fill="#ffffff" stroke="#2c2c2c" stroke-width="1.6"/>
+<rect x="866.6999999999999" y="280" width="40" height="4" rx="2" fill="#d8d2cf"/>
+<text x="886.6999999999999" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Up</text>
+<text x="500" y="330.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="19" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Or drag a window by its title bar:</text>
+<text x="500" y="362.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">to the left or right edge for a half, into a corner for a quarter, to the top to maximize.</text>
+<text x="500" y="392.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">Pause at the top edge for the layout picker; drop the window on the tile you want.</text>
+<text x="500" y="432.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#6b6b6b" font-weight="normal" text-anchor="middle" dominant-baseline="central">Tiled side by side? Drag the line between them to resize both.</text>
+</svg>

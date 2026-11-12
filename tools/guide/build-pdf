@@ -1,0 +1,172 @@
+#!/usr/bin/python3
+"""Build the Umoja User Guide as a PDF from docs/guide/*.md.
+
+    tools/guide/build-pdf [--out umoja-user-guide.pdf] [--version 2026.46.6] [--html guide.html]
+
+The Markdown chapters are what GitHub shows; this joins them into one
+book with a cover, a table of contents with page numbers, and links
+between chapters turned into links inside the PDF. It needs pandoc and
+WeasyPrint (sudo apt install pandoc weasyprint). The version on the cover
+comes from debian/changelog unless --version is given.
+"""
+
+import argparse
+import datetime
+import html
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+GUIDE = ROOT / "docs" / "guide"
+REPO_URL = "https://github.com/kenvandine/umoja/blob/main"
+
+
+def chapters():
+    return sorted(p for p in GUIDE.glob("[0-9][0-9]-*.md"))
+
+
+def slug(text):
+    """GitHub's heading anchors (what pandoc's gfm reader makes too)."""
+    s = text.strip().lower()
+    s = re.sub(r"[^\w\- ]", "", s)
+    return s.replace(" ", "-")
+
+
+def first_heading(md):
+    m = re.search(r"^# (.+)$", md, re.M)
+    return m.group(1).strip() if m else ""
+
+
+def fix_links(md, anchors):
+    """Chapter links become in-book anchors; links outside the guide go to
+    GitHub."""
+
+    def repl(m):
+        text, target = m.group(1), m.group(2)
+        if re.match(r"^[a-z]+:", target) or target.startswith("#"):
+            return m.group(0)
+        path, _, frag = target.partition("#")
+        if path.startswith("images/"):
+            return m.group(0)
+        name = Path(path).name
+        if name in anchors:
+            return f"[{text}](#{frag or anchors[name]})"
+        resolved = os.path.normpath(os.path.join("docs/guide", path))
+        return f"[{text}]({REPO_URL}/{resolved}{'#' + frag if frag else ''})"
+
+    return re.sub(r"(?<!!)\[([^\]]+)\]\(([^)\s]+)\)", repl, md)
+
+
+def intro(md):
+    """The guide's front page without its own contents list (the book has
+    one with page numbers) and without the picture (the cover has it)."""
+    md = re.sub(r"^# .+\n", "", md, count=1, flags=re.M)
+    md = re.sub(r"^!\[[^\]]*\]\([^)]*\)\n", "", md, count=1, flags=re.M)
+    md = re.sub(r"^## Contents\n.*?(?=^## )", "", md, flags=re.M | re.S)
+    return "# Welcome\n" + md
+
+
+def version():
+    try:
+        first = (ROOT / "debian" / "changelog").read_text().splitlines()[0]
+        return re.search(r"\(([^)]+)\)", first).group(1)
+    except (OSError, AttributeError, IndexError):
+        return ""
+
+
+def toc(entries):
+    rows = []
+    for level, title, anchor in entries:
+        cls = "toc-1" if level == 1 else "toc-2"
+        rows.append(f'<li class="{cls}"><a href="#{anchor}">{html.escape(title)}</a></li>')
+    return '<nav class="toc"><h1 class="toc-title">Contents</h1><ul>' + "".join(rows) + "</ul></nav>"
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--out", type=Path, default=Path("umoja-user-guide.pdf"))
+    p.add_argument("--version", default=None)
+    p.add_argument("--html", type=Path, help="also keep the HTML the PDF is made from")
+    a = p.parse_args()
+
+    for tool in ("pandoc",):
+        if not shutil.which(tool):
+            sys.exit(f"build-pdf needs {tool}: sudo apt install pandoc weasyprint")
+    try:
+        from weasyprint import HTML  # noqa: F401
+    except ImportError:
+        if not shutil.which("weasyprint"):
+            sys.exit("build-pdf needs WeasyPrint: sudo apt install weasyprint")
+
+    files = chapters()
+    if not files:
+        sys.exit(f"no chapters in {GUIDE}")
+    texts = {f.name: f.read_text() for f in files}
+    anchors = {name: slug(first_heading(md)) for name, md in texts.items()}
+    anchors["README.md"] = "welcome"
+
+    entries = []
+    parts = [fix_links(intro((GUIDE / "README.md").read_text()), anchors)]
+    entries.append((1, "Welcome", "welcome"))
+    for f in files:
+        md = texts[f.name]
+        parts.append(fix_links(md, anchors))
+        for m in re.finditer(r"^(#{1,2}) (.+)$", md, re.M):
+            level = len(m.group(1))
+            entries.append((level, m.group(2).strip(), slug(m.group(2))))
+    book = "\n\n".join(parts)
+
+    ver = a.version or version()
+    cover = (
+        '<section class="cover">'
+        '<div class="cover-mark">umoja</div>'
+        "<h1 class=\"cover-title\">The Umoja User Guide</h1>"
+        '<p class="cover-sub">Getting around the desktop, and everything it can do for you</p>'
+        '<img class="cover-shot" src="images/desktop-map.jpg" alt=""/>'
+        f'<p class="cover-version">{html.escape("Version " + ver if ver else "")}</p>'
+        "</section>"
+    )
+
+    body = subprocess.run(
+        ["pandoc", "-f", "gfm", "-t", "html5", "--wrap=none"],
+        input=book,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    # A picture on its own line gets its description as a caption.
+    body = re.sub(
+        r'<p><img src="([^"]+)" alt="([^"]*)" ?/?></p>',
+        lambda m: f'<figure><img src="{m.group(1)}" alt="{m.group(2)}"/><figcaption>{m.group(2)}</figcaption></figure>',
+        body,
+    )
+    # Each chapter starts a new page.
+    body = re.sub(r"<h1 ", '<h1 class="chapter" ', body)
+    css = (Path(__file__).parent / "guide.css").read_text()
+    doc = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<title>The Umoja User Guide</title><style>{css}</style></head><body>"
+        f"{cover}{toc(entries)}<main>{body}</main>"
+        f'<p class="colophon">Made {datetime.date.today().isoformat()} from docs/guide in the Umoja source.</p>'
+        "</body></html>"
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(a.html) if a.html else Path(tmp) / "guide.html"
+        src.write_text(doc)
+        try:
+            from weasyprint import HTML
+
+            HTML(string=doc, base_url=str(GUIDE) + "/").write_pdf(str(a.out))
+        except ImportError:
+            subprocess.run(["weasyprint", "--base-url", str(GUIDE) + "/", str(src), str(a.out)], check=True)
+    print(f"wrote {a.out}")
+
+
+if __name__ == "__main__":
+    main()

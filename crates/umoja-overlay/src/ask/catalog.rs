@@ -127,6 +127,16 @@ const fn settings(
 
 pub const CATALOG: &[Instant] = &[
     control(
+        "user-guide",
+        "User Guide",
+        &["guide", "help", "manual", "documentation", "docs", "how to", "tutorial", "learn"],
+        "help-browser-symbolic",
+        Run::Call {
+            tool: "open_user_guide",
+            args: "{}",
+        },
+    ),
+    control(
         "undo",
         "Undo Last Change",
         &["undo", "put back", "revert", "change back", "go back"],

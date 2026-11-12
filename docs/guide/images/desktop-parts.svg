@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" width="1000" height="560" role="img" aria-label="The parts of the desktop">
+<title>The parts of the desktop</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+<rect x="1" y="1" width="998" height="558" rx="18" fill="#fbf9f8" stroke="#d8d2cf" stroke-width="2"/>
+<rect x="60" y="60" width="880" height="440" rx="10" fill="#3b1f38" stroke="#2c2c2c" stroke-width="3" />
+<rect x="63" y="63" width="874" height="26" rx="8" fill="#1d0f1c"/>
+<text x="500" y="76.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#ffffff" font-weight="normal" text-anchor="middle" dominant-baseline="central">Thu 12 Nov  10:04</text>
+<circle cx="86" cy="76" r="6" fill="#ffffff"/>
+<circle cx="100" cy="76" r="5" fill="#a58aa2"/>
+<circle cx="114" cy="76" r="5" fill="#a58aa2"/>
+<circle cx="128" cy="76" r="5" fill="#a58aa2"/>
+<text x="880" y="76.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#ffffff" font-weight="normal" text-anchor="middle" dominant-baseline="central">◉  ▾</text>
+<rect x="72" y="130" width="46" height="330" rx="12" fill="#26122a" stroke="#26122a" stroke-width="2" />
+<rect x="80" y="142" width="30" height="30" rx="7" fill="#E95420"/>
+<rect x="80" y="188" width="30" height="30" rx="7" fill="#c7a54b"/>
+<rect x="80" y="234" width="30" height="30" rx="7" fill="#4a90d9"/>
+<rect x="80" y="280" width="30" height="30" rx="7" fill="#5fa05a"/>
+<rect x="80" y="326" width="30" height="30" rx="7" fill="#9b59b6"/>
+<rect x="80" y="372" width="30" height="30" rx="7" fill="#888"/>
+<text x="95" y="440.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#ffffff" font-weight="normal" text-anchor="middle" dominant-baseline="central">⋮⋮</text>
+<rect x="200" y="130" width="380" height="260" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="200" y="130" width="380" height="12" rx="5" fill="#cfc8c5"/>
+<text x="390.0" y="266.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Files</text>
+<rect x="520" y="190" width="360" height="240" rx="6" fill="#e9e5e3" stroke="#b9b1ad" stroke-width="1.5" />
+<rect x="520" y="190" width="360" height="12" rx="5" fill="#cfc8c5"/>
+<text x="700.0" y="316.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="14" fill="#2c2c2c" font-weight="bold" text-anchor="middle" dominant-baseline="central">Text Editor</text>
+<line x1="100" y1="76" x2="200" y2="42" stroke="#E95420" stroke-width="2"/>
+<circle cx="100" cy="76" r="5" fill="#E95420"/>
+<text x="200" y="30.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Workspaces: click for the overview</text>
+<line x1="500" y1="76" x2="500" y2="42" stroke="#E95420" stroke-width="2"/>
+<circle cx="500" cy="76" r="5" fill="#E95420"/>
+<text x="500" y="30.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Clock: calendar, events and notifications</text>
+<line x1="880" y1="76" x2="840" y2="42" stroke="#E95420" stroke-width="2"/>
+<circle cx="880" cy="76" r="5" fill="#E95420"/>
+<text x="840" y="30.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Status: Quick Settings</text>
+<line x1="118" y1="300" x2="190" y2="518" stroke="#E95420" stroke-width="2"/>
+<circle cx="118" cy="300" r="5" fill="#E95420"/>
+<text x="190" y="530.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Dock: favourites and running apps</text>
+<line x1="95" y1="440" x2="470" y2="518" stroke="#E95420" stroke-width="2"/>
+<circle cx="95" cy="440" r="5" fill="#E95420"/>
+<text x="470" y="530.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Show Apps: the app grid</text>
+<line x1="700" y1="310" x2="790" y2="518" stroke="#E95420" stroke-width="2"/>
+<circle cx="700" cy="310" r="5" fill="#E95420"/>
+<text x="790" y="530.0" font-family="Ubuntu, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif" font-size="16" fill="#77216F" font-weight="bold" text-anchor="middle" dominant-baseline="central">Windows</text>
+</svg>

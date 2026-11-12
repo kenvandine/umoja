@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Umoja User Guide
+GenericName=User Guide
+Comment=How to use the Umoja desktop and everything it can do
+Keywords=help;guide;manual;documentation;docs;how to;tutorial;umoja;
+Exec=gio open /usr/share/umoja/guide/umoja-user-guide.pdf
+Icon=help-browser
+Categories=Documentation;Utility;
+OnlyShowIn=Umoja;
+TryExec=gio
+NoDisplay=false
