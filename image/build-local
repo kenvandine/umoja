@@ -1,0 +1,132 @@
+#!/bin/bash
+# Build the Umoja installer ISO from this checkout, start to finish:
+# the .debs, the Imagecraft disk image and the ISO.
+#
+#   image/build-local [options]
+#
+#   --autoinstall   build the unattended CI ISO instead (installs onto the
+#                   first disk without asking; never boot it on hardware
+#                   you care about)
+#   --out DIR       where the ISO, its debs and the logs go (default: build/)
+#   --skip-debs     reuse the debs already in DIR/debs
+#   --skip-image    reuse image/umoja.img (the debs are still put into the
+#                   ISO's installed system by image/iso/build)
+#   --keep-image    pack the image without `imagecraft clean` first (faster,
+#                   but imagecraft can reuse stale parts; see image/README.md)
+#
+# The result is DIR/ubuntu-umoja-desktop-vVERSION+HASH_amd64.iso, where
+# VERSION is debian/changelog's (the umoja-desktop version) and HASH the
+# checkout's commit, with ".dirty" when there are uncommitted changes.
+#
+# Needs: the Debian build dependencies (`make deb`; without pandoc and
+# weasyprint the PDF user guide is skipped), LXD with your user in the lxd
+# group, the imagecraft snap, xorriso, squashfs-tools, mtools and dosfstools.
+# Only the last step needs root; it asks for your password through sudo.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+
+AUTO=0 SKIP_DEBS=0 SKIP_IMAGE=0 CLEAN=1 OUT=$ROOT/build
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --autoinstall) AUTO=1 ;;
+        --out) OUT=$(realpath -m "${2:?--out needs a directory}"); shift ;;
+        --skip-debs) SKIP_DEBS=1 ;;
+        --skip-image) SKIP_IMAGE=1 ;;
+        --keep-image) CLEAN=0 ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+step() { printf '\n==> %s\n' "$*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+VERSION=$(dpkg-parsechangelog -l debian/changelog -S Version)
+HASH=$(git rev-parse --short=8 HEAD)
+git diff --quiet HEAD -- . ':!image/local-debs' 2>/dev/null || HASH="$HASH.dirty"
+ISO_NAME="ubuntu-umoja-desktop-v${VERSION}+${HASH}$([ $AUTO = 1 ] && echo -autoinstall)_amd64.iso"
+DEBS=$OUT/debs LOGS=$OUT/logs
+mkdir -p "$DEBS" "$LOGS"
+
+# Debs this builds; the first four go into the image, all five into the ISO.
+IMAGE_PKGS="ubuntu-umoja-desktop umoja-archive-keyring umoja-desktop umoja-greeter"
+ISO_PKGS="$IMAGE_PKGS umoja-installer"
+
+need() { for t; do command -v "$t" >/dev/null || die "missing $t"; done; }
+need dpkg-parsechangelog git sudo
+[ $SKIP_DEBS = 1 ] || need dpkg-buildpackage cargo make
+[ $SKIP_IMAGE = 1 ] || need imagecraft lxc sg
+need xorriso mksquashfs mcopy
+command -v mkfs.vfat >/dev/null || [ -x /usr/sbin/mkfs.vfat ] || die "missing mkfs.vfat (dosfstools)"
+
+echo "Umoja $VERSION ($HASH) -> $OUT/$ISO_NAME"
+
+# 1. Debs ---------------------------------------------------------------
+deb_file() { # package -> the .deb dpkg-buildpackage left next to the checkout
+    local f
+    for arch in amd64 all; do
+        f=$(dirname "$ROOT")/${1}_${VERSION}_${arch}.deb
+        [ -f "$f" ] && { echo "$f"; return; }
+    done
+    return 1
+}
+
+if [ $SKIP_DEBS = 0 ]; then
+    step "Building debs (log: $LOGS/debs.log)"
+    if ! command -v pandoc >/dev/null || ! command -v weasyprint >/dev/null; then
+        echo "pandoc/weasyprint not installed: skipping the PDF user guide (nodoc)"
+        export DEB_BUILD_PROFILES=nodoc DEB_BUILD_OPTIONS=nodoc
+    fi
+    started=$(date +%s)
+    make deb > "$LOGS/debs.log" 2>&1 || { tail -40 "$LOGS/debs.log"; die "deb build failed"; }
+    rm -f "$DEBS"/*.deb
+    for p in $ISO_PKGS; do
+        f=$(deb_file "$p") || die "no $p deb for $VERSION next to the checkout"
+        [ "$(stat -c %Y "$f")" -ge "$started" ] || die "$f is older than this build"
+        cp "$f" "$DEBS/"
+    done
+fi
+for p in $ISO_PKGS; do
+    ls "$DEBS/${p}_${VERSION}_"*.deb >/dev/null 2>&1 || die "no $p $VERSION deb in $DEBS (drop --skip-debs)"
+done
+
+# 2. Disk image -------------------------------------------------------------
+pack() { # imagecraft as a member of lxd, even before a re-login
+    if id -nG | grep -qw lxd; then (cd image && imagecraft "$@"); else sg lxd -c "cd image && imagecraft $*"; fi
+}
+
+if [ $SKIP_IMAGE = 0 ]; then
+    step "Building the disk image (log: $LOGS/image.log)"
+    lxc info >/dev/null 2>&1 || sg lxd -c 'lxc info' >/dev/null 2>&1 \
+        || die "LXD isn't usable: sudo snap install lxd && sudo lxd init --auto && sudo usermod -aG lxd $USER"
+    rm -f image/local-debs/*.deb
+    for p in $IMAGE_PKGS; do cp "$DEBS/${p}_${VERSION}_"*.deb image/local-debs/; done
+    image/prepare
+    : > "$LOGS/image.log"
+    [ $CLEAN = 0 ] || pack clean >> "$LOGS/image.log" 2>&1
+    # The snap store sometimes drops a download; a retry resumes after the
+    # parts that already finished.
+    for try in 1 2 3; do
+        if pack pack --verbose >> "$LOGS/image.log" 2>&1; then break; fi
+        [ $try = 3 ] && { tail -40 "$LOGS/image.log"; die "imagecraft pack failed 3 times"; }
+        echo "imagecraft pack failed (attempt $try), retrying"
+    done
+fi
+[ -f image/umoja.img ] || die "no image/umoja.img (drop --skip-image)"
+
+# 3. ISO --------------------------------------------------------------------
+step "Building the ISO (needs root; log: $LOGS/iso.log)"
+sudo "$ROOT/image/iso/build" $([ $AUTO = 1 ] && echo --autoinstall) \
+    "$ROOT/image/umoja.img" "$DEBS" "$OUT/$ISO_NAME" 2>&1 | tee "$LOGS/iso.log"
+[ "${PIPESTATUS[0]}" = 0 ] || die "ISO build failed"
+sudo chown "$(id -u):$(id -g)" "$OUT/$ISO_NAME"
+grep -q 'snap preseeding failed' "$LOGS/iso.log" \
+    && echo "WARNING: snaps were not preseeded; first boot will set them up (see $LOGS/iso.log)"
+(cd "$OUT" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256")
+
+step "Done"
+ls -lh "$OUT/$ISO_NAME"
+echo "Boot it in QEMU with image/test/boot-vm-style UEFI + Secure Boot, or point a quickemu conf's iso= at it."

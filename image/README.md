@@ -69,3 +69,17 @@ disk, types the disk password and takes screenshots:
 sudo image/iso/build --autoinstall image/umoja.img .. umoja-auto.iso
 image/test/install-vm umoja-auto.iso /tmp/umoja-install
 ```
+
+## Everything at once
+
+`image/build-local` builds the debs, the image and the installer ISO from a
+checkout in one go, and names the ISO after the version and commit:
+
+```sh
+image/build-local                 # build/ubuntu-umoja-desktop-v2026.46.7+1a2b3c4d_amd64.iso
+image/build-local --autoinstall   # the unattended CI variant
+image/build-local --skip-debs --skip-image   # just redo the ISO
+```
+
+Only the last step needs root (it asks through sudo). Logs go to
+`build/logs/`.
