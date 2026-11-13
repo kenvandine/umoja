@@ -1,0 +1,216 @@
+Description: Cross-GPU copy: map linear buffers instead of reading them back
+ On a hybrid laptop with a monitor on the NVIDIA GPU, every buffer a client
+ commits to a window there is copied through the CPU (3009). Measured on a
+ ThinkPad P16 Gen 3 with two windows redrawing at about 30 fps each: 450 MB/s
+ copied and about 4 s of every 10 s spent in glReadPixels (5.5 ms per 6 MB
+ buffer) on the compositing thread.
+ .
+ A linear dma-buf can be mapped and copied with memcpy instead, which is
+ several times cheaper. Clients only allocate linear buffers when nothing
+ better is on offer, so MIR_DMABUF_LINEAR_ONLY=1 makes Mir advertise just
+ the linear modifier (for formats that have one); umoja-mir sets it when a
+ monitor is wired to the other GPU. Anything else still goes through
+ glReadPixels as before.
+ .
+ Also: spare copy buffers are released when a buffer of a new size is
+ needed, instead of up to eight (tens of megabytes each) being kept for
+ good; the per-size statistics are only gathered in debug mode, and the
+ debug line says how many copies were mapped.
+Author: Umoja
+Forwarded: no
+
+diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dmabuf.cpp
+index b1bd858..f66ab37 100644
+--- a/src/platform/graphics/linux_dmabuf.cpp
++++ b/src/platform/graphics/linux_dmabuf.cpp
+@@ -96,10 +96,12 @@ public:
+                 return b;
+             }
+         }
+-        if (buffers.size() >= max_buffers)
+-        {
+-            std::erase_if(buffers, [](auto const& b) { return b.use_count() == 1; });
+-        }
++        /* No spare of this size: a window appeared or was resized. Spares of
++         * other sizes are then mostly left over from sizes no longer in use
++         * (each is tens of megabytes), so let them all go; a window that
++         * still wants one allocates it once more.
++         */
++        std::erase_if(buffers, [](auto const& b) { return b.use_count() == 1; });
+         auto b = std::make_shared<mgc::MemoryBackedShmBuffer>(size, mir_pixel_format_argb_8888);
+         if (buffers.size() < max_buffers)
+         {
+@@ -125,11 +127,17 @@ auto cross_gpu_copy_pool() -> CrossGpuCopyPool&
+ class CrossGpuCopyStats
+ {
+ public:
+-    void add(std::size_t bytes, std::chrono::nanoseconds took, geom::Size size)
++    void add(std::size_t bytes, std::chrono::nanoseconds took, geom::Size size, bool mapped)
+     {
+         copies.fetch_add(1, std::memory_order_relaxed);
++        if (mapped)
++        {
++            mapped_copies.fetch_add(1, std::memory_order_relaxed);
++        }
+         total_bytes.fetch_add(bytes, std::memory_order_relaxed);
+         total_ns.fetch_add(took.count(), std::memory_order_relaxed);
++        // Checked every 10 s below, not per copy.
++        if (debug.load(std::memory_order_relaxed))
+         {
+             std::lock_guard lock{sizes_mutex};
+             ++sizes[{size.width.as_int(), size.height.as_int()}];
+@@ -149,6 +157,7 @@ public:
+             return;
+         }
+         auto const n = copies.exchange(0);
++        auto const m = mapped_copies.exchange(0);
+         auto const b = total_bytes.exchange(0);
+         auto const ns = total_ns.exchange(0);
+         // Which windows (by buffer size) were copied most.
+@@ -161,7 +170,8 @@ public:
+             }
+             sizes.clear();
+         }
+-        if (!debugging())
++        bool const was_debugging = debug.exchange(debugging());
++        if (!was_debugging)
+         {
+             return;
+         }
+@@ -173,9 +183,10 @@ public:
+                 std::to_string(by_count[i].second.second) + " x" + std::to_string(by_count[i].first);
+         }
+         mir::log_info(
+-            "Cross-GPU CPU copies in the last %.1f s: %llu buffers, %.1f MB, %.1f ms copying; most: %s",
++            "Cross-GPU CPU copies in the last %.1f s: %llu buffers (%llu mapped), %.1f MB, %.1f ms copying; most: %s",
+             static_cast<double>(now - last) / static_cast<double>(interval) * 10.0,
+             static_cast<unsigned long long>(n),
++            static_cast<unsigned long long>(m),
+             static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str());
+     }
+ 
+@@ -187,6 +198,8 @@ private:
+     }
+ 
+     std::atomic<unsigned long long> copies{0};
++    std::atomic<unsigned long long> mapped_copies{0};
++    std::atomic<bool> debug{false};
+     std::atomic<unsigned long long> total_bytes{0};
+     std::atomic<long long> total_ns{0};
+     std::mutex sizes_mutex;
+@@ -199,6 +212,17 @@ auto cross_gpu_copy_stats() -> CrossGpuCopyStats&
+     static CrossGpuCopyStats stats;
+     return stats;
+ }
++
++/* Offer clients only linear dma-bufs (MIR_DMABUF_LINEAR_ONLY=1). */
++auto linear_only() -> bool
++{
++    static bool const enabled = []
++        {
++            auto const env = getenv("MIR_DMABUF_LINEAR_ONLY");
++            return env && strcmp(env, "0") != 0 && env[0] != '\0';
++        }();
++    return enabled;
++}
+ }
+ 
+ namespace
+@@ -299,6 +323,26 @@ public:
+                 external_only.resize(returned_modifiers);
+             }
+ 
++            /* MIR_DMABUF_LINEAR_ONLY=1: offer clients only linear buffers
++             * (for formats that have them), so that buffers which must be
++             * copied to another GPU can be mapped instead of read back
++             * through GL (DmabufTexBuffer::cpu_copy). Umoja sets it when a
++             * monitor is wired to the other GPU of a hybrid laptop.
++             */
++            if (linear_only())
++            {
++                for (auto j = 0u; j < modifiers.size(); ++j)
++                {
++                    if (modifiers[j] == DRM_FORMAT_MOD_LINEAR)
++                    {
++                        auto const external = external_only[j];
++                        modifiers.assign(1, DRM_FORMAT_MOD_LINEAR);
++                        external_only.assign(1, external);
++                        break;
++                    }
++                }
++            }
++
+             if (num_modifiers == 0)
+             {
+                 /* Special case: num_modifiers == 0 means that the driver doesn't support modifiers;
+@@ -1353,9 +1397,59 @@ public:
+         GLsizei const height = size_.height.as_int();
+         GLuint const src = tex.tex_id();
+ 
++        /* A linear buffer can simply be mapped and copied, which is several
++         * times cheaper than reading it back through GL (5.5 ms for a 6 MB
++         * window on an Arrow Lake iGPU, on the compositing thread, per
++         * commit). Clients only use linear buffers when nothing better is
++         * offered: see MIR_DMABUF_LINEAR_ONLY. DMA_BUF_IOCTL_SYNC (in
++         * DmaBufMapping) waits for the client's rendering to land.
++         */
++        bool mapped = false;
++        auto const mir_format = format().as_mir_format();
++        if (modifier().value_or(DRM_FORMAT_MOD_INVALID) == DRM_FORMAT_MOD_LINEAR &&
++            planes().size() == 1 &&
++            (mir_format == mir_pixel_format_argb_8888 || mir_format == mir_pixel_format_xrgb_8888))
++        {
++            try
++            {
++                DmaBufMapping const source{*this};
++                auto const src_stride = source.stride().as<size_t>();
++                auto const row = static_cast<size_t>(width) * 4;
++                auto const dst_stride = mapping->stride().as<size_t>();
++                if (src_stride >= row && dst_stride >= row)
++                {
++                    auto const* from = reinterpret_cast<unsigned char const*>(source.data());
++                    auto* to = reinterpret_cast<unsigned char*>(dest);
++                    bool const opaque = mir_format == mir_pixel_format_xrgb_8888;
++                    for (GLsizei y = 0; y < height; ++y)
++                    {
++                        std::memcpy(to + y * dst_stride, from + y * src_stride, row);
++                        if (opaque)
++                        {
++                            // The X byte is undefined; the copy is drawn as ARGB.
++                            auto* px = to + y * dst_stride;
++                            for (size_t x = 3; x < row; x += 4)
++                            {
++                                px[x] = 0xff;
++                            }
++                        }
++                    }
++                    mapped = true;
++                }
++            }
++            catch (std::exception const&)
++            {
++                // Not mappable after all: read it back through GL below.
++            }
++        }
++
+         std::promise<bool> done;
+         auto result = done.get_future();
+-        egl_executor->spawn(
++        if (mapped)
++        {
++            done.set_value(true);
++        }
++        else egl_executor->spawn(
+             [&done, dest, width, height, src]()
+             {
+                 bool ok = false;
+@@ -1397,7 +1491,8 @@ public:
+         cross_gpu_copy_stats().add(
+             static_cast<std::size_t>(width) * height * 4,
+             std::chrono::steady_clock::now() - started,
+-            size_);
++            size_,
++            mapped);
+ 
+         if (ok)
+         {

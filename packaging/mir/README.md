@@ -52,6 +52,15 @@ Umoja PPA:
   monitor used to zero and fault in a fresh multi-megabyte buffer and a new
   texture every frame. While `$XDG_RUNTIME_DIR/umoja-debug-windows` exists,
   Mir logs the amount copied every 10 s with the most-copied buffer sizes.
+- `patches/3020_cross-gpu-map-linear.patch`: the 3009 copy cost 5.5 ms of
+  `glReadPixels` per 6 MB buffer on the compositing thread (measured on
+  p16g3: 450 MB/s, 4 s of every 10 s, with two windows redrawing on the
+  NVIDIA monitor). A linear dma-buf is now mapped and copied with memcpy
+  instead. `MIR_DMABUF_LINEAR_ONLY=1` makes Mir offer clients only the
+  linear modifier so their buffers qualify; umoja-mir sets it when a
+  monitor is on the other GPU (`crates/umoja-mir/src/gpu.rs`). Spare copy
+  buffers are released when a new size is needed, and the debug line says
+  how many copies were mapped.
 - `patches/3010_xwayland-initial-net-wm-state.patch`: `XWaylandSurface::map()`
   queued a read of `_NET_WM_STATE` but never called the returned cookie, so
   an X11 window's initial state was ignored. Wine/Proton games map their
