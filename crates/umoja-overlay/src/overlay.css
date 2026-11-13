@@ -548,6 +548,9 @@ window.umoja-chrome {
   border-radius: 8px;
   box-shadow: 0 1px 4px alpha(#000000, 0.4);
 }
+.switcher-title {
+  margin-top: 8px;
+}
 .switcher-badge {
   -gtk-icon-shadow: 0 1px 3px alpha(#000000, 0.5);
 }

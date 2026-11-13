@@ -601,10 +601,10 @@ impl Dock {
                     cards.push((w.clone(), holder));
                 }
                 let cards = RefCell::new(cards);
-                popover.connect_map(move |_| previews::load(cards.take()));
+                popover.connect_map(move |p| previews::load(p, cards.take()));
                 let expander = gtk::Expander::builder()
                     .label(i18n::dock("All Windows"))
-                    .child(&previews::scroller(&list))
+                    .child(&previews::scroller(&list, wins.len()))
                     .expanded(cfg.default_windows_preview_to_open)
                     .build();
                 expander.add_css_class("dock-menu-submenu");

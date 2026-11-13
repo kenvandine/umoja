@@ -601,12 +601,41 @@ fn draw_tile_icon(
 /// (app_id, title, window titles) per item, as umoja-mir sends them.
 pub type SwitcherItems = Vec<(String, String, Vec<String>)>;
 
-/// The popup's room for a row of window previews, in logical pixels.
-const SWITCHER_ROW_WIDTH: i32 = 1200;
+// gnome-shell's altTab.js sizes: a window switcher item is a 128 x 128 box
+// with the window scaled to fit (never up) and a 48 px app icon in its
+// bottom right corner; the selected window's title is one label under the
+// row. The app switcher's window row (ThumbnailSwitcher) fits each window
+// in 256 x 256 with its title under it.
+const WINDOW_PREVIEW_SIZE: i32 = 128;
+const APP_ICON_SIZE_SMALL: i32 = 48;
+const THUMBNAIL_DEFAULT_SIZE: i32 = 256;
+/// Item padding plus spacing per item, and the list's own padding and the
+/// screen margin, in logical pixels (overlay.css .switcher-list).
+const SWITCHER_ITEM_EXTRA: i32 = 16;
+const SWITCHER_LIST_EXTRA: i32 = 24 + 2 * 48;
+
+/// The narrowest monitor's width: the popup shows on the active one.
+fn switcher_room() -> i32 {
+    umoja_common::monitors::all()
+        .iter()
+        .map(|m| m.geometry().width())
+        .min()
+        .unwrap_or(1280)
+}
+
+/// Preview box size for `n` items of at most `max` each, shrunk so the row
+/// fits the screen (gnome-shell scrolls the list instead; a smaller box
+/// keeps every window in view).
+fn preview_box(n: usize, max: i32) -> i32 {
+    let n = n.max(1) as i32;
+    ((switcher_room() - SWITCHER_LIST_EXTRA) / n - SWITCHER_ITEM_EXTRA).clamp(48, max)
+}
 
 struct Switcher {
     window: gtk::ApplicationWindow,
     list: gtk::Box,
+    /// The selected window's title under the previews (WindowSwitcher).
+    title: gtk::Label,
     windows_row: gtk::Box,
     items: RefCell<Vec<gtk::Button>>,
     data: RefCell<SwitcherItems>,
@@ -653,7 +682,16 @@ impl Switcher {
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_exclusive_zone(-1);
         let list = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        list.add_css_class("switcher-list");
+        let title = gtk::Label::builder()
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(60)
+            .visible(false)
+            .build();
+        title.add_css_class("switcher-title");
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card.add_css_class("switcher-list");
+        card.append(&list);
+        card.append(&title);
         let windows_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         windows_row.add_css_class("switcher-list");
         windows_row.add_css_class("switcher-windows");
@@ -661,12 +699,13 @@ impl Switcher {
         windows_row.set_visible(false);
         let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
         column.add_css_class("switcher-popup");
-        column.append(&list);
+        column.append(&card);
         column.append(&windows_row);
         window.set_child(Some(&column));
         Rc::new(Self {
             window,
             list,
+            title,
             windows_row,
             items: RefCell::default(),
             data: RefCell::default(),
@@ -690,21 +729,23 @@ impl Switcher {
     /// A window preview `w` x `h` with the app's icon on its bottom right
     /// corner (gnome-shell's WindowIcon). The app icon stands in until a
     /// thumbnail arrives.
-    fn preview(&self, id: u64, app_id: &str, w: i32, h: i32) -> gtk::Widget {
+    fn preview(&self, id: u64, app_id: &str, w: i32, h: i32, badge: bool) -> gtk::Widget {
         let (icon, _) = icon_for(app_id);
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_size_request(w, h);
-        holder.set_halign(gtk::Align::Center);
-        holder.set_valign(gtk::Align::Center);
         self.fill(&holder, id, &icon, w, h);
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&holder));
+        overlay.set_halign(gtk::Align::Center);
+        let badge_shown = badge;
         let badge = gtk::Image::from_gicon(&icon);
-        badge.set_pixel_size(if h >= 120 { 48 } else { 32 });
+        badge.set_pixel_size(APP_ICON_SIZE_SMALL.min(h * 3 / 8));
         badge.set_halign(gtk::Align::End);
         badge.set_valign(gtk::Align::End);
         badge.add_css_class("switcher-badge");
-        overlay.add_overlay(&badge);
+        if badge_shown {
+            overlay.add_overlay(&badge);
+        }
         self.slots.borrow_mut().push((id, holder, w, h));
         overlay.upcast()
     }
@@ -788,9 +829,7 @@ impl Switcher {
         } else {
             96
         };
-        // Previews share the row; 16:10 boxes, 96..256 wide.
-        let preview_w = (SWITCHER_ROW_WIDTH / n as i32 - 24).clamp(96, 256);
-        let preview_h = preview_w * 10 / 16;
+        let preview = preview_box(n, WINDOW_PREVIEW_SIZE);
         let mut buttons = Vec::new();
         for (i, (app_id, title, windows)) in data.iter().enumerate() {
             // Mode 3 is Ctrl+Alt+Tab: an icon name and a gnome-shell msgid.
@@ -818,7 +857,7 @@ impl Switcher {
             let window_id = ids.get(i).and_then(|w| w.first().copied());
             let picture: gtk::Widget = match window_id {
                 Some(id) if self.shows_previews() => {
-                    self.preview(id, app_id, preview_w, preview_h)
+                    self.preview(id, app_id, preview, preview, true)
                 }
                 _ => {
                     let image = gtk::Image::from_gicon(&icon);
@@ -829,17 +868,14 @@ impl Switcher {
             let label = gtk::Label::builder()
                 .label(&label_text)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
-                .max_width_chars(if self.mode.get() == 0 {
-                    12
-                } else if self.shows_previews() {
-                    (preview_w / 9).max(8)
-                } else {
-                    24
-                })
+                .max_width_chars(if self.mode.get() == 0 { 12 } else { 24 })
                 .build();
             let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
             column.append(&picture);
-            column.append(&label);
+            // Window previews have one title under the whole row instead.
+            if !self.shows_previews() {
+                column.append(&label);
+            }
             // An arrow under apps with several windows, as in GNOME.
             let arrow = gtk::Label::new(Some(if windows.len() > 1 { "▾" } else { " " }));
             arrow.add_css_class("switcher-arrow");
@@ -870,6 +906,15 @@ impl Switcher {
                 b.remove_css_class("selected");
             }
         }
+        // WindowSwitcher: the selected window's title under the row.
+        let title = self
+            .data
+            .borrow()
+            .get(self.selected.get() as usize)
+            .map(|(_, t, w)| w.first().cloned().unwrap_or_else(|| t.clone()))
+            .unwrap_or_default();
+        self.title.set_label(&title);
+        self.title.set_visible(self.shows_previews());
         // Window list for the selected app (Alt+` inside the app switcher):
         // previews, like gnome-shell's ThumbnailSwitcher.
         while let Some(c) = self.windows_row.first_child() {
@@ -886,16 +931,10 @@ impl Switcher {
         let selected = self.selected.get() as usize;
         if let (true, Some((app_id, _, titles))) = (show, data.get(selected)) {
             let window_ids = ids.get(selected).cloned().unwrap_or_default();
-            let n = titles.len().max(1) as i32;
-            let w = (SWITCHER_ROW_WIDTH / n - 24).clamp(96, 256);
-            let h = w * 10 / 16;
+            let w = preview_box(titles.len(), THUMBNAIL_DEFAULT_SIZE);
             for (i, t) in titles.iter().enumerate() {
                 let picture = match window_ids.get(i) {
-                    Some(&id) => {
-                        let p = self.preview(id, app_id, w, h);
-                        p.set_halign(gtk::Align::Center);
-                        p
-                    }
+                    Some(&id) => self.preview(id, app_id, w, w, false),
                     None => {
                         let (icon, _) = icon_for(app_id);
                         let image = gtk::Image::from_gicon(&icon);
@@ -906,7 +945,7 @@ impl Switcher {
                 let label = gtk::Label::builder()
                     .label(t)
                     .ellipsize(gtk::pango::EllipsizeMode::End)
-                    .max_width_chars((w / 9).max(8))
+                    .max_width_chars((w / 8).max(8))
                     .build();
                 let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 column.append(&picture);
@@ -923,7 +962,14 @@ impl Switcher {
         self.windows_row.set_visible(show);
     }
 
-    fn show(self: &Rc<Self>, mode: u32, items: SwitcherItems, ids: Vec<Vec<u64>>, selected: u32, sub: i32) {
+    fn show(
+        self: &Rc<Self>,
+        mode: u32,
+        items: SwitcherItems,
+        ids: Vec<Vec<u64>>,
+        selected: u32,
+        sub: i32,
+    ) {
         let opening = !self.window.is_visible() && self.pending.borrow().is_none();
         let new_ids = *self.ids.borrow() != ids;
         self.mode.set(mode);

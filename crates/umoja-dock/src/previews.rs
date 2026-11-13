@@ -21,9 +21,11 @@ pub const THUMB_H: i32 = 150;
 /// A window card: the preview (filled in later by `load`) over the title.
 /// Returns the card and the box that receives the picture.
 pub fn card(title: &str) -> (gtk::Box, gtk::Box) {
+    // The thumbnail's room is kept from the start so the card doesn't grow
+    // (and the menu jump) when the picture arrives.
     let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
     holder.set_halign(gtk::Align::Center);
-    holder.set_visible(false);
+    holder.set_size_request(THUMB_W, THUMB_H);
     let label = gtk::Label::builder()
         .label(title)
         .max_width_chars(28)
@@ -39,17 +41,39 @@ pub fn card(title: &str) -> (gtk::Box, gtk::Box) {
 
 /// `list` in a scroller that grows with it up to most of a screen, for
 /// apps with many windows.
-pub fn scroller(list: &gtk::Box) -> gtk::ScrolledWindow {
+///
+/// Its height is fixed up front from the number of cards, not left to
+/// natural-size propagation: inside the right-click menu's "All Windows"
+/// expander the menu is already up when the pictures arrive, and the
+/// scroller stayed a short empty grey box.
+pub fn scroller(list: &gtk::Box, cards: usize) -> gtk::ScrolledWindow {
+    let height = (cards.max(1) as i32 * CARD_H).min(MAX_LIST_H);
     gtk::ScrolledWindow::builder()
         .child(list)
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true)
-        .max_content_height(640)
+        .vscrollbar_policy(if cards as i32 * CARD_H > MAX_LIST_H {
+            gtk::PolicyType::Automatic
+        } else {
+            gtk::PolicyType::Never
+        })
+        .min_content_height(height)
+        .max_content_height(height)
+        .min_content_width(THUMB_W + 16)
         .build()
 }
 
+/// A card's height: padding, thumbnail, spacing and one line of title.
+const CARD_H: i32 = THUMB_H + 16 + 6 + 22 + 4;
+/// The tallest the window list gets before it scrolls.
+const MAX_LIST_H: i32 = 640;
+
 /// Capture each window and put its picture in its card.
-pub fn load(cards: Vec<(WindowInfo, gtk::Box)>) {
+///
+/// `menu` is the popover they are in: capturing stops once it is closed.
+/// (Not `holder.root()`: GTK 4's Expander takes its child out of the widget
+/// tree while collapsed, which made "All Windows" stay empty.)
+pub fn load(menu: &gtk::Popover, cards: Vec<(WindowInfo, gtk::Box)>) {
+    let menu = menu.downgrade();
     if cards.is_empty() {
         return;
     }
@@ -62,7 +86,7 @@ pub fn load(cards: Vec<(WindowInfo, gtk::Box)>) {
         for ((_, holder), id) in cards.iter().zip(ids) {
             let Some(id) = id else { continue };
             // The menu may have closed meanwhile.
-            if holder.root().is_none() {
+            if !menu.upgrade().is_some_and(|m| m.is_visible()) {
                 return;
             }
             let Some(texture) =
@@ -73,7 +97,6 @@ pub fn load(cards: Vec<(WindowInfo, gtk::Box)>) {
             let picture = umoja_common::thumbnails::picture(&texture, THUMB_W, THUMB_H);
             picture.add_css_class("dock-window-thumb");
             holder.append(&picture);
-            holder.set_visible(true);
         }
     });
 }
@@ -139,7 +162,7 @@ pub fn popover(windows: &[WindowInfo], commands: crate::tracker::Commands) -> gt
     let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
     list.add_css_class("dock-menu");
     let popover = gtk::Popover::builder()
-        .child(&scroller(&list))
+        .child(&scroller(&list, windows.len()))
         .has_arrow(false)
         .build();
     let mut cards = Vec::new();
@@ -168,7 +191,7 @@ pub fn popover(windows: &[WindowInfo], commands: crate::tracker::Commands) -> gt
     }
     // After the popover is up, so the cards are in a window when they load.
     let cards = std::cell::RefCell::new(cards);
-    popover.connect_map(move |_| load(cards.take()));
+    popover.connect_map(move |p| load(p, cards.take()));
     popover
 }
 
@@ -203,7 +226,10 @@ mod tests {
     fn same_titles_get_different_windows() {
         let a = win(1, "org.gnome.Ptyxis", "ken@umoja: ~");
         let b = win(2, "org.gnome.Ptyxis", "ken@umoja: ~");
-        let l = listed(&[(10, "org.gnome.Ptyxis", "ken@umoja: ~"), (11, "org.gnome.Ptyxis", "ken@umoja: ~")]);
+        let l = listed(&[
+            (10, "org.gnome.Ptyxis", "ken@umoja: ~"),
+            (11, "org.gnome.Ptyxis", "ken@umoja: ~"),
+        ]);
         assert_eq!(match_ids(&[&a, &b], &l), vec![Some(10), Some(11)]);
     }
 
@@ -218,7 +244,10 @@ mod tests {
     #[test]
     fn renamed_window_falls_back_to_the_only_one_of_its_app() {
         let a = win(1, "org.gnome.Nautilus", "Home");
-        let l = listed(&[(10, "org.gnome.Nautilus", "Downloads"), (11, "firefox", "Home")]);
+        let l = listed(&[
+            (10, "org.gnome.Nautilus", "Downloads"),
+            (11, "firefox", "Home"),
+        ]);
         assert_eq!(match_ids(&[&a], &l), vec![Some(10)]);
     }
 }
