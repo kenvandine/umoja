@@ -149,12 +149,20 @@ mkdir -p "$TARGET/boot/efi"
 mount "$(part 1)" "$TARGET/boot/efi"
 
 progress 8 "Copying Umoja"
-# unsquashfs -percentage prints one number per update.
-unsquashfs -f -d "$TARGET" -processors "$(nproc)" -percentage "$SQUASHFS" | while read -r pct; do
+# unsquashfs -percentage prints one number per update. Only security.*
+# xattrs (file capabilities such as snap-confine's): the first xattr the
+# target can't store (a user.* one on the FAT /boot/efi) makes unsquashfs
+# drop every xattr after it, and snaps then can't start.
+unsquashfs -f -d "$TARGET" -processors "$(nproc)" -xattrs-include '^security\.' \
+    -percentage "$SQUASHFS" | while read -r pct; do
     case "$pct" in ''|*[!0-9]*) continue ;; esac
     progress $((8 + pct * 72 / 100)) "Copying Umoja"
 done
 [ -x "$TARGET/usr/bin/umoja-session" ] || die "copy incomplete"
+if [ -e "$TARGET/usr/lib/snapd/snap-confine" ]; then
+    getcap "$TARGET/usr/lib/snapd/snap-confine" | grep -q cap_sys_admin \
+        || die "file capabilities were not copied (snap-confine has none)"
+fi
 
 progress 81 "Setting up the system"
 LUKS_UUID=$(blkid -s UUID -o value "$(part 3)")

@@ -119,7 +119,7 @@ if [ -x /usr/lib/snapd/snap-preseed ] && [ -f "$TARGET/var/lib/snapd/seed/seed.y
     umount "$TARGET/dev" "$TARGET/sys/kernel/security" "$TARGET/sys" "$TARGET/proc"
     umount "$TARGET"
 fi
-mksquashfs "$TARGET" "$ISO/casper/umoja.squashfs" -noappend -comp zstd -Xcompression-level 19 -quiet
+mksquashfs "$TARGET" "$ISO/casper/umoja.squashfs" -noappend -xattrs-exclude '^user\.fuseoverlayfs\.' -comp zstd -Xcompression-level 19 -quiet
 
 step "Live layer"
 mount -t overlay overlay -o "lowerdir=$TARGET,upperdir=$UPPER,workdir=$OVL" "$LIVE"
@@ -179,7 +179,7 @@ chroot "$LIVE" apt-get clean
 
 for m in run dev/pts dev proc sys; do umount -l "$LIVE/$m"; done
 umount "$LIVE"
-mksquashfs "$UPPER" "$ISO/casper/umoja.live.squashfs" -noappend -comp zstd -Xcompression-level 19 -quiet
+mksquashfs "$UPPER" "$ISO/casper/umoja.live.squashfs" -noappend -xattrs-exclude '^user\.fuseoverlayfs\.' -comp zstd -Xcompression-level 19 -quiet
 
 step "Boot files"
 EFI_SRC=$TARGET

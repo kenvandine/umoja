@@ -146,6 +146,7 @@ Depends: ${shlibs:Depends},
          dosfstools,
          e2fsprogs,
          gdisk,
+         libcap2-bin,
          parted,
          squashfs-tools,
          util-linux
