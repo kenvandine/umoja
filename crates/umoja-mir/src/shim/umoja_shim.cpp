@@ -373,6 +373,8 @@ public:
         if (!lock_surfaces.empty() && tools.active_window() == w) defer_lock_focus();
         above.erase(w);
         preferred_output.erase(w);
+        away.erase(w);
+        retile_pending.erase(w);
         session_restore.erase(w);
         awaiting_size.erase(w);
         fullscreen_lifted.erase(w);
@@ -940,7 +942,11 @@ public:
         if (animating) return;
         // Only the user's own moves pick a new preferred monitor (mutter:
         // META_MOVE_RESIZE_USER_ACTION), not monitors coming and going.
-        if (!rehoming && user_moving(info.window())) remember_monitor(info.window());
+        if (!rehoming && user_moving(info.window())) {
+            remember_monitor(info.window());
+            away.erase(info.window());
+            retile_pending.erase(info.window());
+        }
         if (all_windows.count(info.window()) && update_workspace_membership(info.window())) relayout_workspaces();
         if (applying) return;
         // The user dragged a tiled window away: it leaves its tile group.
@@ -949,13 +955,18 @@ public:
 
     // ---- outputs ----------------------------------------------------------
 
+    // Mir reports one display configuration as a run of create/update/delete
+    // calls, and an unplug is often followed by a second configuration
+    // (monitors.xml layout for the monitors that are left). Windows are
+    // moved once things settle (settle_outputs), not call by call: moving
+    // them while half the new layout is known put them in the wrong place.
     void advise_output_create(Output const& output) override {
         outputs[output.id()] = output.extents();
         output_names[output.id()] = output.name();
         output_refresh[output.id()] = output.refresh_rate();
         update_slide_pace();
         report(output);
-        return_windows_to(output.name());
+        schedule_output_settle();
     }
 
     void advise_output_update(Output const& updated, Output const&) override {
@@ -964,27 +975,262 @@ public:
         output_refresh[updated.id()] = updated.refresh_rate();
         update_slide_pace();
         report(updated);
-        return_windows_to(updated.name());
+        schedule_output_settle();
     }
 
     void advise_output_delete(Output const& output) override {
-        auto const gone = output.extents();
         outputs.erase(output.id());
         output_names.erase(output.id());
         output_refresh.erase(output.id());
         update_slide_pace();
         umoja_output_remove(output.id());
-        if (outputs.empty()) return;
-        // Like mutter: windows on an unplugged monitor move to the primary
-        // one. They keep it as their preferred monitor, and go back to it
-        // when it is plugged in again (return_windows_to).
-        auto const target = primary_output();
-        rehoming = true;
-        for (auto const& w : all_windows) {
-            if (!gone.contains(centre_of(w))) continue;
-            move_between(w, gone, target);
+        schedule_output_settle();
+    }
+
+    // ---- monitors coming and going ------------------------------------------
+    //
+    // mutter's meta_window_update_for_monitors_changed: a window whose
+    // preferred monitor (below) is connected goes to it; otherwise it stays
+    // on its monitor if that is still there, following it if the layout
+    // moved it; otherwise it goes to the primary monitor. A window leaving
+    // a monitor that went away remembers exactly where it was there, and
+    // gets that back when the monitor returns (mutter keeps the window's
+    // unconstrained rect for the same reason), unless the user has moved it
+    // in between. Maximized, fullscreen and tiled windows stay so.
+    //
+    // Mir also "removes" every output when the screen blanks (power mode
+    // off). With no output left nothing moves, and when they come back on
+    // the layout is the one windows were placed for, so nothing moves then
+    // either.
+
+    // Output connector name -> extents, as windows were last placed for.
+    std::map<std::string, geom::Rectangle> settled_layout;
+
+    struct Away {
+        std::string output;         // the monitor it left
+        geom::Rectangle output_rect; // that monitor's extents then
+        geom::Rectangle rect;        // where the window was on it
+    };
+    std::map<Window, Away> away;
+
+    // Tiled windows moved to a monitor whose panel and dock haven't
+    // reserved their space yet: tiled again once its work area is known.
+    std::set<Window> retile_pending;
+
+    static std::atomic<uint64_t>& output_generation() {
+        static std::atomic<uint64_t> g{0};
+        return g;
+    }
+
+    // From Mir's display configuration callbacks: apply from a helper
+    // thread that takes the WM lock once Mir has been quiet for a moment.
+    void schedule_output_settle() {
+        auto const gen = ++output_generation();
+        std::thread([gen] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            if (output_generation().load() != gen) return;
+            guarded("settle outputs", [] {
+                if (!g_wm) return;
+                g_wm->invoke([] {
+                    if (g_wm) guarded("settle outputs", [] { g_wm->settle_outputs(); });
+                });
+            });
+        }).detach();
+    }
+
+    std::string output_key(int id) const {
+        auto const it = output_names.find(id);
+        if (it != output_names.end() && !it->second.empty()) return it->second;
+        return "#" + std::to_string(id);
+    }
+
+    std::map<std::string, geom::Rectangle> current_layout() const {
+        std::map<std::string, geom::Rectangle> layout;
+        for (auto const& [id, r] : outputs) layout[output_key(id)] = r;
+        return layout;
+    }
+
+    std::string primary_output_name() const {
+        auto const primary = primary_output();
+        for (auto const& [id, r] : outputs)
+            if (r == primary) return output_key(id);
+        return {};
+    }
+
+    void settle_outputs() {
+        auto const now = current_layout();
+        if (now.empty()) return; // screen off, or nothing connected: wait
+        if (animating) {
+            // Mid workspace slide windows are off their real spots.
+            schedule_output_settle();
+            return;
         }
-        rehoming = false;
+        auto const before = settled_layout.empty() ? now : settled_layout;
+        settled_layout = now;
+        if (before == now) return;
+        if (debug_windows()) {
+            std::string b, n;
+            for (auto const& [name, r] : before) b += " " + name;
+            for (auto const& [name, r] : now) n += " " + name;
+            std::fprintf(stderr, "umoja-mir: wm: monitors changed:%s ->%s\n", b.c_str(), n.c_str());
+        }
+        std::vector<Window> const windows{all_windows.begin(), all_windows.end()};
+        auto const primary = primary_output_name();
+        bool const was_rehoming = rehoming;
+        rehoming = true;
+        for (auto const& w : windows) {
+            guarded("monitor change", [&] { rehome(w, before, now, primary); });
+        }
+        rehoming = was_rehoming;
+    }
+
+    void rehome(Window const& w, std::map<std::string, geom::Rectangle> const& before,
+                std::map<std::string, geom::Rectangle> const& now, std::string const& primary) {
+        if (!all_windows.count(w)) return;
+        geom::Rectangle const rect{w.top_left(), w.size()};
+        auto const c = centre_of(rect);
+
+        // The monitor it was on, in the layout it was placed for.
+        std::string from_name;
+        geom::Rectangle from;
+        for (auto const& [name, r] : before)
+            if (r.contains(c)) {
+                from_name = name;
+                from = r;
+            }
+        if (from_name.empty()) {
+            // Not on any monitor of the old layout (placed since, or off
+            // screen): where it is now, if anywhere.
+            for (auto const& [name, r] : now)
+                if (r.contains(c)) {
+                    from_name = name;
+                    from = r;
+                }
+        }
+
+        std::string target;
+        auto const pref = preferred_output.find(w);
+        if (pref != preferred_output.end() && now.count(pref->second)) target = pref->second;
+        else if (!from_name.empty() && now.count(from_name)) target = from_name;
+        else target = primary;
+        auto const to_it = now.find(target);
+        if (to_it == now.end()) return;
+        auto const to = to_it->second;
+        if (from_name.empty()) from = to; // clamp it onto its monitor
+
+        if (from_name == target && from == to && to.contains(c)) return;
+
+        // Leaving a monitor that went away: remember the spot on it.
+        if (!from_name.empty() && !now.count(from_name)) away[w] = Away{from_name, from, rect};
+
+        geom::Rectangle dest;
+        auto const a = away.find(w);
+        if (a != away.end() && a->second.output == target) {
+            // Back to the monitor it left: the same spot. A returning
+            // monitor may first show up somewhere else and only then get
+            // its stored position and scale, so the spot is kept until the
+            // monitor is back exactly as it was.
+            dest = translate(a->second.rect, a->second.output_rect, to);
+            from = a->second.output_rect;
+            if (a->second.output_rect == to) away.erase(a);
+        } else {
+            dest = translate(rect, from, to);
+        }
+        place_on_monitor(w, from, to, dest);
+    }
+
+    static geom::Rectangle translate(geom::Rectangle const& r, geom::Rectangle const& from, geom::Rectangle const& to) {
+        // Same size: just shift it, exactly (Rust's relative maths can
+        // round a pixel off). Otherwise scale the spot and fit it inside.
+        if (from.size == to.size && from.contains(centre_of(r))) return geom::Rectangle{r.top_left + (to.top_left - from.top_left), r.size};
+        return from_rect(umoja_translate_rect(to_rect(r), to_rect(from), to_rect(to)));
+    }
+
+    // Put a window at `dest` on monitor `to` (it came from `from`), keeping
+    // it maximized, fullscreen or tiled there.
+    void place_on_monitor(Window const& w, geom::Rectangle const& from, geom::Rectangle const& to,
+                          geom::Rectangle const& dest) {
+        auto& info = tools.info_for(w);
+        WindowSpecification spec;
+        spec.top_left() = dest.top_left;
+        spec.size() = dest.size;
+        for (auto const& [id, r] : outputs)
+            if (r == to) spec.output_id() = id;
+
+        auto const id = window_id(w);
+        auto const action = tile_action.find(w);
+        bool const is_tiled = tiled.count(id) && action != tile_action.end();
+        if (auto const u = untiled.find(w); u != untiled.end()) u->second = translate(u->second, from, to);
+
+        if (info.state() == mir_window_state_maximized || info.state() == mir_window_state_fullscreen) {
+            spec.state() = info.state();
+            tools.place_and_size_for_state(spec, info);
+        } else if (is_tiled) {
+            bool const known = has_zone_on(to);
+            UmojaRect out{};
+            if (umoja_tile_geometry(action->second, to_rect(area_on(to)), &out)) {
+                spec.top_left() = geom::Point{out.x, out.y};
+                spec.size() = geom::Size{out.w, out.h};
+            }
+            if (known) retile_pending.erase(w);
+            else retile_pending.insert(w);
+        }
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: monitor change moves %s ->%s\n", describe(info).c_str(),
+                         describe(spec).c_str());
+        bool const was_applying = applying;
+        applying = true; // a tiled window stays tiled
+        tools.modify_window(info, spec);
+        applying = was_applying;
+        if (is_tiled) {
+            umoja_tiling_unregister(id);
+            umoja_tiling_register(id, action->second, to_rect({w.top_left(), w.size()}));
+        }
+    }
+
+    bool has_zone_on(geom::Rectangle const& output) const {
+        for (auto const& [id, r] : zones)
+            if (output.contains(centre_of(r))) return true;
+        return false;
+    }
+
+    // Zone callbacks come from inside Mir's own relayout: tile afterwards.
+    void schedule_retile() {
+        if (retile_pending.empty()) return;
+        std::thread([] {
+            guarded("retile", [] {
+                if (!g_wm) return;
+                g_wm->invoke([] {
+                    if (g_wm) guarded("retile", [] { g_wm->retile_moved(); });
+                });
+            });
+        }).detach();
+    }
+
+    void retile_moved() {
+        std::vector<Window> const pending{retile_pending.begin(), retile_pending.end()};
+        for (auto const& w : pending) {
+            auto const id = window_id(w);
+            auto const action = tile_action.find(w);
+            if (!all_windows.count(w) || !tiled.count(id) || action == tile_action.end()) {
+                retile_pending.erase(w);
+                continue;
+            }
+            auto const output = output_at(centre_of(w));
+            if (!has_zone_on(output)) continue;
+            retile_pending.erase(w);
+            UmojaRect out{};
+            if (!umoja_tile_geometry(action->second, to_rect(area_on(output)), &out)) continue;
+            WindowSpecification spec;
+            spec.top_left() = geom::Point{out.x, out.y};
+            spec.size() = geom::Size{out.w, out.h};
+            bool const was_applying = applying;
+            applying = true;
+            tools.modify_window(tools.info_for(w), spec);
+            applying = was_applying;
+            umoja_tiling_unregister(id);
+            umoja_tiling_register(id, action->second, out);
+        }
     }
 
     // ---- preferred monitor ------------------------------------------------
@@ -992,9 +1238,8 @@ public:
     // mutter's window->preferred_logical_monitor: the monitor a window was
     // opened on or last moved to. Taking a monitor away doesn't change it,
     // so when that monitor comes back (meta_window_update_for_monitors_changed)
-    // its windows move back to it, at the same relative spot, still maximized
-    // or tiled. Kept by connector name, as Mir may number a returning output
-    // differently.
+    // its windows move back to it (settle_outputs). Kept by connector name,
+    // as Mir may number a returning output differently.
 
     std::map<Window, std::string> preferred_output;
     std::map<int, std::string> output_names;
@@ -1026,50 +1271,6 @@ public:
         if (!all_windows.count(w)) return;
         auto const name = output_name_at(centre_of(w));
         if (!name.empty()) preferred_output[w] = name;
-    }
-
-    void return_windows_to(std::string const& name) {
-        if (name.empty() || all_windows.empty()) return;
-        geom::Rectangle home;
-        bool found = false;
-        for (auto const& [id, n] : output_names)
-            if (n == name) {
-                home = outputs[id];
-                found = true;
-            }
-        if (!found) return;
-        rehoming = true;
-        for (auto const& w : all_windows) {
-            auto const it = preferred_output.find(w);
-            if (it == preferred_output.end() || it->second != name) continue;
-            auto const c = centre_of(w);
-            if (home.contains(c)) continue;
-            move_between(w, output_at(c), home);
-        }
-        rehoming = false;
-    }
-
-    // Move a window from one monitor to the same spot on another, keeping
-    // it maximized or fullscreen there.
-    void move_between(Window const& w, geom::Rectangle const& from, geom::Rectangle const& to) {
-        guarded("move between monitors", [&] {
-            auto& info = tools.info_for(w);
-            WindowSpecification spec;
-            auto const moved = umoja_translate_rect(to_rect({w.top_left(), w.size()}), to_rect(from), to_rect(to));
-            spec.top_left() = geom::Point{moved.x, moved.y};
-            spec.size() = geom::Size{moved.w, moved.h};
-            for (auto const& [id, r] : outputs)
-                if (r == to) spec.output_id() = id;
-            // As move_to_monitor (Super+Shift+arrows) does.
-            if (info.state() == mir_window_state_maximized || info.state() == mir_window_state_fullscreen) {
-                spec.state() = info.state();
-                tools.place_and_size_for_state(spec, info);
-            }
-            if (debug_windows())
-                std::fprintf(stderr, "umoja-mir: wm: monitor change moves %s ->%s\n", describe(info).c_str(),
-                             describe(spec).c_str());
-            tools.modify_window(info, spec);
-        });
     }
 
     // The work area of a monitor (the monitor itself until its panel and
@@ -1333,9 +1534,13 @@ public:
         spec.size() = geom::Size{moved.w, moved.h};
     }
 
-    void advise_application_zone_create(Zone const& zone) override { zones[zone.id()] = zone.extents(); }
+    void advise_application_zone_create(Zone const& zone) override {
+        zones[zone.id()] = zone.extents();
+        schedule_retile();
+    }
     void advise_application_zone_update(Zone const& updated, Zone const&) override {
         zones[updated.id()] = updated.extents();
+        schedule_retile();
     }
     void advise_application_zone_delete(Zone const& zone) override { zones.erase(zone.id()); }
 
@@ -2726,6 +2931,8 @@ private:
         }
         tools.modify_window(info, spec);
         remember_monitor(w);
+        away.erase(w);
+        retile_pending.erase(w);
         return true;
     }
 
