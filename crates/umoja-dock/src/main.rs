@@ -575,13 +575,36 @@ impl Dock {
                 )
             };
             if cfg.show_windows_preview {
-                let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                // Ubuntu Dock's previews: a live thumbnail over each title.
+                let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+                list.add_css_class("dock-window-list");
+                let mut cards = Vec::new();
                 for w in wins {
-                    list.append(&window_button(w));
+                    let title = if w.title.is_empty() {
+                        app.display_name().to_string()
+                    } else {
+                        w.title.clone()
+                    };
+                    let (card, holder) = previews::card(&title);
+                    let b = gtk::Button::builder()
+                        .child(&card)
+                        .css_classes(["flat", "dock-window"])
+                        .build();
+                    let (tx, id, pop) = (tx.clone(), w.id, weak_pop.clone());
+                    b.connect_clicked(move |_| {
+                        if let Some(p) = pop.upgrade() {
+                            p.popdown();
+                        }
+                        tx.try_send(Command::Activate(id));
+                    });
+                    list.append(&b);
+                    cards.push((w.clone(), holder));
                 }
+                let cards = RefCell::new(cards);
+                popover.connect_map(move |_| previews::load(cards.take()));
                 let expander = gtk::Expander::builder()
                     .label(i18n::dock("All Windows"))
-                    .child(&list)
+                    .child(&previews::scroller(&list))
                     .expanded(cfg.default_windows_preview_to_open)
                     .build();
                 expander.add_css_class("dock-menu-submenu");

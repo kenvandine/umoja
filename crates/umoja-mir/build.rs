@@ -9,6 +9,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.cpp");
     println!("cargo:rerun-if-changed=src/shim/natural_scroll.cpp");
     println!("cargo:rerun-if-changed=src/shim/idle.cpp");
+    println!("cargo:rerun-if-changed=src/shim/capture.cpp");
     println!("cargo:rerun-if-changed=src/shim/input_config.cpp");
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.h");
     println!("cargo:rerun-if-changed=src/shim/session_management.cpp");
@@ -73,6 +74,7 @@ fn main() {
         .file("src/shim/umoja_shim.cpp")
         .file("src/shim/natural_scroll.cpp")
         .file("src/shim/idle.cpp")
+        .file("src/shim/capture.cpp")
         .file("src/shim/input_config.cpp")
         .file("src/shim/session_management.cpp")
         .include(&out)
@@ -94,6 +96,8 @@ fn main() {
     // Our Mir patch (packaging/mir) finds the touchpad gesture hook with
     // dlsym(RTLD_DEFAULT), so it must be in the dynamic symbol table.
     println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_touchpad_gesture_hook");
+    // Same for the scene filter behind window thumbnails (shim/capture.cpp).
+    println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_scene_filter_hook");
 
     for path in miral
         .link_paths

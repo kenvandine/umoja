@@ -99,6 +99,14 @@ Umoja PPA:
   gets xdg_toplevels from `add_toplevel`/`restore_toplevel` and needs their
   window. Without the patch it falls back to matching a client's next
   window.
+- `patches/3018_scene-filter-hook.patch`: Mir can only capture an area of
+  the screen with everything on it. The surface stack now asks
+  `mir_scene_filter_hook` (exported by umoja-mir, found with `dlsym`) about
+  each surface when building a compositor's scene: 1 shows it even when
+  hidden, 0 leaves it out, -1 keeps the usual rules. umoja-mir answers only
+  for its own screen shooter (`CaptureWindow` on org.umoja.Compositor), so
+  it renders one window alone, minimized or on another workspace too, for
+  the Alt+Tab, overview and dock thumbnails. No ABI change.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

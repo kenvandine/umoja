@@ -29,3 +29,5 @@ blur = ["dep:gtk4", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backe
 monitors = ["dep:gtk4"]
 # Icons gnome-shell keeps to itself, shipped by Umoja (data/icons).
 icons = ["dep:gtk4"]
+# Live window thumbnails from umoja-mir (CaptureWindow).
+thumbnails = ["dep:gtk4"]

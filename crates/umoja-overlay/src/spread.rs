@@ -202,6 +202,11 @@ pub struct Spread {
     /// The file `wallpaper` was decoded from, to notice a new one.
     wallpaper_path: RefCell<Option<std::path::PathBuf>>,
     previews: RefCell<HashMap<u64, gdk::Texture>>,
+    /// Whether umoja-mir can render single windows (CaptureWindow, needs
+    /// Umoja's Mir): None until the first try. With it every window gets a
+    /// real preview, covered, minimized or on another workspace; without it
+    /// previews are cut from screen captures.
+    window_capture: Cell<Option<bool>>,
     state: RefCell<State>,
     refresh_pending: Cell<bool>,
     /// Pending background preview capture (see `watch_windows`).
@@ -281,6 +286,7 @@ impl Spread {
             wallpaper: RefCell::default(),
             wallpaper_path: RefCell::default(),
             previews: RefCell::default(),
+            window_capture: Cell::new(None),
             state: RefCell::default(),
             refresh_pending: Cell::new(false),
             snap_timer: RefCell::default(),
@@ -526,6 +532,10 @@ impl Spread {
     }
 
     async fn snapshot(self: &Rc<Self>) {
+        // Windows are captured one by one when the overview opens.
+        if self.window_capture.get() == Some(true) {
+            return;
+        }
         if self.opening.get() || self.is_visible() || self.own_window_shown() {
             return;
         }
@@ -598,9 +608,48 @@ impl Spread {
         }
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
+            let Some(s) = weak.upgrade() else { return };
+            if s.window_capture.get() != Some(false) {
+                // The windows on this workspace before showing, the rest
+                // (other workspaces, minimized) while it is up.
+                let state = fetch_state().await;
+                let here: Vec<u64> = state
+                    .windows
+                    .iter()
+                    .filter(|w| {
+                        w.flags & FLAG_CURRENT_WORKSPACE != 0 && w.flags & FLAG_MINIMIZED == 0
+                    })
+                    .map(|w| w.id)
+                    .collect();
+                let got = s.capture_windows(&here).await;
+                if got > 0 || (here.is_empty() && s.window_capture.get() == Some(true)) {
+                    s.window_capture.set(Some(true));
+                    s.previews
+                        .borrow_mut()
+                        .retain(|id, _| state.windows.iter().any(|w| w.id == *id));
+                    let rest: Vec<u64> = state
+                        .windows
+                        .iter()
+                        .map(|w| w.id)
+                        .filter(|id| !here.contains(id))
+                        .collect();
+                    s.opening.set(false);
+                    s.load_wallpaper();
+                    *s.state.borrow_mut() = state;
+                    s.populate();
+                    s.window.present();
+                    s.entry.grab_focus();
+                    if !rest.is_empty() && s.capture_windows(&rest).await > 0 {
+                        s.queue_refresh();
+                    }
+                    return;
+                }
+                if !here.is_empty() {
+                    s.window_capture.set(Some(false));
+                }
+            }
             // Capture before mapping so the overview isn't in the picture.
             let (state, frame) = futures_util::join!(fetch_state(), capture(OPEN_SCALE));
-            let Some(s) = weak.upgrade() else { return };
             s.opening.set(false);
             s.load_wallpaper();
             s.remember_previews(&state, frame.as_ref());
@@ -609,6 +658,25 @@ impl Spread {
             s.window.present();
             s.entry.grab_focus();
         });
+    }
+
+    /// Render these windows one by one through umoja-mir into `previews`;
+    /// how many it managed.
+    async fn capture_windows(&self, ids: &[u64]) -> usize {
+        let shots = futures_util::future::join_all(
+            ids.iter()
+                .map(|&id| umoja_common::thumbnails::capture(id, umoja_common::thumbnails::LARGE)),
+        )
+        .await;
+        let mut previews = self.previews.borrow_mut();
+        let mut got = 0;
+        for (id, shot) in ids.iter().zip(shots) {
+            if let Some(t) = shot {
+                previews.insert(*id, t);
+                got += 1;
+            }
+        }
+        got
     }
 
     /// Re-read windows and workspaces and redraw, coalescing bursts.

@@ -322,6 +322,12 @@ typedef struct {
 // Safe from any thread; applies once the server is up.
 void umoja_input_apply(UmojaInputSettings const* settings);
 
+// Live window thumbnails (capture.cpp). umoja_wm_window_rect: the window's
+// rectangle in layout coordinates, false if there is no such window.
+bool umoja_wm_window_rect(uint64_t id, UmojaRect* out);
+bool umoja_capture_window(uint64_t id, UmojaRect rect, uint32_t size, uint8_t* out, uint32_t* out_w,
+                          uint32_t* out_h);
+
 #ifdef __cplusplus
 }
 
@@ -332,4 +338,6 @@ struct MirEvent;
 bool umoja_idle_input_filter(MirEvent const* event);
 // Hooks MirAL's input device configuration up (input_config.cpp).
 void umoja_input_setup(mir::Server& server);
+// Keeps the server for window captures (capture.cpp).
+void umoja_capture_setup(mir::Server& server);
 #endif

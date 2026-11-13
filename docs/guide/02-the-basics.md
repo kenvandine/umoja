@@ -27,6 +27,8 @@ There are four ways to open an app. Use whichever you like.
 
 Right-click an app on the dock (or in the app grid) for its menu:
 
+- **All Windows**, a live preview of each of its open windows; click one
+  to go to it
 - the app's own actions, such as **New Window** or **New Private Window**
 - **Pin to Dock** or **Unpin**, to keep it on the dock or take it off
 - **App Details**, which opens the app in App Center
@@ -60,10 +62,11 @@ and the other to the right edge. There is much more about this in
 
 ### Switching between windows
 
-- **Alt+Tab** switches between windows, and **Super+Tab** between apps.
-  Keep holding **Alt** (or **Super**) and press **Tab** again to go
+- **Alt+Tab** switches between windows, showing a live preview of each,
+  and **Super+Tab** between apps, showing their icons. Keep holding **Alt** (or **Super**) and press **Tab** again to go
   further along. Add **Shift** to go back.
-- **Alt+`** (the key above Tab) switches between windows of the same app.
+- **Alt+`** (the key above Tab) switches between windows of the same app,
+  also with previews.
 - **Super** opens the overview, where you can see every window at once
   and click the one you want.
 

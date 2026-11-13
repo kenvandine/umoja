@@ -165,6 +165,12 @@ fn announce(open: &Open) {
     if !has_popup(open) {
         return;
     }
+    let ids: Vec<Vec<u64>> = open
+        .switcher
+        .items
+        .iter()
+        .map(|i| i.windows.clone())
+        .collect();
     overlay_call(
         "ShowSwitcher",
         (
@@ -172,6 +178,7 @@ fn announce(open: &Open) {
             items,
             sel as u32,
             sub.map(|s| s as i32).unwrap_or(-1),
+            ids,
         ),
     );
 }
@@ -520,6 +527,38 @@ unsafe extern "C" {
     fn umoja_wm_show_workspace(index: u32);
     fn umoja_wm_send_to_workspace(id: u64, index: u32);
     fn umoja_wm_workspace_settings_changed();
+    fn umoja_wm_window_rect(id: u64, out: *mut Rect) -> bool;
+    fn umoja_capture_window(
+        id: u64,
+        rect: Rect,
+        size: u32,
+        out: *mut u8,
+        out_w: *mut u32,
+        out_h: *mut u32,
+    ) -> bool;
+}
+
+/// Render one window on its own (shim/capture.cpp), even minimized or on
+/// another workspace: (width, height, BGRA premultiplied pixels) with the
+/// longer side about `size`. None without Umoja's patched Mir, for an
+/// unknown window, or while the screen is blanked or locked.
+pub fn capture_window(id: u64, size: u32) -> Option<(u32, u32, Vec<u8>)> {
+    if crate::idle::desktop_hidden() {
+        return None;
+    }
+    let mut rect = Rect::default();
+    if !unsafe { umoja_wm_window_rect(id, &mut rect) } {
+        return None;
+    }
+    let n = if size <= 512 { 512usize } else { 1024 };
+    let mut pixels = vec![0u8; n * n * 4];
+    let (mut w, mut h) = (0u32, 0u32);
+    let ok = unsafe { umoja_capture_window(id, rect, size, pixels.as_mut_ptr(), &mut w, &mut h) };
+    if !ok || w == 0 || h == 0 {
+        return None;
+    }
+    pixels.truncate(w as usize * h as usize * 4);
+    Some((w, h, pixels))
 }
 
 /// Ease-in-out position `t` (0..=1) of a scripted drag.
@@ -642,6 +681,18 @@ impl Compositor {
 
     async fn activate_window(&self, id: u64) {
         let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_activate(id) }).await;
+    }
+
+    /// A live thumbnail of window `id`, its longer side about `size` pixels
+    /// (512 or 1024): (width, height, BGRA premultiplied, rows top to bottom
+    /// with no padding). Works for minimized windows and windows on other
+    /// workspaces. (0, 0, []) when it can't (needs Umoja's patched Mir).
+    async fn capture_window(&self, id: u64, size: u32) -> (u32, u32, Vec<u8>) {
+        tokio::task::spawn_blocking(move || capture_window(id, size))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
     }
 
     async fn close_window(&self, id: u64) {

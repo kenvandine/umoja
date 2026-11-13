@@ -542,6 +542,15 @@ window.umoja-chrome {
   min-height: 0;
   margin-top: -4px;
 }
+/* Window previews (Alt+Tab, Alt+`): gnome-shell's WindowIcon, a thumbnail
+   with the app icon on its bottom right corner. */
+.switcher-thumb {
+  border-radius: 8px;
+  box-shadow: 0 1px 4px alpha(#000000, 0.4);
+}
+.switcher-badge {
+  -gtk-icon-shadow: 0 1px 3px alpha(#000000, 0.5);
+}
 
 /* Activities overview window spread. */
 window.umoja-spread {

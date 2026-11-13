@@ -92,6 +92,24 @@ popover button:active {
 .dock-menu-submenu > title:hover {
   background-color: @shell_fill_hover;
 }
+/* Window previews ("All Windows" and the multi-window click list), like
+   Ubuntu Dock's: a thumbnail over the title in a lighter rounded card. */
+.dock-menu-submenu {
+  background-color: alpha(#ffffff, 0.06);
+  border-radius: 12px;
+  padding-bottom: 4px;
+}
+button.dock-window {
+  padding: 8px;
+  border-radius: 10px;
+}
+.dock-window-card label {
+  font-size: 0.95em;
+}
+.dock-window-thumb {
+  border-radius: 6px;
+  box-shadow: 0 1px 4px alpha(#000000, 0.4);
+}
 
 /* Unity LauncherEntry badges, as on Ubuntu Dock: the unread count in the
    top corner, a progress bar over the bottom of the icon, and a pulse for

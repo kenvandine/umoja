@@ -152,6 +152,7 @@ const IFACE_XML: &str = r#"
       <arg name="items" type="a(ssas)" direction="in"/>
       <arg name="selected" type="u" direction="in"/>
       <arg name="window" type="i" direction="in"/>
+      <arg name="window_ids" type="aat" direction="in"/>
     </method>
     <method name="SwitcherSelect">
       <arg name="selected" type="u" direction="in"/>
@@ -405,10 +406,10 @@ fn export(
                         }
                     }
                     "ShowSwitcher" => {
-                        if let Some((mode, items, sel, sub)) =
-                            params.get::<(u32, chrome::SwitcherItems, u32, i32)>()
-                        {
-                            chrome.show_switcher(mode, items, sel, sub);
+                        if let Some((mode, items, sel, sub, ids)) = params
+                            .get::<(u32, chrome::SwitcherItems, u32, i32, Vec<Vec<u64>>)>(
+                        ) {
+                            chrome.show_switcher(mode, items, ids, sel, sub);
                         }
                     }
                     "SwitcherSelect" => {

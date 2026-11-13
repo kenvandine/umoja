@@ -2612,6 +2612,17 @@ extern "C" void umoja_wm_activate(uint64_t id) {
     with_wm("activate window", [&] { g_wm->activate(g_wm->find(id)); });
 }
 
+extern "C" bool umoja_wm_window_rect(uint64_t id, UmojaRect* out) {
+    bool found = false;
+    with_wm("window rect", [&] {
+        Window const w = g_wm->find(id);
+        if (!w || !out) return;
+        *out = to_rect({w.top_left(), w.size()});
+        found = true;
+    });
+    return found;
+}
+
 extern "C" void umoja_wm_close(uint64_t id) {
     with_wm("close window", [&] { g_wm->close(g_wm->find(id)); });
 }
@@ -2806,12 +2817,14 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
 
     auto const idle = [](mir::Server& server) { umoja_idle_setup(server); };
     auto const input = [](mir::Server& server) { umoja_input_setup(server); };
+    auto const capture = [](mir::Server& server) { umoja_capture_setup(server); };
 
     auto const result = [](int code) { return g_exit_code >= 0 ? g_exit_code.load() : code; };
     if (config->enable_x11) {
         return result(runner.run_with({
             idle,
             input,
+            capture,
             display_config,
             display_config.layout_option(),
             natural_scroll,
@@ -2829,6 +2842,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     return result(runner.run_with({
         idle,
         input,
+        capture,
         display_config,
         display_config.layout_option(),
         natural_scroll,

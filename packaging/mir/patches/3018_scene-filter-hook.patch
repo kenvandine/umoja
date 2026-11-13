@@ -1,0 +1,79 @@
+Description: Let the server show one window to its own screen shooter
+ Umoja shows live window thumbnails (Alt+Tab, overview, dock menu), and Mir
+ can only capture an area of the screen with everything on it. If the
+ server executable exports a C function named mir_scene_filter_hook, the
+ surface stack asks it about every surface (and once with a null surface
+ for the overlays) when building a compositor's scene: 1 shows the
+ surface even when it is hidden (minimized, on another workspace), 0
+ leaves it out, -1 keeps the usual rules. umoja-mir answers only for a
+ screen shooter it created itself, so outputs and screencopy clients are
+ unaffected. Without the hook nothing changes; no ABI change.
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/server/scene/surface_stack.cpp	2026-11-13 01:33:00.748849558 +0000
++++ b/src/server/scene/surface_stack.cpp	2026-11-13 01:33:00.750465587 +0000
+@@ -26,6 +26,7 @@
+ #include <mir/log.h>
+ 
+ #include <boost/throw_exception.hpp>
++#include <dlfcn.h>
+ 
+ #include <algorithm>
+ #include <functional>
+@@ -147,16 +148,37 @@
+     }
+ }
+ 
++namespace
++{
++// Window thumbnails for the shell. A server that exports this C function
++// can restrict what one compositor (such as a screen shooter it created)
++// sees: it answers 1 to show a surface, even a hidden one (a minimized
++// window, one on another workspace), 0 to leave it out, and -1 to let the
++// stack decide as usual. Without it nothing changes.
++using SceneFilter = int (*)(void const* compositor_id, void const* surface);
++
++auto scene_filter() -> SceneFilter
++{
++    static SceneFilter const filter =
++        reinterpret_cast<SceneFilter>(dlsym(RTLD_DEFAULT, "mir_scene_filter_hook"));
++    return filter;
++}
++}
++
+ mc::SceneElementSequence ms::SurfaceStack::scene_elements_for(mc::CompositorID id)
+ {
+     RecursiveReadLock lg(guard);
+ 
++    auto const filter = scene_filter();
+     mc::SceneElementSequence elements;
+     for (auto const& layer : surface_layers)
+     {
+         for (auto const& surface : layer)
+         {
+-            if (surface_can_be_shown(surface) && surface->visible())
++            int const filtered = filter ? filter(id, surface.get()) : -1;
++            if (filtered == 0)
++                continue;
++            if (surface_can_be_shown(surface) && (filtered == 1 || surface->visible()))
+             {
+                 for (auto& renderable : surface->generate_renderables(id))
+                 {
+@@ -170,9 +192,14 @@
+             }
+         }
+     }
+-    for (auto const& renderable : overlays)
++    // Overlays (drag icons) are not part of any window: a filtered
++    // compositor answers 0 for "no surface".
++    if (!filter || filter(id, nullptr) != 0)
+     {
+-        elements.emplace_back(std::make_shared<OverlaySceneElement>(renderable));
++        for (auto const& renderable : overlays)
++        {
++            elements.emplace_back(std::make_shared<OverlaySceneElement>(renderable));
++        }
+     }
+     return elements;
+ }

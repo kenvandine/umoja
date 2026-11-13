@@ -28,6 +28,8 @@ pub mod monitors;
 pub mod recall;
 pub mod screen;
 pub mod terminal;
+#[cfg(feature = "thumbnails")]
+pub mod thumbnails;
 pub mod types;
 #[cfg(feature = "monitors")]
 pub mod wallpaper;

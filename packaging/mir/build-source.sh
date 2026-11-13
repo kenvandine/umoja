@@ -34,4 +34,5 @@ dch --append "Reuse the cross-GPU CPU copy buffers instead of allocating one per
 dch --append "Screencopy: keep a renderer per capture size, so capturing monitors of different sizes in turn does not rebuild the GL renderer every time."
 dch --append "xdg-activation: give a token to a client the user is interacting with even without keyboard focus (the top bar), stop revoking tokens on key presses and focus changes, and let them live 30 s, so clicked notifications and links bring their window forward."
 dch --append "Let miral::window_for() resolve an xdg_toplevel to its window, for Umoja's xdg-session-management (apps getting their windows back where they left them)."
+dch --append "Let the server pick which surfaces its own screen shooter renders (mir_scene_filter_hook), for Umoja's live window thumbnails in Alt+Tab, the overview and the dock."
 echo "$PWD"

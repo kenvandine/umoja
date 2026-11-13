@@ -601,16 +601,28 @@ fn draw_tile_icon(
 /// (app_id, title, window titles) per item, as umoja-mir sends them.
 pub type SwitcherItems = Vec<(String, String, Vec<String>)>;
 
+/// The popup's room for a row of window previews, in logical pixels.
+const SWITCHER_ROW_WIDTH: i32 = 1200;
+
 struct Switcher {
     window: gtk::ApplicationWindow,
     list: gtk::Box,
     windows_row: gtk::Box,
     items: RefCell<Vec<gtk::Button>>,
     data: RefCell<SwitcherItems>,
+    /// Window ids per item, MRU first.
+    ids: RefCell<Vec<Vec<u64>>>,
     mode: Cell<u32>,
     selected: Cell<u32>,
     sub: Cell<i32>,
     pending: RefCell<Option<glib::SourceId>>,
+    /// Live window thumbnails, kept between opens so the next Alt+Tab shows
+    /// the last picture at once while a fresh one is captured.
+    thumbs: RefCell<std::collections::HashMap<u64, gdk::Texture>>,
+    /// Where each window's thumbnail is drawn now: (window, holder, w, h).
+    slots: RefCell<Vec<(u64, gtk::Box, i32, i32)>>,
+    /// Bumped on every open, so an older round of captures stops.
+    generation: Cell<u64>,
 }
 
 fn icon_for(app_id: &str) -> (gio::Icon, String) {
@@ -658,18 +670,115 @@ impl Switcher {
             windows_row,
             items: RefCell::default(),
             data: RefCell::default(),
+            ids: RefCell::default(),
             mode: Cell::new(0),
             selected: Cell::new(0),
             sub: Cell::new(-1),
             pending: RefCell::default(),
+            thumbs: RefCell::default(),
+            slots: RefCell::default(),
+            generation: Cell::new(0),
         })
+    }
+
+    /// Window lists (Alt+Tab, Alt+`) show previews, like gnome-shell's
+    /// WindowSwitcherPopup; the app switcher (Super+Tab) shows icons.
+    fn shows_previews(&self) -> bool {
+        matches!(self.mode.get(), 1 | 2)
+    }
+
+    /// A window preview `w` x `h` with the app's icon on its bottom right
+    /// corner (gnome-shell's WindowIcon). The app icon stands in until a
+    /// thumbnail arrives.
+    fn preview(&self, id: u64, app_id: &str, w: i32, h: i32) -> gtk::Widget {
+        let (icon, _) = icon_for(app_id);
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.set_size_request(w, h);
+        holder.set_halign(gtk::Align::Center);
+        holder.set_valign(gtk::Align::Center);
+        self.fill(&holder, id, &icon, w, h);
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&holder));
+        let badge = gtk::Image::from_gicon(&icon);
+        badge.set_pixel_size(if h >= 120 { 48 } else { 32 });
+        badge.set_halign(gtk::Align::End);
+        badge.set_valign(gtk::Align::End);
+        badge.add_css_class("switcher-badge");
+        overlay.add_overlay(&badge);
+        self.slots.borrow_mut().push((id, holder, w, h));
+        overlay.upcast()
+    }
+
+    fn fill(&self, holder: &gtk::Box, id: u64, icon: &gio::Icon, w: i32, h: i32) {
+        while let Some(c) = holder.first_child() {
+            holder.remove(&c);
+        }
+        match self.thumbs.borrow().get(&id) {
+            Some(t) => {
+                let picture = umoja_common::thumbnails::picture(t, w, h);
+                picture.add_css_class("switcher-thumb");
+                picture.set_vexpand(true);
+                picture.set_valign(gtk::Align::Center);
+                picture.set_halign(gtk::Align::Center);
+                holder.append(&picture);
+            }
+            None => {
+                let image = gtk::Image::from_gicon(icon);
+                image.set_pixel_size((h * 2 / 3).clamp(32, 96));
+                image.set_vexpand(true);
+                image.set_valign(gtk::Align::Center);
+                holder.append(&image);
+            }
+        }
+    }
+
+    /// Capture every listed window, one after another, putting each
+    /// picture in place as it arrives.
+    fn fetch_thumbs(self: &Rc<Self>) {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        let ids: Vec<u64> = self.ids.borrow().iter().flatten().copied().collect();
+        self.thumbs.borrow_mut().retain(|id, _| ids.contains(id));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            for id in ids {
+                let texture =
+                    umoja_common::thumbnails::capture(id, umoja_common::thumbnails::SMALL).await;
+                let Some(s) = weak.upgrade() else { return };
+                if s.generation.get() != generation {
+                    return;
+                }
+                let Some(texture) = texture else { continue };
+                s.thumbs.borrow_mut().insert(id, texture);
+                let slots: Vec<_> = s
+                    .slots
+                    .borrow()
+                    .iter()
+                    .filter(|(i, ..)| *i == id)
+                    .cloned()
+                    .collect();
+                let app_id = s
+                    .ids
+                    .borrow()
+                    .iter()
+                    .position(|w| w.contains(&id))
+                    .and_then(|i| s.data.borrow().get(i).map(|d| d.0.clone()))
+                    .unwrap_or_default();
+                let (icon, _) = icon_for(&app_id);
+                for (_, holder, w, h) in slots {
+                    s.fill(&holder, id, &icon, w, h);
+                }
+            }
+        });
     }
 
     fn rebuild(self: &Rc<Self>) {
         while let Some(c) = self.list.first_child() {
             self.list.remove(&c);
         }
+        self.slots.borrow_mut().clear();
         let data = self.data.borrow();
+        let ids = self.ids.borrow();
         let n = data.len().max(1);
         // switcherPopup.js shrinks icons when many apps don't fit.
         let size = if n > 12 {
@@ -679,6 +788,9 @@ impl Switcher {
         } else {
             96
         };
+        // Previews share the row; 16:10 boxes, 96..256 wide.
+        let preview_w = (SWITCHER_ROW_WIDTH / n as i32 - 24).clamp(96, 256);
+        let preview_h = preview_w * 10 / 16;
         let mut buttons = Vec::new();
         for (i, (app_id, title, windows)) in data.iter().enumerate() {
             // Mode 3 is Ctrl+Alt+Tab: an icon name and a gnome-shell msgid.
@@ -703,15 +815,30 @@ impl Switcher {
             } else {
                 windows.first().cloned().unwrap_or_else(|| title.clone())
             };
-            let image = gtk::Image::from_gicon(&icon);
-            image.set_pixel_size(size);
+            let window_id = ids.get(i).and_then(|w| w.first().copied());
+            let picture: gtk::Widget = match window_id {
+                Some(id) if self.shows_previews() => {
+                    self.preview(id, app_id, preview_w, preview_h)
+                }
+                _ => {
+                    let image = gtk::Image::from_gicon(&icon);
+                    image.set_pixel_size(size);
+                    image.upcast()
+                }
+            };
             let label = gtk::Label::builder()
                 .label(&label_text)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
-                .max_width_chars(if self.mode.get() == 0 { 12 } else { 24 })
+                .max_width_chars(if self.mode.get() == 0 {
+                    12
+                } else if self.shows_previews() {
+                    (preview_w / 9).max(8)
+                } else {
+                    24
+                })
                 .build();
             let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
-            column.append(&image);
+            column.append(&picture);
             column.append(&label);
             // An arrow under apps with several windows, as in GNOME.
             let arrow = gtk::Label::new(Some(if windows.len() > 1 { "▾" } else { " " }));
@@ -730,6 +857,7 @@ impl Switcher {
             buttons.push(button);
         }
         drop(data);
+        drop(ids);
         *self.items.borrow_mut() = buttons;
         self.highlight();
     }
@@ -742,25 +870,46 @@ impl Switcher {
                 b.remove_css_class("selected");
             }
         }
-        // Window list for the selected app (Alt+` inside the app switcher).
+        // Window list for the selected app (Alt+` inside the app switcher):
+        // previews, like gnome-shell's ThumbnailSwitcher.
         while let Some(c) = self.windows_row.first_child() {
             self.windows_row.remove(&c);
         }
+        let row = self.windows_row.clone();
+        self.slots
+            .borrow_mut()
+            .retain(|(_, holder, ..)| !holder.is_ancestor(&row));
         let sub = self.sub.get();
         let data = self.data.borrow();
+        let ids = self.ids.borrow();
         let show = self.mode.get() == 0 && sub >= 0;
-        if let (true, Some((app_id, _, titles))) = (show, data.get(self.selected.get() as usize)) {
-            let (icon, _) = icon_for(app_id);
+        let selected = self.selected.get() as usize;
+        if let (true, Some((app_id, _, titles))) = (show, data.get(selected)) {
+            let window_ids = ids.get(selected).cloned().unwrap_or_default();
+            let n = titles.len().max(1) as i32;
+            let w = (SWITCHER_ROW_WIDTH / n - 24).clamp(96, 256);
+            let h = w * 10 / 16;
             for (i, t) in titles.iter().enumerate() {
-                let image = gtk::Image::from_gicon(&icon);
-                image.set_pixel_size(48);
+                let picture = match window_ids.get(i) {
+                    Some(&id) => {
+                        let p = self.preview(id, app_id, w, h);
+                        p.set_halign(gtk::Align::Center);
+                        p
+                    }
+                    None => {
+                        let (icon, _) = icon_for(app_id);
+                        let image = gtk::Image::from_gicon(&icon);
+                        image.set_pixel_size(48);
+                        image.upcast()
+                    }
+                };
                 let label = gtk::Label::builder()
                     .label(t)
                     .ellipsize(gtk::pango::EllipsizeMode::End)
-                    .max_width_chars(24)
+                    .max_width_chars((w / 9).max(8))
                     .build();
                 let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                column.append(&image);
+                column.append(&picture);
                 column.append(&label);
                 let item = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 item.add_css_class("item-box");
@@ -774,13 +923,21 @@ impl Switcher {
         self.windows_row.set_visible(show);
     }
 
-    fn show(self: &Rc<Self>, mode: u32, items: SwitcherItems, selected: u32, sub: i32) {
+    fn show(self: &Rc<Self>, mode: u32, items: SwitcherItems, ids: Vec<Vec<u64>>, selected: u32, sub: i32) {
+        let opening = !self.window.is_visible() && self.pending.borrow().is_none();
+        let new_ids = *self.ids.borrow() != ids;
         self.mode.set(mode);
         *self.data.borrow_mut() = items;
+        *self.ids.borrow_mut() = ids;
         self.selected.set(selected);
         self.sub.set(sub);
         self.rebuild();
-        if self.window.is_visible() || self.pending.borrow().is_some() {
+        // Fresh pictures on every open (the app switcher needs them for its
+        // window row too), and for windows that weren't listed before.
+        if mode != 3 && (opening || new_ids) {
+            self.fetch_thumbs();
+        }
+        if !opening {
             return;
         }
         let weak = Rc::downgrade(self);
@@ -804,6 +961,8 @@ impl Switcher {
         if let Some(id) = self.pending.borrow_mut().take() {
             id.remove();
         }
+        // Stop capturing for a popup that is gone.
+        self.generation.set(self.generation.get() + 1);
         self.window.set_visible(false);
     }
 }
@@ -923,8 +1082,15 @@ impl Chrome {
         self.picker.update(visibility, tile, x, area_y);
     }
 
-    pub fn show_switcher(&self, mode: u32, items: SwitcherItems, selected: u32, sub: i32) {
-        self.switcher.show(mode, items, selected, sub);
+    pub fn show_switcher(
+        &self,
+        mode: u32,
+        items: SwitcherItems,
+        ids: Vec<Vec<u64>>,
+        selected: u32,
+        sub: i32,
+    ) {
+        self.switcher.show(mode, items, ids, selected, sub);
     }
 
     pub fn switcher_select(&self, selected: u32, sub: i32) {
