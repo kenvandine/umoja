@@ -221,6 +221,9 @@ pub struct AccessPoint {
     pub ssid: String,
     pub strength: u8,
     pub secure: bool,
+    /// WPA/WPA2 Enterprise (802.1X): needs certificates and an EAP method,
+    /// which only Settings can ask for.
+    pub enterprise: bool,
 }
 
 type Listener = Box<dyn Fn(&NetState)>;
@@ -494,7 +497,10 @@ fn read_access_points(c: &gio::DBusConnection, wifi_path: &str) -> (Vec<AccessPo
             if ssid.is_empty() {
                 continue; // hidden network
             }
+            // NM_802_11_AP_SEC_KEY_MGMT_802_1X
+            let wpa = p.u32("WpaFlags").unwrap_or(0) | p.u32("RsnFlags").unwrap_or(0);
             let ap = AccessPoint {
+                enterprise: wpa & 0x200 != 0,
                 path,
                 strength: p.u8("Strength").unwrap_or(0),
                 secure: p.u32("Flags").unwrap_or(0) & 1 != 0
@@ -516,9 +522,11 @@ fn read_access_points(c: &gio::DBusConnection, wifi_path: &str) -> (Vec<AccessPo
 }
 
 impl Network {
-    /// Connect the way gnome-shell does: reuse a saved profile, create one
-    /// for open networks, and hand secured new networks to Settings, which
-    /// asks for the password.
+    /// Connect the way gnome-shell does: reuse a saved profile, otherwise
+    /// have NetworkManager create one from the access point. For a secured
+    /// network NM then asks our secret agent (`nm_agent`) for the
+    /// password, which shows the password card. Enterprise (802.1X)
+    /// networks go to Settings, which can ask for certificates.
     pub fn connect_to(&self, ap: &AccessPoint, saved: Option<&str>) {
         let (Some(c), Some(w)) = (&self.conn, self.state.borrow().wifi.clone()) else {
             return;
@@ -528,12 +536,15 @@ impl Network {
         if let Some(profile) = saved {
             let args = (bus::object_path(profile), dev, specific).to_variant();
             bus::call(c, NM, NM_PATH, NM, "ActivateConnection", Some(args));
-        } else if !ap.secure {
+        } else if ap.enterprise {
+            crate::quick_settings::open_settings_with(
+                "wifi",
+                &["connect-8021x-wifi", &w.path, &ap.path],
+            );
+        } else {
             let empty: HashMap<String, HashMap<String, glib::Variant>> = HashMap::new();
             let args = (empty, dev, specific).to_variant();
             bus::call(c, NM, NM_PATH, NM, "AddAndActivateConnection", Some(args));
-        } else {
-            crate::quick_settings::open_settings("wifi");
         }
     }
 
@@ -970,7 +981,12 @@ fn fill_networks(list: &gtk::Box, s: &NetState) {
                 .css_classes(["flat", "network-row"])
                 .build();
             let profile = saved.get(&ap.ssid).cloned();
-            button.connect_clicked(move |_| Network::get().connect_to(&ap, profile.as_deref()));
+            // Like gnome-shell's menu items, picking one closes the menu
+            // (the password card, if one is needed, comes up on its own).
+            button.connect_clicked(move |b| {
+                crate::quick_settings::close_menu(b);
+                Network::get().connect_to(&ap, profile.as_deref());
+            });
             list.append(&button);
         }
         let all = gtk::Button::builder()
@@ -980,7 +996,10 @@ fn fill_networks(list: &gtk::Box, s: &NetState) {
         if let Some(l) = all.child().and_downcast::<gtk::Label>() {
             l.set_xalign(0.0);
         }
-        all.connect_clicked(|_| crate::quick_settings::open_settings("wifi"));
+        all.connect_clicked(|b| {
+            crate::quick_settings::close_menu(b);
+            crate::quick_settings::open_settings("wifi");
+        });
         list.append(&all);
     });
 }

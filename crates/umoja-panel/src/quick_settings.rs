@@ -803,11 +803,18 @@ pub fn close_menu(w: &impl IsA<gtk::Widget>) {
 /// Opens GNOME Settings (optionally on a panel) through its desktop file,
 /// with an activation token so the compositor focuses the new window.
 pub fn open_settings(panel: &str) {
+    open_settings_with(panel, &[]);
+}
+
+/// Settings on a panel, with that panel's own arguments (gnome-shell's
+/// launchSettingsPanel, e.g. `wifi connect-8021x-wifi <device> <ap>`).
+pub fn open_settings_with(panel: &str, args: &[&str]) {
     let ctx = gtk::gdk::Display::default().map(|d| d.app_launch_context());
     let app = gio::DesktopAppInfo::new("org.gnome.Settings.desktop");
     let mut argv = vec!["gnome-control-center".to_string()];
     if !panel.is_empty() {
         argv.push(panel.to_string());
+        argv.extend(args.iter().map(|a| a.to_string()));
     }
     let token = match (&ctx, &app) {
         (Some(ctx), Some(app)) => ctx.startup_notify_id(Some(app), &[]),

@@ -24,6 +24,7 @@ mod menu_gap;
 mod mpris;
 mod myna;
 mod network;
+mod nm_agent;
 mod notifications;
 mod osd;
 mod polkit;
@@ -95,6 +96,11 @@ thread_local! {
         const { std::cell::OnceCell::new() };
 }
 
+/// The shell's notification center, once the panel is up.
+pub fn notification_center() -> Option<std::rc::Rc<notifications::Center>> {
+    NOTIFICATIONS.with(|n| n.get().cloned())
+}
+
 fn build(app: &adw::Application) {
     // Learn the primary monitor before the first surface maps.
     monitors::start();
@@ -148,6 +154,8 @@ fn build(app: &adw::Application) {
     window.present();
     lock::init();
     polkit::start();
+    // Wi-Fi, VPN and 802.1X password prompts for NetworkManager.
+    nm_agent::start();
     // Volume, brightness and playback keys, and their on-screen display.
     osd::init(app);
     media_keys::own_name();
