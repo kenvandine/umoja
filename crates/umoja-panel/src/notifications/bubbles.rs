@@ -31,7 +31,7 @@ struct Bubble {
 }
 
 pub struct Bubbles {
-    _window: gtk::Window,
+    window: gtk::Window,
     column: gtk::Box,
     items: RefCell<HashMap<u32, Bubble>>,
     /// Ids top to bottom, newest first.
@@ -112,12 +112,16 @@ impl Bubbles {
                 });
             });
         }
-        // Mapped once and never hidden: Mir places a re-mapped surface in the
-        // wrong place, and with no bubbles the input region is empty so
-        // the transparent surface doesn't get in the way.
-        window.present();
+        // Mapped only while there are bubbles. It used to stay mapped with an
+        // empty input region, but that region only reaches the compositor
+        // with a later frame, and when that frame never came the invisible
+        // 360x640 surface ate every click at the top center of the screen
+        // (2026-11-13, caught with umoja-mir's press trace). An unmapped
+        // surface takes no input at all, and unmapping doesn't wait for a
+        // frame. Anchored to the top edge only and fixed in size, it maps
+        // back in the same centered place.
         Self {
-            _window: window,
+            window,
             column,
             items: RefCell::default(),
             order: RefCell::default(),
@@ -153,6 +157,9 @@ impl Bubbles {
                 .child(&content)
                 .build();
             self.column.prepend(&revealer);
+            if !self.window.is_visible() {
+                self.window.present();
+            }
             self.order.borrow_mut().insert(0, id);
             self.items.borrow_mut().insert(
                 id,
@@ -218,10 +225,15 @@ impl Bubbles {
         let revealer = b.revealer;
         revealer.set_reveal_child(false);
         let column = self.column.clone();
+        let window = self.window.clone();
         glib::timeout_add_local_once(
             std::time::Duration::from_millis(FADE_MS as u64),
             move || {
                 column.remove(&revealer);
+                // The last one gone: take the surface off the screen.
+                if column.first_child().is_none() {
+                    window.set_visible(false);
+                }
             },
         );
         true

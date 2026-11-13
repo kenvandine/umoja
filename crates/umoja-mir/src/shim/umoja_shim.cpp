@@ -685,7 +685,8 @@ public:
                 guarded("trace press", [&] {
                     std::string target = "nothing";
                     if (auto const w = tools.window_at(geom::Point{px, py}))
-                        target = describe(tools.info_for(w)) + " app '" + tools.info_for(w).application_id() + "'";
+                        target = describe(tools.info_for(w)) + " app '" + tools.info_for(w).application_id() +
+                                 "' pid " + std::to_string(miral::pid_of(w.application()));
                     std::fprintf(stderr, "umoja-mir: wm: press at %d,%d goes to %s\n", px, py, target.c_str());
                 });
             umoja_pointer_pressed();
