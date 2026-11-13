@@ -5,6 +5,7 @@
 //! (`umoja-panel.service`); if it crashes, systemd restarts it and the rest
 //! of the session carries on.
 
+mod automount;
 mod battery;
 mod bluetooth;
 mod brightness;
@@ -23,6 +24,7 @@ mod login;
 mod media_keys;
 mod menu_api;
 mod menu_gap;
+mod mount_op;
 mod mpris;
 mod myna;
 mod network;
@@ -162,6 +164,10 @@ fn build(app: &adw::Application) {
     captive_portal::start();
     // Ask before apps get the location (GeoClue's agent).
     location::start();
+    // Drive passphrases, network share logins and "drive is busy" for
+    // every app (org.gtk.MountOperationHandler), and automounting drives.
+    mount_op::start();
+    automount::start();
     // Volume, brightness and playback keys, and their on-screen display.
     osd::init(app);
     media_keys::own_name();

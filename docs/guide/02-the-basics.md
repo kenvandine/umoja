@@ -84,6 +84,23 @@ extras:
   this session, so you can paste something you copied earlier. See
   [Clipboard history](07-everyday-ai.md#the-clipboard-history).
 
+## USB drives and network shares
+
+Plug in a USB stick, an SD card or an external disk and Umoja mounts it
+for you, then shows a notification: click it, or **Open with Files**, to
+see what's on it. **Eject** in the same notification unmounts it so it's
+safe to unplug. If the drive is encrypted (LUKS, BitLocker or VeraCrypt),
+Umoja asks for its passphrase first.
+
+The same password card appears whenever an app needs a password to open
+something: an encrypted drive opened from Files, or a network share. Tick
+**Remember Password** to keep it in your keyring. If you eject a drive
+that an app is still using, Umoja lists the apps keeping it busy, so you
+can close them or unmount anyway.
+
+To stop drives from mounting by themselves, or to choose what happens for
+photos, music or software discs, search Settings for **Removable Media**.
+
 ## The top bar
 
 ### The clock, the calendar and notifications

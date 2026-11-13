@@ -65,6 +65,45 @@ pub fn launch_info(info: gio::AppInfo, arg: Option<String>) {
     spawn_app(&id, &argv, token.as_deref());
 }
 
+/// Start a desktop app on `uris` (files or URIs) in its own scope, filling
+/// in the Exec line's field codes like GIO does, with an activation token
+/// so the compositor focuses the new window.
+pub fn launch_app_info(info: &gio::AppInfo, uris: &[String]) {
+    use gtk4::prelude::*;
+    let Some(cmd) = info.commandline() else {
+        return;
+    };
+    let Ok(words) = gtk4::glib::shell_parse_argv(cmd.as_os_str()) else {
+        return;
+    };
+    let as_path = |u: &String| {
+        gio::File::for_uri(u)
+            .path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| u.clone())
+    };
+    let mut argv = Vec::new();
+    for w in words {
+        let w = w.to_string_lossy().into_owned();
+        match w.as_str() {
+            "%u" => argv.extend(uris.first().cloned()),
+            "%U" => argv.extend(uris.iter().cloned()),
+            "%f" => argv.extend(uris.first().map(as_path)),
+            "%F" => argv.extend(uris.iter().map(as_path)),
+            s if s.len() == 2 && s.starts_with('%') => {}
+            _ => argv.push(w),
+        }
+    }
+    let id = info
+        .id()
+        .map(|s| s.trim_end_matches(".desktop").to_string())
+        .unwrap_or_default();
+    let token = gtk4::gdk::Display::default()
+        .and_then(|d| d.app_launch_context().startup_notify_id(Some(info), &[]))
+        .map(|t| t.to_string());
+    spawn_app(&id, &argv, token.as_deref());
+}
+
 fn glib_counter() -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
