@@ -201,6 +201,13 @@ pw_context* g_context = nullptr;
 pw_core* g_core = nullptr;
 spa_hook g_core_listener;
 
+// Wait until the loop thread has run everything queued on it so far. Never
+// call it with the loop locked or from the loop thread.
+int noop_invoke(spa_loop*, bool, uint32_t, void const*, size_t, void*) { return 0; }
+void flush_loop() {
+    pw_loop_invoke(pw_thread_loop_get_loop(g_loop), noop_invoke, 0, nullptr, 0, true, nullptr);
+}
+
 struct LoopLock {
     LoopLock() { pw_thread_loop_lock(g_loop); }
     ~LoopLock() { pw_thread_loop_unlock(g_loop); }
@@ -296,11 +303,30 @@ public:
             if (thread.joinable()) thread.join();
         }
         if (stream) {
-            LoopLock lock;
-            spa_hook_remove(&listener);
-            pw_stream_disconnect(stream);
-            pw_stream_destroy(stream);
-            stream = nullptr;
+            // pw_stream_trigger_process() and the stream's own callbacks
+            // queue invokes on the loop that point at the stream, and
+            // pw_stream_destroy() only flushes those when it runs on the
+            // loop thread. Destroying it from here with one still queued
+            // let the loop thread run it on freed memory: the crash on
+            // "Stop presenting" (SIGSEGV in libpipewire on the
+            // umoja-screencast thread). So drain the queue around each step.
+            flush_loop();
+            {
+                LoopLock lock;
+                // Disconnect with the listener still in place so
+                // remove_buffer frees our memfds; this stop is not news to
+                // the Rust side.
+                reported = false;
+                pw_stream_disconnect(stream);
+            }
+            flush_loop();
+            {
+                LoopLock lock;
+                spa_hook_remove(&listener);
+                pw_stream_destroy(stream);
+                stream = nullptr;
+            }
+            flush_loop();
         }
         if (shooter) {
             umoja_scene_filter_set(shooter->id(), nullptr);
@@ -527,11 +553,13 @@ private:
         seen_scene = g_scene_serial.load(std::memory_order_acquire);
         seen_cursor = g_cursor_serial.load(std::memory_order_acquire);
 
-        pw_buffer* buffer;
-        {
-            LoopLock lock;
-            buffer = pw_stream_dequeue_buffer(stream);
-        }
+        // The loop lock is held until the buffer is queued again: PipeWire
+        // frees the buffers on its loop thread when the consumer goes away
+        // or renegotiates ("Stop presenting" in a browser), and rendering
+        // into, or queueing, a buffer freed under us crashed the compositor.
+        LoopLock lock;
+        if (!streaming) return;
+        pw_buffer* const buffer = pw_stream_dequeue_buffer(stream);
         if (!buffer) {
             // The consumer holds them all; try again with the next change.
             seen_scene = 0;
@@ -579,7 +607,6 @@ private:
             header->dts_offset = 0;
             header->seq = sequence++;
         }
-        LoopLock lock;
         pw_stream_queue_buffer(stream, buffer);
         // We drive the graph: run a cycle so the consumer gets the frame.
         if (pw_stream_is_driving(stream)) pw_stream_trigger_process(stream);
