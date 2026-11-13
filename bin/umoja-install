@@ -48,6 +48,11 @@ if grep -qw umoja.autoinstall /proc/cmdline 2>/dev/null && [ -w /dev/kmsg ]; the
     exec > >(tee >(sed -u 's/^/<3>umoja-install: /' > /dev/kmsg)) 2>&1
 fi
 
+# A copy of the log, for /var/log/installer on the installed system.
+if LOG_COPY=$(mktemp /run/umoja-install.XXXXXX.log 2>/dev/null); then
+    exec > >(tee -a "$LOG_COPY") 2>&1
+fi
+
 die() { echo "ERROR $*" >&2; exit 1; }
 START_NS=$(date +%s%N)
 mark() { echo "[+$(( ($(date +%s%N) - START_NS) / 1000000 ))ms] $*"; }
@@ -127,7 +132,10 @@ mark "  luksFormat done"
 cryptsetup open --volume-key-file="$VOLUME_KEY" "$(part 3)" "$MAPPER"
 rm -f "$VOLUME_KEY"
 mark "  open done"
-mkfs.ext4 -q -F -E nodiscard,lazy_itable_init=1 \
+# lazy_journal_init skips zeroing the journal (1 GiB on big disks). Safe
+# here: the LUKS key is brand new, so whatever the disk held before reads
+# back as noise and can never pass for valid journal blocks.
+mkfs.ext4 -q -F -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 \
     -L umoja-root "/dev/mapper/$MAPPER"
 mark "  mkfs root done"
 wait "$SMALL_FS" || die "formatting the EFI or /boot partition failed"
@@ -236,7 +244,10 @@ in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --bootloader-id=ubuntu --uefi-secure-boot \
     || echo "grub-install failed ($?); putting the boot loader in place by hand"
 mark "  done: grub-install"
-in_target update-grub
+# No os-prober during the install: the disk was just erased, and on real
+# hardware it would mount and probe every other partition, the live USB
+# stick included. Later update-grub runs keep Ubuntu's default.
+in_target env GRUB_DISABLE_OS_PROBER=true update-grub
 mark "  done: update-grub"
 echo "EFI partition after grub-install:"
 find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
@@ -281,6 +292,11 @@ find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
 in_target efibootmgr -v 2>/dev/null || true
 
 progress 99 "Finishing"
+# Keep this log (with its [+ms] timings) on the installed system.
+if [ -n "${LOG_COPY:-}" ] && [ -f "$LOG_COPY" ]; then
+    mkdir -p "$TARGET/var/log/installer"
+    cp "$LOG_COPY" "$TARGET/var/log/installer/umoja-install.log" || true
+fi
 # Plain (not lazy) unmounts, so anything left unwritten shows up as an
 # error instead of a disk that won't boot.
 for m in sys/firmware/efi/efivars sys proc dev/pts dev run; do

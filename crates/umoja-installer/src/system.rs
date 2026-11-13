@@ -123,6 +123,51 @@ fn output(cmd: &str, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Where casper mounts the live medium; the installer copies this file.
+const SQUASHFS: [&str; 2] = [
+    "/cdrom/casper/umoja.squashfs",
+    "/run/live/medium/casper/umoja.squashfs",
+];
+
+/// Read the system image into the page cache in the background while the
+/// user answers the questions, so the copy reads RAM instead of a slow USB
+/// stick. Only a read: if memory gets tight the kernel just drops it, and
+/// the copy reads the stick as before. Idle I/O priority, so the live
+/// session stays responsive.
+pub fn prefetch_squashfs() {
+    let Some(path) = SQUASHFS.into_iter().find(|p| std::path::Path::new(p).is_file()) else {
+        return;
+    };
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    let available = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| mem_available(&m))
+        .unwrap_or(0);
+    if !worth_prefetching(size, available) {
+        tracing::info!(size, available, "not prefetching the system image: not enough memory");
+        return;
+    }
+    tracing::info!(path, size, "prefetching the system image");
+    let _ = Command::new("ionice")
+        .args(["-c3", "nice", "-n19", "cat", path])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// MemAvailable from /proc/meminfo, in bytes.
+fn mem_available(meminfo: &str) -> Option<u64> {
+    meminfo.lines().find_map(|l| {
+        let kb = l.strip_prefix("MemAvailable:")?.trim().strip_suffix("kB")?.trim();
+        kb.parse::<u64>().ok().map(|k| k * 1024)
+    })
+}
+
+/// Keep at least 2 GiB free for the live session after caching the image.
+fn worth_prefetching(size: u64, available: u64) -> bool {
+    size.saturating_add(2 << 30) <= available
+}
+
 /// The disk the live session was started from, so it isn't offered.
 fn live_medium() -> Vec<String> {
     let mut out = vec![];
@@ -348,5 +393,14 @@ mod tests {
         assert_eq!(parse_line("PROGRESS 140 x"), Event::Progress(100, "x".into()));
         assert_eq!(parse_line("ERROR no disk"), Event::Error("no disk".into()));
         assert_eq!(parse_line("mke2fs 1.47"), Event::Log);
+    }
+
+    #[test]
+    fn prefetch_needs_room() {
+        let m = "MemTotal:       16000000 kB\nMemAvailable:    8388608 kB\n";
+        assert_eq!(mem_available(m), Some(8 << 30));
+        assert!(worth_prefetching(4 << 30, 8 << 30));
+        assert!(!worth_prefetching(4 << 30, 5 << 30));
+        assert!(!worth_prefetching(u64::MAX, 8 << 30));
     }
 }

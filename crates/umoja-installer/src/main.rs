@@ -212,6 +212,8 @@ fn build(app: &adw::Application, preview: bool) {
 
     if ui.auto {
         start_auto(&ui);
+    } else if !preview {
+        system::prefetch_squashfs();
     }
     window.fullscreen();
     window.present();
