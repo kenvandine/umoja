@@ -81,6 +81,28 @@ geom::Point centre_of(geom::Rectangle const& r) {
 
 geom::Point centre_of(Window const& w) { return centre_of(geom::Rectangle{w.top_left(), w.size()}); }
 
+// Mir's spot for a new window (BasicWindowManager::place_new_surface):
+// centred across the work area, optically raised by a sixth of the slack.
+geom::Point optical_centre(geom::Rectangle const& area, geom::Size const& size) {
+    int const sw = area.size.width.as_int() - size.width.as_int();
+    int const sh = area.size.height.as_int() - size.height.as_int();
+    return {area.top_left.x.as_int() + sw / 2, area.top_left.y.as_int() + sh / 2 - sh / 6};
+}
+
+// mutter's constrain_fully_onscreen/constrain_to_workarea for a new window:
+// shrunk to the work area (never under its minimum size) and moved so that
+// all of it is inside.
+geom::Rectangle fit_inside(geom::Rectangle const& r, geom::Rectangle const& area, geom::Size const& min) {
+    int const ax = area.top_left.x.as_int(), ay = area.top_left.y.as_int();
+    int const aw = area.size.width.as_int(), ah = area.size.height.as_int();
+    if (aw <= 0 || ah <= 0) return r;
+    int const w = std::max(std::min(r.size.width.as_int(), aw), std::max(1, min.width.as_int()));
+    int const h = std::max(std::min(r.size.height.as_int(), ah), std::max(1, min.height.as_int()));
+    int const x = std::clamp(r.top_left.x.as_int(), ax, std::max(ax, ax + aw - w));
+    int const y = std::clamp(r.top_left.y.as_int(), ay, std::max(ay, ay + ah - h));
+    return {geom::Point{x, y}, geom::Size{w, h}};
+}
+
 uint32_t to_umoja_mods(MirInputEventModifiers m) {
     uint32_t out = 0;
     if (m & mir_input_event_modifier_shift) out |= UMOJA_MOD_SHIFT;
@@ -261,6 +283,21 @@ public:
             });
         }
         if (restored) return spec;
+        // A Wayland client's first commit carries no buffer, so Mir places a
+        // 640x480 stand-in; the real size only comes with the first buffer
+        // (handle_modify_window). Placed from the stand-in, a big window like
+        // Firefox's first run hung ~100 px off the bottom and right of a
+        // small (250% scaled) screen.
+        unsized_placement.reset();
+        if (toplevel && !requested.size().is_set() && spec.top_left().is_set() &&
+            (!spec.state().is_set() || spec.state().value() == mir_window_state_restored) &&
+            (!spec.type().is_set() || spec.type().value() == mir_window_type_normal ||
+             spec.type().value() == mir_window_type_freestyle)) {
+            geom::Size const stand_in{640, 480};
+            auto const area = area_at(centre_of(geom::Rectangle{spec.top_left().value(), stand_in}));
+            unsized_placement = spec.top_left().value() - optical_centre(area, stand_in);
+            return spec;
+        }
         // Like mutter (meta_window_place): a new window opens on the monitor
         // under the pointer. Mir picks the monitor of the focused window.
         if (toplevel && !requested.output_id().is_set()) guarded("place on pointer monitor", [&] { to_pointer_monitor(spec); });
@@ -279,6 +316,16 @@ public:
                 area.top_left.x.as_int() + (area.size.width.as_int() - sz.width.as_int()) / 2,
                 area.top_left.y.as_int() + (area.size.height.as_int() - sz.height.as_int()) / 2};
         }
+        // Keep it all inside the work area, shrunk if it's bigger.
+        if (toplevel && !placed_by_state && spec.size().is_set() && spec.top_left().is_set() &&
+            !(spec.state().is_set() && spec.state().value() == mir_window_state_attached)) {
+            geom::Rectangle const r{spec.top_left().value(), spec.size().value()};
+            geom::Size const min{spec.min_width().is_set() ? spec.min_width().value() : geom::Width{1},
+                                 spec.min_height().is_set() ? spec.min_height().value() : geom::Height{1}};
+            auto const fitted = fit_inside(r, area_at(centre_of(r)), min);
+            spec.top_left() = fitted.top_left;
+            if (fitted.size != r.size) spec.size() = fitted.size;
+        }
         return spec;
     }
 
@@ -288,6 +335,9 @@ public:
             lock_surfaces.push_back(info.window());
             if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: lock surface added (%zu)\n", lock_surfaces.size());
         }
+        auto const unsized = unsized_placement;
+        unsized_placement.reset();
+        if (unsized && is_app_window(info)) awaiting_size[info.window()] = *unsized;
         if (!is_app_window(info)) {
             // Chrome mapped during a drag (tile preview) goes under the window.
             if (moving && elevated) guarded("raise dragged", [&] { tools.raise_tree(moving); });
@@ -321,6 +371,7 @@ public:
         above.erase(w);
         preferred_output.erase(w);
         session_restore.erase(w);
+        awaiting_size.erase(w);
         fullscreen_lifted.erase(w);
         pinned.erase(w);
         hidden_at.erase(w);
@@ -783,6 +834,7 @@ public:
             if (requested != mir_window_state_hidden) it->second = requested;
         }
         use_session_restore(info, spec);
+        place_on_first_size(info, spec);
         if (trace)
             std::fprintf(stderr, "umoja-mir: wm: request for %s:%s -> applying%s\n", describe(info).c_str(),
                          describe(modifications).c_str(), describe(spec).c_str());
@@ -816,6 +868,7 @@ public:
     }
 
     void handle_request_move(WindowInfo& info, MirInputEvent const* input_event) override {
+        awaiting_size.erase(info.window());
         // Logged before anything can drop it, so a client's move request
         // that goes nowhere still shows up in the window trace.
         if (debug_windows())
@@ -1112,6 +1165,54 @@ public:
     }
 
     std::map<Window, geom::Rectangle> session_restore;
+
+    // ---- placing windows that mapped without a size -----------------------
+    //
+    // Set by place_new_window for the window being created: how far Mir's
+    // cascade moved the stand-in from its usual spot.
+    std::optional<geom::Displacement> unsized_placement;
+    // Windows still waiting for their first real size, with that cascade.
+    std::map<Window, geom::Displacement> awaiting_size;
+
+    // mutter places a window when it first maps, at its real size: on the
+    // monitor under the pointer, centred (center-new-windows) or where Mir
+    // would have put it, and fully inside the work area, shrunk if needed.
+    void place_on_first_size(WindowInfo const& info, WindowSpecification& spec) {
+        auto const it = awaiting_size.find(info.window());
+        if (it == awaiting_size.end()) return;
+        auto const state = spec.state().is_set() ? spec.state().value() : info.state();
+        if (spec.top_left().is_set() || (state != mir_window_state_restored && state != mir_window_state_hidden)) {
+            // Moved, maximized, fullscreened or tiled before it had a size:
+            // that already says where it goes.
+            awaiting_size.erase(it);
+            return;
+        }
+        if (!spec.size().is_set()) return;
+        auto const cascade = it->second;
+        awaiting_size.erase(it);
+        guarded("place on first size", [&] {
+            auto const size = spec.size().value();
+            auto const w = info.window();
+            geom::Rectangle output = output_at(centre_of(w));
+            if (outputs.size() > 1 && have_pointer)
+                for (auto const& [id, r] : outputs)
+                    if (r.contains(last_pointer)) output = r;
+            auto const area = area_on(output);
+            geom::Point top_left;
+            if (umoja_center_new_windows())
+                top_left = {area.top_left.x.as_int() + (area.size.width.as_int() - size.width.as_int()) / 2,
+                            area.top_left.y.as_int() + (area.size.height.as_int() - size.height.as_int()) / 2};
+            else
+                top_left = optical_centre(area, size) + cascade;
+            auto const fitted = fit_inside({top_left, size}, area, {info.min_width(), info.min_height()});
+            if (debug_windows())
+                std::fprintf(stderr, "umoja-mir: wm: first size %dx%d for %s -> %d,%d %dx%d\n", size.width.as_int(),
+                             size.height.as_int(), describe(info).c_str(), fitted.top_left.x.as_int(),
+                             fitted.top_left.y.as_int(), fitted.size.width.as_int(), fitted.size.height.as_int());
+            spec.top_left() = fitted.top_left;
+            if (fitted.size != size) spec.size() = fitted.size;
+        });
+    }
 
     // A restored window leaving maximized/fullscreen/minimized for the first
     // time takes its saved floating geometry.
@@ -1690,6 +1791,7 @@ private:
     // replace the WindowInfo that a reference like info.window() points into.
     void begin_move(Window w, int32_t px, int32_t py, bool restore) {
         if (moving == w) return;
+        awaiting_size.erase(w);
         if (moving) end_move();
         moving = w;
         drag_target = UMOJA_ACTION_NONE;
