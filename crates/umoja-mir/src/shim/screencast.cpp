@@ -297,8 +297,11 @@ public:
         }
         if (stream) {
             LoopLock lock;
-            spa_hook_remove(&listener);
+            // Disconnect with the listener still in place so remove_buffer
+            // frees our memfds; this stop is not news to the Rust side.
+            reported = false;
             pw_stream_disconnect(stream);
+            spa_hook_remove(&listener);
             pw_stream_destroy(stream);
             stream = nullptr;
         }
@@ -527,11 +530,13 @@ private:
         seen_scene = g_scene_serial.load(std::memory_order_acquire);
         seen_cursor = g_cursor_serial.load(std::memory_order_acquire);
 
-        pw_buffer* buffer;
-        {
-            LoopLock lock;
-            buffer = pw_stream_dequeue_buffer(stream);
-        }
+        // The loop lock is held until the buffer is queued again: PipeWire
+        // frees the buffers on its loop thread when the consumer goes away
+        // or renegotiates ("Stop presenting" in a browser), and rendering
+        // into, or queueing, a buffer freed under us crashed the compositor.
+        LoopLock lock;
+        if (!streaming) return;
+        pw_buffer* const buffer = pw_stream_dequeue_buffer(stream);
         if (!buffer) {
             // The consumer holds them all; try again with the next change.
             seen_scene = 0;
@@ -579,7 +584,6 @@ private:
             header->dts_offset = 0;
             header->seq = sequence++;
         }
-        LoopLock lock;
         pw_stream_queue_buffer(stream, buffer);
         // We drive the graph: run a cycle so the consumer gets the frame.
         if (pw_stream_is_driving(stream)) pw_stream_trigger_process(stream);
