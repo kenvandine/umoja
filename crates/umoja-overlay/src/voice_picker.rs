@@ -484,6 +484,12 @@ impl VoicePage {
                         p.choose(&key);
                         return;
                     }
+                    Err(e) if e == speech::CANCELLED => {
+                        p.downloading.replace(None);
+                        p.set_status(None);
+                        p.fill();
+                        return;
+                    }
                     Err(e) => {
                         p.downloading.replace(None);
                         p.set_status(Some(&format!(

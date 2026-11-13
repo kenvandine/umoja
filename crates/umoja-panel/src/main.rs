@@ -12,6 +12,7 @@ mod bus;
 mod clock;
 mod crash_watch;
 mod dbusmenu;
+mod downloads;
 mod event_sound;
 mod events;
 mod fade;
@@ -141,6 +142,9 @@ fn build(app: &adw::Application) {
     // Myna's recording indicator, left of the tray like GNOME's privacy
     // indicators; the same object hosts Myna's HUD pill.
     end.append(&MYNA.with(|m| m.get_or_init(myna::Myna::start).widget()));
+    // Background downloads (the assistant's model, Piper voices), only
+    // while there are some.
+    end.append(&downloads::indicator());
     end.append(&TRAY.with(|t| t.get_or_init(sni::Tray::start).widget()));
     let quick = quick_settings::button();
     end.append(&quick);

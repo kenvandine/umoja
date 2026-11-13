@@ -122,7 +122,9 @@ voice**) to choose another.
 one marked **Best for this computer** is a good balance of speed and
 smarts. Models marked **Recommended** are good at using the desktop
 tools. A new model downloads in the background (only on a connection that
-isn't metered), and a notification shows the progress.
+isn't metered), and a notification shows the progress. While it downloads,
+a ring in the top bar fills up; hover it to see how far along it is, how
+long is left, or to cancel. Voice downloads show there too.
 
 The model uses memory while it's loaded. It unloads by itself after ten
 minutes without a question. Click **Free Memory** to unload it straight

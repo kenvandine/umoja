@@ -14,6 +14,7 @@ mod clipboard;
 mod clipwatch;
 mod cloud;
 mod context;
+mod downloads;
 mod files;
 mod lemonade;
 mod model;
@@ -123,6 +124,26 @@ const IFACE_XML: &str = r#"
     <signal name="ScreencastChanged">
       <arg name="active" type="b"/>
     </signal>
+    <!-- Background downloads (Lemonade models, Piper voices) for the
+         panel's download indicator: (id, kind "model"/"voice", title,
+         state "downloading"/"waiting"/"done"/"failed", bytes done, bytes
+         total or 0 when not known yet, cancellable). Done and failed ones
+         stay listed for a few seconds. "waiting" = held back on a metered
+         connection; StartDownload fetches it anyway. -->
+    <method name="GetDownloads">
+      <arg name="downloads" type="a(ssssttb)" direction="out"/>
+    </method>
+    <signal name="DownloadsChanged">
+      <arg name="downloads" type="a(ssssttb)"/>
+    </signal>
+    <method name="CancelDownload">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="cancelled" type="b" direction="out"/>
+    </method>
+    <method name="StartDownload">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="started" type="b" direction="out"/>
+    </method>
     <method name="ScreenshotScreen"/>
     <method name="ScreenshotArea">
       <arg name="x" type="i" direction="in"/>
@@ -257,6 +278,19 @@ fn export(
                 tracing::warn!(error = %e, "could not emit ScreencastChanged");
             }
         });
+        // umoja-panel's download indicator follows this.
+        let downloads_conn = conn.clone();
+        downloads::serve(move |list| {
+            if let Err(e) = downloads_conn.emit_signal(
+                None,
+                dbus::OVERLAY_OBJECT_PATH,
+                dbus::OVERLAY_INTERFACE,
+                "DownloadsChanged",
+                Some(&glib::Variant::tuple_from_iter([list])),
+            ) {
+                tracing::warn!(error = %e, "could not emit DownloadsChanged");
+            }
+        });
         let res = conn
             .register_object(dbus::OVERLAY_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {
@@ -293,6 +327,28 @@ fn export(
                     "IsScreencasting" => {
                         invocation
                             .return_value(Some(&(shots.recorder().is_recording(),).to_variant()));
+                        return;
+                    }
+                    "GetDownloads" => {
+                        invocation.return_value(Some(&glib::Variant::tuple_from_iter([
+                            downloads::snapshot(),
+                        ])));
+                        return;
+                    }
+                    "CancelDownload" | "StartDownload" => {
+                        let Some((id,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (s)",
+                            );
+                            return;
+                        };
+                        let ok = if method == "CancelDownload" {
+                            downloads::cancel(&id)
+                        } else {
+                            downloads::start_now(&id)
+                        };
+                        invocation.return_value(Some(&(ok,).to_variant()));
                         return;
                     }
                     "ScreenshotScreen" => shots.capture_screen(),

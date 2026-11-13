@@ -24,6 +24,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::downloads;
 use crate::lemonade::RUNTIME;
 
 pub const SCHEMA: &str = "org.umoja.shell";
@@ -373,8 +374,24 @@ fn voice_path(voice: &str) -> Option<String> {
     Some(format!("{lang}/{locale}/{name}/{quality}"))
 }
 
+/// What [`download_voice`] returns when the user cancelled it from the
+/// panel's download indicator.
+pub const CANCELLED: &str = "cancelled";
+
+/// "en_GB-alan-medium" -> "Voice · Alan", for the download indicator.
+fn voice_title(voice: &str) -> String {
+    let name = voice.split('-').nth(1).unwrap_or(voice).replace('_', " ");
+    let mut chars = name.chars();
+    let name = match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => name,
+    };
+    format!("{} · {name}", umoja_common::i18n::umoja("Voice"))
+}
+
 /// Fetch a voice's model and config into `dir`; `progress` gets the
-/// fraction done (0.0 to 1.0) of the model file.
+/// fraction done (0.0 to 1.0) of the model file. It's listed in the
+/// panel's download indicator meanwhile, where it can be cancelled.
 pub async fn download_voice(
     voice: &str,
     dir: &Path,
@@ -388,6 +405,13 @@ pub async fn download_voice(
         .connect_timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
+    let listed = downloads::start(
+        &format!("voice:{voice}"),
+        downloads::Kind::Voice,
+        &voice_title(voice),
+        0,
+        true,
+    );
     // The config first: a model without one is no use.
     for file in [format!("{voice}.onnx.json"), format!("{voice}.onnx")] {
         let dest = dir.join(&file);
@@ -397,13 +421,32 @@ pub async fn download_voice(
         let url = format!("{VOICES_URL}/{folder}/{file}?download=true");
         tracing::info!(%url, "downloading Piper voice");
         let part = dir.join(format!("{file}.part"));
-        let result = fetch(&client, &url, &part, &progress).await;
+        // Only the model counts in the indicator: the config is a few KB.
+        let model = file.ends_with(".onnx");
+        let report = |done: u64, total: Option<u64>| {
+            if let Some(t) = total {
+                progress((done as f64 / t as f64).min(1.0));
+            }
+            if model {
+                listed.progress(done, total.unwrap_or(0));
+            }
+        };
+        let result = fetch(&client, &url, &part, &report, &listed).await;
         if let Err(e) = result {
             let _ = tokio::fs::remove_file(&part).await;
+            let cancelled = listed.cancelled();
+            listed.finish(false);
+            if cancelled {
+                return Err(CANCELLED.into());
+            }
             return Err(format!("could not download the {voice} voice: {e}"));
         }
-        tokio::fs::rename(&part, &dest).await.map_err(|e| e.to_string())?;
+        if let Err(e) = tokio::fs::rename(&part, &dest).await {
+            listed.finish(false);
+            return Err(e.to_string());
+        }
     }
+    listed.finish(true);
     Ok(())
 }
 
@@ -411,7 +454,8 @@ async fn fetch(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
-    progress: &impl Fn(f64),
+    progress: &impl Fn(u64, Option<u64>),
+    listed: &downloads::Handle,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
@@ -426,12 +470,13 @@ async fn fetch(
     let mut body = resp.bytes_stream();
     let mut done = 0u64;
     while let Some(chunk) = body.next().await {
+        if listed.cancelled() {
+            return Err(CANCELLED.into());
+        }
         let chunk = chunk.map_err(|e| e.to_string())?;
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
         done += chunk.len() as u64;
-        if let Some(t) = total {
-            progress((done as f64 / t as f64).min(1.0));
-        }
+        progress(done, total);
     }
     file.flush().await.map_err(|e| e.to_string())
 }
