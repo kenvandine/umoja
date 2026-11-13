@@ -5,6 +5,8 @@
 #
 # IMAGE.img   image/umoja.img from `imagecraft pack` (image/README.md)
 # DEBS_DIR    holds umoja-installer_*.deb (and optionally newer Umoja debs)
+# Also writes OUTPUT.list next to the ISO (OUTPUT without .iso): the
+# installed system's packages, one "name version" per line.
 # --autoinstall  boot straight into an unattended install onto the first
 #             disk (account umoja / umoja-install), for CI. Never ship it.
 #
@@ -29,7 +31,7 @@ fi
 
 AUTO=0
 if [ "${1:-}" = --autoinstall ]; then AUTO=1; shift; fi
-[ $# -eq 3 ] || { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -eq 3 ] || { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 IMAGE=$(realpath "$1"); DEBS=$(realpath "$2"); OUT=$(realpath -m "$3")
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 for t in xorriso mksquashfs mcopy mkfs.vfat losetup; do
@@ -119,6 +121,12 @@ if [ -x /usr/lib/snapd/snap-preseed ] && [ -f "$TARGET/var/lib/snapd/seed/seed.y
     umount "$TARGET/dev" "$TARGET/sys/kernel/security" "$TARGET/sys" "$TARGET/proc"
     umount "$TARGET"
 fi
+# The package manifest: every deb the installed system has, one
+# "name version" per line, next to the ISO as NAME.list.
+MANIFEST=${OUT%.iso}.list
+chroot "$TARGET" dpkg-query -W -f '${db:Status-Status} ${Package} ${Version}\n' \
+    | awk '$1 == "installed" { print $2, $3 }' | LC_ALL=C sort -u > "$MANIFEST"
+echo "$(wc -l < "$MANIFEST") packages listed in $MANIFEST"
 mksquashfs "$TARGET" "$ISO/casper/umoja.squashfs" -noappend -xattrs-exclude '^user\.fuseoverlayfs\.' -comp zstd -Xcompression-level 19 -quiet
 
 step "Live layer"
@@ -245,4 +253,4 @@ xorriso -as mkisofs \
     -append_partition 2 C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$WORK/efi.img" \
     -e --interval:appended_partition_2:all:: -no-emul-boot \
     -output "$OUT" "$ISO"
-ls -l "$OUT"
+ls -l "$OUT" "$MANIFEST"

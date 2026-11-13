@@ -124,11 +124,11 @@ step "Building the ISO (needs root; log: $LOGS/iso.log)"
 sudo "$ROOT/image/iso/build" "${AUTO_FLAG[@]}" \
     "$ROOT/image/umoja.img" "$DEBS" "$OUT/$ISO_NAME" 2>&1 | tee "$LOGS/iso.log"
 [ "${PIPESTATUS[0]}" = 0 ] || die "ISO build failed"
-sudo chown "$(id -u):$(id -g)" "$OUT/$ISO_NAME"
+sudo chown "$(id -u):$(id -g)" "$OUT/$ISO_NAME" "$OUT/${ISO_NAME%.iso}.list"
 grep -q 'snap preseeding failed' "$LOGS/iso.log" \
     && echo "WARNING: snaps were not preseeded; first boot will set them up (see $LOGS/iso.log)"
 (cd "$OUT" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256")
 
 step "Done"
-ls -lh "$OUT/$ISO_NAME"
+ls -lh "$OUT/$ISO_NAME" "$OUT/${ISO_NAME%.iso}.list"
 echo "Boot it in QEMU with image/test/boot-vm-style UEFI + Secure Boot, or point a quickemu conf's iso= at it."

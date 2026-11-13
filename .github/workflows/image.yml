@@ -8,8 +8,11 @@
 # - Packages runs on main: that run (workflow_run),
 # - manual runs: the run id given as packages_run, or none (PPA only).
 #
-# Artifacts: umoja-image (umoja.img.zst, kept 7 days) and
-# umoja-image-boot (screenshots + serial log).
+# Artifacts: umoja-image (umoja.img.zst, kept 7 days),
+# umoja-image-boot (screenshots + serial log) and, when there are debs to
+# add, the installer ISO: ubuntu-umoja-desktop-vVERSION+HASH_amd64 (the
+# .iso, its .sha256 and the .list package manifest, kept 7 days) plus the
+# .list on its own, unzipped.
 
 name: Image
 
@@ -132,6 +135,42 @@ jobs:
           name: umoja-image-boot
           path: boot/
           if-no-files-found: ignore
+
+      # The installer ISO, from the image just booted plus this run's debs
+      # (it needs their umoja-installer). Named like image/build-local's,
+      # with a package manifest (NAME.list: "package version" per line).
+      - name: Build the installer ISO
+        id: iso
+        if: steps.debs.outputs.run != ''
+        run: |
+          sudo apt-get install -y -q xorriso mtools dosfstools squashfs-tools
+          mkdir -p iso-debs iso
+          for p in ubuntu-umoja-desktop umoja-desktop umoja-greeter umoja-archive-keyring umoja-installer; do
+            cp dist/${p}_*.deb iso-debs/
+          done
+          version=$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
+          name="ubuntu-umoja-desktop-v${version}+$(git rev-parse --short=8 HEAD)_amd64"
+          sudo image/iso/build image/umoja.img iso-debs "iso/$name.iso"
+          sudo chown -R "$(id -u):$(id -g)" iso
+          (cd iso && sha256sum "$name.iso" > "$name.iso.sha256")
+          ls -l iso
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.iso.outputs.name != ''
+        with:
+          name: ${{ steps.iso.outputs.name }}
+          path: iso/
+          retention-days: 7
+          compression-level: 0
+
+      # The manifest on its own too, unzipped, to read in the browser.
+      - uses: actions/upload-artifact@v7
+        if: steps.iso.outputs.name != ''
+        with:
+          path: iso/${{ steps.iso.outputs.name }}.list
+          archive: false
+          retention-days: 7
 
       - name: Compress the image
         run: |
