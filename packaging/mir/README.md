@@ -55,8 +55,10 @@ Umoja PPA:
 - `patches/3021_drm-connector-no-reprobe.patch` (umoja24): Mir asked the
   kernel to probe every connector again at each query, four times over at
   startup; two empty DisplayPort ports cost 0.68 s per probe on p16g3 (5.5 s
-  of black screen at every login). Reads the kernel's kept state instead and
-  probes only when there is none. `MIR_DRM_ALWAYS_PROBE=1` turns it off.
+  of black screen at every login). On i915/xe a connector the kernel already
+  reports as disconnected is no longer probed; connected ones and other
+  drivers still are (umoja26: nvidia-drm needs the probe to notice an
+  unplug). `MIR_DRM_ALWAYS_PROBE=1` turns it off.
 - `patches/3020_cross-gpu-map-linear.patch`: the 3009 copy cost 5.5 ms of
   `glReadPixels` per 6 MB buffer on the compositing thread (measured on
   p16g3: 450 MB/s, 4 s of every 10 s, with two windows redrawing on the
