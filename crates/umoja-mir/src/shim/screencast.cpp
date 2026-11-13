@@ -624,6 +624,12 @@ std::map<uint64_t, std::unique_ptr<Cast>> g_casts;
 
 void umoja_screencast_setup(mir::Server& server) {
     server.add_init_callback([&server] { g_server = &server; });
+    // Spare shooters go while Mir is still there, not in exit() after it
+    // has unloaded the graphics platform (see capture.cpp).
+    server.add_stop_callback([] {
+        std::lock_guard lock{g_shooters_mutex};
+        g_free_shooters.clear();
+    });
 }
 
 extern "C" bool umoja_cast_start(uint64_t handle, UmojaCastParams const* params) {
