@@ -31,6 +31,33 @@ const BATCH: usize = 16;
 /// Pause between batches, so indexing never hogs a core or the GPU.
 const BATCH_PAUSE: Duration = Duration::from_millis(250);
 const SNIPPET_CHARS: usize = 1000;
+/// How often a long indexing pass writes the index to disk. The whole
+/// file is rewritten each time, so on a first pass over a big home folder
+/// this is by the clock rather than every so many batches.
+const SAVE_EVERY: Duration = Duration::from_secs(300);
+
+/// Files (path and modification time) the model could not embed since this
+/// service started. They stay searchable by name and words; without this
+/// they were picked again at the head of every batch and nothing after
+/// them was ever indexed.
+static UNEMBEDDABLE: std::sync::Mutex<Option<std::collections::HashSet<(String, i64)>>> =
+    std::sync::Mutex::new(None);
+
+fn unembeddable(path: &str, mtime: i64) -> bool {
+    UNEMBEDDABLE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|s| s.contains(&(path.to_string(), mtime)))
+}
+
+fn mark_unembeddable(path: &str, mtime: i64) {
+    UNEMBEDDABLE
+        .lock()
+        .unwrap()
+        .get_or_insert_with(Default::default)
+        .insert((path.to_string(), mtime));
+}
 /// Small enough to stay under 512 tokens (the default llama.cpp batch)
 /// for most text; denser chunks are halved on retry.
 const CHUNK_CHARS: usize = 800;
@@ -322,13 +349,29 @@ async fn cycle(
     shared.status.lock().unwrap().semantic = semantic;
     shared.set_state("indexing");
 
-    let mut done = 0usize;
+    // Entries keep their places for the whole pass (only merge() above
+    // reorders them), so look paths up in one map instead of building one
+    // of the whole index for every batch.
+    let pos: HashMap<String, usize> = {
+        let idx = shared.index.read().unwrap();
+        idx.entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.path.clone(), i))
+            .collect()
+    };
+    let mut saved = Instant::now();
     loop {
         let batch: Vec<Entry> = {
             let idx = shared.index.read().unwrap();
             idx.entries
                 .iter()
-                .filter(|e| !e.read || (semantic && e.vectors.is_empty()))
+                .filter(|e| {
+                    !e.read
+                        || (semantic
+                            && e.vectors.is_empty()
+                            && !unembeddable(&e.path, e.mtime))
+                })
                 .take(BATCH)
                 .cloned()
                 .collect()
@@ -353,24 +396,20 @@ async fn cycle(
         };
         {
             let mut idx = shared.index.write().unwrap();
-            let pos: HashMap<String, usize> = idx
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, e)| (e.path.clone(), i))
-                .collect();
             for e in processed {
-                if let Some(&i) = pos.get(&e.path) {
+                if let Some(&i) = pos.get(&e.path)
+                    && let Some(slot) = idx.entries.get_mut(i)
                     // Skip it if the file changed again meanwhile.
-                    if idx.entries[i].mtime == e.mtime {
-                        idx.entries[i] = e;
-                    }
+                    && slot.path == e.path
+                    && slot.mtime == e.mtime
+                {
+                    *slot = e;
                 }
             }
         }
-        done += 1;
-        if done % 25 == 0 {
+        if saved.elapsed() >= SAVE_EVERY {
             shared.save();
+            saved = Instant::now();
         }
         tokio::time::sleep(BATCH_PAUSE).await;
     }
@@ -471,15 +510,25 @@ async fn process(shared: &Shared, batch: Vec<Entry>, semantic: bool) -> Option<V
             out
         }
     };
+    let asked = vectors.len();
+    let mut embedded = 0usize;
     for ((i, _), v) in chunks.iter().zip(vectors) {
         if let Some(q) = v.as_deref().and_then(Vector::quantize) {
             entries[*i].vectors.push(q);
+            embedded += 1;
         }
     }
-    // A file left without vectors would be picked again forever.
-    if entries.iter().any(|e| e.vectors.is_empty()) {
-        tracing::warn!("embedding failed for some files");
+    // Nothing at all came back: if the server no longer answers a plain
+    // query either, it is the server that is in trouble, not these files.
+    if asked > 0 && embedded == 0 && shared.embedder.query("probe").await.is_err() {
+        tracing::warn!("embedding failed for a whole batch");
         return None;
+    }
+    // A file left without vectors would be picked again forever, ahead of
+    // everything after it: remember it and move on.
+    for e in entries.iter().filter(|e| e.vectors.is_empty()) {
+        tracing::debug!(path = e.path, "could not embed; indexed by name and words only");
+        mark_unembeddable(&e.path, e.mtime);
     }
     Some(entries)
 }
