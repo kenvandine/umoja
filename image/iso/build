@@ -239,7 +239,9 @@ mkdir -p "$(dirname "$OUT")"
 xorriso -as mkisofs \
     -iso-level 3 -full-iso9660-filenames -joliet -joliet-long -rational-rock \
     -volid "UMOJA_${VERSION//./}" \
+    -partition_offset 16 --mbr-force-bootable \
     -appended_part_as_gpt \
+    -iso_mbr_part_type a2a0d0ebe5b9334487c068b6b72699c7 \
     -append_partition 2 C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$WORK/efi.img" \
     -e --interval:appended_partition_2:all:: -no-emul-boot \
     -output "$OUT" "$ISO"
