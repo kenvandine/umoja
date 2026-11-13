@@ -35,7 +35,8 @@ pub fn started(wayland_display: &str) {
     if std::env::var_os("UMOJA_NO_SESSION_TARGET").is_some() {
         return;
     }
-    std::thread::spawn(|| {
+    let ready_at = monotonic_usec();
+    std::thread::spawn(move || {
         let vars = [
             "WAYLAND_DISPLAY",
             "DISPLAY",
@@ -54,7 +55,49 @@ pub fn started(wayland_display: &str) {
             "systemctl",
             &["--user", "start", "--no-block", "umoja-session.target"],
         );
+        restart_stale_portals(ready_at);
     });
+}
+
+/// Portal backends that came up before this compositor did are stuck
+/// without it: after umoja-mir crashed and came back,
+/// xdg-desktop-portal-gnome had been restarted while no Wayland display
+/// was there, logged "Non-compatible display server, exposing settings
+/// only" and never offered ScreenCast again, so screen sharing stayed
+/// broken (Meet's Window tab empty) until the next login. Restart such
+/// backends now; on a fresh login they start after us and are left alone.
+/// xdg-desktop-portal-gtk may also have hit its start limit crash-looping
+/// on the missing X display, so its failed state is cleared too.
+fn restart_stale_portals(ready_at: u64) {
+    run("systemctl", &["--user", "reset-failed", "xdg-desktop-portal-gtk.service"]);
+    for unit in ["xdg-desktop-portal-gnome.service", "xdg-desktop-portal-gtk.service"] {
+        let Some(since) = active_since(unit) else { continue };
+        if since != 0 && since < ready_at {
+            tracing::info!(unit, "restarting a portal backend started before the compositor");
+            run("systemctl", &["--user", "try-restart", "--no-block", unit]);
+        }
+    }
+}
+
+/// When `unit` last became active (CLOCK_MONOTONIC, µs), or 0 when it isn't
+/// active.
+fn active_since(unit: &str) -> Option<u64> {
+    let out = Command::new("systemctl")
+        .args(["--user", "show", "--value", "-p", "ActiveState,ActiveEnterTimestampMonotonic", unit])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let state = lines.next()?.trim().to_string();
+    let since: u64 = lines.next()?.trim().parse().ok()?;
+    Some(if state == "active" { since } else { 0 })
+}
+
+fn monotonic_usec() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: a valid timespec to fill.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1_000
 }
 
 /// Actions handled by other processes over D-Bus.
