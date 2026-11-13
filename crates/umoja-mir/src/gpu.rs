@@ -149,6 +149,14 @@ pub fn add_quirks(args: &mut Vec<std::ffi::OsString>) {
             // SAFETY: as above.
             unsafe { std::env::set_var("MIR_DMABUF_LINEAR_ONLY", "1") };
         }
+        // NVIDIA's GL driver spins on the CPU while it waits for the GPU
+        // (glFinish after each texture upload, buffer swaps): on p16g3 that
+        // was more than half of the compositing thread's CPU time. Ask it
+        // to sleep instead, as KWin does. Only that driver reads this.
+        if std::env::var_os("__GL_YIELD").is_none() {
+            // SAFETY: as above.
+            unsafe { std::env::set_var("__GL_YIELD", "USLEEP") };
+        }
         return;
     }
     tracing::info!(
