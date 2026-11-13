@@ -1162,9 +1162,23 @@ public:
         bool const is_tiled = tiled.count(id) && action != tile_action.end();
         if (auto const u = untiled.find(w); u != untiled.end()) u->second = translate(u->second, from, to);
 
-        if (info.state() == mir_window_state_maximized || info.state() == mir_window_state_fullscreen) {
-            spec.state() = info.state();
+        auto const state = info.state();
+        if (state == mir_window_state_fullscreen) {
+            // Mir moves a fullscreen window between outputs as a state
+            // change with a new output_id.
+            spec.state() = state;
             tools.place_and_size_for_state(spec, info);
+        } else if (state == mir_window_state_maximized || state == mir_window_state_horizmaximized ||
+                   state == mir_window_state_vertmaximized) {
+            // Not as a state change: setting the state it already has keeps
+            // it attached to the old output's display area, and Mir's next
+            // relayout pulls it back there. An output_id alone re-attaches
+            // it to the new one.
+            WindowSpecification sized = spec;
+            sized.state() = state;
+            tools.place_and_size_for_state(sized, info);
+            if (sized.top_left().is_set()) spec.top_left() = sized.top_left().value();
+            if (sized.size().is_set()) spec.size() = sized.size().value();
         } else if (is_tiled) {
             bool const known = has_zone_on(to);
             UmojaRect out{};

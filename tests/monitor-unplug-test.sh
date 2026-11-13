@@ -2,7 +2,8 @@
 # Headless test: windows leave a monitor that goes away and come back to it,
 # as in GNOME (mutter's meta_window_update_for_monitors_changed).
 #
-# umoja-mir runs on two virtual outputs. Windows are moved to the second
+# umoja-mir runs on two virtual outputs (Mir 2.28 wants --virtual-output
+# once per output; a colon list gives one output with two modes). Windows are moved to the second
 # one (one floating, one maximized, one tiled), then the second output is
 # switched off through org.gnome.Mutter.DisplayConfig (as Settings would,
 # and as unplugging it looks to the window manager), and on again.
@@ -29,11 +30,13 @@ touch "$XDG_RUNTIME_DIR/umoja-debug-windows"
 
 cleanup() {
     kill $(jobs -p) 2>/dev/null
+    # gvfsd (from nautilus) starts a wsdd that outlives the test bus.
+    pkill -f "wsdd.*$XDG_RUNTIME_DIR" 2>/dev/null
     kill "$DBUS_SESSION_BUS_PID" 2>/dev/null
 }
 trap cleanup EXIT
 
-"$MIR_BIN" --platform-display-libs mir:virtual --virtual-output 1920x1080:1280x800 >"$OUT/umoja-mir.log" 2>&1 &
+"$MIR_BIN" --platform-display-libs mir:virtual --virtual-output 1920x1080 --virtual-output 1920x1080 >"$OUT/umoja-mir.log" 2>&1 &
 for _ in $(seq 1 30); do [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break; sleep 1; done
 [ -S "$XDG_RUNTIME_DIR/wayland-0" ] || { fail "umoja-mir did not start (see umoja-mir.log)"; exit 1; }
 export WAYLAND_DISPLAY=wayland-0
@@ -47,7 +50,7 @@ geometry() {
     comp GetWindows | python3 -c '
 import ast, re, sys
 text = sys.stdin.read().strip()
-text = re.sub(r"\b(uint64|uint32|int32|@a\([^)]*\))\s*", "", text)
+text = re.sub(r"(\b(uint64|uint32|int32)|@a\([^)]*\))\s*", "", text)
 rows = ast.literal_eval(text)[0]
 for row in rows:
     if sys.argv[1].lower() in (row[1] + " " + row[2]).lower():
@@ -97,15 +100,15 @@ on_first() { read -r x _ w _ <<<"$1"; [ -n "$x" ] && [ "$x" -ge 0 ] && [ $((x + 
 
 # Floating: gnome-text-editor, moved over with Super+Shift+Right.
 launch TextEditor gnome-text-editor --new-window || exit 1
-key -M logo -M shift -k Right -m shift -m logo
+key -P Super_L -P Shift_L -k Right -p Shift_L -p Super_L
 # Maximized: gnome-calculator, moved over then maximized.
 launch Calculator gnome-calculator || exit 1
-key -M logo -M shift -k Right -m shift -m logo
-key -M logo -k Up -m logo
+key -P Super_L -P Shift_L -k Right -p Shift_L -p Super_L
+key -P Super_L -k Up -p Super_L
 # Tiled: nautilus, moved over then tiled into the right half.
 launch Nautilus nautilus --new-window || exit 1
-key -M logo -M shift -k Right -m shift -m logo
-key -M logo -k Right -m logo
+key -P Super_L -P Shift_L -k Right -p Shift_L -p Super_L
+key -P Super_L -k Right -p Super_L
 
 editor0=$(geometry TextEditor) calc0=$(geometry Calculator) files0=$(geometry Nautilus)
 echo "before: editor=$editor0 calc=$calc0 files=$files0" >>"$LOG"
