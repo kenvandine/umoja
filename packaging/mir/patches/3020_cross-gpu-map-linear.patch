@@ -15,6 +15,11 @@ Description: Cross-GPU copy: map linear buffers instead of reading them back
  ARGB/XRGB and ABGR/XBGR buffers are mapped (browsers and GL clients mostly
  use the latter); the copy keeps the buffer's byte order.
  .
+ A mapped read does not queue behind the client's rendering on the GPU as
+ a GL read did, so it first waits for the dma-buf's write fence (poll).
+ In debug mode every mapped copy is checked against a GL read and
+ differences are logged (and the GL pixels shown).
+ .
  Also: spare copy buffers are released when a buffer of a new size is
  needed, instead of up to eight (tens of megabytes each) being kept for
  good; the per-size statistics are only gathered in debug mode, and the
@@ -26,15 +31,18 @@ Forwarded: no
 diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dmabuf.cpp
 --- a/src/platform/graphics/linux_dmabuf.cpp
 +++ b/src/platform/graphics/linux_dmabuf.cpp
-@@ -48,6 +48,7 @@
+@@ -48,8 +48,10 @@
  
  #include <EGL/egl.h>
  #include <cstdint>
 +#include <cstdio>
  #include <cstring>
  #include <stdexcept>
++#include <poll.h>
  #include <sys/ioctl.h>
-@@ -85,22 +86,24 @@
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+@@ -85,22 +87,24 @@
  class CrossGpuCopyPool
  {
  public:
@@ -66,7 +74,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          if (buffers.size() < max_buffers)
          {
              buffers.push_back(b);
-@@ -125,14 +128,28 @@
+@@ -125,14 +129,28 @@
  class CrossGpuCopyStats
  {
  public:
@@ -96,16 +104,17 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          }
  
          auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
-@@ -149,6 +166,8 @@
+@@ -149,6 +167,9 @@
              return;
          }
          auto const n = copies.exchange(0);
 +        auto const m = mapped_copies.exchange(0);
 +        auto const mns = mapped_ns.exchange(0);
++        auto const w = waits.exchange(0);
          auto const b = total_bytes.exchange(0);
          auto const ns = total_ns.exchange(0);
          // Which windows (by buffer size) were copied most.
-@@ -161,7 +180,18 @@
+@@ -161,7 +182,18 @@
              }
              sizes.clear();
          }
@@ -125,30 +134,45 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          {
              return;
          }
-@@ -173,10 +203,14 @@
+@@ -173,10 +205,27 @@
                  std::to_string(by_count[i].second.second) + " x" + std::to_string(by_count[i].first);
          }
          mir::log_info(
 -            "Cross-GPU CPU copies in the last %.1f s: %llu buffers, %.1f MB, %.1f ms copying; most: %s",
-+            "Cross-GPU CPU copies in the last %.1f s: %llu buffers (%llu mapped in %.1f ms), %.1f MB, "
-+            "%.1f ms copying; most: %s; read back: %s",
++            "Cross-GPU CPU copies in the last %.1f s: %llu buffers (%llu mapped in %.1f ms, %llu waited for "
++            "rendering), %.1f MB, %.1f ms copying; most: %s; read back: %s",
              static_cast<double>(now - last) / static_cast<double>(interval) * 10.0,
              static_cast<unsigned long long>(n),
 -            static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str());
 +            static_cast<unsigned long long>(m),
 +            static_cast<double>(mns) / 1e6,
++            static_cast<unsigned long long>(w),
 +            static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str(),
 +            read_back.empty() ? "none" : read_back.c_str());
++    }
++
++    /* A mapped copy had to wait for the client's rendering first. */
++    void waited()
++    {
++        waits.fetch_add(1, std::memory_order_relaxed);
++    }
++
++    /* Whether Umoja's window debug switch was on at the last report. */
++    auto debug_mode() const -> bool
++    {
++        return debug.load(std::memory_order_relaxed);
      }
  
  private:
-@@ -187,10 +221,14 @@
+@@ -187,10 +236,16 @@
      }
  
      std::atomic<unsigned long long> copies{0};
 +    std::atomic<unsigned long long> mapped_copies{0};
 +    std::atomic<long long> mapped_ns{0};
-+    std::atomic<bool> debug{false};
++    // Also at startup, to check the first frames of a session.
++    std::atomic<bool> debug{debugging()};
++    std::atomic<unsigned long long> waits{0};
      std::atomic<unsigned long long> total_bytes{0};
      std::atomic<long long> total_ns{0};
      std::mutex sizes_mutex;
@@ -157,7 +181,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
      std::atomic<std::chrono::steady_clock::rep> last_report{0};
  };
  
-@@ -199,6 +237,17 @@
+@@ -199,6 +254,17 @@
      static CrossGpuCopyStats stats;
      return stats;
  }
@@ -175,7 +199,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
  }
  
  namespace
-@@ -299,6 +348,26 @@
+@@ -299,6 +365,26 @@
                  external_only.resize(returned_modifiers);
              }
  
@@ -202,7 +226,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
              if (num_modifiers == 0)
              {
                  /* Special case: num_modifiers == 0 means that the driver doesn't support modifiers;
-@@ -1346,17 +1415,92 @@
+@@ -1346,58 +1432,242 @@
          }
  
          auto const started = std::chrono::steady_clock::now();
@@ -213,6 +237,17 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          GLsizei const height = size_.height.as_int();
          GLuint const src = tex.tex_id();
  
+-        std::promise<bool> done;
+-        auto result = done.get_future();
+-        egl_executor->spawn(
+-            [&done, dest, width, height, src]()
+-            {
+-                bool ok = false;
+-                GLuint fbo{0};
+-                glGenFramebuffers(1, &fbo);
+-                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src, 0);
+-                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
 +        /* A linear buffer can simply be mapped and copied, which is several
 +         * times cheaper than reading it back through GL (5.5 ms for a 6 MB
 +         * window on an Arrow Lake iGPU, on the compositing thread, per
@@ -248,6 +283,17 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
 +        {
 +            try
 +            {
++                /* The client's rendering may still be in flight. Reading
++                 * through GL queued behind it on the GPU; a mapped read
++                 * has to wait for the buffer's write fence itself (the
++                 * dma-buf polls readable once it has signalled), or the
++                 * copy shows a half-drawn frame. */
++                pollfd fence{planes().front().dma_buf, POLLIN, 0};
++                if (poll(&fence, 1, 0) == 0)
++                {
++                    cross_gpu_copy_stats().waited();
++                    poll(&fence, 1, 100);
++                }
 +                DmaBufMapping const source{*this};
 +                auto const src_stride = source.stride().as<size_t>();
 +                auto const row = static_cast<size_t>(width) * 4;
@@ -287,42 +333,163 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
 +            }
 +        }
 +
-         std::promise<bool> done;
-         auto result = done.get_future();
--        egl_executor->spawn(
--            [&done, dest, width, height, src]()
-+        if (mapped)
-+        {
-+            done.set_value(true);
-+        }
-+        else egl_executor->spawn(
-+            [&done, dest, width, height, src, rgba_dest]()
-             {
-                 bool ok = false;
-                 GLuint fbo{0};
-@@ -1367,9 +1511,15 @@
-                 {
-                     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-                     while (glGetError() != GL_NO_ERROR) {}
-+                    if (rgba_dest)
++        /* Reads the buffer back through GL into `to`: R,G,B,A bytes when
++         * `rgba`, else B,G,R,A (ARGB8888). */
++        auto const read_back = [this, width, height, src](void* to, bool rgba) -> bool
++            {
++                std::promise<bool> done;
++                auto result = done.get_future();
++                egl_executor->spawn(
++                    [&done, to, width, height, src, rgba]()
 +                    {
-+                        // The copy is ABGR8888: R,G,B,A in memory, as GL_RGBA gives it.
-+                        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, dest);
-+                        ok = glGetError() == GL_NO_ERROR;
-+                    }
-                     // ARGB8888 is B,G,R,A in memory: GL_BGRA_EXT gives it directly.
++                        bool ok = false;
++                        GLuint fbo{0};
++                        glGenFramebuffers(1, &fbo);
++                        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src, 0);
++                        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
++                        {
++                            glPixelStorei(GL_PACK_ALIGNMENT, 4);
++                            while (glGetError() != GL_NO_ERROR) {}
++                            if (rgba)
++                            {
++                                glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, to);
++                                ok = glGetError() == GL_NO_ERROR;
++                            }
++                            // ARGB8888 is B,G,R,A in memory: GL_BGRA_EXT gives it directly.
++                            else if (glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, to);
++                                glGetError() == GL_NO_ERROR)
++                            {
++                                ok = true;
++                            }
++                            else
++                            {
++                                glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, to);
++                                if (glGetError() == GL_NO_ERROR)
++                                {
++                                    auto* px = static_cast<unsigned char*>(to);
++                                    for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i)
++                                    {
++                                        std::swap(px[i * 4], px[i * 4 + 2]);
++                                    }
++                                    ok = true;
++                                }
++                            }
++                        }
++                        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++                        glDeleteFramebuffers(1, &fbo);
++                        done.set_value(ok);
++                    });
++                return result.get();
++            };
++
++        bool const ok = mapped || read_back(dest, rgba_dest);
++        auto const took = std::chrono::steady_clock::now() - started;
++
++        /* Debug mode: check the mapped copy against what GL reads, and say
++         * where they differ (a mapped read that is ahead of the client's
++         * rendering, or stale, shows up as wrong pixels on screen). */
++        if (mapped && cross_gpu_copy_stats().debug_mode())
++        {
++            auto const row = static_cast<size_t>(width) * 4;
++            auto const dst_stride = mapping->stride().as<size_t>();
++            std::vector<unsigned char> reference(row * height);
++            if (read_back(reference.data(), rgba_dest))
++            {
++                auto const* got = reinterpret_cast<unsigned char const*>(dest);
++                size_t wrong = 0, wrong_rows = 0, wrong_zero = 0, first_x = 0, first_y = 0;
++                for (GLsizei y = 0; y < height; ++y)
+                 {
+-                    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+-                    while (glGetError() != GL_NO_ERROR) {}
+-                    // ARGB8888 is B,G,R,A in memory: GL_BGRA_EXT gives it directly.
 -                    glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, dest);
 -                    if (glGetError() == GL_NO_ERROR)
-+                    else if (glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, dest);
-+                        glGetError() == GL_NO_ERROR)
++                    auto const* a = got + y * dst_stride;
++                    auto const* b = reference.data() + y * row;
++                    if (std::memcmp(a, b, row) == 0)
                      {
-                         ok = true;
+-                        ok = true;
++                        continue;
                      }
-@@ -1397,7 +1547,16 @@
+-                    else
++                    ++wrong_rows;
++                    for (GLsizei x = 0; x < width; ++x)
+                     {
+-                        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, dest);
+-                        if (glGetError() == GL_NO_ERROR)
++                        if (std::memcmp(a + x * 4, b + x * 4, opaque ? 3 : 4) != 0)
+                         {
+-                            auto* px = reinterpret_cast<unsigned char*>(dest);
+-                            for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i)
++                            if (wrong == 0)
++                            {
++                                first_x = x;
++                                first_y = y;
++                            }
++                            ++wrong;
++                            if (a[x * 4] == 0 && a[x * 4 + 1] == 0 && a[x * 4 + 2] == 0)
+                             {
+-                                std::swap(px[i * 4], px[i * 4 + 2]);
++                                ++wrong_zero;
+                             }
+-                            ok = true;
+                         }
+                     }
+                 }
+-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+-                glDeleteFramebuffers(1, &fbo);
+-                done.set_value(ok);
+-            });
+-        bool const ok = result.get();
++                if (wrong)
++                {
++                    // Does a second mapped read agree with GL now (the first was early)?
++                    size_t still_wrong = 0;
++                    try
++                    {
++                        DmaBufMapping const again{*this};
++                        auto const src_stride = again.stride().as<size_t>();
++                        auto const* from = reinterpret_cast<unsigned char const*>(again.data());
++                        for (GLsizei y = 0; y < height; ++y)
++                        {
++                            for (GLsizei x = 0; x < width; ++x)
++                            {
++                                if (std::memcmp(
++                                        from + y * src_stride + x * 4,
++                                        reference.data() + y * row + x * 4,
++                                        opaque ? 3 : 4) != 0)
++                                {
++                                    ++still_wrong;
++                                }
++                            }
++                        }
++                    }
++                    catch (std::exception const&)
++                    {
++                    }
++                    mir::log_warning(
++                        "Cross-GPU mapped copy differs from GL: %dx%d %s, %zu pixels in %zu rows wrong "
++                        "(%zu of them black in the mapped read), first at %zu,%zu; %zu still wrong on a second read",
++                        width, height, format().name(), wrong, wrong_rows, wrong_zero, first_x, first_y,
++                        still_wrong);
++                    // Show what GL read.
++                    auto* to = reinterpret_cast<unsigned char*>(dest);
++                    for (GLsizei y = 0; y < height; ++y)
++                    {
++                        std::memcpy(to + y * dst_stride, reference.data() + y * row, row);
++                    }
++                }
++            }
++        }
++
+         // Unmapping marks the copy's textures for upload, also when reused.
+         mapping.reset();
          cross_gpu_copy_stats().add(
              static_cast<std::size_t>(width) * height * 4,
-             std::chrono::steady_clock::now() - started,
+-            std::chrono::steady_clock::now() - started,
 -            size_);
++            took,
 +            size_,
 +            mapped,
 +            [this]
