@@ -44,6 +44,8 @@ pub fn button() -> gtk::MenuButton {
     let icons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     icons.add_css_class("system-status");
     let (net, vpn) = network::indicators();
+    // gnome-shell puts its privacy indicators (location) first.
+    icons.append(&crate::location::indicator());
     icons.append(&net);
     icons.append(&vpn);
     icons.append(&bluetooth::indicator());

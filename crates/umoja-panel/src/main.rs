@@ -17,6 +17,7 @@ mod event_sound;
 mod events;
 mod fade;
 mod launch;
+mod location;
 mod lock;
 mod login;
 mod media_keys;
@@ -159,6 +160,8 @@ fn build(app: &adw::Application) {
     nm_agent::start();
     // "Sign in to Network" and the Hotspot Login window for captive portals.
     captive_portal::start();
+    // Ask before apps get the location (GeoClue's agent).
+    location::start();
     // Volume, brightness and playback keys, and their on-screen display.
     osd::init(app);
     media_keys::own_name();

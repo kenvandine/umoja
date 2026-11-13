@@ -632,6 +632,10 @@ window.umoja-end-session {
 .umoja-end-session .end-session-body {
   opacity: 0.85;
 }
+.umoja-location .location-note {
+  font-size: 0.9em;
+  opacity: 0.65;
+}
 .umoja-polkit .polkit-user {
   font-weight: 700;
 }
