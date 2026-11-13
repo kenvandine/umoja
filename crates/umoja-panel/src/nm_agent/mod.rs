@@ -148,7 +148,9 @@ thread_local! {
 /// Export the agent and register it with NetworkManager, again whenever
 /// NetworkManager restarts.
 pub fn start() {
-    let Some(conn) = bus::system_bus() else { return };
+    let Some(conn) = bus::system_bus() else {
+        return;
+    };
     let agent = AGENT.with(Rc::clone);
     if let Err(e) = export(&conn, Rc::downgrade(&agent)) {
         tracing::warn!(error = %e, "could not export the network secret agent");
@@ -214,7 +216,8 @@ fn export(conn: &gio::DBusConnection, agent: Weak<Agent>) -> Result<(), glib::Er
                 "SaveSecrets" => {
                     let conn = Conn::from_variant(&params.child_value(0));
                     glib::spawn_future_local(async move {
-                        let _ = gio::spawn_blocking(move || save_secrets(&conn, &HashMap::new())).await;
+                        let _ =
+                            gio::spawn_blocking(move || save_secrets(&conn, &HashMap::new())).await;
                         invocation.return_value(None);
                     });
                 }
@@ -227,7 +230,9 @@ fn export(conn: &gio::DBusConnection, agent: Weak<Agent>) -> Result<(), glib::Er
                         invocation.return_value(None);
                     });
                 }
-                _ => invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method),
+                _ => {
+                    invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+                }
             }
         })
         .build()?;
@@ -393,12 +398,20 @@ impl Agent {
         if req.setting == "vpn" {
             let weak = Rc::downgrade(self);
             let r = Rc::downgrade(req);
-            match vpn::Helper::start(&req.conn.borrow(), &req.hints, req.flags, &req.vpn_secrets.borrow(), move |ev| {
-                let (Some(a), Some(r)) = (weak.upgrade(), r.upgrade()) else { return };
-                if a.is_current(&r) {
-                    a.on_vpn(&r, ev);
-                }
-            }) {
+            match vpn::Helper::start(
+                &req.conn.borrow(),
+                &req.hints,
+                req.flags,
+                &req.vpn_secrets.borrow(),
+                move |ev| {
+                    let (Some(a), Some(r)) = (weak.upgrade(), r.upgrade()) else {
+                        return;
+                    };
+                    if a.is_current(&r) {
+                        a.on_vpn(&r, ev);
+                    }
+                },
+            ) {
                 Some(h) => {
                     req.ui.replace(Ui::Vpn(h));
                 }
@@ -460,7 +473,9 @@ impl Agent {
 
     fn show_next(self: &Rc<Self>) {
         while !self.dialog_open.get() {
-            let Some(id) = self.queue.borrow_mut().pop_front() else { return };
+            let Some(id) = self.queue.borrow_mut().pop_front() else {
+                return;
+            };
             let content = PENDING.with(|p| p.borrow_mut().remove(&id));
             let req = self.requests.borrow().get(&id).cloned();
             if let (Some(req), Some(content)) = (req, content)
@@ -492,7 +507,11 @@ impl Agent {
         if req.close_ui() {
             self.dialog_closed();
         }
-        tracing::info!(connection = req.conn.borrow().id(), ?response, "network secrets answered");
+        tracing::info!(
+            connection = req.conn.borrow().id(),
+            ?response,
+            "network secrets answered"
+        );
         match response {
             Response::UserCanceled => {
                 req.reply_error("UserCanceled", "Network dialog was canceled by the user")
@@ -536,7 +555,9 @@ impl Agent {
 
     /// NetworkManager withdrew a request (or replaced it).
     fn cancel(self: &Rc<Self>, id: &str) {
-        let Some(req) = self.requests.borrow_mut().remove(id) else { return };
+        let Some(req) = self.requests.borrow_mut().remove(id) else {
+            return;
+        };
         if req.close_ui() {
             self.dialog_closed();
         }
@@ -575,7 +596,8 @@ fn save_secrets(conn: &Conn, answers: &HashMap<String, HashMap<String, String>>)
         let fresh = answers.get(setting);
         if setting == "vpn" {
             let service = conn.str("vpn", "service-type").unwrap_or_default();
-            let mut secrets: HashMap<String, String> = conn.dict("vpn", "secrets").into_iter().collect();
+            let mut secrets: HashMap<String, String> =
+                conn.dict("vpn", "secrets").into_iter().collect();
             if let Some(f) = fresh {
                 secrets.extend(f.clone());
             }
@@ -589,8 +611,12 @@ fn save_secrets(conn: &Conn, answers: &HashMap<String, HashMap<String, String>>)
             continue;
         }
         for key in content::secret_keys(setting) {
-            let value = fresh.and_then(|f| f.get(*key).cloned()).or_else(|| props.str(key));
-            let Some(value) = value.filter(|v| !v.is_empty()) else { continue };
+            let value = fresh
+                .and_then(|f| f.get(*key).cloned())
+                .or_else(|| props.str(key));
+            let Some(value) = value.filter(|v| !v.is_empty()) else {
+                continue;
+            };
             if conn.secret_flags(setting, key) != content::AGENT_OWNED {
                 continue;
             }

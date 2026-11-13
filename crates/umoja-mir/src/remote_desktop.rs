@@ -44,7 +44,14 @@ unsafe extern "C" {
     fn umoja_remote_pointer_motion(handle: u64, dx: f64, dy: f64);
     fn umoja_remote_pointer_absolute(handle: u64, x: f64, y: f64);
     fn umoja_remote_pointer_button(handle: u64, linux_button: u32, pressed: bool);
-    fn umoja_remote_pointer_scroll(handle: u64, dx: f64, dy: f64, steps_x: i32, steps_y: i32, finish: bool);
+    fn umoja_remote_pointer_scroll(
+        handle: u64,
+        dx: f64,
+        dy: f64,
+        steps_x: i32,
+        steps_y: i32,
+        finish: bool,
+    );
     fn umoja_remote_touch(handle: u64, action: u32, slot: u32, x: f64, y: f64);
 }
 
@@ -178,7 +185,9 @@ impl RemoteSession {
         self.check(&header)?;
         {
             let sessions = sessions();
-            let s = sessions.get(&self.id).ok_or_else(|| failed("Session closed"))?;
+            let s = sessions
+                .get(&self.id)
+                .ok_or_else(|| failed("Session closed"))?;
             if s.input != 0 {
                 return Err(failed("Session already started"));
             }
@@ -347,7 +356,11 @@ impl RemoteSession {
         Ok(())
     }
 
-    async fn notify_touch_up(&self, slot: u32, #[zbus(header)] header: Header<'_>) -> fdo::Result<()> {
+    async fn notify_touch_up(
+        &self,
+        slot: u32,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
         self.check(&header)?;
         let h = input_of(&self.id)?;
         unsafe { umoja_remote_touch(h, TOUCH_UP, slot, 0.0, 0.0) };
@@ -395,7 +408,8 @@ pub async fn close(id: &str) {
     }
     if session.input != 0 {
         let input = session.input;
-        let _ = tokio::task::spawn_blocking(move || unsafe { umoja_remote_input_free(input) }).await;
+        let _ =
+            tokio::task::spawn_blocking(move || unsafe { umoja_remote_input_free(input) }).await;
     }
     for cast in crate::screencast::sessions_of_remote_desktop(id) {
         crate::screencast::close_session(&cast).await;

@@ -13,6 +13,8 @@
 //!                      button does (it logs out after 60 s)
 //! ConfirmPowerOff()    show the Power Off dialog, as the Quick Settings
 //!                      button does (it powers off after 60 s)
+//! ConfirmRestart()     show the Restart dialog (it restarts after 60 s);
+//!                      what org.gnome.SessionManager.Reboot asks for
 //! ```
 
 use std::cell::Cell;
@@ -31,6 +33,7 @@ const XML: &str = r#"<node>
     <method name="LogOut"/>
     <method name="ConfirmLogOut"/>
     <method name="ConfirmPowerOff"/>
+    <method name="ConfirmRestart"/>
   </interface>
 </node>"#;
 
@@ -147,6 +150,11 @@ pub fn own_name(
                     "ConfirmPowerOff" => {
                         invocation.return_value(None);
                         gtk::glib::idle_add_local_once(crate::power_dialog::open);
+                        return;
+                    }
+                    "ConfirmRestart" => {
+                        invocation.return_value(None);
+                        gtk::glib::idle_add_local_once(crate::power_dialog::open_restart);
                         return;
                     }
                     "OpenMenu" | "ToggleMenu" => {}

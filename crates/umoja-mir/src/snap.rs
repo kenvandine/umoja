@@ -103,10 +103,8 @@ pub fn picker(
     } else {
         area.y + PEEK
     };
-    let near = py >= monitor.y
-        && py <= bottom
-        && px >= x0 + OUTER_PAD
-        && px <= x0 + PICKER_W - OUTER_PAD;
+    let near =
+        py >= monitor.y && py <= bottom && px >= x0 + OUTER_PAD && px <= x0 + PICKER_W - OUTER_PAD;
     if !near {
         return (Visibility::Peek, PickerTile::None);
     }

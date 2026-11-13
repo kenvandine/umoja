@@ -79,7 +79,16 @@ pub fn send(method: &'static str) {
             return;
         };
         if let Err(e) = conn
-            .call_future(Some(name), PATH, PLAYER, method, None, None, gio::DBusCallFlags::NONE, 1000)
+            .call_future(
+                Some(name),
+                PATH,
+                PLAYER,
+                method,
+                None,
+                None,
+                gio::DBusCallFlags::NONE,
+                1000,
+            )
             .await
         {
             tracing::debug!(player = name, method, error = %e, "MPRIS call failed");
@@ -105,7 +114,9 @@ mod tests {
     #[test]
     fn picks_playing_then_paused() {
         let p = |v: &[(&str, &str)]| -> Vec<(String, String)> {
-            v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+            v.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
         };
         let list = p(&[("a", "Stopped"), ("b", "Paused"), ("c", "Playing")]);
         assert_eq!(pick(&list), Some("c"));

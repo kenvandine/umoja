@@ -242,7 +242,10 @@ impl TilingState {
 
     /// (window id, tile action) for every tiled window.
     pub fn tiles(&self) -> Vec<(u64, u32)> {
-        self.windows.iter().map(|(id, (a, _))| (*id, *a as u32)).collect()
+        self.windows
+            .iter()
+            .map(|(id, (a, _))| (*id, *a as u32))
+            .collect()
     }
 
     /// Window `id` was resized to `new`. Returns the neighbours that shared a

@@ -37,7 +37,11 @@ static DESKTOP_IDS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Def
 /// The desktop file id gnome-shell would give (`org.gnome.TextEditor.desktop`,
 /// `firefox_firefox.desktop`): the portal finds the icon with it.
 fn desktop_id(app_id: &str) -> String {
-    if let Some(id) = DESKTOP_IDS.lock().unwrap_or_else(|e| e.into_inner()).get(app_id) {
+    if let Some(id) = DESKTOP_IDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(app_id)
+    {
         return id.clone();
     }
     let id = umoja_common::apps::app_for_window(app_id)
@@ -175,8 +179,16 @@ impl Introspect {
     #[zbus(property)]
     fn screen_size(&self) -> (i32, i32) {
         let outputs = crate::display_config::outputs();
-        let w = outputs.values().map(|o| o.rect.x + o.rect.w).max().unwrap_or(0);
-        let h = outputs.values().map(|o| o.rect.y + o.rect.h).max().unwrap_or(0);
+        let w = outputs
+            .values()
+            .map(|o| o.rect.x + o.rect.w)
+            .max()
+            .unwrap_or(0);
+        let h = outputs
+            .values()
+            .map(|o| o.rect.y + o.rect.h)
+            .max()
+            .unwrap_or(0);
         (w, h)
     }
 

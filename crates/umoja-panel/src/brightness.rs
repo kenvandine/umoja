@@ -38,7 +38,9 @@ pub fn to_percent(min: i64, max: i64, value: i64) -> i64 {
     if max <= min {
         return 0;
     }
-    (((value - min) * 100) as f64 / (max - min) as f64).round().clamp(0.0, 100.0) as i64
+    (((value - min) * 100) as f64 / (max - min) as f64)
+        .round()
+        .clamp(0.0, 100.0) as i64
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +56,9 @@ fn read_int(path: &Path) -> Option<i64> {
 }
 
 fn read_str(path: &Path) -> String {
-    std::fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default()
+    std::fs::read_to_string(path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 impl Backlight {
@@ -79,7 +83,12 @@ impl Backlight {
         if max < 99 && kind == "raw" {
             min = 0;
         }
-        (min < max).then_some(Self { name, dir, min, max })
+        (min < max).then_some(Self {
+            name,
+            dir,
+            min,
+            max,
+        })
     }
 
     fn current(&self) -> Option<i64> {
@@ -139,7 +148,11 @@ impl Brightness {
         };
         let Some(now) = now else { return };
         let step = step_amount(b.max - b.min + 1);
-        let new = if up { (now + step).min(b.max) } else { (now - step).max(b.min) };
+        let new = if up {
+            (now + step).min(b.max)
+        } else {
+            (now - step).max(b.min)
+        };
         self.target.set(Some((new, Instant::now())));
         if new != now {
             set_brightness("backlight", &b.name, new as u32);
@@ -173,7 +186,9 @@ impl Brightness {
     }
 
     fn kbd_get(&self) -> Option<i32> {
-        self.kbd_call("GetBrightness", None)?.get::<(i32,)>().map(|(v,)| v)
+        self.kbd_call("GetBrightness", None)?
+            .get::<(i32,)>()
+            .map(|(v,)| v)
     }
 
     fn kbd_set(&self, v: i32) {
@@ -267,7 +282,11 @@ impl Brightness {
             Some(up) => {
                 let step = step_amount(max as i64) as i32;
                 self.kbd_before_off.set(-1);
-                if up { (now + step).min(max) } else { (now - step).max(0) }
+                if up {
+                    (now + step).min(max)
+                } else {
+                    (now - step).max(0)
+                }
             }
             None => self.toggled(now, max),
         };
@@ -291,7 +310,9 @@ impl Brightness {
             gio::DBusSignalFlags::NONE,
             move |_, _, _, _, _, params| {
                 let Some(this) = weak.upgrade() else { return };
-                let Some((value, source)) = params.get::<(i32, String)>() else { return };
+                let Some((value, source)) = params.get::<(i32, String)>() else {
+                    return;
+                };
                 if source != "internal" {
                     return;
                 }
@@ -325,7 +346,9 @@ impl Brightness {
 
 /// logind's Session.SetBrightness(subsystem, name, value), asynchronously.
 fn set_brightness(subsystem: &str, name: &str, value: u32) {
-    let Some(conn) = crate::bus::system_bus() else { return };
+    let Some(conn) = crate::bus::system_bus() else {
+        return;
+    };
     conn.call(
         Some("org.freedesktop.login1"),
         "/org/freedesktop/login1/session/auto",

@@ -191,11 +191,7 @@ fn primary_id(
     stored: impl FnOnce(&[String]) -> Option<String>,
 ) -> Option<i32> {
     let names = connected_names(map);
-    let by_name = |name: &str| {
-        map.iter()
-            .find(|(_, o)| o.name == name)
-            .map(|(id, _)| *id)
-    };
+    let by_name = |name: &str| map.iter().find(|(_, o)| o.name == name).map(|(id, _)| *id);
     chosen
         .filter(|(set, _)| *set == names)
         .and_then(|(_, name)| by_name(name))
@@ -395,7 +391,10 @@ fn place_new_outputs(
             enabled: true,
         }
     };
-    let mut out: Vec<MonitorConfig> = known.iter().map(|o| config(o, o.rect.x, o.rect.y)).collect();
+    let mut out: Vec<MonitorConfig> = known
+        .iter()
+        .map(|o| config(o, o.rect.x, o.rect.y))
+        .collect();
     let mut right = known.iter().map(|o| o.rect.x + o.rect.w).max().unwrap_or(0);
     let top = known.iter().map(|o| o.rect.y).min().unwrap_or(0);
     for o in new {
@@ -430,7 +429,10 @@ fn ensure_new_outputs_placed(display_file: &str) {
     let Some(configs) = place_new_outputs(&map, &listed) else {
         return;
     };
-    match std::fs::write(&path, outputs::render_display_yaml(std::slice::from_ref(&configs))) {
+    match std::fs::write(
+        &path,
+        outputs::render_display_yaml(std::slice::from_ref(&configs)),
+    ) {
         Ok(()) => tracing::info!(
             outputs = ?configs.iter().map(|c| (&c.connector, c.x, c.y)).collect::<Vec<_>>(),
             "placed new monitors to the right of the saved layout"
@@ -496,7 +498,10 @@ pub fn start_greeter(display_file: &'static str) {
                 continue;
             };
             let path = outputs::config_dir().join(display_file);
-            match std::fs::write(&path, outputs::render_display_yaml(std::slice::from_ref(&configs))) {
+            match std::fs::write(
+                &path,
+                outputs::render_display_yaml(std::slice::from_ref(&configs)),
+            ) {
                 Ok(()) => tracing::info!(
                     outputs = ?configs.iter().map(|c| (&c.connector, c.x)).collect::<Vec<_>>(),
                     "greeter: screens side by side"

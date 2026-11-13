@@ -143,5 +143,12 @@ pub fn manager_call(method: &str) {
         tracing::warn!(method, "no system bus; cannot reach logind");
         return;
     };
-    bus::call(&conn, LOGIN1, LOGIN1_PATH, MANAGER, method, Some((true,).to_variant()));
+    bus::call(
+        &conn,
+        LOGIN1,
+        LOGIN1_PATH,
+        MANAGER,
+        method,
+        Some((true,).to_variant()),
+    );
 }

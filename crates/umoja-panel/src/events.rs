@@ -34,7 +34,10 @@ fn month_range(d: &glib::DateTime) -> (i64, i64) {
     let start = glib::DateTime::from_local(d.year(), d.month(), 1, 0, 0, 0.0);
     match start {
         Ok(s) => {
-            let end = s.add_months(1).map(|e| e.to_unix()).unwrap_or(s.to_unix() + 31 * 86400);
+            let end = s
+                .add_months(1)
+                .map(|e| e.to_unix())
+                .unwrap_or(s.to_unix() + 31 * 86400);
             (s.to_unix(), end)
         }
         Err(_) => (d.to_unix() - 31 * 86400, d.to_unix() + 31 * 86400),
@@ -46,7 +49,10 @@ impl Events {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("date-events");
         root.set_visible(false);
-        let heading = gtk::Label::builder().xalign(0.0).css_classes(["date-events-heading"]).build();
+        let heading = gtk::Label::builder()
+            .xalign(0.0)
+            .css_classes(["date-events-heading"])
+            .build();
         let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
         root.append(&heading);
         root.append(&list);
@@ -91,7 +97,9 @@ impl Events {
         let (start, end) = month_range(&date);
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else { return };
+            let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+                return;
+            };
             let events = calendar::fetch(&conn, start, end).await;
             let Some(this) = weak.upgrade() else { return };
             if this.serial.get() != serial {
@@ -125,7 +133,9 @@ impl Events {
         let (m0, _) = month_range(&date);
         for day in 0..31u32 {
             let start = m0 + day as i64 * 86400;
-            let Ok(d) = glib::DateTime::from_unix_local(start) else { continue };
+            let Ok(d) = glib::DateTime::from_unix_local(start) else {
+                continue;
+            };
             if d.month() != date.month() {
                 break;
             }
@@ -140,7 +150,9 @@ impl Events {
         self.heading.set_text(&if is_today {
             i18n::shell("Today")
         } else {
-            date.format("%A, %B %-d").map(|s| s.to_string()).unwrap_or_default()
+            date.format("%A, %B %-d")
+                .map(|s| s.to_string())
+                .unwrap_or_default()
         });
         let day = calendar::on_day(events, day_start(&date));
         if day.is_empty() {
@@ -158,7 +170,11 @@ impl Events {
             row.add_css_class("date-event");
             row.append(
                 &gtk::Label::builder()
-                    .label(if e.summary.is_empty() { i18n::shell("Untitled Event") } else { e.summary.clone() })
+                    .label(if e.summary.is_empty() {
+                        i18n::shell("Untitled Event")
+                    } else {
+                        e.summary.clone()
+                    })
                     .xalign(0.0)
                     .ellipsize(gtk::pango::EllipsizeMode::End)
                     .max_width_chars(28)

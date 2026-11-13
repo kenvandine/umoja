@@ -57,7 +57,13 @@ impl Keyring {
         Some(Self { conn, session })
     }
 
-    fn call(&self, path: &str, iface: &str, method: &str, args: Option<glib::Variant>) -> Option<glib::Variant> {
+    fn call(
+        &self,
+        path: &str,
+        iface: &str,
+        method: &str,
+        args: Option<glib::Variant>,
+    ) -> Option<glib::Variant> {
         self.conn
             .call_sync(
                 Some(SECRETS),
@@ -77,15 +83,25 @@ impl Keyring {
     /// Items matching `attrs`, unlocking the locked ones when the keyring
     /// lets us without a prompt (the login keyring is unlocked at login).
     fn search(&self, attrs: &HashMap<String, String>) -> Vec<String> {
-        let Some(reply) = self.call(SERVICE_PATH, SERVICE, "SearchItems", Some((attrs.clone(),).to_variant())) else {
+        let Some(reply) = self.call(
+            SERVICE_PATH,
+            SERVICE,
+            "SearchItems",
+            Some((attrs.clone(),).to_variant()),
+        ) else {
             return vec![];
         };
-        let paths = |v: glib::Variant| v.iter().filter_map(|p| p.str().map(String::from)).collect::<Vec<_>>();
+        let paths = |v: glib::Variant| {
+            v.iter()
+                .filter_map(|p| p.str().map(String::from))
+                .collect::<Vec<_>>()
+        };
         let mut items = paths(reply.child_value(0));
         let locked = paths(reply.child_value(1));
         if !locked.is_empty() {
             let list: Vec<_> = locked.iter().map(|p| op(p)).collect();
-            if let Some(r) = self.call(SERVICE_PATH, SERVICE, "Unlock", Some((list,).to_variant())) {
+            if let Some(r) = self.call(SERVICE_PATH, SERVICE, "Unlock", Some((list,).to_variant()))
+            {
                 items.extend(paths(r.child_value(0)));
                 if r.child_value(1).str().is_some_and(|p| p != "/") {
                     tracing::info!("keyring is locked; skipping its network secrets");

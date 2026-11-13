@@ -71,7 +71,8 @@ struct Session {
 /// Sessions by object path.
 static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> = LazyLock::new(Default::default);
 /// Running streams: stream handle -> (session path, stream path).
-static HANDLES: LazyLock<Mutex<HashMap<u64, (String, OwnedObjectPath)>>> = LazyLock::new(Default::default);
+static HANDLES: LazyLock<Mutex<HashMap<u64, (String, OwnedObjectPath)>>> =
+    LazyLock::new(Default::default);
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static CONNECTION: OnceLock<Connection> = OnceLock::new();
@@ -95,7 +96,11 @@ fn handles() -> std::sync::MutexGuard<'static, HashMap<u64, (String, OwnedObject
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_cast_node_added(handle: u64, node: u32, serial: u64) {
     if let Some(tx) = EVENTS.get() {
-        let _ = tx.send(Event::NodeAdded { handle, node, serial });
+        let _ = tx.send(Event::NodeAdded {
+            handle,
+            node,
+            serial,
+        });
     }
 }
 
@@ -112,7 +117,10 @@ fn prop<'a>(v: impl Into<Value<'a>>) -> OwnedValue {
     OwnedValue::try_from(v.into()).expect("plain values convert")
 }
 
-fn get<'a, T: TryFrom<&'a OwnedValue>>(props: &'a HashMap<String, OwnedValue>, key: &str) -> Option<T> {
+fn get<'a, T: TryFrom<&'a OwnedValue>>(
+    props: &'a HashMap<String, OwnedValue>,
+    key: &str,
+) -> Option<T> {
     props.get(key).and_then(|v| T::try_from(v).ok())
 }
 
@@ -145,7 +153,11 @@ fn scale_on(rect: Rect, outputs: &[(Rect, f64)]) -> Option<f64> {
     let overlap = |o: &Rect| {
         let w = (rect.x + rect.w).min(o.x + o.w) - rect.x.max(o.x);
         let h = (rect.y + rect.h).min(o.y + o.h) - rect.y.max(o.y);
-        if w > 0 && h > 0 { w as i64 * h as i64 } else { 0 }
+        if w > 0 && h > 0 {
+            w as i64 * h as i64
+        } else {
+            0
+        }
     };
     outputs
         .iter()
@@ -167,7 +179,12 @@ fn max_scale_for(rect: Rect) -> f64 {
 fn max_scale_on(rect: Rect, outputs: &[(Rect, f64)]) -> f64 {
     outputs
         .iter()
-        .filter(|(o, _)| rect.x < o.x + o.w && o.x < rect.x + rect.w && rect.y < o.y + o.h && o.y < rect.y + rect.h)
+        .filter(|(o, _)| {
+            rect.x < o.x + o.w
+                && o.x < rect.x + rect.w
+                && rect.y < o.y + o.h
+                && o.y < rect.y + rect.h
+        })
         .map(|(_, s)| *s)
         .fold(None, |m: Option<f64>, s| Some(m.map_or(s, |m| m.max(s))))
         .unwrap_or(1.0)
@@ -176,7 +193,9 @@ fn max_scale_on(rect: Rect, outputs: &[(Rect, f64)]) -> f64 {
 fn cursor_mode(props: &HashMap<String, OwnedValue>) -> fdo::Result<u32> {
     let mode = get::<u32>(props, "cursor-mode").unwrap_or(CURSOR_HIDDEN);
     if mode > CURSOR_METADATA {
-        return Err(fdo::Error::InvalidArgs(format!("Unknown cursor mode {mode}")));
+        return Err(fdo::Error::InvalidArgs(format!(
+            "Unknown cursor mode {mode}"
+        )));
     }
     Ok(mode)
 }
@@ -271,11 +290,13 @@ impl CastSession {
         parameters: HashMap<String, OwnedValue>,
     ) -> fdo::Result<OwnedObjectPath> {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let path =
-            OwnedObjectPath::try_from(format!("{OBJECT_PATH}/Stream/u{id}")).map_err(|e| failed(e.to_string()))?;
+        let path = OwnedObjectPath::try_from(format!("{OBJECT_PATH}/Stream/u{id}"))
+            .map_err(|e| failed(e.to_string()))?;
         {
             let mut sessions = sessions();
-            let session = sessions.get_mut(&self.path).ok_or_else(|| failed("Session closed"))?;
+            let session = sessions
+                .get_mut(&self.path)
+                .ok_or_else(|| failed("Session closed"))?;
             if session.started {
                 return Err(failed("Session already started"));
             }
@@ -355,7 +376,8 @@ impl CastSession {
         properties: HashMap<String, OwnedValue>,
         #[zbus(connection)] conn: &Connection,
     ) -> fdo::Result<OwnedObjectPath> {
-        let id = get::<u64>(&properties, "window-id").ok_or_else(|| fdo::Error::InvalidArgs("No window-id".into()))?;
+        let id = get::<u64>(&properties, "window-id")
+            .ok_or_else(|| fdo::Error::InvalidArgs("No window-id".into()))?;
         let rect = tokio::task::spawn_blocking(move || crate::shell::window_rect(id))
             .await
             .ok()
@@ -410,7 +432,9 @@ impl CastSession {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
         self.check(&header)?;
-        Err(fdo::Error::NotSupported("Virtual monitors are not supported".into()))
+        Err(fdo::Error::NotSupported(
+            "Virtual monitors are not supported".into(),
+        ))
     }
 
     #[zbus(signal)]
@@ -452,12 +476,18 @@ impl CastStream {
 pub async fn start_session(path: &str) -> fdo::Result<()> {
     let params: Vec<(OwnedObjectPath, CastParams)> = {
         let mut sessions = sessions();
-        let session = sessions.get_mut(path).ok_or_else(|| failed("Session closed"))?;
+        let session = sessions
+            .get_mut(path)
+            .ok_or_else(|| failed("Session closed"))?;
         if session.started {
             return Err(failed("Session already started"));
         }
         session.started = true;
-        session.streams.iter().map(|s| (s.path.clone(), s.params)).collect()
+        session
+            .streams
+            .iter()
+            .map(|s| (s.path.clone(), s.params))
+            .collect()
     };
     for (stream_path, p) in params {
         // Registered before the stream exists, so its node event finds it.
@@ -557,7 +587,11 @@ pub async fn close_all() {
 async fn handle_events(conn: Connection, mut rx: tokio::sync::mpsc::UnboundedReceiver<Event>) {
     while let Some(event) = rx.recv().await {
         match event {
-            Event::NodeAdded { handle, node, serial } => {
+            Event::NodeAdded {
+                handle,
+                node,
+                serial,
+            } => {
                 let Some((_, stream)) = handles().get(&handle).cloned() else {
                     continue;
                 };
@@ -576,7 +610,9 @@ async fn handle_events(conn: Connection, mut rx: tokio::sync::mpsc::UnboundedRec
                 let Some((session, _)) = handles().get(&handle).cloned() else {
                     continue;
                 };
-                let rd = sessions().get(&session).and_then(|s| s.remote_desktop.clone());
+                let rd = sessions()
+                    .get(&session)
+                    .and_then(|s| s.remote_desktop.clone());
                 if let Some(rd) = rd {
                     // The remote desktop session ends with it, as in mutter.
                     crate::remote_desktop::close(&rd).await;
@@ -633,9 +669,15 @@ mod tests {
     #[test]
     fn stream_scale_follows_the_monitor() {
         // A 2x laptop panel left of a 1x monitor.
-        let outputs = [(Rect::new(0, 0, 1440, 900), 2.0), (Rect::new(1440, 0, 1920, 1080), 1.0)];
+        let outputs = [
+            (Rect::new(0, 0, 1440, 900), 2.0),
+            (Rect::new(1440, 0, 1920, 1080), 1.0),
+        ];
         // A window mostly on the external monitor streams at its scale.
-        assert_eq!(scale_on(Rect::new(1300, 100, 800, 600), &outputs), Some(1.0));
+        assert_eq!(
+            scale_on(Rect::new(1300, 100, 800, 600), &outputs),
+            Some(1.0)
+        );
         assert_eq!(scale_on(Rect::new(100, 100, 800, 600), &outputs), Some(2.0));
         assert_eq!(scale_on(Rect::new(5000, 0, 10, 10), &outputs), None);
         // An area across both is as sharp as the sharper one.

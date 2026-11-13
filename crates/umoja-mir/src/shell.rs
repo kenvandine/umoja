@@ -595,7 +595,9 @@ fn scripted_drag(id: u64, x: i32, y: i32, duration_ms: u32) -> bool {
     let frame = std::time::Duration::from_millis(16);
     for (px, py) in drag_path((gx, gy), (x, y), duration_ms) {
         std::thread::sleep(frame);
-        if !unsafe { umoja_wm_script_drag(id, 1, px, py, std::ptr::null_mut(), std::ptr::null_mut()) } {
+        if !unsafe {
+            umoja_wm_script_drag(id, 1, px, py, std::ptr::null_mut(), std::ptr::null_mut())
+        } {
             break;
         }
     }

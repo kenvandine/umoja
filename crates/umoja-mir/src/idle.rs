@@ -612,13 +612,57 @@ impl ScreenSaver {
     }
 }
 
-/// The inhibitor part of gnome-session's `org.gnome.SessionManager`. The
-/// rest of it (logout, client registration) isn't offered: logind handles
-/// that in Umoja.
+/// The inhibitor part of gnome-session's `org.gnome.SessionManager`, plus
+/// its end-session requests (Reboot, Shutdown, Logout), which open the
+/// panel's confirmation card as gnome-session has gnome-shell do. Apps
+/// such as update-notifier ask for a restart this way and only fall back
+/// to their own dialog (whose `un-reboot` icon no current theme ships)
+/// when the call fails. Client registration isn't offered.
 struct SessionManager;
+
+/// Asks umoja-panel to show one of its end-session cards.
+async fn panel_confirm(conn: &zbus::Connection, method: &str) -> zbus::fdo::Result<()> {
+    use umoja_common::dbus;
+    conn.call_method(
+        Some(dbus::PANEL_BUS_NAME),
+        dbus::PANEL_OBJECT_PATH,
+        Some(dbus::PANEL_INTERFACE),
+        method,
+        &(),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| {
+        tracing::warn!(method, error = %e, "panel end-session dialog unavailable");
+        zbus::fdo::Error::Failed(e.to_string())
+    })
+}
 
 #[interface(name = "org.gnome.SessionManager")]
 impl SessionManager {
+    /// Shows the Restart card (gnome-session: the reboot end-session dialog).
+    async fn reboot(&self, #[zbus(connection)] conn: &zbus::Connection) -> zbus::fdo::Result<()> {
+        panel_confirm(conn, "ConfirmRestart").await
+    }
+
+    /// Shows the Power Off card.
+    async fn shutdown(&self, #[zbus(connection)] conn: &zbus::Connection) -> zbus::fdo::Result<()> {
+        panel_confirm(conn, "ConfirmPowerOff").await
+    }
+
+    /// Mode 0 asks first; 1 (no confirmation) and 2 (force) log out now.
+    async fn logout(
+        &self,
+        mode: u32,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        panel_confirm(conn, if mode == 0 { "ConfirmLogOut" } else { "LogOut" }).await
+    }
+
+    fn can_shutdown(&self) -> bool {
+        true
+    }
+
     fn inhibit(
         &self,
         app_id: String,

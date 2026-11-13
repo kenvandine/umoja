@@ -1,6 +1,7 @@
 //! The Power Off and Log Out confirmations, like gnome-shell's end-session
 //! dialog: a card over a dimmed screen that acts by itself after 60
-//! seconds, with Cancel, Restart and Power Off, or Cancel and Log Out.
+//! seconds, with Cancel, Restart and Power Off, Cancel and Restart (an app
+//! asking org.gnome.SessionManager to reboot), or Cancel and Log Out.
 
 use gtk::{gdk, glib, prelude::*};
 use gtk4 as gtk;
@@ -21,6 +22,7 @@ thread_local! {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
     PowerOff,
+    Restart,
     LogOut,
 }
 
@@ -65,6 +67,11 @@ fn countdown_text(kind: Kind, left: u32) -> String {
             "The system will power off automatically in %d seconds.",
             left,
         ),
+        Kind::Restart => i18n::shell_n(
+            "The system will restart automatically in %d second.",
+            "The system will restart automatically in %d seconds.",
+            left,
+        ),
         Kind::LogOut => match real_name() {
             Some(name) => i18n::shell_n(
                 "%s will be logged out automatically in %d second.",
@@ -85,6 +92,11 @@ fn countdown_text(kind: Kind, left: u32) -> String {
 /// Shows the Power Off dialog (or brings the open one back to the front).
 pub fn open() {
     show(Kind::PowerOff);
+}
+
+/// Shows the Restart dialog (or brings the open one back to the front).
+pub fn open_restart() {
+    show(Kind::Restart);
 }
 
 /// Shows the Log Out dialog (or brings the open one back to the front).
@@ -128,6 +140,7 @@ fn show(kind: Kind) {
         &gtk::Label::builder()
             .label(match kind {
                 Kind::PowerOff => i18n::shell("Power Off"),
+                Kind::Restart => i18n::shell("Restart"),
                 Kind::LogOut => i18n::shell("Log Out"),
             })
             .css_classes(["end-session-title"])
@@ -162,6 +175,7 @@ fn show(kind: Kind) {
             (i18n::shell("Restart"), REBOOT),
             (i18n::shell("Power Off"), POWER_OFF),
         ],
+        Kind::Restart => vec![(i18n::shell("Restart"), REBOOT)],
         Kind::LogOut => vec![(i18n::shell("Log Out"), Action::LogOut)],
     };
     let default_action = choices.last().map(|(_, a)| *a).unwrap_or(POWER_OFF);

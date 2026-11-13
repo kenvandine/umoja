@@ -98,7 +98,9 @@ impl Dialog {
             card.append(editable);
             let (fields_c, update_c) = (Rc::downgrade(&fields), update.clone());
             editable.connect_changed(move |e| {
-                let Some(fields) = fields_c.upgrade() else { return };
+                let Some(fields) = fields_c.upgrade() else {
+                    return;
+                };
                 let (s, _, valid) = &fields[i];
                 if s.key.is_some() {
                     valid.set(s.validate.check(&e.text()));

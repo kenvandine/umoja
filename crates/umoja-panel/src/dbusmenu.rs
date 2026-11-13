@@ -204,15 +204,7 @@ impl Menu {
                     let ts = (glib::monotonic_time() / 1000) as u32;
                     proxy.call(
                         "Event",
-                        Some(
-                            &(
-                                id,
-                                "clicked",
-                                0i32.to_variant(),
-                                ts,
-                            )
-                                .to_variant(),
-                        ),
+                        Some(&(id, "clicked", 0i32.to_variant(), ts).to_variant()),
                         gio::DBusCallFlags::NONE,
                         2000,
                         gio::Cancellable::NONE,
