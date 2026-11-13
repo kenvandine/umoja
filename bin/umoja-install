@@ -76,19 +76,25 @@ if [ -z "$SQUASHFS" ]; then
 fi
 [ -f "$SQUASHFS" ] || die "can't find the Umoja file system (casper/umoja.squashfs)"
 
+# The full name goes into /etc/passwd's comment field: a colon or a line
+# break there makes useradd refuse it, after the disk has been erased.
+FULLNAME=$(printf '%s' "$FULLNAME" | tr ':\n\r' '   ')
+
 IFS= read -r PASSWORD || true
 [ -n "$PASSWORD" ] || die "no password on stdin"
 
 # /dev/sda -> /dev/sda1, /dev/nvme0n1 -> /dev/nvme0n1p1
 part() { case "$DISK" in *[0-9]) echo "${DISK}p$1" ;; *) echo "${DISK}$1" ;; esac; }
 
+# Best effort, and it must not change the shell's options: it is also called
+# directly below, and a `set +e` here used to turn errexit off for the whole
+# install, so a failed mkfs, mount or useradd went unnoticed.
 cleanup() {
-    set +e
-    [ -n "${VOLUME_KEY:-}" ] && rm -f "$VOLUME_KEY"
+    [ -n "${VOLUME_KEY:-}" ] && rm -f "$VOLUME_KEY" || true
     for m in sys/firmware/efi/efivars sys proc dev/pts dev run boot/efi boot ""; do
-        mountpoint -q "$TARGET/$m" && umount -l "$TARGET/$m"
+        if mountpoint -q "$TARGET/$m"; then umount -l "$TARGET/$m" || true; fi
     done
-    [ -e "/dev/mapper/$MAPPER" ] && cryptsetup close "$MAPPER"
+    if [ -e "/dev/mapper/$MAPPER" ]; then cryptsetup close "$MAPPER" || true; fi
 }
 trap cleanup EXIT
 
@@ -157,7 +163,14 @@ unsquashfs -f -d "$TARGET" -processors "$(nproc)" -xattrs-include '^security\.' 
     -percentage "$SQUASHFS" | while read -r pct; do
     case "$pct" in ''|*[!0-9]*) continue ;; esac
     progress $((8 + pct * 72 / 100)) "Copying Umoja"
-done
+done || copy_status=$?
+# unsquashfs exits 2 for errors it could carry on from (an attribute the
+# target can't store); the checks below decide whether the copy is good.
+case ${copy_status:-0} in
+    0) ;;
+    2) echo "unsquashfs reported non-fatal errors; checking the copy" ;;
+    *) die "copying the system failed (unsquashfs status $copy_status)" ;;
+esac
 [ -x "$TARGET/usr/bin/umoja-session" ] || die "copy incomplete"
 if [ -e "$TARGET/usr/lib/snapd/snap-confine" ]; then
     getcap "$TARGET/usr/lib/snapd/snap-confine" | grep -q cap_sys_admin \
@@ -268,9 +281,10 @@ find "$TARGET/boot/efi" -type f | sed "s|^$TARGET||"
 #   EFI/ubuntu  shim -> grubx64.efi, which reads EFI/ubuntu/grub.cfg
 #   EFI/BOOT    the same, for firmware that has no boot entry for us
 pick() { for f in "$@"; do [ -s "$f" ] && { echo "$f"; return; }; done; }
-SHIM=$(pick "$TARGET"/usr/lib/shim/shimx64.efi.signed.latest "$TARGET"/usr/lib/shim/shimx64.efi.signed)
-MOK=$(pick "$TARGET"/usr/lib/shim/mmx64.efi.signed "$TARGET"/usr/lib/shim/mmx64.efi)
-GRUB=$(pick "$TARGET"/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed)
+# (pick fails when it finds nothing; the checks below report what matters.)
+SHIM=$(pick "$TARGET"/usr/lib/shim/shimx64.efi.signed.latest "$TARGET"/usr/lib/shim/shimx64.efi.signed) || true
+MOK=$(pick "$TARGET"/usr/lib/shim/mmx64.efi.signed "$TARGET"/usr/lib/shim/mmx64.efi) || true
+GRUB=$(pick "$TARGET"/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed) || true
 [ -n "$SHIM" ] && [ -n "$GRUB" ] || die "signed shim or GRUB missing from the system"
 [ -s "$TARGET/boot/grub/grub.cfg" ] || die "update-grub wrote no /boot/grub/grub.cfg"
 for dir in ubuntu BOOT; do

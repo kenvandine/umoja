@@ -260,7 +260,14 @@ fn image_data(v: &glib::Variant) -> Option<gdk::Texture> {
     if w <= 0 || h <= 0 || bits != 8 || !(channels == 3 || channels == 4) {
         return None;
     }
-    if data.len() < (stride as usize) * (h as usize - 1) + (w * channels) as usize {
+    // Any app on the session bus sends these numbers: a stride shorter than
+    // a row (or negative), or sizes whose product overflows, must not get
+    // as far as GDK, which aborts or reads past the buffer.
+    if w > MAX_SOURCE_IMAGE || h > MAX_SOURCE_IMAGE || stride < w.checked_mul(channels)? {
+        return None;
+    }
+    let needed = (stride as u64) * (h as u64 - 1) + (w as u64) * (channels as u64);
+    if (data.len() as u64) < needed {
         return None;
     }
     let bytes = glib::Bytes::from_owned(data);
@@ -297,6 +304,8 @@ fn image_data(v: &glib::Variant) -> Option<gdk::Texture> {
 
 /// Largest side kept of a notification's image-data, in pixels.
 const MAX_IMAGE: i32 = 144;
+/// Largest side accepted in a notification's image-data at all.
+const MAX_SOURCE_IMAGE: i32 = 16384;
 
 /// Bodies may carry a small markup subset (b, i, u, a, img) and often
 /// carry plain HTML; turn either into markup we can show.

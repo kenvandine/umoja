@@ -209,7 +209,7 @@ fn build(app: &adw::Application) {
 
     for (name, panel) in [(dbus::PANEL_BUS_NAME, true), (dbus::DOCK_BUS_NAME, false)] {
         let state = state.clone();
-        let id = gio::bus_watch_name(
+        gio::bus_watch_name(
             gio::BusType::Session,
             name,
             gio::BusNameWatcherFlags::NONE,
@@ -224,8 +224,6 @@ fn build(app: &adw::Application) {
             },
             |_, _| {},
         );
-        // Watched for the life of this short process.
-        std::mem::forget(id);
     }
 
     let s = state.clone();

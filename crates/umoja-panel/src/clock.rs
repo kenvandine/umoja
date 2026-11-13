@@ -168,11 +168,7 @@ impl ClockButton {
                 }
             });
         }
-        glib::timeout_add_seconds_local(1, move || {
-            let _keep_alive = (&settings, &weekdate);
-            refresh();
-            glib::ControlFlow::Continue
-        });
+        tick(Rc::new(refresh), format, Rc::new((settings, weekdate)));
         Self { button }
     }
 
@@ -202,4 +198,26 @@ mod tests {
         };
         assert_eq!(f.pattern(), "%a %-l:%M:%S %p");
     }
+}
+
+/// Refreshes the clock when its text next changes: on the second when
+/// seconds are shown, otherwise on the minute, instead of waking the panel
+/// every second all day. Without seconds it still looks every ten seconds
+/// at most, because a timer doesn't run while the machine sleeps and the
+/// time can be set under us.
+fn tick<K: 'static>(refresh: Rc<dyn Fn()>, format: Rc<Cell<Format>>, _keep_alive: Rc<K>) {
+    let now = glib::DateTime::now_local().ok();
+    let micros = now.as_ref().map_or(0, |n| n.microsecond() as u64);
+    let second = now.as_ref().map_or(0, |n| n.second() as u64);
+    // A few milliseconds late rather than early: early shows the old time.
+    let to_second = 1_000 - micros / 1_000 + 5;
+    let delay = if format.get().seconds {
+        to_second
+    } else {
+        ((59 - second.min(59)) * 1_000 + to_second).min(10_000)
+    };
+    glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
+        refresh();
+        tick(refresh, format, _keep_alive);
+    });
 }

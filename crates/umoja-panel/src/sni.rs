@@ -413,6 +413,12 @@ impl ItemState {
                 let (Ok(v), Some(st)) = (res, weak.upgrade()) else {
                     return;
                 };
+                // The item is any app: check the reply before unpacking it
+                // (child_value panics on anything but a container).
+                if v.type_().as_str() != "(a{sv})" {
+                    tracing::debug!(reply = %v.type_(), "unexpected tray item properties");
+                    return;
+                }
                 st.apply(&crate::bus::Props::from_dict(&v.child_value(0)));
             },
         );
@@ -594,14 +600,24 @@ fn is_multicolour(data: &[u8]) -> bool {
     false
 }
 
+/// Largest side accepted for a tray icon pixmap, in pixels.
+const MAX_PIXMAP: i32 = 1024;
+
 fn best_pixmap(v: &glib::Variant, size: i32) -> Option<Pixmap> {
+    if !v.is_container() {
+        return None;
+    }
     let mut pixmaps: Vec<(i32, i32, Vec<u8>)> = v
         .iter()
         .filter_map(|p| {
             let w = p.try_child_value(0)?.get::<i32>()?;
             let h = p.try_child_value(1)?.get::<i32>()?;
             let data = p.try_child_value(2)?.get::<Vec<u8>>()?;
-            (w > 0 && h > 0 && data.len() >= (w * h * 4) as usize).then_some((w, h, data))
+            // Sizes come from the app: no overflow, and nothing absurd.
+            let fits = (1..=MAX_PIXMAP).contains(&w)
+                && (1..=MAX_PIXMAP).contains(&h)
+                && data.len() as u64 >= w as u64 * h as u64 * 4;
+            fits.then_some((w, h, data))
         })
         .collect();
     pixmaps.sort_by_key(|(w, _, _)| *w);

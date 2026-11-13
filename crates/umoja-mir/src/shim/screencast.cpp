@@ -494,9 +494,13 @@ private:
             {
                 std::unique_lock lock{g_wake_mutex};
                 // Windows are also checked now and then: their size decides
-                // the stream's, and a closed one ends the stream.
+                // the stream's, and a closed one ends the stream. Only a
+                // stream that is running has frames due: one still waiting
+                // for its consumer (or paused by it) always has changes it
+                // hasn't sent, and treating that as due made this loop spin
+                // on a whole core until the consumer connected.
                 g_wake.wait_for(lock, params.kind == UMOJA_CAST_WINDOW ? 250ms : 1s,
-                                [this] { return !running || due(); });
+                                [this] { return !running || (streaming && due()); });
             }
             if (!running) break;
             auto const now = std::chrono::steady_clock::now();

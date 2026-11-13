@@ -34,6 +34,12 @@ pub struct Locker {
     /// The unlock prompt's widgets, on the first monitor's lock surface.
     ui: RefCell<Option<PromptUi>>,
     fingerprint: RefCell<Option<Rc<fingerprint::Fingerprint>>>,
+    /// Holds suspend back until the lock screen is up (login::inhibit_sleep).
+    sleep_inhibitor: RefCell<Option<std::os::fd::OwnedFd>>,
+    /// Between PrepareForSleep(true) and (false).
+    going_to_sleep: std::cell::Cell<bool>,
+    /// The compositor has confirmed the lock: every screen shows it.
+    confirmed: std::cell::Cell<bool>,
 }
 
 #[derive(Clone)]
@@ -61,8 +67,24 @@ pub fn init() {
             let going_down = params.try_child_value(0).and_then(|v| v.get::<bool>()) == Some(true);
             let wanted = gs::get_bool(SCREENSAVER, "lock-enabled", true)
                 && gs::get_bool(SCREENSAVER, "ubuntu-lock-on-suspend", true);
+            let l = locker();
+            l.going_to_sleep.set(going_down);
             if going_down && wanted {
-                locker().lock();
+                l.lock();
+            }
+            if going_down {
+                // Let the machine sleep once the lock is on screen (the
+                // compositor's "locked", see lock()), or at once when there
+                // is nothing to wait for. Never hold it for long.
+                if !l.is_locked() || l.confirmed.get() {
+                    l.allow_sleep();
+                } else {
+                    glib::timeout_add_local_once(std::time::Duration::from_secs(2), || {
+                        locker().allow_sleep()
+                    });
+                }
+            } else {
+                l.hold_sleep();
             }
             // The reader may have been reset over suspend.
             if !going_down && let Some(fp) = locker().fingerprint.borrow().clone() {
@@ -78,6 +100,7 @@ pub fn init() {
         tracing::info!("session was locked when the panel started; locking again");
         locker().lock();
     }
+    locker().hold_sleep();
 }
 
 impl Locker {
@@ -97,6 +120,11 @@ impl Locker {
         instance.connect_locked(|_| {
             tracing::info!("screen locked");
             login::set_locked_hint(true);
+            let l = locker();
+            l.confirmed.set(true);
+            if l.going_to_sleep.get() {
+                l.allow_sleep();
+            }
         });
         instance.connect_failed({
             let weak = Rc::downgrade(self);
@@ -204,7 +232,20 @@ impl Locker {
         tracing::info!("screen unlocked");
     }
 
+    /// Take the sleep inhibitor (at start and after each resume).
+    fn hold_sleep(&self) {
+        if self.sleep_inhibitor.borrow().is_none() {
+            *self.sleep_inhibitor.borrow_mut() = login::inhibit_sleep();
+        }
+    }
+
+    /// Close the sleep inhibitor: logind carries on suspending.
+    fn allow_sleep(&self) {
+        self.sleep_inhibitor.borrow_mut().take();
+    }
+
     fn teardown(&self) {
+        self.confirmed.set(false);
         self.instance.borrow_mut().take();
         if let Some(fp) = self.fingerprint.borrow_mut().take() {
             fp.stop();

@@ -103,6 +103,38 @@ pub fn terminate_session() {
     }
 }
 
+/// Asks logind to hold suspend back until the returned descriptor is closed
+/// (a "delay" inhibitor, up to logind's InhibitDelayMaxSec). Without one,
+/// logind does not wait for anyone after PrepareForSleep: the machine could
+/// be asleep before the lock screen had drawn, and show the unlocked
+/// desktop for a moment on wake. gnome-shell holds the same inhibitor.
+pub fn inhibit_sleep() -> Option<std::os::fd::OwnedFd> {
+    let conn = bus::system_bus()?;
+    let reply = conn.call_with_unix_fd_list_sync(
+        Some(LOGIN1),
+        LOGIN1_PATH,
+        MANAGER,
+        "Inhibit",
+        Some(&("sleep", "Umoja", "Lock the screen before sleep", "delay").to_variant()),
+        Some(glib::VariantTy::new("(h)").ok()?),
+        gio::DBusCallFlags::NONE,
+        2000,
+        None::<&gio::UnixFDList>,
+        gio::Cancellable::NONE,
+    );
+    let (value, fds) = match reply {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not take a sleep inhibitor; the lock may trail suspend");
+            return None;
+        }
+    };
+    let index = value.try_child_value(0)?.get::<glib::variant::Handle>()?.0;
+    let fd = fds?.get(index).ok()?;
+    // SAFETY: g_unix_fd_list_get returns a new duplicate the caller owns.
+    Some(unsafe { std::os::fd::FromRawFd::from_raw_fd(fd) })
+}
+
 /// Calls `f(signal_name, params)` for the Lock/Unlock signals on our session
 /// and PrepareForSleep on the manager.
 pub fn watch(f: impl Fn(&str, &glib::Variant) + 'static) {
