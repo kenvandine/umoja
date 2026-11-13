@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use gtk::glib;
 use gtk4 as gtk;
 use serde::{Deserialize, Serialize};
-use umoja_common::{gsettings as gs, lemonade};
+use umoja_common::lemonade;
 
 use super::Note;
 
@@ -89,7 +89,15 @@ struct Delta {
 }
 
 fn model() -> String {
-    gs::get_string(gs::UMOJA_SHELL, "lemonade-model", lemonade::DEFAULT_MODEL)
+    lemonade::chat_model()
+}
+
+/// Why the local server just stopped (OOM kill, restart), if it did.
+async fn trouble() -> Option<String> {
+    tokio::task::spawn_blocking(|| lemonade::trouble_message_wait(Duration::from_secs(2)))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Pango markup to plain text, cut to `limit` characters.
@@ -416,12 +424,14 @@ async fn run(body: Vec<u8>, tx: async_channel::Sender<Event>) {
     let resp = match resp {
         Ok(r) => r,
         Err(e) => {
-            let msg = if e.is_connect() {
+            let msg = if let Some(msg) = trouble().await {
+                msg
+            } else if e.is_connect() {
                 "The assistant isn't running.".to_string()
             } else if e.status().is_some_and(|s| s.as_u16() == 404) {
                 "The assistant's model isn't downloaded yet.".to_string()
             } else {
-                e.to_string()
+                "The local AI server stopped answering.".to_string()
             };
             let _ = tx.send(Event::Error(msg)).await;
             return;
@@ -431,9 +441,10 @@ async fn run(body: Vec<u8>, tx: async_channel::Sender<Event>) {
     let mut buf = String::new();
     while let Some(chunk) = body.next().await {
         let Ok(chunk) = chunk else {
-            let _ = tx
-                .send(Event::Error("Lost the connection to the assistant.".into()))
-                .await;
+            let msg = trouble()
+                .await
+                .unwrap_or_else(|| "Lost the connection to the assistant.".into());
+            let _ = tx.send(Event::Error(msg)).await;
             return;
         };
         buf.push_str(&String::from_utf8_lossy(&chunk));

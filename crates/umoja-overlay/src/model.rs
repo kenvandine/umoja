@@ -15,7 +15,7 @@ use serde::Deserialize;
 use umoja_common::{gsettings as gs, i18n, lemonade};
 
 use crate::downloads;
-use crate::lemonade::{DEFAULT_MODEL, RUNTIME};
+use crate::lemonade::RUNTIME;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelEvent {
@@ -281,6 +281,8 @@ pub struct ModelWatcher {
     waiting: RefCell<Option<String>>,
     on_status: Box<dyn Fn(Option<String>)>,
     _settings: RefCell<Option<gio::Settings>>,
+    /// Watches for Umoja stepping the automatic model down after an OOM.
+    _step_down: RefCell<Option<gio::FileMonitor>>,
 }
 
 impl ModelWatcher {
@@ -293,6 +295,7 @@ impl ModelWatcher {
             waiting: RefCell::default(),
             on_status: Box::new(on_status),
             _settings: RefCell::default(),
+            _step_down: RefCell::default(),
         });
         if !gs::get_bool(gs::UMOJA_SHELL, "lemonade-enabled", true) {
             return this;
@@ -309,6 +312,25 @@ impl ModelWatcher {
             this.pull(current_model());
         }
         *this._settings.borrow_mut() = s;
+        // After an OOM kill the automatic choice becomes the tiny model
+        // (umoja_common::lemonade::trouble_message): fetch it right away.
+        let file = gio::File::for_path(umoja_common::lemonade::stepped_down_path());
+        match file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+            Ok(m) => {
+                let weak = Rc::downgrade(&this);
+                m.connect_changed(move |_, _, _, event| {
+                    if matches!(
+                        event,
+                        gio::FileMonitorEvent::Created | gio::FileMonitorEvent::ChangesDoneHint
+                    ) && let Some(this) = weak.upgrade()
+                    {
+                        this.pull(current_model());
+                    }
+                });
+                *this._step_down.borrow_mut() = Some(m);
+            }
+            Err(e) => tracing::debug!(error = %e, "no step-down monitor"),
+        }
         this
     }
 
@@ -554,7 +576,7 @@ fn online(m: &gio::NetworkMonitor) -> bool {
 }
 
 fn current_model() -> String {
-    gs::get_string(gs::UMOJA_SHELL, "lemonade-model", DEFAULT_MODEL)
+    umoja_common::lemonade::chat_model()
 }
 
 /// "Qwen3-4B-Instruct-2507-GGUF" -> "Qwen3 4B Instruct 2507".

@@ -1,7 +1,9 @@
 {
   "ctx_size": 16384,
   "max_loaded_models": 1,
+  "websocket_port": 13346,
   "llamacpp": {
-    "args": "--parallel 1 -fa on -ctk q8_0 -ctv q8_0"
+    "args": "--parallel 1 -fa on -ctk q8_0 -ctv q8_0",
+    "prefer_system": false
   }
 }

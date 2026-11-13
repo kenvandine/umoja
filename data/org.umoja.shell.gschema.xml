@@ -22,9 +22,12 @@
       </description>
     </key>
     <key name="lemonade-model" type="s">
-      <default>'Qwen3-4B-Instruct-2507-GGUF'</default>
+      <default>''</default>
       <summary>Model the embedded Lemonade server uses for the assistant</summary>
       <description>
+        Empty (the default) picks one by memory: Qwen3-4B-Instruct-2507-GGUF
+        with 12 GB of RAM or more, Qwen3.5-2B-GGUF below that, and
+        Qwen3.5-0.8B-GGUF once the 2B model has run out of memory.
         The embedded server listens on 127.0.0.1:13345 by default (not
         Lemonade's usual 13305). Override the port by writing
         UMOJA_LEMONADE_PORT=PORT to ~/.config/umoja/lemonade.env.

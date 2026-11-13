@@ -23,8 +23,6 @@ pub static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .expect("tokio runtime")
 });
 
-pub const DEFAULT_MODEL: &str = "Qwen3-4B-Instruct-2507-GGUF";
-
 const SYSTEM_PROMPT: &str = "You are Umoja OS Assistant, built into an Ubuntu desktop. \
 Answer in at most four short sentences of practical guidance. When the user's request maps \
 to a desktop action, also return one or more JSON objects, each on its own line, using only \
@@ -209,7 +207,11 @@ impl LemonadeClient {
                 // OpenRouter's app attribution; other servers ignore it.
                 req = req.header("X-Title", "Umoja Desktop");
             }
-            let resp = req.send().await.map_err(|e| self.describe(&e))?;
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) if self.backend.cloud => return Err(self.describe(&e)),
+                Err(e) => return Err(local_error(e).await),
+            };
             let status = resp.status();
             if status.is_success() {
                 return Ok(resp);
@@ -383,7 +385,12 @@ impl LemonadeClient {
         };
         while let Some(chunk) = stream.next().await {
             let Ok(chunk) = chunk else {
-                let _ = tx.send(ChatEvent::Error("connection lost".into())).await;
+                let msg = if self.backend.cloud {
+                    "connection lost".to_string()
+                } else {
+                    lost_connection().await
+                };
+                let _ = tx.send(ChatEvent::Error(msg)).await;
                 return;
             };
             buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -498,15 +505,43 @@ pub fn describe_cloud(host: &str, e: &reqwest::Error) -> String {
     }
 }
 
+/// Why the server stopped, if it just did. systemd writes the reason a
+/// moment after lemond dies, so this waits up to two seconds for it.
+async fn trouble() -> Option<String> {
+    tokio::task::spawn_blocking(|| lemonade::trouble_message_wait(Duration::from_secs(2)))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// A failed request to the local server, in words.
+async fn local_error(e: reqwest::Error) -> String {
+    match trouble().await {
+        Some(msg) => msg,
+        None => describe(&e),
+    }
+}
+
 fn describe(e: &reqwest::Error) -> String {
     if e.is_connect() {
         format!(
             "The local assistant isn't running. Start it with: systemctl --user start {}",
             lemonade::SYSTEMD_UNIT
         )
+    } else if e.is_timeout() {
+        "The local assistant took too long to answer. Try again, or pick a smaller model.".into()
     } else {
-        e.to_string()
+        // reqwest's "error sending request for url (...)" means nothing to
+        // a user; it nearly always means the server went away mid-request.
+        "The local AI server stopped answering. Try again in a moment.".into()
     }
+}
+
+/// The stream broke off: why, in words.
+async fn lost_connection() -> String {
+    trouble().await.unwrap_or_else(|| {
+        "Lost the connection to the local AI server. Try again in a moment.".into()
+    })
 }
 
 #[derive(Debug, PartialEq)]

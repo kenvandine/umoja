@@ -22,8 +22,10 @@ fi
 
 mkdir -p "$CONFIG" "$CACHE"
 
-# Keep Hugging Face model downloads inside Umoja's cache too.
+# Keep Hugging Face model downloads inside Umoja's cache too, apart from
+# a system lemonade-server's (~/.cache/huggingface).
 export HF_HOME="$CACHE/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
 
 # GPU memory headroom for the desktop. On an AMD APU the GPU shares system
 # RAM, and with ctx_size left at -1 Lemonade's auto-tune sizes the context
@@ -37,6 +39,25 @@ export HF_HOME="$CACHE/huggingface"
 DEFAULTS=${UMOJA_LEMONADE_DEFAULTS:-/usr/share/umoja/lemonade/defaults.json}
 if [ -z "${LEMONADE_DEFAULTS_PATH:-}" ] && [ -r "$DEFAULTS" ]; then
     export LEMONADE_DEFAULTS_PATH="$DEFAULTS"
+    # Under 12 GB of RAM ("8 GB" laptops report 6.5 to 7.8) halve the
+    # context to 8k: the overlay also picks the smaller Qwen3.5-2B there
+    # (umoja_common::lemonade::SMALL_RAM_GB), and with a browser open an
+    # 8 GB laptop has about 2.5 GB left for the model. Set
+    # UMOJA_LEMONADE_CTX in ~/.config/umoja/lemonade.env to choose.
+    mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+    ctx=${UMOJA_LEMONADE_CTX:-}
+    if [ -z "$ctx" ] && [ "${mem_kb:-0}" -gt 0 ] && [ "$mem_kb" -lt $((12 * 1024 * 1024)) ]; then
+        ctx=8192
+    fi
+    case "$ctx" in
+    '' | *[!0-9]*) ;;
+    *)
+        runtime=${XDG_RUNTIME_DIR:-$CACHE}
+        sed "s/\"ctx_size\": *[0-9-]*/\"ctx_size\": $ctx/" "$DEFAULTS" >"$runtime/umoja-lemonade-defaults.json"
+        export LEMONADE_DEFAULTS_PATH="$runtime/umoja-lemonade-defaults.json"
+        echo "umoja-lemonade: context capped at $ctx tokens (RAM $((mem_kb / 1024)) MiB)" >&2
+        ;;
+    esac
 fi
 
 # Put llama.cpp's Vulkan buffers in GTT (system RAM the GPU maps) rather than

@@ -16,7 +16,7 @@ use umoja_common::assistant_backend as backend;
 use umoja_common::{gsettings as gs, i18n, lemonade};
 
 use crate::cloud::CloudForm;
-use crate::lemonade::{DEFAULT_MODEL, RUNTIME};
+use crate::lemonade::RUNTIME;
 
 /// The catalog that ships inside the embedded Lemonade build.
 const CATALOG: &str = "/usr/lib/umoja/lemonade/resources/server_models.json";
@@ -260,18 +260,7 @@ pub fn best_fit(models: &[ModelInfo], mem_gb: f64) -> Option<&ModelInfo> {
 }
 
 fn mem_total_gb() -> f64 {
-    std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|m| {
-            m.lines()
-                .find(|l| l.starts_with("MemTotal:"))?
-                .split_whitespace()
-                .nth(1)?
-                .parse::<f64>()
-                .ok()
-        })
-        .map(|kb| kb / 1024.0 / 1024.0)
-        .unwrap_or(16.0)
+    umoja_common::lemonade::mem_total_gb()
 }
 
 /// The server's full registry (`GET /api/v1/models?show_all=true`), which
@@ -524,7 +513,7 @@ fn fill(
     let current = if backend::current().cloud {
         String::new()
     } else {
-        gs::get_string(gs::UMOJA_SHELL, "lemonade-model", DEFAULT_MODEL)
+        umoja_common::lemonade::chat_model()
     };
     for m in models {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -639,6 +628,14 @@ mod tests {
         )) else {
             return; // vendor/ not populated in this checkout
         };
-        assert!(catalog(&json, 32.0).iter().any(|m| m.id == DEFAULT_MODEL));
+        use umoja_common::lemonade::{DEFAULT_MODEL, SMALL_MODEL, TINY_MODEL};
+        let models = catalog(&json, 32.0);
+        for id in [DEFAULT_MODEL, SMALL_MODEL, TINY_MODEL] {
+            let m = models
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap_or_else(|| panic!("{id} missing"));
+            assert!(m.recommended(), "{id} lacks tool calling");
+        }
     }
 }

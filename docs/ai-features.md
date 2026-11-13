@@ -147,7 +147,12 @@ using tools are marked **Recommended** and sorted to the top; others may be
 marked **Reasoning** or **Vision**. Each row shows its size and whether it
 is **Downloaded** or **Downloads when selected**. Click one to use it.
 
-The default is Qwen3-4B-Instruct-2507. Umoja downloads the selected model in
+Until you pick one, Umoja chooses by memory: Qwen3-4B-Instruct-2507 with
+12 GB of RAM or more, and Qwen3.5-2B with an 8k-token context below that
+(an "8 GB" laptop). If the local model still runs out of memory, Ask Umoja
+says so, switches to Qwen3.5-0.8B and downloads it. The AI server is capped
+at 70% of RAM, so a model that doesn't fit is stopped and restarted before
+the desktop slows down. Umoja downloads the selected model in
 the background, at login or as soon as you pick a new one, so it's ready
 before your first question:
 

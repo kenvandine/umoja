@@ -32,7 +32,7 @@ impl Endpoint {
     pub fn local() -> Self {
         Self {
             chat_url: lemonade::chat_completions_url(),
-            model: gs::get_string(gs::UMOJA_SHELL, "lemonade-model", lemonade::DEFAULT_MODEL),
+            model: lemonade::chat_model(),
             cloud: false,
         }
     }

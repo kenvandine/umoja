@@ -14,8 +14,22 @@ EnvironmentFile=-%E/umoja/lemonade.env
 ExecStart=/usr/lib/umoja/umoja-lemonade
 Restart=on-failure
 RestartSec=2s
+# Record why lemond stopped ("oom-kill", "signal", "success"...) so Ask
+# Umoja can say "the local model ran out of memory" instead of a URL
+# error, and step its automatic model down (umoja_common::lemonade).
+ExecStopPost=/bin/sh -c 'echo "$$SERVICE_RESULT" >"%t/umoja-lemonade.result"'
 # Inference is the first thing the OOM killer should take, never the shell.
 OOMScoreAdjust=800
+# Keep the desktop responsive when a model doesn't fit: cap the server
+# below the whole of RAM so it gets OOM-killed in its own cgroup (and
+# restarts) before the session starts thrashing, and don't let its
+# context buffers push the shell into swap. The picker only offers models
+# up to half of RAM, which fit under this with their context.
+MemoryMax=70%
+MemorySwapMax=0
+# systemd-oomd, where it runs, kills it first under memory pressure.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=50%
 Slice=app.slice
 Nice=5
 

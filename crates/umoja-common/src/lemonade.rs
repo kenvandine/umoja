@@ -20,8 +20,194 @@ pub const PORT_ENV: &str = "UMOJA_LEMONADE_PORT";
 pub const URL_ENV: &str = "UMOJA_LEMONADE_URL";
 pub const BINARY_PATH: &str = "/usr/lib/umoja/lemonade/lemond";
 pub const SYSTEMD_UNIT: &str = "umoja-lemonade.service";
-/// Model used when `org.umoja.shell lemonade-model` is unset.
+/// Model used when `org.umoja.shell lemonade-model` is unset, on a
+/// computer with enough memory for it (see [`auto_model`]).
 pub const DEFAULT_MODEL: &str = "Qwen3-4B-Instruct-2507-GGUF";
+/// Default below [`SMALL_RAM_GB`]: Qwen3-4B (2.5 GB plus its context) got
+/// OOM-killed on an 8 GB laptop (6.7 GB usable) with a browser open.
+pub const SMALL_MODEL: &str = "Qwen3.5-2B-GGUF";
+/// Last resort after the small model got OOM-killed too.
+pub const TINY_MODEL: &str = "Qwen3.5-0.8B-GGUF";
+/// Below this much RAM (MemTotal, GiB) the small model is the default. A
+/// "16 GB" laptop reports ~15, an "8 GB" one 6.5 to 7.8.
+pub const SMALL_RAM_GB: f64 = 12.0;
+/// The runtime file `umoja-lemonade.service` writes its `$SERVICE_RESULT`
+/// to whenever lemond stops (ExecStopPost): "oom-kill" after an OOM kill.
+const RESULT_FILE: &str = "umoja-lemonade.result";
+/// Kept when an OOM kill made Umoja step down to [`TINY_MODEL`].
+const STEPPED_DOWN_FILE: &str = "lemonade-tiny-model";
+
+/// Total RAM in GiB (`MemTotal`), 16 when unknown.
+pub fn mem_total_gb() -> f64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| mem_total_from(&m))
+        .unwrap_or(16.0)
+}
+
+fn mem_total_from(meminfo: &str) -> Option<f64> {
+    meminfo
+        .lines()
+        .find(|l| l.starts_with("MemTotal:"))?
+        .split_whitespace()
+        .nth(1)?
+        .parse::<f64>()
+        .ok()
+        .map(|kb| kb / 1024.0 / 1024.0)
+}
+
+/// The chat model to use when the user hasn't picked one: by RAM, and the
+/// tiny one once the small one ran out of memory.
+pub fn auto_model() -> &'static str {
+    auto_model_for(mem_total_gb(), stepped_down_path().exists())
+}
+
+fn auto_model_for(mem_gb: f64, stepped_down: bool) -> &'static str {
+    if mem_gb >= SMALL_RAM_GB {
+        DEFAULT_MODEL
+    } else if stepped_down {
+        TINY_MODEL
+    } else {
+        SMALL_MODEL
+    }
+}
+
+/// The local chat model: `org.umoja.shell lemonade-model`, or
+/// [`auto_model`] when that is empty (the default).
+pub fn chat_model() -> String {
+    let picked = crate::gsettings::get_string(crate::gsettings::UMOJA_SHELL, "lemonade-model", "");
+    let picked = picked.trim();
+    if picked.is_empty() {
+        auto_model().to_string()
+    } else {
+        picked.to_string()
+    }
+}
+
+fn state_dir() -> std::path::PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+        })
+        .unwrap_or_else(std::env::temp_dir)
+        .join("umoja")
+}
+
+/// The file whose presence makes [`TINY_MODEL`] the automatic choice.
+pub fn stepped_down_path() -> std::path::PathBuf {
+    state_dir().join(STEPPED_DOWN_FILE)
+}
+
+fn result_path() -> std::path::PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(RESULT_FILE)
+}
+
+/// Why the local server just went away, from what the service wrote
+/// when lemond last stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trouble {
+    /// The kernel OOM killer took lemond (the model didn't fit).
+    OutOfMemory,
+    /// lemond stopped some other way and systemd is bringing it back.
+    Restarting,
+}
+
+/// How recent a stop has to be to explain a failed request.
+const TROUBLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Whether the local server stopped in the last few minutes, and why.
+/// Call it after a request to the local server failed.
+pub fn recent_trouble() -> Option<Trouble> {
+    let path = result_path();
+    let age = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())?;
+    if age > TROUBLE_WINDOW {
+        return None;
+    }
+    let result = std::fs::read_to_string(&path).ok()?;
+    trouble_from(&result)
+}
+
+fn trouble_from(result: &str) -> Option<Trouble> {
+    match result.trim() {
+        "oom-kill" => Some(Trouble::OutOfMemory),
+        // A clean stop (logout, `systemctl stop`) isn't trouble.
+        "" | "success" => None,
+        _ => Some(Trouble::Restarting),
+    }
+}
+
+/// A failed local request, said for the user. After an OOM kill of the
+/// automatic small model this also steps the automatic choice down to
+/// [`TINY_MODEL`], once; `None` when the server didn't stop recently.
+pub fn trouble_message() -> Option<String> {
+    let trouble = recent_trouble()?;
+    Some(match trouble {
+        Trouble::Restarting => {
+            "The local AI server stopped and is restarting. Ask again in a moment.".into()
+        }
+        Trouble::OutOfMemory => {
+            let model = chat_model();
+            if model == SMALL_MODEL && step_down() {
+                format!(
+                    "The local model ran out of memory, so Umoja switched to a smaller one ({TINY_MODEL}). \
+                     Ask again once it has downloaded."
+                )
+            } else {
+                "The local model ran out of memory. Close some apps, or pick a smaller model \
+                 or a cloud model in Ask Umoja's settings, then ask again."
+                    .into()
+            }
+        }
+    })
+}
+
+/// [`trouble_message`], waiting up to `wait` for the service to record
+/// why lemond stopped (ExecStopPost runs just after it dies). Blocking.
+pub fn trouble_message_wait(wait: std::time::Duration) -> Option<String> {
+    let until = std::time::Instant::now() + wait;
+    loop {
+        if let Some(msg) = trouble_message() {
+            return Some(msg);
+        }
+        if std::time::Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Make [`TINY_MODEL`] the automatic choice from now on. True when this
+/// call changed it.
+fn step_down() -> bool {
+    let picked = crate::gsettings::get_string(crate::gsettings::UMOJA_SHELL, "lemonade-model", "");
+    let path = stepped_down_path();
+    if !picked.trim().is_empty() || path.exists() || mem_total_gb() >= SMALL_RAM_GB {
+        return false;
+    }
+    let made =
+        std::fs::create_dir_all(state_dir()).and_then(|()| std::fs::write(&path, TINY_MODEL));
+    match made {
+        Ok(()) => {
+            tracing::warn!(
+                from = SMALL_MODEL,
+                to = TINY_MODEL,
+                "local model ran out of memory; using a smaller one"
+            );
+            true
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "could not switch to the smaller model");
+            false
+        }
+    }
+}
 
 /// Base URL of the embedded server, e.g. `http://127.0.0.1:13345`.
 ///
@@ -249,6 +435,29 @@ mod tests {
     fn port_override() {
         assert_eq!(base_url_from(None, Some("14000")), "http://127.0.0.1:14000");
         assert_eq!(base_url_from(None, Some("junk")), "http://127.0.0.1:13345");
+    }
+
+    #[test]
+    fn auto_model_by_memory() {
+        assert_eq!(auto_model_for(31.0, false), DEFAULT_MODEL);
+        assert_eq!(auto_model_for(15.2, true), DEFAULT_MODEL);
+        assert_eq!(auto_model_for(6.7, false), SMALL_MODEL);
+        assert_eq!(auto_model_for(6.7, true), TINY_MODEL);
+    }
+
+    #[test]
+    fn meminfo_parse() {
+        let gb = mem_total_from("MemTotal:        7025344 kB\nMemFree: 1 kB\n").unwrap();
+        assert!((gb - 6.7).abs() < 0.05, "{gb}");
+        assert_eq!(mem_total_from("nothing"), None);
+    }
+
+    #[test]
+    fn service_results() {
+        assert_eq!(trouble_from("oom-kill\n"), Some(Trouble::OutOfMemory));
+        assert_eq!(trouble_from("signal"), Some(Trouble::Restarting));
+        assert_eq!(trouble_from("success"), None);
+        assert_eq!(trouble_from(""), None);
     }
 
     #[test]
