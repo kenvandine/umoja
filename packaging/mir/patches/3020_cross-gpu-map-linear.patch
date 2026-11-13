@@ -17,6 +17,10 @@ Description: Cross-GPU copy: map linear buffers instead of reading them back
  .
  A mapped read does not queue behind the client's rendering on the GPU as
  a GL read did, so it first waits for the dma-buf's write fence (poll).
+ The CPU's cached lines of the mapping are flushed before each read: the
+ Intel iGPU (no shared last-level cache since Meteor Lake) writes new
+ frames without the CPU cache noticing, and stale lines from the previous
+ read of the same buffer showed as runs of old pixels.
  In debug mode every mapped copy is checked against a GL read and
  differences are logged (and the GL pixels shown).
  .
@@ -42,7 +46,17 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
  #include <sys/ioctl.h>
  #include <sys/mman.h>
  #include <sys/stat.h>
-@@ -85,22 +87,24 @@
+@@ -64,6 +66,9 @@
+ #include <utility>
+ #include <algorithm>
+ #include <drm_fourcc.h>
++#if defined(__x86_64__)
++#include <immintrin.h>
++#endif
+ #include <wayland-server.h>
+ 
+ namespace mg = mir::graphics;
+@@ -85,22 +90,24 @@
  class CrossGpuCopyPool
  {
  public:
@@ -74,7 +88,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          if (buffers.size() < max_buffers)
          {
              buffers.push_back(b);
-@@ -125,14 +129,28 @@
+@@ -125,14 +132,28 @@
  class CrossGpuCopyStats
  {
  public:
@@ -104,7 +118,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          }
  
          auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
-@@ -149,6 +167,9 @@
+@@ -149,6 +170,9 @@
              return;
          }
          auto const n = copies.exchange(0);
@@ -114,7 +128,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          auto const b = total_bytes.exchange(0);
          auto const ns = total_ns.exchange(0);
          // Which windows (by buffer size) were copied most.
-@@ -161,7 +182,18 @@
+@@ -161,7 +185,18 @@
              }
              sizes.clear();
          }
@@ -134,7 +148,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          {
              return;
          }
-@@ -173,10 +205,27 @@
+@@ -173,10 +208,27 @@
                  std::to_string(by_count[i].second.second) + " x" + std::to_string(by_count[i].first);
          }
          mir::log_info(
@@ -164,7 +178,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
      }
  
  private:
-@@ -187,10 +236,16 @@
+@@ -187,10 +239,16 @@
      }
  
      std::atomic<unsigned long long> copies{0};
@@ -181,10 +195,54 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
      std::atomic<std::chrono::steady_clock::rep> last_report{0};
  };
  
-@@ -199,6 +254,17 @@
+@@ -199,6 +257,61 @@
      static CrossGpuCopyStats stats;
      return stats;
  }
++
++/* Drop the CPU's cached copy of a mapped dma-buf before reading it.
++ *
++ * An integrated GPU that does not share the CPU's last-level cache (Intel
++ * since Meteor Lake) writes the client's next frame to memory without the
++ * CPU cache noticing, and the kernel does not flush for us on
++ * DMA_BUF_IOCTL_SYNC: cache lines still held from our read of an earlier
++ * frame in the same buffer came back stale (runs of 16 pixels of an old
++ * frame, on a ThinkPad P16 Gen 3).
++ */
++#if defined(__x86_64__)
++__attribute__((target("clflushopt")))
++void flush_cache_opt(char* p, char const* end)
++{
++    for (; p < end; p += 64)
++    {
++        _mm_clflushopt(p);
++    }
++    _mm_sfence();
++}
++
++void flush_cache(void const* data, std::size_t len)
++{
++    auto* p = reinterpret_cast<char*>(reinterpret_cast<std::uintptr_t>(data) & ~std::uintptr_t{63});
++    auto const* end = static_cast<char const*>(data) + len;
++    static bool const opt = __builtin_cpu_supports("clflushopt");
++    if (opt)
++    {
++        flush_cache_opt(p, end);
++    }
++    else
++    {
++        for (; p < end; p += 64)
++        {
++            _mm_clflush(p);
++        }
++        _mm_mfence();
++    }
++}
++#else
++void flush_cache(void const*, std::size_t)
++{
++}
++#endif
 +
 +/* Offer clients only linear dma-bufs (MIR_DMABUF_LINEAR_ONLY=1). */
 +auto linear_only() -> bool
@@ -199,7 +257,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
  }
  
  namespace
-@@ -299,6 +365,26 @@
+@@ -299,6 +412,26 @@
                  external_only.resize(returned_modifiers);
              }
  
@@ -226,7 +284,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
              if (num_modifiers == 0)
              {
                  /* Special case: num_modifiers == 0 means that the driver doesn't support modifiers;
-@@ -1346,58 +1432,242 @@
+@@ -1346,58 +1479,244 @@
          }
  
          auto const started = std::chrono::steady_clock::now();
@@ -300,6 +358,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
 +                auto const dst_stride = mapping->stride().as<size_t>();
 +                if (src_stride >= row && dst_stride >= row)
 +                {
++                    flush_cache(source.data(), src_stride * height);
 +                    auto const* from = reinterpret_cast<unsigned char const*>(source.data());
 +                    auto* to = reinterpret_cast<unsigned char*>(dest);
 +                    for (GLsizei y = 0; y < height; ++y)
@@ -423,14 +482,14 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
 -                            auto* px = reinterpret_cast<unsigned char*>(dest);
 -                            for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i)
 +                            if (wrong == 0)
-+                            {
+                             {
+-                                std::swap(px[i * 4], px[i * 4 + 2]);
 +                                first_x = x;
 +                                first_y = y;
 +                            }
 +                            ++wrong;
 +                            if (a[x * 4] == 0 && a[x * 4 + 1] == 0 && a[x * 4 + 2] == 0)
-                             {
--                                std::swap(px[i * 4], px[i * 4 + 2]);
++                            {
 +                                ++wrong_zero;
                              }
 -                            ok = true;
@@ -450,6 +509,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
 +                    {
 +                        DmaBufMapping const again{*this};
 +                        auto const src_stride = again.stride().as<size_t>();
++                        flush_cache(again.data(), src_stride * height);
 +                        auto const* from = reinterpret_cast<unsigned char const*>(again.data());
 +                        for (GLsizei y = 0; y < height; ++y)
 +                        {
