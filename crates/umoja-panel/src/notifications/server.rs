@@ -170,9 +170,13 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
             hint_str("image-path")
                 .or_else(|| hint_str("image_path"))
                 .filter(|s| !s.is_empty())
-                .map(icon_from_string)
+                .and_then(|s| loaded(icon_from_string(s)))
         })
-        .or_else(|| (!app_icon.is_empty()).then(|| icon_from_string(app_icon.clone())))
+        .or_else(|| {
+            (!app_icon.is_empty())
+                .then(|| icon_from_string(app_icon.clone()))
+                .and_then(loaded)
+        })
         .or_else(|| {
             let app = gio::DesktopAppInfo::new(&format!("{}.desktop", app_id.as_deref()?))?;
             let gicon = app.icon()?;
@@ -232,6 +236,21 @@ fn icon_from_string(s: String) -> Icon {
     } else {
         Icon::Name(s)
     }
+}
+
+/// Read a file icon now, scaled down, so the notification keeps its
+/// picture after the file moves or goes away: the screenshot UI renames
+/// shots after what they show a moment after announcing them, and some
+/// apps send temporary files. `None` if it can't be read, so the next
+/// icon source is tried instead of showing a broken image.
+fn loaded(icon: Icon) -> Option<Icon> {
+    let Icon::File(path) = &icon else {
+        return Some(icon);
+    };
+    let pixbuf =
+        gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, MAX_IMAGE, MAX_IMAGE, true).ok()?;
+    #[allow(deprecated)]
+    Some(Icon::Texture(gdk::Texture::for_pixbuf(&pixbuf)))
 }
 
 /// `(iiibiiay)`: width, height, rowstride, has_alpha, bits, channels, data.
