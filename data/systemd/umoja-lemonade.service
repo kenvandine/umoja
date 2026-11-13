@@ -14,6 +14,11 @@ EnvironmentFile=-%E/umoja/lemonade.env
 ExecStart=/usr/lib/umoja/umoja-lemonade
 Restart=on-failure
 RestartSec=2s
+# lemond says "Cleanup complete" within 40 ms of SIGTERM and then lingers
+# for 4 to 9 seconds before it exits. Nothing it holds needs that long
+# (models are read-only files), so don't let it hold up logout, a restart
+# or a compositor restart: kill what is left after 3 seconds.
+TimeoutStopSec=3s
 # Record why lemond stopped ("oom-kill", "signal", "success"...) so Ask
 # Umoja can say "the local model ran out of memory" instead of a URL
 # error, and step its automatic model down (umoja_common::lemonade).

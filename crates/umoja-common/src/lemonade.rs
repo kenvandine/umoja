@@ -137,8 +137,10 @@ pub fn recent_trouble() -> Option<Trouble> {
 fn trouble_from(result: &str) -> Option<Trouble> {
     match result.trim() {
         "oom-kill" => Some(Trouble::OutOfMemory),
-        // A clean stop (logout, `systemctl stop`) isn't trouble.
-        "" | "success" => None,
+        // A clean stop (logout, `systemctl stop`) isn't trouble, and nor is
+        // one that ran into the unit's TimeoutStopSec (lemond is slow to
+        // exit after its cleanup).
+        "" | "success" | "timeout" => None,
         _ => Some(Trouble::Restarting),
     }
 }
@@ -457,6 +459,7 @@ mod tests {
         assert_eq!(trouble_from("oom-kill\n"), Some(Trouble::OutOfMemory));
         assert_eq!(trouble_from("signal"), Some(Trouble::Restarting));
         assert_eq!(trouble_from("success"), None);
+        assert_eq!(trouble_from("timeout"), None);
         assert_eq!(trouble_from(""), None);
     }
 

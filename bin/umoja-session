@@ -100,12 +100,32 @@ systemctl --user daemon-reload || log "systemctl --user daemon-reload failed; au
 # Stop the shell services when the compositor exits, however it exits, and
 # take our variables back out of the user manager, which outlives this
 # session and would otherwise hand them to the next login (e.g. GNOME).
+# The stop is not waited for: the display manager only starts the login
+# screen once this script has exited, and a service that is slow to stop
+# (Lemonade unloading a model took 4 to 9 seconds) kept the screen black for
+# all of that. The user manager finishes the job on its own.
 cleanup() {
-    systemctl --user stop umoja-session.target
+    systemctl --user stop --no-block umoja-session.target
     # shellcheck disable=SC2086
     systemctl --user unset-environment $SESSION_VARS WAYLAND_DISPLAY DISPLAY
 }
-trap cleanup EXIT INT TERM
+
+# Log Out (logind terminating the session) or the display manager stopping
+# us. logind signals the compositor at the same moment, so tell the shell
+# services to stop right away: otherwise they lose their Wayland connection,
+# get restarted by systemd and fail in a loop until the compositor is gone.
+# From here on the compositor is never restarted: a crash while it shuts
+# down used to bring the whole desktop back up inside the dying session.
+stopping=no
+mir_pid=""
+stop_session() {
+    [ $stopping = yes ] && return
+    stopping=yes
+    systemctl --user stop --no-block umoja-session.target
+    [ -n "$mir_pid" ] && kill -TERM "$mir_pid" 2>/dev/null
+}
+trap cleanup EXIT
+trap stop_session HUP INT TERM
 
 session_active() {
     [ "$(loginctl show-session "$XDG_SESSION_ID" -p Active --value 2>/dev/null)" = yes ]
@@ -124,6 +144,7 @@ wait_active() {
     if [ "$limit" = forever ] && ! session_active; then
         log "waiting for session $XDG_SESSION_ID to be in the foreground before restarting umoja-mir"
         while ! session_active; do
+            [ $stopping = yes ] && return 0
             sleep 0.5
         done
         return 0
@@ -138,12 +159,26 @@ wait_active() {
 }
 
 # The compositor's output goes to the journal (journalctl -t umoja-mir).
+# It runs in the background with the script waiting on it, because a shell
+# only runs its traps between commands: with umoja-mir in the foreground
+# stop_session could not run until the compositor had already exited.
+# systemd-cat execs the command, so $! is umoja-mir itself.
 run_mir() {
     if command -v systemd-cat >/dev/null 2>&1; then
-        systemd-cat -t umoja-mir /usr/bin/umoja-mir "$@"
+        systemd-cat -t umoja-mir /usr/bin/umoja-mir "$@" &
     else
-        /usr/bin/umoja-mir "$@"
+        /usr/bin/umoja-mir "$@" &
     fi
+    mir_pid=$!
+    # A trapped signal interrupts wait (status above 128) while the
+    # compositor is still running; wait again until it is really gone.
+    while :; do
+        wait "$mir_pid"
+        mir_status=$?
+        kill -0 "$mir_pid" 2>/dev/null || break
+    done
+    mir_pid=""
+    return $mir_status
 }
 
 # umoja-mir is the session master. Once Wayland is up it starts
@@ -184,10 +219,13 @@ count_recent_crashes() {
 wait_limit=100    # 10s at login; a restart after a crash waits forever
 while :; do
     wait_active $wait_limit
+    [ $stopping = yes ] && break
     started=$(date +%s)
     run_mir "$@"
     status=$?
     [ $status -eq 0 ] && break
+    # Logging out: whatever the exit status, this session is over.
+    [ $stopping = yes ] && break
     now=$(date +%s)
 
     # A compositor that dies straight away most likely lost the race for the
