@@ -29,6 +29,11 @@ Description: Cross-GPU copy: map linear buffers instead of reading them back
  good; the per-size statistics are only gathered in debug mode, and the
  debug line says how many copies were mapped, how long those took, and the
  format and modifier of the buffers that were read back.
+ .
+ The copy buffer pool is never destroyed: exit() ran its destructor after
+ the platform modules were unloaded, and releasing a buffer's texture then
+ called into unmapped memory (a segfault at every logout since the pool
+ was added in umoja14).
 Author: Umoja
 Forwarded: no
 
@@ -88,7 +93,22 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          if (buffers.size() < max_buffers)
          {
              buffers.push_back(b);
-@@ -125,14 +132,28 @@
+@@ -116,8 +123,12 @@
+ 
+ auto cross_gpu_copy_pool() -> CrossGpuCopyPool&
+ {
+-    static CrossGpuCopyPool pool;
+-    return pool;
++    /* Never destroyed: at exit() the graphics platform modules are already
++     * unloaded, and the buffers' textures were made by code in them, so
++     * releasing a pooled buffer then called into unmapped memory (a
++     * segfault at every logout and greeter exit). */
++    static auto* const pool = new CrossGpuCopyPool;
++    return *pool;
+ }
+ 
+ /* While $XDG_RUNTIME_DIR/umoja-debug-windows exists (Umoja's window debug
+@@ -125,14 +136,28 @@
  class CrossGpuCopyStats
  {
  public:
@@ -118,7 +138,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          }
  
          auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
-@@ -149,6 +170,9 @@
+@@ -149,6 +174,9 @@
              return;
          }
          auto const n = copies.exchange(0);
@@ -128,7 +148,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          auto const b = total_bytes.exchange(0);
          auto const ns = total_ns.exchange(0);
          // Which windows (by buffer size) were copied most.
-@@ -161,7 +185,18 @@
+@@ -161,7 +189,18 @@
              }
              sizes.clear();
          }
@@ -148,7 +168,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
          {
              return;
          }
-@@ -173,10 +208,27 @@
+@@ -173,10 +212,27 @@
                  std::to_string(by_count[i].second.second) + " x" + std::to_string(by_count[i].first);
          }
          mir::log_info(
@@ -178,7 +198,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
      }
  
  private:
-@@ -187,10 +239,16 @@
+@@ -187,10 +243,16 @@
      }
  
      std::atomic<unsigned long long> copies{0};
@@ -195,7 +215,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
      std::atomic<std::chrono::steady_clock::rep> last_report{0};
  };
  
-@@ -199,6 +257,61 @@
+@@ -199,6 +261,61 @@
      static CrossGpuCopyStats stats;
      return stats;
  }
@@ -257,7 +277,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
  }
  
  namespace
-@@ -299,6 +412,26 @@
+@@ -299,6 +416,26 @@
                  external_only.resize(returned_modifiers);
              }
  
@@ -284,7 +304,7 @@ diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dm
              if (num_modifiers == 0)
              {
                  /* Special case: num_modifiers == 0 means that the driver doesn't support modifiers;
-@@ -1346,58 +1479,244 @@
+@@ -1346,58 +1483,244 @@
          }
  
          auto const started = std::chrono::steady_clock::now();
