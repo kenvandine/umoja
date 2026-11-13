@@ -290,11 +290,24 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     window.set_cursor_from_name(Some("default"));
     // Fade up from black once the window is on screen, then bring the card in.
     let content = overlay.clone();
+    let st = state.clone();
     window.connect_map(move |_| {
         let card_reveal = card_reveal.clone();
+        let st = st.clone();
         fade(&content, 1.0, FADE_IN_MS, move || {
-            card_reveal.set_reveal_child(true)
+            card_reveal.set_reveal_child(true);
+            // The entry can't take focus while the revealer hides it, and
+            // with a finger enrolled PAM's password prompt (which used to
+            // focus it) only comes once pam_fprintd gives up.
+            focus_entry(&st);
         });
+    });
+    // Whenever the greeter gets the keyboard back, it goes to the password.
+    let st = state.clone();
+    window.connect_is_active_notify(move |w| {
+        if w.is_active() {
+            focus_entry(&st);
+        }
     });
     window.present();
 }
@@ -302,7 +315,11 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
 /// The wallpaper alone on `monitor`: a background layer surface
 /// filling the screen (a fullscreen toplevel there didn't always end up
 /// covering it), or a fullscreen window without layer shell.
-fn wallpaper_on(app: &adw::Application, main: &adw::ApplicationWindow, monitor: &gtk::gdk::Monitor) {
+fn wallpaper_on(
+    app: &adw::Application,
+    main: &adw::ApplicationWindow,
+    monitor: &gtk::gdk::Monitor,
+) {
     use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
     let w = gtk::Window::builder()
         .application(app)
@@ -471,7 +488,7 @@ fn wire(state: &Rc<State>) {
         s.busy.set(false);
         s.entry.set_sensitive(true);
         s.submit.set_sensitive(true);
-        s.entry.grab_focus();
+        focus_entry(&s);
     });
 
     let s = state.clone();
@@ -627,6 +644,21 @@ fn select_user(state: &Rc<State>, index: usize) {
     // A different user starts afresh; a retry keeps nothing typed either.
     state.queued.borrow_mut().take();
     start_auth(state, false);
+    // Picking someone from the strip leaves focus on their chip.
+    focus_entry(state);
+}
+
+/// Put the keyboard in the password field. Typing works while PAM waits
+/// for a finger too: submitting then restarts without the reader.
+fn focus_entry(state: &State) {
+    // GtkText inside holds the focus; grabbing again would select all.
+    let focused = state
+        .entry
+        .state_flags()
+        .contains(gtk::StateFlags::FOCUS_WITHIN);
+    if state.entry.is_sensitive() && !focused {
+        state.entry.grab_focus();
+    }
 }
 
 /// Start a PAM conversation for the current user. `password_only` claims
