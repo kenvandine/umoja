@@ -30,6 +30,7 @@ DROP = {
     "yaru-theme-gnome-shell": "GNOME Shell theme",
     "gnome-remote-desktop": "needs Mutter for remote sessions",
     "gnome-initial-setup": "runs as a GNOME Shell mode; umoja-agent-setup covers first login",
+    "sysprof": "a developer profiler; not for a default desktop (Ken, 2026-11-13)",
 }
 
 # Added on top of ubuntu-desktop-minimal (they are only in ubuntu-desktop).

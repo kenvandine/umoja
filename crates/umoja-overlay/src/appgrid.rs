@@ -456,7 +456,7 @@ pub fn keywords(app: &gio::AppInfo) -> Vec<String> {
 pub fn load_apps() -> Vec<gio::AppInfo> {
     let mut apps: Vec<_> = gio::AppInfo::all()
         .into_iter()
-        .filter(|a| a.should_show())
+        .filter(umoja_common::apps::should_show)
         .collect();
     apps.sort_by_key(|a| a.display_name().to_lowercase());
     apps

@@ -122,7 +122,7 @@ fn clean_query(q: &str) -> String {
 pub fn find_launcher(query: &str) -> Option<gio::AppInfo> {
     let q = clean_query(query).to_lowercase();
     let mut best: Option<(u8, gio::AppInfo)> = None;
-    for app in gio::AppInfo::all().into_iter().filter(|a| a.should_show()) {
+    for app in gio::AppInfo::all().into_iter().filter(umoja_common::apps::should_show) {
         let id = app.id().map(|s| s.to_string()).unwrap_or_default();
         if let Some(s) = app_score(&q, &app.display_name(), &id, &extra_words(&app))
             && best.as_ref().is_none_or(|(b, _)| s < *b)
@@ -282,7 +282,7 @@ struct Launcher {
 fn launchers() -> Vec<Launcher> {
     gio::AppInfo::all()
         .into_iter()
-        .filter(|a| a.should_show())
+        .filter(umoja_common::apps::should_show)
         .filter_map(|a| {
             let extra = extra_words(&a);
             let d = a.downcast::<gio::DesktopAppInfo>().ok()?;

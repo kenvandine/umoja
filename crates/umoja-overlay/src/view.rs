@@ -3461,7 +3461,7 @@ fn json_to_variant(v: &serde_json::Value) -> Option<glib::Variant> {
 /// Every app's launcher actions (Desktop Actions in its .desktop file).
 fn load_actions() -> Vec<(gio::DesktopAppInfo, String, String)> {
     let mut out = Vec::new();
-    for app in gio::AppInfo::all().into_iter().filter(|a| a.should_show()) {
+    for app in gio::AppInfo::all().into_iter().filter(umoja_common::apps::should_show) {
         let Ok(d) = app.downcast::<gio::DesktopAppInfo>() else {
             continue;
         };

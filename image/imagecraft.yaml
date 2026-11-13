@@ -127,7 +127,7 @@ parts:
       apt-get update
       # Umoja must not have brought GNOME Shell back.
       for p in gnome-shell mutter gdm3 budgie-desktop gnome-terminal alacritty \
-          gnome-software nm-connection-editor; do
+          gnome-software nm-connection-editor sysprof; do
         if dpkg -s "$p" >/dev/null 2>&1; then echo "$p is installed" >&2; exit 1; fi
       done
       # setuid/setgid helpers must keep their bits (see the reinstall above).

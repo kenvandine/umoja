@@ -92,6 +92,18 @@ fn electron_class(app_id: &str) -> Option<&str> {
     (!name.is_empty() && last.eq_ignore_ascii_case("desktop")).then_some(name)
 }
 
+/// Launchers Ubuntu Desktop installs that Umoja's app grid, search and
+/// assistant leave out. `info` (TeXInfo) is a hard dependency of
+/// ubuntu-standard, so it can't simply be left out of the image.
+const HIDDEN_LAUNCHERS: &[&str] = &["info.desktop"];
+
+/// Whether an app belongs in the app grid and app search: GLib's
+/// `should_show` (no NoDisplay/Hidden/OnlyShowIn mismatch) minus
+/// [`HIDDEN_LAUNCHERS`].
+pub fn should_show(app: &gio::AppInfo) -> bool {
+    app.should_show() && !app.id().is_some_and(|id| HIDDEN_LAUNCHERS.contains(&id.as_str()))
+}
+
 fn all_entries() -> Vec<gio::DesktopAppInfo> {
     gio::AppInfo::all()
         .into_iter()
