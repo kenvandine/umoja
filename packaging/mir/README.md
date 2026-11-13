@@ -107,6 +107,14 @@ Umoja PPA:
   for its own screen shooter (`CaptureWindow` on org.umoja.Compositor), so
   it renders one window alone, minimized or on another workspace too, for
   the Alt+Tab, overview and dock thumbnails. No ABI change.
+- `patches/3019_xwayland-override-redirect-no-wm-state.patch` (umoja19):
+  Steam's menus showed as blank white boxes or closed again at once. An X11
+  override-redirect window never gets a MapRequest, so Mir creates its
+  surface in the hidden (withdrawn) state, and the XWM reported that back:
+  it set `_NET_WM_STATE_HIDDEN` on the menu Steam had just mapped and
+  lowered it to the bottom of the X stack, and Chromium hid the menu. The
+  XWM now leaves WM_STATE, `_NET_WM_STATE` and hidden-state restacking off
+  override-redirect windows, as ICCCM expects.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

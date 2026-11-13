@@ -1,0 +1,49 @@
+Description: Leave window manager state off X11 override-redirect windows
+ An override-redirect window never gets a MapRequest, so its cached state
+ stays "withdrawn" and Mir creates its scene surface as
+ mir_window_state_hidden. The surface observer then reported that state back
+ to X: the XWM wrote WM_STATE Iconic and _NET_WM_STATE_HIDDEN on the popup
+ and lowered it to the bottom of the X stack, a few milliseconds after the
+ client mapped it. Steam's menus (Chromium) took that as the menu being
+ hidden: they stayed up as blank white boxes or closed again at once.
+ ICCCM leaves override-redirect windows to their client, so the XWM no
+ longer writes WM_STATE/_NET_WM_STATE on them or restacks them for a
+ hidden/minimized state.
+Author: Umoja developers
+Forwarded: no
+
+diff --git src/server/frontend_xwayland/xwayland_surface.cpp src/server/frontend_xwayland/xwayland_surface.cpp
+index c65cdd5..379a163 100644
+--- a/src/server/frontend_xwayland/xwayland_surface.cpp
++++ b/src/server/frontend_xwayland/xwayland_surface.cpp
+@@ -974,9 +974,13 @@ void mf::XWaylandSurface::scene_surface_state_set(MirWindowState new_state)
+ {
+     std::unique_lock lock{mutex};
+     auto const state = cached.state.with_active_mir_state(new_state);
++    bool const override_redirect = cached.override_redirect;
+     inform_client_of_window_state(std::move(lock), state);
+ 
+-    if (new_state == mir_window_state_minimized || new_state == mir_window_state_hidden)
++    // Lowering an override-redirect popup to the bottom of the X stack
++    // (see inform_client_of_window_state) put it under its own parent.
++    if (!override_redirect &&
++        (new_state == mir_window_state_minimized || new_state == mir_window_state_hidden))
+     {
+         connection->configure_window(
+             window,
+@@ -1117,6 +1121,15 @@ void mf::XWaylandSurface::inform_client_of_window_state(std::unique_lock<std::mu
+     {
+         return;
+     }
++    // No window manager state on override-redirect windows (ICCCM leaves
++    // them alone). They never get a MapRequest, so Mir creates their scene
++    // surface "hidden" (withdrawn), and telling the client so set
++    // _NET_WM_STATE_HIDDEN on a menu it had just mapped: Steam (Chromium)
++    // then hid the menu's contents, leaving a blank white box, or closed it.
++    if (cached.override_redirect)
++    {
++        return;
++    }
+     lock.unlock();
+ 
+     WmState const wm_state = new_state.wm_state();
