@@ -86,7 +86,9 @@ Recommends: umoja-greeter,
             xdg-user-dirs,
             xdg-user-dirs-gtk,
             gvfs,
-            udisks2
+            gvfs-backends,
+            udisks2,
+            geoclue-2.0
 Provides: polkit-1-auth-agent,
           notification-daemon
 Description: AI-native, Rust-based desktop shell for Ubuntu
