@@ -165,7 +165,7 @@ fn export(conn: &gio::DBusConnection, agent: Rc<Agent>) -> Result<(), glib::Erro
         conn.register_object(AGENT_PATH, &iface)
             .method_call(move |conn, sender, _, _, method, params, invocation| {
                 // Only polkitd gets to open password dialogs.
-                if !from_polkitd(&conn, sender) {
+                if !bus::sent_by_owner(&conn, sender, POLKIT) {
                     invocation.return_dbus_error(
                         "org.freedesktop.DBus.Error.AccessDenied",
                         "only polkitd may call the authentication agent",
@@ -192,26 +192,6 @@ fn export(conn: &gio::DBusConnection, agent: Rc<Agent>) -> Result<(), glib::Erro
             })
             .build()?;
     Ok(())
-}
-
-fn from_polkitd(conn: &gio::DBusConnection, sender: Option<&str>) -> bool {
-    let Some(sender) = sender else {
-        return false;
-    };
-    conn.call_sync(
-        Some("org.freedesktop.DBus"),
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-        "GetNameOwner",
-        Some(&(POLKIT,).to_variant()),
-        None,
-        gio::DBusCallFlags::NONE,
-        1000,
-        gio::Cancellable::NONE,
-    )
-    .ok()
-    .and_then(|r| r.child_value(0).str().map(|o| o == sender))
-    .unwrap_or(false)
 }
 
 /// `(sssa{ss}sa(sa{sv}))` into a request, keeping the unix-user

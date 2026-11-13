@@ -1,0 +1,17 @@
+[package]
+name = "umoja-portal-helper"
+description = "Hotspot login window for Wi-Fi captive portals, like gnome-shell-portal-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+umoja-common.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+gio.workspace = true
+glib.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+webkit6 = { version = "0.4", features = ["v2_42"] }

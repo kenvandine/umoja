@@ -14,6 +14,7 @@ use gtk4 as gtk;
 use serde::Deserialize;
 use umoja_common::{gsettings as gs, i18n, lemonade};
 
+use crate::downloads;
 use crate::lemonade::{DEFAULT_MODEL, RUNTIME};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +29,8 @@ pub enum ModelEvent {
         downloaded: bool,
     },
     Failed(String),
+    /// The user cancelled it from the panel's download indicator.
+    Cancelled,
 }
 
 #[derive(Deserialize, Default)]
@@ -162,10 +165,24 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
     let mut parser = SseParser::default();
     let mut downloaded = false;
     let mut last_step = -1;
+    // Listed in the panel's download indicator from the first fetched
+    // byte, so a model that's already on disk never flashes up there.
+    // Dropping our end of the stream cancels the pull in lemond (we don't
+    // pass `subscribe: false`), which is what Cancel relies on.
+    let mut listed: Option<downloads::Handle> = None;
+    let mut last_permille = -1;
     let mut buf = String::new();
     let mut body = resp.bytes_stream();
     while let Some(chunk) = body.next().await {
+        if listed.as_ref().is_some_and(|h| h.cancelled()) {
+            tracing::info!(model, "model download cancelled");
+            let _ = tx.send(ModelEvent::Cancelled).await;
+            return;
+        }
         let Ok(chunk) = chunk else {
+            if let Some(h) = listed.take() {
+                h.finish(false);
+            }
             let _ = tx
                 .send(ModelEvent::Failed(i18n::umoja(
                     "Connection to the assistant service was lost",
@@ -184,9 +201,26 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
                 }) => {
                     // Cached models just report what's on disk; and lemond
                     // sends ~10k events a second, so only pass on whole
-                    // percent steps.
+                    // percent steps (tenths for the indicator).
+                    if !fetching {
+                        continue;
+                    }
+                    let permille = (percent * 10.0).floor() as i32;
+                    if permille != last_permille {
+                        last_permille = permille;
+                        let h = listed.get_or_insert_with(|| {
+                            downloads::start(
+                                &download_id(&model),
+                                downloads::Kind::Model,
+                                &download_title(&model),
+                                total,
+                                true,
+                            )
+                        });
+                        h.progress((total as f64 * percent / 100.0) as u64, total);
+                    }
                     let step = percent.floor() as i32;
-                    if !fetching || step == last_step {
+                    if step == last_step {
                         continue;
                     }
                     last_step = step;
@@ -199,10 +233,16 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
                         .await;
                 }
                 Some(PullEvent::Complete) => {
+                    if let Some(h) = listed.take() {
+                        h.finish(true);
+                    }
                     let _ = tx.send(ModelEvent::Ready { downloaded }).await;
                     return;
                 }
                 Some(PullEvent::Error(e)) => {
+                    if let Some(h) = listed.take() {
+                        h.finish(false);
+                    }
                     let _ = tx.send(ModelEvent::Failed(e)).await;
                     return;
                 }
@@ -210,7 +250,24 @@ async fn ensure(model: String, tx: async_channel::Sender<ModelEvent>) {
             }
         }
     }
+    if let Some(h) = listed.take() {
+        h.finish(true);
+    }
     let _ = tx.send(ModelEvent::Ready { downloaded }).await;
+}
+
+/// The model's id in the download indicator; Lemonade's own job id.
+fn download_id(model: &str) -> String {
+    format!("model:{model}")
+}
+
+/// "Assistant model · Qwen3 4B Instruct 2507".
+fn download_title(model: &str) -> String {
+    format!(
+        "{} · {}",
+        i18n::umoja("Assistant model"),
+        pretty_model_name(model)
+    )
 }
 
 /// Shows download progress as a notification and through `on_status`.
@@ -220,6 +277,8 @@ pub struct ModelWatcher {
     progress_dismissed: Cell<bool>,
     last_percent: Cell<i32>,
     generation: Cell<u32>,
+    /// The model listed as waiting for an unmetered connection.
+    waiting: RefCell<Option<String>>,
     on_status: Box<dyn Fn(Option<String>)>,
     _settings: RefCell<Option<gio::Settings>>,
 }
@@ -231,6 +290,7 @@ impl ModelWatcher {
             progress_dismissed: Cell::new(false),
             last_percent: Cell::new(-1),
             generation: Cell::new(0),
+            waiting: RefCell::default(),
             on_status: Box::new(on_status),
             _settings: RefCell::default(),
         });
@@ -290,6 +350,9 @@ impl ModelWatcher {
         self.generation.set(generation);
         self.last_percent.set(-1);
         self.progress_dismissed.set(false);
+        if let Some(old) = self.waiting.take() {
+            downloads::not_waiting(&download_id(&old));
+        }
         let monitor = gio::NetworkMonitor::default();
         if online(&monitor) {
             self.start_pull(model, generation);
@@ -299,6 +362,29 @@ impl ModelWatcher {
             model,
             "waiting for an unmetered connection to fetch the model"
         );
+        // Connected but metered: show it in the panel, where "Download
+        // now" fetches it anyway. Fully offline there's nothing to offer.
+        if monitor.is_network_available()
+            && monitor.connectivity() == gio::NetworkConnectivity::Full
+        {
+            let weak = Rc::downgrade(self);
+            let m = model.clone();
+            downloads::waiting(
+                &download_id(&model),
+                downloads::Kind::Model,
+                &download_title(&model),
+                move || {
+                    if let Some(this) = weak.upgrade() {
+                        this.waiting.replace(None);
+                        // A new generation also retires the network watch below.
+                        let generation = this.generation.get().wrapping_add(1);
+                        this.generation.set(generation);
+                        this.start_pull(m.clone(), generation);
+                    }
+                },
+            );
+            self.waiting.replace(Some(model.clone()));
+        }
         let weak = Rc::downgrade(self);
         let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::default();
         let h = handler.clone();
@@ -313,6 +399,9 @@ impl ModelWatcher {
             if online(m) {
                 if let Some(id) = h.borrow_mut().take() {
                     m.disconnect(id);
+                }
+                if let Some(old) = this.waiting.take() {
+                    downloads::not_waiting(&download_id(&old));
                 }
                 this.start_pull(model.clone(), generation);
             }
@@ -377,6 +466,12 @@ impl ModelWatcher {
                 }
                 tracing::info!(model, downloaded, "assistant model ready");
             }
+            ModelEvent::Cancelled => {
+                (self.on_status)(None);
+                if self.notification_id.get() != 0 {
+                    self.close_notification();
+                }
+            }
             ModelEvent::Failed(e) => {
                 tracing::warn!(model, error = %e, "model download failed");
                 (self.on_status)(Some(i18n::umoja(
@@ -389,6 +484,26 @@ impl ModelWatcher {
                 );
             }
         }
+    }
+
+    /// Take down the progress notification (the download was cancelled).
+    fn close_notification(&self) {
+        let id = self.notification_id.replace(0);
+        let Ok(conn) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
+            return;
+        };
+        conn.call(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications",
+            "CloseNotification",
+            Some(&(id,).to_variant()),
+            None,
+            gio::DBusCallFlags::NONE,
+            1000,
+            gio::Cancellable::NONE,
+            |_| {},
+        );
     }
 
     fn notify(&self, summary: &str, body: &str, value: Option<i32>) {

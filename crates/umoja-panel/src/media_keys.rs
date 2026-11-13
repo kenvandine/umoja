@@ -6,7 +6,7 @@
 //! anything else that wants to show one.
 
 use gio::prelude::*;
-use gtk4::{glib, prelude::*};
+use gtk4::glib;
 use umoja_common::dbus;
 
 use crate::brightness::Brightness;
@@ -111,34 +111,15 @@ pub fn press(key: &str) {
 
 fn launch_desktop(ids: &[&str]) {
     match ids.iter().find_map(|id| gio::DesktopAppInfo::new(id)) {
-        Some(info) => launch_info(info.upcast(), None),
+        Some(info) => launch::launch_info(info.upcast(), None),
         None => tracing::info!(?ids, "app not installed"),
     }
 }
 
 fn launch_default(info: Option<gio::AppInfo>, arg: Option<String>) {
     match info {
-        Some(info) => launch_info(info, arg),
+        Some(info) => launch::launch_info(info, arg),
         None => tracing::info!("no default app"),
     }
 }
 
-/// Start an app in its own scope, like the rest of the panel's launches.
-fn launch_info(info: gio::AppInfo, arg: Option<String>) {
-    let Some(cmd) = info.commandline() else { return };
-    let Ok(words) = glib::shell_parse_argv(cmd.as_os_str()) else { return };
-    let mut argv: Vec<String> = words
-        .iter()
-        .map(|w| w.to_string_lossy().into_owned())
-        .filter(|w| !(w.len() == 2 && w.starts_with('%')))
-        .collect();
-    if let Some(arg) = arg {
-        argv.push(arg);
-    }
-    let id = info.id().map(|s| s.trim_end_matches(".desktop").to_string()).unwrap_or_default();
-    // An activation token, so the compositor focuses the new window.
-    let token = gtk4::gdk::Display::default()
-        .and_then(|d| d.app_launch_context().startup_notify_id(Some(&info), &[]))
-        .map(|t| t.to_string());
-    launch::spawn_app(&id, &argv, token.as_deref());
-}

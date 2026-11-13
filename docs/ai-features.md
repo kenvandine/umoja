@@ -152,9 +152,16 @@ the background, at login or as soon as you pick a new one, so it's ready
 before your first question:
 
 - Downloads only start when you are online on a connection that isn't
-  metered. On a metered connection Umoja waits.
+  metered. On a metered connection Umoja waits; the download indicator
+  (below) shows it as paused, with **Download Now** to fetch it anyway.
 - A **Downloading AI model** notification shows progress, and Ask Umoja
   shows *Downloading the assistant's model…* until it's done.
+- While anything downloads in the background (the assistant's model, a
+  Piper voice, the captions model) a ring appears in the top bar, left of
+  the tray. It fills as the download goes, spins while the size isn't
+  known yet, and shows a check when it's done before fading away. Hover it
+  (or click it) for a card listing each download with its size, time left
+  and a **Cancel** button.
 - If the download fails you get a notification saying so. It is tried again
   at your next login, or when you pick a different model.
 

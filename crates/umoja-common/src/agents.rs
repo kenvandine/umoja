@@ -233,14 +233,16 @@ impl Agent {
                 } else {
                     name.to_string()
                 };
-                // snapd asks for the password through polkit; sudo only if
-                // there is no polkit agent. While the demo tour records
-                // (its flag file exists) passwordless sudo goes first, as
-                // nobody is there to answer a polkit dialog.
+                // snapd asks for the password through polkit (the panel's
+                // dialog). No sudo fallback: snap gives up on a slow answer
+                // while the dialog stays up, and a second password prompt
+                // in the terminal behind it is confusing. While the demo
+                // tour records (its flag file exists) passwordless sudo
+                // goes first, as nobody is there to answer a polkit dialog.
                 format!(
                     "{{ {{ [ -e \"${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}/umoja-demo\" ] \
                      && sudo -n snap install {args} 2>/dev/null; }} \
-                     || snap install {args} || sudo snap install {args}; }}"
+                     || snap install {args}; }}"
                 )
             }
             Install::Script { url, shell } => format!(
@@ -470,7 +472,7 @@ mod tests {
         assert!(o.starts_with(
             "{ { [ -e \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/umoja-demo\" ] \
              && sudo -n snap install opencode --classic 2>/dev/null; } \
-             || snap install opencode --classic || sudo snap install opencode --classic; }"
+             || snap install opencode --classic; }"
         ));
         assert!(o.contains("&& umoja-agent-setup opencode"));
         // Skips the sign-in when setup already signed it in.

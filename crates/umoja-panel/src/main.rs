@@ -5,22 +5,27 @@
 //! (`umoja-panel.service`); if it crashes, systemd restarts it and the rest
 //! of the session carries on.
 
+mod automount;
 mod battery;
 mod bluetooth;
 mod brightness;
 mod bus;
+mod captive_portal;
 mod clock;
 mod crash_watch;
 mod dbusmenu;
+mod downloads;
 mod event_sound;
 mod events;
 mod fade;
 mod launch;
+mod location;
 mod lock;
 mod login;
 mod media_keys;
 mod menu_api;
 mod menu_gap;
+mod mount_op;
 mod mpris;
 mod myna;
 mod network;
@@ -144,6 +149,9 @@ fn build(app: &adw::Application) {
     // Myna's recording indicator, left of the tray like GNOME's privacy
     // indicators; the same object hosts Myna's HUD pill.
     end.append(&MYNA.with(|m| m.get_or_init(myna::Myna::start).widget()));
+    // Background downloads (the assistant's model, Piper voices), only
+    // while there are some.
+    end.append(&downloads::indicator());
     end.append(&TRAY.with(|t| t.get_or_init(sni::Tray::start).widget()));
     let quick = quick_settings::button();
     end.append(&quick);
@@ -159,6 +167,14 @@ fn build(app: &adw::Application) {
     polkit::start();
     // Wi-Fi, VPN and 802.1X password prompts for NetworkManager.
     nm_agent::start();
+    // "Sign in to Network" and the Hotspot Login window for captive portals.
+    captive_portal::start();
+    // Ask before apps get the location (GeoClue's agent).
+    location::start();
+    // Drive passphrases, network share logins and "drive is busy" for
+    // every app (org.gtk.MountOperationHandler), and automounting drives.
+    mount_op::start();
+    automount::start();
     // Volume, brightness and playback keys, and their on-screen display.
     osd::init(app);
     media_keys::own_name();

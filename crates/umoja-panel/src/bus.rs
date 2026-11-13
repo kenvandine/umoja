@@ -135,6 +135,28 @@ pub fn object_path(p: &str) -> glib::variant::ObjectPath {
     })
 }
 
+/// Whether a method call came from the current owner of `name` (a system
+/// daemon), so only that daemon can drive one of our agents.
+pub fn sent_by_owner(conn: &gio::DBusConnection, sender: Option<&str>, name: &str) -> bool {
+    let Some(sender) = sender else {
+        return false;
+    };
+    conn.call_sync(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetNameOwner",
+        Some(&(name,).to_variant()),
+        None,
+        gio::DBusCallFlags::NONE,
+        1000,
+        gio::Cancellable::NONE,
+    )
+    .ok()
+    .and_then(|r| r.child_value(0).str().map(|o| o == sender))
+    .unwrap_or(false)
+}
+
 pub fn system_bus() -> Option<gio::DBusConnection> {
     gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE)
         .inspect_err(|e| tracing::warn!(error = %e, "no system bus"))

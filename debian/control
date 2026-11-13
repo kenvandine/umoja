@@ -23,6 +23,7 @@ Build-Depends: debhelper-compat (= 13),
                libpolkit-agent-1-dev,
                libpolkit-gobject-1-dev,
                libpulse-dev,
+               libwebkitgtk-6.0-dev,
                libcanberra-dev,
                libglib2.0-dev,
                libglib2.0-bin,
@@ -79,7 +80,9 @@ Recommends: umoja-greeter,
             tesseract-ocr,
             systemd-coredump,
             xdg-user-dirs,
-            xdg-user-dirs-gtk
+            xdg-user-dirs-gtk,
+            gvfs,
+            udisks2
 Provides: polkit-1-auth-agent,
           notification-daemon
 Description: AI-native, Rust-based desktop shell for Ubuntu
@@ -94,6 +97,10 @@ Description: AI-native, Rust-based desktop shell for Ubuntu
  umoja-panel is the session's polkit authentication agent and notification
  server, which is what lets update-manager, update-notifier and
  nm-connection-editor install without GNOME Shell.
+ .
+ It also answers GTK apps' mount questions (org.gtk.MountOperationHandler:
+ drive passphrases, network share passwords, "drive is busy") and mounts
+ removable drives when they are plugged in, as GNOME Shell does.
  .
  Without GNOME Shell, the Ubuntu Dock and Tiling Assistant settings that
  Umoja and Settings > Ubuntu Desktop use have no schemas, so umoja-desktop

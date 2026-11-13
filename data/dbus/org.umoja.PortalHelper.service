@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.umoja.PortalHelper
+Exec=/usr/libexec/umoja-portal-helper --gapplication-service

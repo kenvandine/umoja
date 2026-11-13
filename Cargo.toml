@@ -11,6 +11,7 @@ members = [
     "crates/umoja-mcp",
     "crates/umoja-screensaver",
     "crates/umoja-installer",
+    "crates/umoja-portal-helper",
 ]
 resolver = "2"
 

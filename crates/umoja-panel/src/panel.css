@@ -632,6 +632,10 @@ window.umoja-end-session {
 .umoja-end-session .end-session-body {
   opacity: 0.85;
 }
+.umoja-location .location-note {
+  font-size: 0.9em;
+  opacity: 0.65;
+}
 .umoja-polkit .polkit-user {
   font-weight: 700;
 }
@@ -719,6 +723,77 @@ window.umoja-panel > box > box > button.screen-sharing-indicator > *:not(popover
 }
 window.umoja-panel > box > box > button.screen-sharing-indicator:hover > *:not(popover) {
   background-color: #f0b52c;
+}
+
+/* Download indicator (downloads.rs): a progress ring in a pill like a
+   tray icon, with a count when more than one thing is downloading, and a
+   hover card listing the downloads. */
+window.umoja-panel > box > box > button.downloads-indicator > *:not(popover) {
+  padding: 0 8px;
+}
+window.umoja-panel .downloads-count {
+  font-size: 9px;
+  font-weight: bold;
+  min-width: 9px;
+  min-height: 13px;
+  padding: 0 2px;
+  margin: -4px -7px 0 0;
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+  box-shadow: 0 0 0 1.5px rgb(22, 22, 24);
+}
+popover.downloads-popover > contents {
+  min-width: 340px;
+}
+popover.downloads-popover .downloads-header {
+  padding: 2px 6px 0;
+}
+popover.downloads-popover .download-row {
+  background-color: @shell_section;
+  border-radius: 12px;
+  padding: 8px 6px 8px 10px;
+}
+popover.downloads-popover .download-icon {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  background-color: @shell_fill;
+  -gtk-icon-size: 20px;
+}
+popover.downloads-popover .download-row.done .download-icon {
+  color: @accent_color;
+}
+popover.downloads-popover .download-title {
+  font-weight: bold;
+}
+popover.downloads-popover .download-subtitle {
+  font-size: 0.9em;
+}
+/* Same bar as the dock's LauncherEntry progress. */
+progressbar.download-progress > trough {
+  min-height: 5px;
+  border-radius: 999px;
+  background-color: alpha(#000000, 0.45);
+  border: 1px solid alpha(#ffffff, 0.15);
+}
+progressbar.download-progress > trough > progress {
+  min-height: 5px;
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+}
+window.umoja-panel popover button.download-cancel {
+  min-width: 36px;
+}
+window.umoja-panel popover button.download-start {
+  min-height: 32px;
+  border-radius: 8px;
+  font-weight: bold;
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+window.umoja-panel popover button.download-start:hover {
+  background-color: mix(@accent_bg_color, #ffffff, 0.1);
 }
 
 /* ---- OSD (volume, brightness...), gnome-shell's .osd-window ---- */

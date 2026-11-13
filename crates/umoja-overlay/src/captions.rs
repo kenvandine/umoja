@@ -174,6 +174,21 @@ async fn transcribe(model: String, prompt: String, samples: Vec<i16>) -> Result<
 }
 
 async fn pull(model: String) -> Result<(), String> {
+    // Listed in the panel's download indicator; a non-streaming pull has no
+    // progress to show and can't be stopped, so the ring just spins.
+    let listed = crate::downloads::start(
+        &format!("model:{model}"),
+        crate::downloads::Kind::Model,
+        &format!("{} · {}", i18n::umoja("Captions model"), model.replace('-', " ")),
+        0,
+        false,
+    );
+    let result = pull_blocking(model).await;
+    listed.finish(result.is_ok());
+    result
+}
+
+async fn pull_blocking(model: String) -> Result<(), String> {
     let resp = reqwest::Client::new()
         .post(lemonade::pull_url())
         .timeout(Duration::from_secs(1800))
