@@ -149,7 +149,9 @@ jobs:
             cp dist/${p}_*.deb iso-debs/
           done
           version=$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)
-          name="ubuntu-umoja-desktop-v${version}+$(git rev-parse --short=8 HEAD)_amd64"
+          # The commit built, not the pull request's merge commit.
+          sha="${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}"
+          name="ubuntu-umoja-desktop-v${version}+${sha:0:8}_amd64"
           sudo image/iso/build image/umoja.img iso-debs "iso/$name.iso"
           sudo chown -R "$(id -u):$(id -g)" iso
           (cd iso && sha256sum "$name.iso" > "$name.iso.sha256")
