@@ -53,3 +53,34 @@ pub const NOTIFICATIONS_INTERFACE: &str = "org.umoja.Notifications";
 pub const MEDIA_KEYS_BUS_NAME: &str = "org.umoja.MediaKeys";
 pub const MEDIA_KEYS_OBJECT_PATH: &str = "/org/umoja/MediaKeys";
 pub const MEDIA_KEYS_INTERFACE: &str = "org.umoja.MediaKeys";
+
+/// The Hotspot Login window for captive portals (`umoja-portal-helper`,
+/// D-Bus activated). umoja-panel calls `Authenticate` when NetworkManager
+/// reports a portal, like gnome-shell does with
+/// `org.gnome.Shell.PortalHelper`; the helper answers with `StatusChanged`.
+pub const PORTAL_HELPER_BUS_NAME: &str = "org.umoja.PortalHelper";
+pub const PORTAL_HELPER_OBJECT_PATH: &str = "/org/umoja/PortalHelper";
+pub const PORTAL_HELPER_INTERFACE: &str = "org.umoja.PortalHelper";
+pub const PORTAL_HELPER_XML: &str = r#"<node>
+  <interface name="org.umoja.PortalHelper">
+    <method name="Authenticate">
+      <arg type="o" name="connection" direction="in"/>
+      <arg type="s" name="url" direction="in"/>
+      <arg type="s" name="activation_token" direction="in"/>
+    </method>
+    <method name="Close">
+      <arg type="o" name="connection" direction="in"/>
+    </method>
+    <method name="Refresh">
+      <arg type="o" name="connection" direction="in"/>
+    </method>
+    <signal name="StatusChanged">
+      <arg type="o" name="connection"/>
+      <arg type="u" name="result"/>
+    </signal>
+  </interface>
+</node>"#;
+/// `StatusChanged` results, as gnome-shell's PortalHelperResult.
+pub const PORTAL_CANCELLED: u32 = 0;
+pub const PORTAL_COMPLETED: u32 = 1;
+pub const PORTAL_RECHECK: u32 = 2;

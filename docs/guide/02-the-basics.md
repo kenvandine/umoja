@@ -136,6 +136,13 @@ Click the status icons at the right of the top bar.
   - **Dark Style** and **Night Light**
   - **Keyboard** backlight, on laptops that have one
 
+On Wi-Fi that wants you to log in first, as in hotels, airports and
+cafés, a **Sign in to Network** notification appears once you connect.
+Click it and a small **Hotspot Login** window opens on the network's
+login page. It closes by itself once you're online. The window keeps
+nothing from your own browser, and a padlock in its corner says whether
+the page is secure.
+
 ### Tray icons
 
 Apps that keep running in the background, such as chat apps, sync clients

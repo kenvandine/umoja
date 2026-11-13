@@ -30,7 +30,8 @@ const TYPE_WIFI: u32 = 2;
 pub const DEV_DISCONNECTED: u32 = 30;
 pub const DEV_ACTIVATED: u32 = 100;
 // NMConnectivityState
-const CONNECTIVITY_FULL: u32 = 4;
+pub const CONNECTIVITY_PORTAL: u32 = 2;
+pub const CONNECTIVITY_FULL: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -89,6 +90,10 @@ pub struct ActiveConn {
     pub kind: Kind,
     pub id: String,
     pub activating: bool,
+    /// The Connection.Active object.
+    pub path: String,
+    /// Fully up (NM_ACTIVE_CONNECTION_STATE_ACTIVATED).
+    pub activated: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -98,6 +103,9 @@ pub struct NetState {
     pub wireless_hw_enabled: bool,
     /// 0 when connectivity checking is off, which we treat as "full".
     pub connectivity: u32,
+    /// Where NetworkManager checks connectivity (empty when it doesn't);
+    /// opening it behind a captive portal shows the login page.
+    pub check_uri: String,
     pub wifi: Option<WifiDevice>,
     pub wired: Option<WiredDevice>,
     pub primary: Option<ActiveConn>,
@@ -433,6 +441,27 @@ impl Network {
         }
     }
 
+    /// Ask NetworkManager to check connectivity now (it otherwise checks
+    /// every few minutes); returns the new NMConnectivityState.
+    pub async fn check_connectivity(&self) -> Option<u32> {
+        let c = self.conn.clone()?;
+        let reply = c
+            .call_future(
+                Some(NM),
+                NM_PATH,
+                NM,
+                "CheckConnectivity",
+                None,
+                Some(glib::VariantTy::new("(u)").ok()?),
+                gio::DBusCallFlags::NONE,
+                30_000,
+            )
+            .await
+            .inspect_err(|e| tracing::debug!(error = %e, "CheckConnectivity failed"))
+            .ok()?;
+        reply.child_value(0).get::<u32>()
+    }
+
     pub fn set_wireless_enabled(&self, on: bool) {
         if let Some(c) = &self.conn {
             bus::set_property(c, NM, NM_PATH, NM, "WirelessEnabled", on.to_variant());
@@ -651,6 +680,7 @@ fn read_state(c: &gio::DBusConnection, profiles: &mut HashMap<String, Option<Str
         wireless_enabled: root.bool("WirelessEnabled").unwrap_or(false),
         wireless_hw_enabled: root.bool("WirelessHardwareEnabled").unwrap_or(true),
         connectivity: root.u32("Connectivity").unwrap_or(0),
+        check_uri: root.str("ConnectivityCheckUri").unwrap_or_default(),
         ..Default::default()
     };
 
@@ -658,8 +688,13 @@ fn read_state(c: &gio::DBusConnection, profiles: &mut HashMap<String, Option<Str
     let primary_path = root
         .obj("PrimaryConnection")
         .or_else(|| root.obj("ActivatingConnection"));
-    if let Some(p) = primary_path.as_deref().and_then(active) {
-        s.primary = Some(active_conn(&p));
+    if let Some(path) = primary_path
+        && let Some(p) = active(&path)
+    {
+        s.primary = Some(ActiveConn {
+            path,
+            ..active_conn(&p)
+        });
     }
     // Settings path -> (active path, activating) for VPNs that are up.
     let mut vpn_up: HashMap<String, (String, bool)> = HashMap::new();
@@ -756,6 +791,8 @@ fn active_conn(p: &Props) -> ActiveConn {
         id: p.str("Id").unwrap_or_default(),
         // NMActiveConnectionState: 1 activating, 2 activated
         activating: p.u32("State") == Some(1),
+        activated: p.u32("State") == Some(2),
+        path: String::new(),
     }
 }
 
@@ -1219,6 +1256,8 @@ mod tests {
             kind,
             id: "x".into(),
             activating,
+            path: "/a/1".into(),
+            activated: !activating,
         })
     }
 

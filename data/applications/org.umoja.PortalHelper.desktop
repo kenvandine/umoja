@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hotspot Login
+Comment=Sign in to Wi-Fi networks that ask you to log in
+Icon=network-wireless
+Exec=/usr/libexec/umoja-portal-helper
+NoDisplay=true
+DBusActivatable=true
+StartupNotify=true

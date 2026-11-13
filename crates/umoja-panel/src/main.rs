@@ -9,6 +9,7 @@ mod battery;
 mod bluetooth;
 mod brightness;
 mod bus;
+mod captive_portal;
 mod clock;
 mod crash_watch;
 mod dbusmenu;
@@ -156,6 +157,8 @@ fn build(app: &adw::Application) {
     polkit::start();
     // Wi-Fi, VPN and 802.1X password prompts for NetworkManager.
     nm_agent::start();
+    // "Sign in to Network" and the Hotspot Login window for captive portals.
+    captive_portal::start();
     // Volume, brightness and playback keys, and their on-screen display.
     osd::init(app);
     media_keys::own_name();

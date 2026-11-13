@@ -4,6 +4,10 @@
 //! staying in umoja-panel.service's cgroup, so restarting the panel never
 //! takes Settings (or anything else it opened) down with it.
 
+use gio::prelude::*;
+use gtk4::glib;
+use gtk4::prelude::*;
+
 pub fn spawn_app(app_id: &str, argv: &[String], activation_token: Option<&str>) {
     let launcher = gio::SubprocessLauncher::new(gio::SubprocessFlags::NONE);
     if let Some(token) = activation_token {
@@ -39,6 +43,26 @@ pub fn spawn_app(app_id: &str, argv: &[String], activation_token: Option<&str>) 
             }
         }
     }
+}
+
+/// Start an app in its own scope, like the rest of the panel's launches.
+pub fn launch_info(info: gio::AppInfo, arg: Option<String>) {
+    let Some(cmd) = info.commandline() else { return };
+    let Ok(words) = glib::shell_parse_argv(cmd.as_os_str()) else { return };
+    let mut argv: Vec<String> = words
+        .iter()
+        .map(|w| w.to_string_lossy().into_owned())
+        .filter(|w| !(w.len() == 2 && w.starts_with('%')))
+        .collect();
+    if let Some(arg) = arg {
+        argv.push(arg);
+    }
+    let id = info.id().map(|s| s.trim_end_matches(".desktop").to_string()).unwrap_or_default();
+    // An activation token, so the compositor focuses the new window.
+    let token = gtk4::gdk::Display::default()
+        .and_then(|d| d.app_launch_context().startup_notify_id(Some(&info), &[]))
+        .map(|t| t.to_string());
+    spawn_app(&id, &argv, token.as_deref());
 }
 
 fn glib_counter() -> u32 {

@@ -41,7 +41,7 @@ endif
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# GTK crates need a display to run; test the headless logic only.
-	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver -p umoja-installer
+	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver -p umoja-installer -p umoja-portal-helper
 endif
 
 override_dh_auto_clean:
@@ -68,6 +68,12 @@ endif
 	install -D -m 0755 bin/umoja-session $(DESKTOP)/usr/bin/umoja-session
 	install -D -m 0755 bin/umoja-agent-setup $(DESKTOP)/usr/bin/umoja-agent-setup
 	install -D -m 0755 target/release/xdg-desktop-portal-umoja $(DESKTOP)/usr/libexec/xdg-desktop-portal-umoja
+	# Hotspot Login window for captive portals (D-Bus activated by the panel)
+	install -D -m 0755 target/release/umoja-portal-helper $(DESKTOP)/usr/libexec/umoja-portal-helper
+	install -D -m 0644 data/dbus/org.umoja.PortalHelper.service \
+		$(DESKTOP)/usr/share/dbus-1/services/org.umoja.PortalHelper.service
+	install -D -m 0644 data/applications/org.umoja.PortalHelper.desktop \
+		$(DESKTOP)/usr/share/applications/org.umoja.PortalHelper.desktop
 	install -D -m 0755 target/release/umoja-greeter $(GREETER)/usr/sbin/umoja-greeter
 	install -D -m 0755 bin/umoja-greeter-session $(GREETER)/usr/libexec/umoja-greeter-session
 
