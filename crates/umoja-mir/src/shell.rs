@@ -538,6 +538,12 @@ unsafe extern "C" {
     ) -> bool;
 }
 
+/// A window's rectangle in layout coordinates; None once it is gone.
+pub fn window_rect(id: u64) -> Option<Rect> {
+    let mut rect = Rect::default();
+    unsafe { umoja_wm_window_rect(id, &mut rect) }.then_some(rect)
+}
+
 /// Render one window on its own (shim/capture.cpp), even minimized or on
 /// another workspace: (width, height, BGRA premultiplied pixels) with the
 /// longer side about `size`. None without Umoja's patched Mir, for an
@@ -820,6 +826,40 @@ impl Compositor {
     /// previews of uncovered windows fresh.
     #[zbus(signal)]
     async fn windows_changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+
+    /// Whether the screen or a window is being shared (screen casts through
+    /// the portal), for the top bar's indicator.
+    async fn is_screen_sharing(&self) -> bool {
+        crate::screencast::sharing()
+    }
+
+    /// End every screen cast (the indicator's Stop Sharing).
+    async fn stop_screen_sharing(&self) {
+        crate::screencast::close_all().await;
+    }
+
+    #[zbus(signal)]
+    async fn screen_sharing_changed(
+        emitter: &zbus::object_server::SignalEmitter<'_>,
+        sharing: bool,
+    ) -> zbus::Result<()>;
+}
+
+/// A screen cast started or ended: tell the top bar.
+pub fn screen_sharing_changed() {
+    let Some(conn) = CONNECTION.get().cloned() else {
+        return;
+    };
+    crate::session::RUNTIME.spawn(async move {
+        let sharing = crate::screencast::sharing();
+        let sent = match zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+            Ok(e) => Compositor::screen_sharing_changed(&e, sharing).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = sent {
+            tracing::debug!(error = %e, "ScreenSharingChanged not sent");
+        }
+    });
 }
 
 /// Bumped by the shim on every window change; one task turns it into
@@ -827,6 +867,11 @@ impl Compositor {
 /// every pointer motion).
 static WINDOWS: LazyLock<tokio::sync::watch::Sender<u64>> =
     LazyLock::new(|| tokio::sync::watch::channel(0).0);
+
+/// Follow window changes (bursts arrive as one change).
+pub fn subscribe_windows() -> tokio::sync::watch::Receiver<u64> {
+    WINDOWS.subscribe()
+}
 
 /// Called from the shim (under the WM lock): only bumps a counter.
 pub fn windows_changed() {

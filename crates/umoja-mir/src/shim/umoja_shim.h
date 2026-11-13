@@ -328,6 +328,80 @@ bool umoja_wm_window_rect(uint64_t id, UmojaRect* out);
 bool umoja_capture_window(uint64_t id, UmojaRect rect, uint32_t size, uint8_t* out, uint32_t* out_w,
                           uint32_t* out_h);
 
+// Screen casts (screencast.cpp, src/screencast.rs): a PipeWire video stream
+// of an area of the screen or of one window.
+enum { UMOJA_CAST_AREA = 0, UMOJA_CAST_WINDOW = 1 };
+// org.gnome.Mutter.ScreenCast's cursor modes; metadata is drawn in.
+enum { UMOJA_CAST_CURSOR_HIDDEN = 0, UMOJA_CAST_CURSOR_EMBEDDED = 1, UMOJA_CAST_CURSOR_METADATA = 2 };
+typedef struct {
+    uint32_t kind;         // UMOJA_CAST_*
+    uint64_t window;       // UMOJA_CAST_WINDOW: the window id
+    UmojaRect area;        // UMOJA_CAST_AREA: layout coordinates
+    double scale;          // stream pixels per layout pixel
+    uint32_t cursor_mode;  // UMOJA_CAST_CURSOR_*
+    uint32_t max_fps;      // 0: 30
+} UmojaCastParams;
+// Start a stream under the caller's (nonzero, unused) handle; false when
+// it couldn't be made (no PipeWire...). Any thread but the cast's own.
+bool umoja_cast_start(uint64_t handle, UmojaCastParams const* params);
+void umoja_cast_stop(uint64_t handle);
+// Implemented in Rust (src/screencast.rs), from PipeWire's or the stream's
+// thread: the PipeWire node is ready for consumers; the stream ended by
+// itself (its window closed, PipeWire went away).
+void umoja_cast_node_added(uint64_t handle, uint32_t node_id, uint64_t serial);
+void umoja_cast_closed(uint64_t handle);
+
+// Remote desktop input (remote_input.cpp, src/remote_desktop.rs): a
+// session's own virtual keyboard, pointer and touchscreen. Positions are
+// layout coordinates; keys and buttons are evdev codes. Any thread.
+enum { UMOJA_TOUCH_DOWN = 0, UMOJA_TOUCH_MOTION = 1, UMOJA_TOUCH_UP = 2 };
+uint64_t umoja_remote_input_new(void);
+// Releases whatever the session still holds, then removes its devices.
+void umoja_remote_input_free(uint64_t handle);
+void umoja_remote_key(uint64_t handle, uint32_t evdev_code, bool pressed);
+// False when the keymap has no key for the keysym.
+bool umoja_remote_keysym(uint64_t handle, uint32_t keysym, bool pressed);
+void umoja_remote_pointer_motion(uint64_t handle, double dx, double dy);
+void umoja_remote_pointer_absolute(uint64_t handle, double x, double y);
+void umoja_remote_pointer_button(uint64_t handle, uint32_t linux_button, bool pressed);
+// Smooth scrolling (dx, dy; finish ends a finger scroll) or wheel steps.
+void umoja_remote_pointer_scroll(uint64_t handle, double dx, double dy, int32_t steps_x, int32_t steps_y,
+                                 bool finish);
+void umoja_remote_touch(uint64_t handle, uint32_t action, uint32_t slot, double x, double y);
+// Let go of every key, button and touch the session holds.
+void umoja_remote_input_release(uint64_t handle);
+
+// libei connections (eis.cpp, src/eis.rs). A remote desktop connection
+// feeds a remote input handle; absolute positions are in these regions
+// (monitors, layout coordinates). Both return a handle (0 on failure) and
+// the client's end of the socket in *out_fd.
+typedef struct {
+    int32_t x, y, w, h;
+    double scale;
+} UmojaRegion;
+enum { UMOJA_CAPTURE_KEYBOARD = 1, UMOJA_CAPTURE_POINTER = 2, UMOJA_CAPTURE_TOUCH = 4 };
+uint64_t umoja_eis_connect_remote(uint64_t remote, UmojaRegion const* regions, size_t n, int* out_fd);
+uint64_t umoja_eis_connect_capture(uint32_t capabilities, int* out_fd);
+void umoja_eis_disconnect(uint64_t handle);
+
+// Input capture (eis.cpp, src/input_capture.rs): barriers on outer screen
+// edges; pushing through one sends local input to the client's EIS
+// connection instead of to apps.
+typedef struct {
+    uint32_t id;
+    int32_t x1, y1, x2, y2;
+} UmojaBarrier;
+void umoja_input_capture_enable(uint64_t eis, UmojaBarrier const* barriers, size_t n);
+uint32_t umoja_input_capture_disable(void);
+uint32_t umoja_input_capture_release(bool warp, double x, double y);
+struct MirEvent;
+bool umoja_input_capture_filter(struct MirEvent const* event);
+// Implemented in Rust (src/input_capture.rs), from Mir's input thread.
+void umoja_input_capture_activated(uint32_t barrier_id, uint32_t activation_id, double x, double y);
+void umoja_input_capture_deactivated(uint32_t activation_id);
+// umoja_wm_move_pointer: put the pointer at (x, y) (not from input threads).
+void umoja_wm_move_pointer(int32_t x, int32_t y);
+
 #ifdef __cplusplus
 }
 
@@ -340,4 +414,15 @@ bool umoja_idle_input_filter(MirEvent const* event);
 void umoja_input_setup(mir::Server& server);
 // Keeps the server for window captures (capture.cpp).
 void umoja_capture_setup(mir::Server& server);
+// Shows one window, or (null target) everything, to one of our own screen
+// shooters (capture.cpp); used by window screen casts too.
+void umoja_scene_filter_set(void const* compositor, void const* target);
+bool umoja_scene_filter_consulted(void const* compositor);
+// Keeps the server for screen casts (screencast.cpp).
+void umoja_screencast_setup(mir::Server& server);
+// Keeps the server for remote desktop input (remote_input.cpp).
+void umoja_remote_input_setup(mir::Server& server);
+#include <string>
+// The keymap remote input uses, as an XKB keymap string (for libei).
+std::string umoja_remote_keymap_string();
 #endif

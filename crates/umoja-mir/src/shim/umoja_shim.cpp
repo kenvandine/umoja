@@ -2773,6 +2773,9 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     DisplayConfiguration display_config{runner};
     PrependEventFilter natural_scroll{umoja_apply_natural_scroll};
     PrependEventFilter idle_activity{umoja_idle_input_filter};
+    // Prepended last, so first: captured input (the input capture portal)
+    // reaches nothing else, not even the idle timer or shortcuts.
+    PrependEventFilter input_capture{umoja_input_capture_filter};
 
     // The pointer drawn by Mir itself (desktop, server-side cursor shapes):
     // the GNOME cursor theme and size that umoja-session exports, like
@@ -2817,7 +2820,11 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
 
     auto const idle = [](mir::Server& server) { umoja_idle_setup(server); };
     auto const input = [](mir::Server& server) { umoja_input_setup(server); };
-    auto const capture = [](mir::Server& server) { umoja_capture_setup(server); };
+    auto const capture = [](mir::Server& server) {
+        umoja_capture_setup(server);
+        umoja_screencast_setup(server);
+        umoja_remote_input_setup(server);
+    };
 
     auto const result = [](int code) { return g_exit_code >= 0 ? g_exit_code.load() : code; };
     if (config->enable_x11) {

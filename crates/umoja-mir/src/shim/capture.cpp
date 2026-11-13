@@ -32,6 +32,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 
 namespace geom = mir::geometry;
 namespace mg = mir::graphics;
@@ -48,27 +49,79 @@ std::mutex g_mutex;
 std::unique_ptr<mir::compositor::ScreenShooter> g_shooter;
 std::map<int, std::shared_ptr<mg::Buffer>> g_buffers;
 
-// What the hook shows while a capture renders.
-std::atomic<void const*> g_compositor{nullptr};
-std::atomic<void const*> g_target{nullptr};
-std::atomic<bool> g_consulted{false};
+}  // namespace
 
+// What the hook shows: for each of our own screen shooters that renders a
+// single window (the thumbnail shooter here, window screen casts in
+// screencast.cpp), the window it renders. A few slots, looked up without a
+// lock: the hook runs for every surface of every frame on every output.
+namespace {
+struct FilterSlot {
+    std::atomic<void const*> compositor{nullptr};
+    std::atomic<void const*> target{nullptr};
+    std::atomic<bool> consulted{false};
+};
+constexpr int max_filters = 16;
+FilterSlot g_filters[max_filters];
+std::atomic<int> g_filter_count{0};
+std::mutex g_filter_mutex;
+
+FilterSlot* slot_for(void const* compositor) {
+    for (auto& slot : g_filters)
+        if (slot.compositor.load(std::memory_order_acquire) == compositor) return &slot;
+    return nullptr;
+}
 }  // namespace
 
 // Called by the patched Mir (surface_stack.cpp) for every surface of every
 // scene a compositor builds, on that compositor's thread.
 extern "C" __attribute__((visibility("default"))) int mir_scene_filter_hook(void const* compositor,
                                                                            void const* surface) {
-    void const* const ours = g_compositor.load(std::memory_order_acquire);
-    if (!ours || compositor != ours) return -1;
-    g_consulted.store(true, std::memory_order_relaxed);
+    if (g_filter_count.load(std::memory_order_acquire) == 0 || !compositor) return -1;
+    FilterSlot* const slot = slot_for(compositor);
+    if (!slot) return -1;
+    slot->consulted.store(true, std::memory_order_relaxed);
     if (!surface) return 0;  // overlays (drag icons)
-    void const* const target = g_target.load(std::memory_order_relaxed);
+    void const* const target = slot->target.load(std::memory_order_relaxed);
+    if (!target) return 0;
     if (surface == target) return 1;
     // Children of the window that draw as part of it (decorations).
     auto const s = static_cast<mir::scene::Surface const*>(surface);
     if (auto const parent = s->parent(); parent && parent.get() == target && s->visible()) return 1;
     return 0;
+}
+
+// Show only window `target` to `compositor` (one of our screen shooters),
+// or let it see everything as usual again with a null target.
+void umoja_scene_filter_set(void const* compositor, void const* target) {
+    std::lock_guard lock{g_filter_mutex};
+    FilterSlot* slot = slot_for(compositor);
+    if (!target) {
+        if (slot) {
+            slot->compositor.store(nullptr, std::memory_order_release);
+            slot->target.store(nullptr);
+            g_filter_count.fetch_sub(1);
+        }
+        return;
+    }
+    if (!slot) {
+        slot = slot_for(nullptr);
+        if (!slot) throw std::runtime_error{"too many window captures"};
+        slot->target.store(target);
+        slot->consulted.store(false);
+        slot->compositor.store(compositor, std::memory_order_release);
+        g_filter_count.fetch_add(1);
+        return;
+    }
+    slot->target.store(target);
+}
+
+// Whether the patched Mir asked the hook about `compositor`'s scene since
+// it was filtered (false: no scene filter hook, not Umoja's Mir).
+bool umoja_scene_filter_consulted(void const* compositor) {
+    std::lock_guard lock{g_filter_mutex};
+    FilterSlot const* slot = slot_for(compositor);
+    return slot && slot->consulted.load();
 }
 
 void umoja_capture_setup(mir::Server& server) {
@@ -96,16 +149,15 @@ extern "C" bool umoja_capture_window(uint64_t id, UmojaRect rect, uint32_t size,
         int const side = std::max(rect.w, rect.h);
         geom::Rectangle const area{{rect.x, rect.y}, {side, side}};
 
-        g_target.store(reinterpret_cast<void const*>(id), std::memory_order_relaxed);
-        g_consulted.store(false, std::memory_order_relaxed);
-        g_compositor.store(g_shooter->id(), std::memory_order_release);
+        umoja_scene_filter_set(g_shooter->id(), reinterpret_cast<void const*>(id));
         std::optional<bool> ok;
         g_shooter->capture(mrs::as_write_mappable(buffer), area, glm::mat2{1.0f}, false,
                            [&ok](std::optional<mir::time::Timestamp> t) { ok = t.has_value(); });
-        g_compositor.store(nullptr, std::memory_order_release);
+        bool const consulted = umoja_scene_filter_consulted(g_shooter->id());
+        umoja_scene_filter_set(g_shooter->id(), nullptr);
         // The immediate executor rendered before capture() returned.
         if (!ok.value_or(false)) return false;
-        if (!g_consulted.load()) {
+        if (!consulted) {
             static std::once_flag warned;
             std::call_once(warned, [] {
                 std::fprintf(stderr, "umoja-mir: window capture needs Mir's scene filter hook (Umoja's Mir)\n");
@@ -143,7 +195,7 @@ extern "C" bool umoja_capture_window(uint64_t id, UmojaRect rect, uint32_t size,
         *out_h = h;
         return true;
     } catch (std::exception const& e) {
-        g_compositor.store(nullptr);
+        if (g_shooter) umoja_scene_filter_set(g_shooter->id(), nullptr);
         std::fprintf(stderr, "umoja-mir: window capture failed: %s\n", e.what());
         return false;
     }

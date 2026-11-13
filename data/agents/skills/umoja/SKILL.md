@@ -86,7 +86,7 @@ wins and a stock GNOME session on the same machine is unaffected.
 | `umoja-overlay` | Super overlay: app grid, search, assistant, clipboard history, screenshot UI |
 | `umoja-lemonade` | Local AI model server |
 | `umoja-files` | File search indexer |
-| `xdg-desktop-portal-umoja` | Portal backend (screenshots, settings for sandboxed apps) |
+| `xdg-desktop-portal-umoja` | Portal backend (screenshots, settings for sandboxed apps); screen sharing goes through xdg-desktop-portal-gnome to umoja-mir |
 
 Logs for a unit: `journalctl --user -u umoja-panel -b`. The hostname may be
 "umoja", so grep for the unit, not the word.
