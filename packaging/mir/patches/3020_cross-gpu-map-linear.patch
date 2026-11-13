@@ -12,18 +12,42 @@ Description: Cross-GPU copy: map linear buffers instead of reading them back
  monitor is wired to the other GPU. Anything else still goes through
  glReadPixels as before.
  .
+ ARGB/XRGB and ABGR/XBGR buffers are mapped (browsers and GL clients mostly
+ use the latter); the copy keeps the buffer's byte order.
+ .
  Also: spare copy buffers are released when a buffer of a new size is
  needed, instead of up to eight (tens of megabytes each) being kept for
  good; the per-size statistics are only gathered in debug mode, and the
- debug line says how many copies were mapped.
+ debug line says how many copies were mapped, how long those took, and the
+ format and modifier of the buffers that were read back.
 Author: Umoja
 Forwarded: no
 
 diff --git src/platform/graphics/linux_dmabuf.cpp src/platform/graphics/linux_dmabuf.cpp
-index b1bd858..f66ab37 100644
 --- a/src/platform/graphics/linux_dmabuf.cpp
 +++ b/src/platform/graphics/linux_dmabuf.cpp
-@@ -96,10 +96,12 @@ public:
+@@ -48,6 +48,7 @@
+ 
+ #include <EGL/egl.h>
+ #include <cstdint>
++#include <cstdio>
+ #include <cstring>
+ #include <stdexcept>
+ #include <sys/ioctl.h>
+@@ -85,22 +86,24 @@
+ class CrossGpuCopyPool
+ {
+ public:
+-    auto take(geom::Size size) -> std::shared_ptr<mgc::MemoryBackedShmBuffer>
++    auto take(geom::Size size, MirPixelFormat format) -> std::shared_ptr<mgc::MemoryBackedShmBuffer>
+     {
+         std::lock_guard lock{mutex};
+         for (auto const& b : buffers)
+         {
+             // Only the pool holds it: no texture or client buffer uses it.
+-            if (b.use_count() == 1 && b->size() == size)
++            if (b.use_count() == 1 && b->size() == size && b->format() == format)
+             {
                  return b;
              }
          }
@@ -31,26 +55,32 @@ index b1bd858..f66ab37 100644
 -        {
 -            std::erase_if(buffers, [](auto const& b) { return b.use_count() == 1; });
 -        }
+-        auto b = std::make_shared<mgc::MemoryBackedShmBuffer>(size, mir_pixel_format_argb_8888);
 +        /* No spare of this size: a window appeared or was resized. Spares of
 +         * other sizes are then mostly left over from sizes no longer in use
 +         * (each is tens of megabytes), so let them all go; a window that
 +         * still wants one allocates it once more.
 +         */
 +        std::erase_if(buffers, [](auto const& b) { return b.use_count() == 1; });
-         auto b = std::make_shared<mgc::MemoryBackedShmBuffer>(size, mir_pixel_format_argb_8888);
++        auto b = std::make_shared<mgc::MemoryBackedShmBuffer>(size, format);
          if (buffers.size() < max_buffers)
          {
-@@ -125,11 +127,17 @@ auto cross_gpu_copy_pool() -> CrossGpuCopyPool&
+             buffers.push_back(b);
+@@ -125,14 +128,28 @@
  class CrossGpuCopyStats
  {
  public:
 -    void add(std::size_t bytes, std::chrono::nanoseconds took, geom::Size size)
-+    void add(std::size_t bytes, std::chrono::nanoseconds took, geom::Size size, bool mapped)
++    /* `kind` says what a buffer that could not be mapped was (its format
++     * and modifier); it is only looked at in debug mode. */
++    template<typename Kind>
++    void add(std::size_t bytes, std::chrono::nanoseconds took, geom::Size size, bool mapped, Kind&& kind)
      {
          copies.fetch_add(1, std::memory_order_relaxed);
 +        if (mapped)
 +        {
 +            mapped_copies.fetch_add(1, std::memory_order_relaxed);
++            mapped_ns.fetch_add(took.count(), std::memory_order_relaxed);
 +        }
          total_bytes.fetch_add(bytes, std::memory_order_relaxed);
          total_ns.fetch_add(took.count(), std::memory_order_relaxed);
@@ -59,46 +89,75 @@ index b1bd858..f66ab37 100644
          {
              std::lock_guard lock{sizes_mutex};
              ++sizes[{size.width.as_int(), size.height.as_int()}];
-@@ -149,6 +157,7 @@ public:
++            if (!mapped)
++            {
++                ++unmapped[kind()];
++            }
+         }
+ 
+         auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
+@@ -149,6 +166,8 @@
              return;
          }
          auto const n = copies.exchange(0);
 +        auto const m = mapped_copies.exchange(0);
++        auto const mns = mapped_ns.exchange(0);
          auto const b = total_bytes.exchange(0);
          auto const ns = total_ns.exchange(0);
          // Which windows (by buffer size) were copied most.
-@@ -161,7 +170,8 @@ public:
+@@ -161,7 +180,18 @@
              }
              sizes.clear();
          }
 -        if (!debugging())
++        // What the buffers that had to be read back through GL were.
++        std::string read_back;
++        {
++            std::lock_guard lock{sizes_mutex};
++            for (auto const& [kind, count] : unmapped)
++            {
++                read_back += (read_back.empty() ? "" : ", ") + kind + " x" + std::to_string(count);
++            }
++            unmapped.clear();
++        }
 +        bool const was_debugging = debug.exchange(debugging());
 +        if (!was_debugging)
          {
              return;
          }
-@@ -173,9 +183,10 @@ public:
+@@ -173,10 +203,14 @@
                  std::to_string(by_count[i].second.second) + " x" + std::to_string(by_count[i].first);
          }
          mir::log_info(
 -            "Cross-GPU CPU copies in the last %.1f s: %llu buffers, %.1f MB, %.1f ms copying; most: %s",
-+            "Cross-GPU CPU copies in the last %.1f s: %llu buffers (%llu mapped), %.1f MB, %.1f ms copying; most: %s",
++            "Cross-GPU CPU copies in the last %.1f s: %llu buffers (%llu mapped in %.1f ms), %.1f MB, "
++            "%.1f ms copying; most: %s; read back: %s",
              static_cast<double>(now - last) / static_cast<double>(interval) * 10.0,
              static_cast<unsigned long long>(n),
+-            static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str());
 +            static_cast<unsigned long long>(m),
-             static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str());
++            static_cast<double>(mns) / 1e6,
++            static_cast<double>(b) / 1e6, static_cast<double>(ns) / 1e6, top.c_str(),
++            read_back.empty() ? "none" : read_back.c_str());
      }
  
-@@ -187,6 +198,8 @@ private:
+ private:
+@@ -187,10 +221,14 @@
      }
  
      std::atomic<unsigned long long> copies{0};
 +    std::atomic<unsigned long long> mapped_copies{0};
++    std::atomic<long long> mapped_ns{0};
 +    std::atomic<bool> debug{false};
      std::atomic<unsigned long long> total_bytes{0};
      std::atomic<long long> total_ns{0};
      std::mutex sizes_mutex;
-@@ -199,6 +212,17 @@ auto cross_gpu_copy_stats() -> CrossGpuCopyStats&
+     std::map<std::pair<int, int>, unsigned> sizes;
++    std::map<std::string, unsigned> unmapped;
+     std::atomic<std::chrono::steady_clock::rep> last_report{0};
+ };
+ 
+@@ -199,6 +237,17 @@
      static CrossGpuCopyStats stats;
      return stats;
  }
@@ -116,7 +175,7 @@ index b1bd858..f66ab37 100644
  }
  
  namespace
-@@ -299,6 +323,26 @@ public:
+@@ -299,6 +348,26 @@
                  external_only.resize(returned_modifiers);
              }
  
@@ -143,7 +202,14 @@ index b1bd858..f66ab37 100644
              if (num_modifiers == 0)
              {
                  /* Special case: num_modifiers == 0 means that the driver doesn't support modifiers;
-@@ -1353,9 +1397,59 @@ public:
+@@ -1346,17 +1415,92 @@
+         }
+ 
+         auto const started = std::chrono::steady_clock::now();
+-        auto copy = cross_gpu_copy_pool().take(size_);
+-        auto mapping = copy->map_writeable();
+-        auto* const dest = mapping->data();
+         GLsizei const width = size_.width.as_int();
          GLsizei const height = size_.height.as_int();
          GLuint const src = tex.tex_id();
  
@@ -153,12 +219,32 @@ index b1bd858..f66ab37 100644
 +         * commit). Clients only use linear buffers when nothing better is
 +         * offered: see MIR_DMABUF_LINEAR_ONLY. DMA_BUF_IOCTL_SYNC (in
 +         * DmaBufMapping) waits for the client's rendering to land.
++         *
++         * The copy keeps the buffer's byte order (GL clients and browsers
++         * mostly use ABGR, others ARGB), so it is one pass either way.
 +         */
-+        bool mapped = false;
-+        auto const mir_format = format().as_mir_format();
-+        if (modifier().value_or(DRM_FORMAT_MOD_INVALID) == DRM_FORMAT_MOD_LINEAR &&
++        auto const mir_format = format().as_mir_format().value_or(mir_pixel_format_invalid);
++        bool const rgba_order =
++            mir_format == mir_pixel_format_abgr_8888 || mir_format == mir_pixel_format_xbgr_8888;
++        bool const bgra_order =
++            mir_format == mir_pixel_format_argb_8888 || mir_format == mir_pixel_format_xrgb_8888;
++        bool const opaque =
++            mir_format == mir_pixel_format_xrgb_8888 || mir_format == mir_pixel_format_xbgr_8888;
++        bool const mappable =
++            modifier().value_or(DRM_FORMAT_MOD_INVALID) == DRM_FORMAT_MOD_LINEAR &&
 +            planes().size() == 1 &&
-+            (mir_format == mir_pixel_format_argb_8888 || mir_format == mir_pixel_format_xrgb_8888))
++            (rgba_order || bgra_order);
++        // Only a mapped copy is in ABGR order; a read back asks GL for ARGB.
++        bool const rgba_dest = mappable && rgba_order;
++
++        auto copy = cross_gpu_copy_pool().take(
++            size_,
++            rgba_dest ? mir_pixel_format_abgr_8888 : mir_pixel_format_argb_8888);
++        auto mapping = copy->map_writeable();
++        auto* const dest = mapping->data();
++
++        bool mapped = false;
++        if (mappable)
 +        {
 +            try
 +            {
@@ -170,18 +256,26 @@ index b1bd858..f66ab37 100644
 +                {
 +                    auto const* from = reinterpret_cast<unsigned char const*>(source.data());
 +                    auto* to = reinterpret_cast<unsigned char*>(dest);
-+                    bool const opaque = mir_format == mir_pixel_format_xrgb_8888;
 +                    for (GLsizei y = 0; y < height; ++y)
 +                    {
-+                        std::memcpy(to + y * dst_stride, from + y * src_stride, row);
 +                        if (opaque)
 +                        {
-+                            // The X byte is undefined; the copy is drawn as ARGB.
-+                            auto* px = to + y * dst_stride;
-+                            for (size_t x = 3; x < row; x += 4)
++                            /* The X byte is undefined and the copy is drawn
++                             * with alpha: set it while copying (alpha is the
++                             * last byte in both orders). */
++                            auto const* in = from + y * src_stride;
++                            auto* out = to + y * dst_stride;
++                            for (GLsizei x = 0; x < width; ++x)
 +                            {
-+                                px[x] = 0xff;
++                                uint32_t px;
++                                std::memcpy(&px, in + x * 4, 4);
++                                px |= 0xff000000u;
++                                std::memcpy(out + x * 4, &px, 4);
 +                            }
++                        }
++                        else
++                        {
++                            std::memcpy(to + y * dst_stride, from + y * src_stride, row);
 +                        }
 +                    }
 +                    mapped = true;
@@ -196,21 +290,49 @@ index b1bd858..f66ab37 100644
          std::promise<bool> done;
          auto result = done.get_future();
 -        egl_executor->spawn(
+-            [&done, dest, width, height, src]()
 +        if (mapped)
 +        {
 +            done.set_value(true);
 +        }
 +        else egl_executor->spawn(
-             [&done, dest, width, height, src]()
++            [&done, dest, width, height, src, rgba_dest]()
              {
                  bool ok = false;
-@@ -1397,7 +1491,8 @@ public:
+                 GLuint fbo{0};
+@@ -1367,9 +1511,15 @@
+                 {
+                     glPixelStorei(GL_PACK_ALIGNMENT, 4);
+                     while (glGetError() != GL_NO_ERROR) {}
++                    if (rgba_dest)
++                    {
++                        // The copy is ABGR8888: R,G,B,A in memory, as GL_RGBA gives it.
++                        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, dest);
++                        ok = glGetError() == GL_NO_ERROR;
++                    }
+                     // ARGB8888 is B,G,R,A in memory: GL_BGRA_EXT gives it directly.
+-                    glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, dest);
+-                    if (glGetError() == GL_NO_ERROR)
++                    else if (glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, dest);
++                        glGetError() == GL_NO_ERROR)
+                     {
+                         ok = true;
+                     }
+@@ -1397,7 +1547,16 @@
          cross_gpu_copy_stats().add(
              static_cast<std::size_t>(width) * height * 4,
              std::chrono::steady_clock::now() - started,
 -            size_);
 +            size_,
-+            mapped);
++            mapped,
++            [this]
++            {
++                char mod[32];
++                snprintf(
++                    mod, sizeof mod, "/0x%llx",
++                    static_cast<unsigned long long>(modifier().value_or(DRM_FORMAT_MOD_INVALID)));
++                return std::string{format().name()} + mod + (planes().size() == 1 ? "" : "/planar");
++            });
  
          if (ok)
          {
