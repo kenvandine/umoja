@@ -1,14 +1,18 @@
-Description: Don't make the kernel probe every connector again at each query
- drmModeGetConnector forces a fresh probe. On a DisplayPort/USB-C port with
- nothing plugged in that waits for AUX timeouts: 0.68 s per port on a
- ThinkPad P16 Gen 3, which has two such ports on the Intel GPU. Mir asks
- about every connector four times over while it starts, so 5.5 s of the
- 6.6 s between exec and "ready" went to probing two empty ports, with the
- screen black (login to desktop, and the greeter at boot).
+Description: Don't probe connectors that Intel's driver already knows are empty
+ drmModeGetConnector forces a fresh probe. On an Intel DisplayPort/USB-C
+ port with nothing plugged in that waits for AUX timeouts: 0.68 s per port
+ on a ThinkPad P16 Gen 3, which has two such ports. Mir asks about every
+ connector four times over while it starts, so 5.5 s of the 6.6 s between
+ exec and "ready" went to probing two empty ports, with the screen black
+ (login to desktop, and the greeter at boot).
  .
- The kernel probes on hotplug and keeps the result, so use
- drmModeGetConnectorCurrent, and fall back to a probe only when the kernel
- has never probed the connector or reports it connected without modes.
+ i915 and xe run detection themselves on a hotplug interrupt, before the
+ uevent. So on those drivers, when the kernel's kept state
+ (drmModeGetConnectorCurrent) says a connector is disconnected, use that.
+ A connector reported connected or unknown is still probed (quick, and
+ its mode list is only refreshed by a probe), and other drivers are always
+ probed: with the first version of this patch nvidia-drm went on
+ reporting an unplugged monitor as connected.
  MIR_DRM_ALWAYS_PROBE=1 restores the old behaviour.
 Author: Umoja developers
 Forwarded: no
@@ -16,27 +20,34 @@ Forwarded: no
 diff --git src/platform/graphics/kms/drm_mode_resources.cpp src/platform/graphics/kms/drm_mode_resources.cpp
 --- a/src/platform/graphics/kms/drm_mode_resources.cpp
 +++ b/src/platform/graphics/kms/drm_mode_resources.cpp
-@@ -18,6 +18,7 @@
+@@ -18,6 +18,9 @@
  
  #include <boost/throw_exception.hpp>
  #include <drm_mode.h>
 +#include <cstdlib>
++#include <memory>
++#include <string_view>
  #include <system_error>
  #include <format>
  #include <xf86drm.h>
-@@ -139,10 +140,59 @@
+@@ -139,10 +142,69 @@
      return get_crtc(drm_fd, id);
  }
  
 +namespace
 +{
-+/* drmModeGetConnector makes the kernel probe the connector again. On a
-+ * DisplayPort/USB-C port with nothing plugged in that waits for AUX
++/* drmModeGetConnector makes the kernel probe the connector again. On an
++ * Intel DisplayPort/USB-C port with nothing plugged in that waits for AUX
 + * timeouts (0.68 s per port on a ThinkPad P16 Gen 3), and Mir asks about
 + * every connector several times while it starts: 5.5 s of a 6.6 s startup
-+ * went to probing two empty ports eight times. The kernel already probes
-+ * when something is plugged or unplugged and keeps the result, so read
-+ * that, and only probe when the kernel has nothing useful yet.
++ * went to probing two empty ports eight times.
++ *
++ * i915 and xe detect a plug or unplug themselves before they send the
++ * hotplug event, so when they say a port is empty, believe them without a
++ * probe. A port they report as connected is still probed (that is quick,
++ * and its mode list is only refreshed by a probe), and so is everything on
++ * other drivers: nvidia-drm kept reporting an unplugged monitor as
++ * connected until asked to probe.
 + * MIR_DRM_ALWAYS_PROBE=1 restores the probe on every query.
 + */
 +auto always_probe() -> bool
@@ -49,20 +60,25 @@ diff --git src/platform/graphics/kms/drm_mode_resources.cpp src/platform/graphic
 +    return enabled;
 +}
 +
-+auto current_connector(int drm_fd, uint32_t id) -> drmModeConnector*
++auto driver_detects_hotplug(int drm_fd) -> bool
 +{
-+    if (always_probe())
++    std::unique_ptr<drmVersion, void (*)(drmVersionPtr)> const version{drmGetVersion(drm_fd), &drmFreeVersion};
++    if (!version || !version->name)
++    {
++        return false;
++    }
++    std::string_view const name{version->name, static_cast<size_t>(version->name_len)};
++    return name == "i915" || name == "xe";
++}
++
++auto known_empty_connector(int drm_fd, uint32_t id) -> drmModeConnector*
++{
++    if (always_probe() || !driver_detects_hotplug(drm_fd))
 +    {
 +        return nullptr;
 +    }
 +    auto const connector = drmModeGetConnectorCurrent(drm_fd, id);
-+    if (!connector)
-+    {
-+        return nullptr;
-+    }
-+    bool const never_probed = connector->connection == DRM_MODE_UNKNOWNCONNECTION;
-+    bool const no_modes = connector->connection == DRM_MODE_CONNECTED && connector->count_modes == 0;
-+    if (never_probed || no_modes)
++    if (connector && connector->connection != DRM_MODE_DISCONNECTED)
 +    {
 +        drmModeFreeConnector(connector);
 +        return nullptr;
@@ -75,7 +91,7 @@ diff --git src/platform/graphics/kms/drm_mode_resources.cpp src/platform/graphic
  {
      errno = 0;
 -    DRMModeConnectorUPtr connector{drmModeGetConnector(drm_fd, id), &drmModeFreeConnector};
-+    auto raw = current_connector(drm_fd, id);
++    auto raw = known_empty_connector(drm_fd, id);
 +    if (!raw)
 +    {
 +        errno = 0;
