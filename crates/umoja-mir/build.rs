@@ -10,6 +10,9 @@ fn main() {
     println!("cargo:rerun-if-changed=src/shim/natural_scroll.cpp");
     println!("cargo:rerun-if-changed=src/shim/idle.cpp");
     println!("cargo:rerun-if-changed=src/shim/capture.cpp");
+    println!("cargo:rerun-if-changed=src/shim/screencast.cpp");
+    println!("cargo:rerun-if-changed=src/shim/remote_input.cpp");
+    println!("cargo:rerun-if-changed=src/shim/eis.cpp");
     println!("cargo:rerun-if-changed=src/shim/input_config.cpp");
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.h");
     println!("cargo:rerun-if-changed=src/shim/session_management.cpp");
@@ -36,6 +39,23 @@ fn main() {
         .cargo_metadata(false)
         .probe("mirserver-internal")
         .expect("mirserver-internal (libmirserver-internal-dev) is required to build umoja-mir");
+
+    // Screen casts (shim/screencast.cpp) are PipeWire streams.
+    let pipewire = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("libpipewire-0.3")
+        .expect("libpipewire-0.3 (libpipewire-0.3-dev) is required to build umoja-mir");
+
+    // Remote desktop and input capture: libei's server side, and xkbcommon
+    // for keysyms and the keymap libei clients get.
+    let eis = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("libeis-1.0")
+        .expect("libeis-1.0 (libeis-dev) is required to build umoja-mir");
+    let xkbcommon = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("xkbcommon")
+        .expect("xkbcommon (libxkbcommon-dev) is required to build umoja-mir");
 
     // Protocols umoja-mir implements itself (Mir has no support for them):
     // generated with wayland-scanner, like any libwayland server.
@@ -75,6 +95,9 @@ fn main() {
         .file("src/shim/natural_scroll.cpp")
         .file("src/shim/idle.cpp")
         .file("src/shim/capture.cpp")
+        .file("src/shim/screencast.cpp")
+        .file("src/shim/remote_input.cpp")
+        .file("src/shim/eis.cpp")
         .file("src/shim/input_config.cpp")
         .file("src/shim/session_management.cpp")
         .include(&out)
@@ -86,6 +109,9 @@ fn main() {
         .chain(&mircommon.include_paths)
         .chain(&mirserver.include_paths)
         .chain(&wayland.include_paths)
+        .chain(&pipewire.include_paths)
+        .chain(&eis.include_paths)
+        .chain(&xkbcommon.include_paths)
     {
         build.include(path);
     }
@@ -105,6 +131,9 @@ fn main() {
         .chain(&mircommon.link_paths)
         .chain(&mirserver.link_paths)
         .chain(&wayland.link_paths)
+        .chain(&pipewire.link_paths)
+        .chain(&eis.link_paths)
+        .chain(&xkbcommon.link_paths)
     {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
@@ -114,6 +143,9 @@ fn main() {
         .chain(&mircommon.libs)
         .chain(&mirserver.libs)
         .chain(&wayland.libs)
+        .chain(&pipewire.libs)
+        .chain(&eis.libs)
+        .chain(&xkbcommon.libs)
     {
         println!("cargo:rustc-link-lib={lib}");
     }

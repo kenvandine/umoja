@@ -8,16 +8,21 @@
 
 mod display_config;
 mod edge_pressure;
+mod eis;
 mod ffi;
 mod gestures;
 mod gpu;
 mod greeter;
 mod idle;
 mod input;
+mod input_capture;
+mod introspect;
 mod media_keys;
 mod outputs;
 mod peripherals;
 mod protocols;
+mod remote_desktop;
+mod screencast;
 mod screensaver;
 mod session;
 mod shell;
@@ -50,6 +55,8 @@ fn main() {
         outputs::import_gnome_monitors(DISPLAY_CONFIG_FILE);
         display_config::start(DISPLAY_CONFIG_FILE);
         shell::start();
+        // Screen sharing, remote desktop and input capture for the portals.
+        remote_desktop::start();
         idle::start();
     }
 

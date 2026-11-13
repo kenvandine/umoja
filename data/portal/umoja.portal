@@ -1,3 +1,3 @@
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.umoja
-Interfaces=org.freedesktop.impl.portal.Settings;org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.ScreenCast;
+Interfaces=org.freedesktop.impl.portal.Settings;org.freedesktop.impl.portal.Screenshot;

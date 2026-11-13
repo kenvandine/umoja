@@ -161,6 +161,16 @@ fn kernel_modes(connector: &str) -> Vec<(u32, u32)> {
     modes
 }
 
+/// Bumped on every monitor change (input capture zones follow it).
+pub fn layout_serial() -> u32 {
+    SERIAL.load(Ordering::SeqCst)
+}
+
+/// The connected outputs, by output id (screen casts pick monitors by name).
+pub fn outputs() -> BTreeMap<i32, OutputState> {
+    OUTPUTS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// The primary monitor's output id, or -1 with no outputs.
 pub fn primary_output_id() -> i32 {
     PRIMARY_ID.load(Ordering::SeqCst)

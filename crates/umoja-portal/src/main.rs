@@ -1,10 +1,11 @@
 //! xdg-desktop-portal-umoja: portal backend for the Umoja session.
 //!
-//! Implements `org.freedesktop.impl.portal.{Settings,Screenshot,ScreenCast}`.
-//! Secret is delegated to gnome-keyring via `umoja-portals.conf`, and every
-//! other interface falls back to the GNOME/GTK backends.
+//! Implements `org.freedesktop.impl.portal.{Settings,Screenshot}`. Secret is
+//! delegated to gnome-keyring via `umoja-portals.conf`, and every other
+//! interface falls back to the GNOME/GTK backends. Screen sharing (ScreenCast,
+//! RemoteDesktop, InputCapture) is xdg-desktop-portal-gnome's, with umoja-mir
+//! serving the mutter and gnome-shell APIs it talks to.
 
-mod screencast;
 mod screenshot;
 mod settings;
 
@@ -29,7 +30,6 @@ async fn main() -> anyhow::Result<()> {
         .name(BUS_NAME)?
         .serve_at(OBJECT_PATH, settings)?
         .serve_at(OBJECT_PATH, screenshot::Screenshot)?
-        .serve_at(OBJECT_PATH, screencast::ScreenCast)?
         .build()
         .await?;
 

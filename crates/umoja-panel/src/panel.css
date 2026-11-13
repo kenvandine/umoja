@@ -715,6 +715,15 @@ window.umoja-panel > box > box > button.screencast-indicator > *:not(popover) {
 window.umoja-panel > box > box > button.screencast-indicator:hover > *:not(popover) {
   background-color: #d4313d;
 }
+/* gnome-shell's screen sharing indicator: $warning_color. */
+window.umoja-panel > box > box > button.screen-sharing-indicator > *:not(popover) {
+  padding: 0 10px;
+  background-color: #e5a50a;
+  color: #000000;
+}
+window.umoja-panel > box > box > button.screen-sharing-indicator:hover > *:not(popover) {
+  background-color: #f0b52c;
+}
 
 /* Download indicator (downloads.rs): a progress ring in a pill like a
    tray icon, with a count when more than one thing is downloading, and a

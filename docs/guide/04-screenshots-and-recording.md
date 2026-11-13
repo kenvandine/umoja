@@ -72,3 +72,24 @@ check what you paste.
 Recordings are saved in **Videos › Screencasts**. While you record,
 notification pop-ups wait so they don't end up in your video. You get a
 summary when you stop.
+
+## Sharing your screen or a window
+
+Video calls in the browser (Google Meet, Zoom, Teams), OBS Studio and
+remote desktop apps can share your screen, or just one window, as they do
+on Ubuntu with GNOME. When an app asks, Umoja shows GNOME's sharing
+dialog:
+
+1. Choose **Entire Screen** (and which monitor, if you have several) or
+   **Window** (and which one).
+2. Click **Share**.
+
+A shared window keeps showing in the call even when it's covered, minimized
+or on another workspace. While anything is shared, an orange indicator sits
+in the top bar. Click it to stop sharing everything at once.
+
+Some apps also ask to control the computer (remote desktop and support
+tools) or to borrow the keyboard and mouse (Deskflow and similar tools
+that share them between computers). They ask for that in their own dialog
+first. While a keyboard-and-mouse sharing tool has your input, press
+**Super+Escape** to take it back.

@@ -28,8 +28,9 @@ to whatever catches your eye.
    tiling, the layout picker, workspaces, several monitors, scaling and
    games
 4. [Screenshots and screen recording](04-screenshots-and-recording.md):
-   the screenshot tool, copying text from the screen, and screenshot names
-   that say what the picture shows
+   the screenshot tool, copying text from the screen, screenshot names
+   that say what the picture shows, and sharing your screen or a window in
+   video calls
 5. [Ask Umoja](05-ask-umoja.md): the card that does everything, from
    switches and sums to emoji and setups
 6. [The assistant](06-the-assistant.md): asking in plain words, what it can

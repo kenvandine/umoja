@@ -36,6 +36,7 @@ mod polkit;
 mod power_dialog;
 mod quick_settings;
 mod screencast;
+mod sharing;
 mod sni;
 mod sound;
 mod volume;
@@ -143,6 +144,8 @@ fn build(app: &adw::Application) {
     let end = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     // gnome-shell's screen recording indicator comes first on the right.
     end.append(&screencast::indicator());
+    // And its screen sharing indicator (portal screen casts).
+    end.append(&sharing::indicator());
     // Myna's recording indicator, left of the tray like GNOME's privacy
     // indicators; the same object hosts Myna's HUD pill.
     end.append(&MYNA.with(|m| m.get_or_init(myna::Myna::start).widget()));
