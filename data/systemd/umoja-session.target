@@ -40,5 +40,5 @@ After=graphical-session-pre.target
 # as with the autostart target above, order it after us to avoid a loop.
 Wants=user-dirs-update-gtk.service
 Before=user-dirs-update-gtk.service
-Wants=umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service
+Wants=umoja-welcome.service umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service
 StopWhenUnneeded=no

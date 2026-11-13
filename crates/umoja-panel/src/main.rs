@@ -43,6 +43,7 @@ mod sni;
 mod sound;
 mod volume;
 mod wallpaper;
+mod welcome;
 
 use adw::prelude::*;
 use gtk::glib;
@@ -57,6 +58,10 @@ const PANEL_HEIGHT: i32 = 32;
 fn main() -> glib::ExitCode {
     umoja_common::init_logging("umoja-panel");
     i18n::init();
+    // The welcome screen shown while the desktop loads (welcome.rs).
+    if std::env::args().any(|a| a == "--welcome") {
+        return welcome::run();
+    }
 
     let app = adw::Application::builder()
         .application_id(APP_ID)

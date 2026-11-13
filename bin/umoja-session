@@ -93,9 +93,18 @@ fi
 # The XDG autostart generator only runs when the user manager starts or
 # reloads, and with lingering (or a second login) that manager outlives the
 # last session, so an app switched to "start at login" since then would be
-# missed. Re-run the generators now, before
-# umoja-session.target pulls in xdg-desktop-autostart.target.
-systemctl --user daemon-reload || log "systemctl --user daemon-reload failed; autostart entries may be stale"
+# missed. Re-run the generators before umoja-session.target pulls in
+# xdg-desktop-autostart.target. It takes about a quarter of a second, all of
+# it black screen if waited for here, so it runs while the compositor
+# starts: umoja-mir only asks for the target once it is up (longer than the
+# reload takes), and the user manager answers that request after the reload.
+( systemctl --user daemon-reload || log "systemctl --user daemon-reload failed; autostart entries may be stale" ) &
+
+# The welcome screen (umoja-welcome.service) covers the desktop while it
+# loads. Only at login: the marker is gone once it has been shown, so a
+# compositor restart after a crash comes straight back.
+WELCOME_MARKER="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/umoja-welcome"
+: > "$WELCOME_MARKER" 2>/dev/null
 
 # Stop the shell services when the compositor exits, however it exits, and
 # take our variables back out of the user manager, which outlives this
@@ -108,6 +117,7 @@ cleanup() {
     systemctl --user stop --no-block umoja-session.target
     # shellcheck disable=SC2086
     systemctl --user unset-environment $SESSION_VARS WAYLAND_DISPLAY DISPLAY
+    rm -f "$WELCOME_MARKER"
 }
 
 # Log Out (logind terminating the session) or the display manager stopping

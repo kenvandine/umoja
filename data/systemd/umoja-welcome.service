@@ -1,0 +1,16 @@
+[Unit]
+Description=Umoja welcome screen while the desktop loads
+Documentation=https://github.com/kenvandine/umoja
+# Covers the screen from the moment the compositor is up until the panel
+# and dock have drawn, then crossfades to them and exits
+# (crates/umoja-panel/src/welcome.rs). bin/umoja-session leaves the marker
+# at login only, so a compositor or shell restart later shows no welcome.
+PartOf=umoja-session.target
+After=umoja-session.target
+Requisite=umoja-session.target
+ConditionPathExists=%t/umoja-welcome
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/umoja-panel --welcome
+Slice=session.slice
