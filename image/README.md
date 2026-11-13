@@ -41,7 +41,11 @@ For an interactive VM, open `umoja.img` in GNOME Boxes or virt-manager
 `.github/workflows/image.yml` builds the image for pull requests that
 touch it (using that commit's debs), after each Packages run on main, and
 on demand. Artifacts: `umoja-image` (the compressed image, kept 7 days)
-and `umoja-image-boot` (screenshots and the serial log).
+and `umoja-image-boot` (screenshots and the serial log). When the run has
+debs to add, it also builds the installer ISO:
+`ubuntu-umoja-desktop-vVERSION+HASH_amd64` holds the `.iso`, its
+`.sha256` and the `.list` package manifest (kept 7 days), and the `.list`
+is also uploaded on its own, unzipped.
 
 ## Installer ISO
 
@@ -59,6 +63,10 @@ The installer erases the chosen disk and lays out an EFI partition,
 `/boot`, and a LUKS2-encrypted ext4 root that the login password unlocks
 (`bin/umoja-install` does the work). Boot is UEFI only, through Ubuntu's
 signed shim and GRUB, with Secure Boot on.
+
+Next to the ISO goes a package manifest with the same name and a `.list`
+extension: every package the installed system gets, one `name version`
+per line.
 
 `--autoinstall` builds a test ISO that installs to the first disk
 unattended (account `umoja`, password `umoja-install`) and powers off.
