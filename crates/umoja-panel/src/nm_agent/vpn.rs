@@ -31,9 +31,7 @@ struct Plugin {
 
 fn find_plugin(service: &str) -> Option<Plugin> {
     for dir in ["/etc/NetworkManager/VPN", "/usr/lib/NetworkManager/VPN"] {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for e in entries.flatten() {
             let path = e.path();
             if path.extension().and_then(|x| x.to_str()) != Some("name") {
@@ -43,9 +41,7 @@ fn find_plugin(service: &str) -> Option<Plugin> {
             if kf.load_from_file(&path, glib::KeyFileFlags::NONE).is_err() {
                 continue;
             }
-            let matches = kf
-                .string("VPN Connector", "service")
-                .is_ok_and(|s| s == service)
+            let matches = kf.string("VPN Connector", "service").is_ok_and(|s| s == service)
                 || kf
                     .string_list("VPN Connector", "aliases")
                     .is_ok_and(|a| a.iter().any(|s| s == service));
@@ -60,12 +56,8 @@ fn find_plugin(service: &str) -> Option<Plugin> {
                 auth_dialog = Path::new("/usr/libexec").join(auth_dialog);
             }
             let truthy = |k: &str| {
-                kf.string("GNOME", k).is_ok_and(|v| {
-                    matches!(
-                        v.trim().to_lowercase().as_str(),
-                        "true" | "yes" | "on" | "1"
-                    )
-                })
+                kf.string("GNOME", k)
+                    .is_ok_and(|v| matches!(v.trim().to_lowercase().as_str(), "true" | "yes" | "on" | "1"))
             };
             return Some(Plugin {
                 auth_dialog,
@@ -135,8 +127,7 @@ impl Helper {
         for (k, v) in conn.dict("vpn", "data") {
             input.push_str(&format!("DATA_KEY={k}\nDATA_VAL={v}\n\n"));
         }
-        let mut secrets: HashMap<String, String> =
-            conn.dict("vpn", "secrets").into_iter().collect();
+        let mut secrets: HashMap<String, String> = conn.dict("vpn", "secrets").into_iter().collect();
         secrets.extend(known.clone());
         for (k, v) in &secrets {
             input.push_str(&format!("SECRET_KEY={k}\nSECRET_VAL={v}\n\n"));
@@ -162,9 +153,7 @@ impl Helper {
         let Some(stdin) = self.process.stdin_pipe() else {
             return Ok(());
         };
-        stdin
-            .write_all(text.as_bytes(), gio::Cancellable::NONE)
-            .map(|_| ())
+        stdin.write_all(text.as_bytes(), gio::Cancellable::NONE).map(|_| ())
     }
 
     async fn run(self: Rc<Self>, on_event: Rc<dyn Fn(Event)>) {
@@ -251,14 +240,8 @@ fn parse_external(data: &[u8]) -> Result<(Option<Content>, Vec<(String, String)>
         return Err(());
     }
     let mut content = Content {
-        title: kf
-            .string(VPN_UI_GROUP, "Title")
-            .map(|s| s.to_string())
-            .unwrap_or_default(),
-        message: kf
-            .string(VPN_UI_GROUP, "Description")
-            .ok()
-            .map(|s| s.to_string()),
+        title: kf.string(VPN_UI_GROUP, "Title").map(|s| s.to_string()).unwrap_or_default(),
+        message: kf.string(VPN_UI_GROUP, "Description").ok().map(|s| s.to_string()),
         ..Default::default()
     };
     let mut given = Vec::new();
@@ -267,16 +250,10 @@ fn parse_external(data: &[u8]) -> Result<(Option<Content>, Vec<(String, String)>
         if group == VPN_UI_GROUP {
             continue;
         }
-        let value = kf
-            .string(group, "Value")
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        let value = kf.string(group, "Value").map(|s| s.to_string()).unwrap_or_default();
         if kf.boolean(group, "ShouldAsk").unwrap_or(false) {
             content.secrets.push(Secret {
-                label: kf
-                    .string(group, "Label")
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_| group.into()),
+                label: kf.string(group, "Label").map(|s| s.to_string()).unwrap_or_else(|_| group.into()),
                 key: Some(group.into()),
                 value,
                 password: kf.boolean(group, "IsSecret").unwrap_or(false),

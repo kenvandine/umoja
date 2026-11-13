@@ -22,8 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use umoja_common::dbus::{
-    PORTAL_COMPLETED, PORTAL_HELPER_BUS_NAME, PORTAL_HELPER_INTERFACE, PORTAL_HELPER_OBJECT_PATH,
-    PORTAL_RECHECK,
+    PORTAL_COMPLETED, PORTAL_HELPER_BUS_NAME, PORTAL_HELPER_INTERFACE, PORTAL_HELPER_OBJECT_PATH, PORTAL_RECHECK,
 };
 use umoja_common::i18n;
 
@@ -83,12 +82,8 @@ pub fn start() {
 /// Whether the state calls for a login: the primary connection is fully up
 /// and NetworkManager found a portal.
 fn wants_login(s: &NetState, test: bool) -> Option<&network::ActiveConn> {
-    let primary = s
-        .primary
-        .as_ref()
-        .filter(|p| p.activated && !p.path.is_empty())?;
-    let portal =
-        s.connectivity == CONNECTIVITY_PORTAL || (test && s.connectivity < CONNECTIVITY_FULL);
+    let primary = s.primary.as_ref().filter(|p| p.activated && !p.path.is_empty())?;
+    let portal = s.connectivity == CONNECTIVITY_PORTAL || (test && s.connectivity < CONNECTIVITY_FULL);
     portal.then_some(primary)
 }
 
@@ -134,9 +129,7 @@ impl Portal {
         }
         impl Drop for Guard {
             fn drop(&mut self) {
-                let Some(p) = self.portal.upgrade() else {
-                    return;
-                };
+                let Some(p) = self.portal.upgrade() else { return };
                 if let Ok(mut logins) = p.logins.try_borrow_mut()
                     && let Some(l @ Login::Notified(_)) = logins.get_mut(&self.path)
                 {
@@ -149,9 +142,7 @@ impl Portal {
             path: conn.path.clone(),
         };
         // Reserve the entry first: notify may call back synchronously.
-        self.logins
-            .borrow_mut()
-            .insert(conn.path.clone(), Login::Notified(0));
+        self.logins.borrow_mut().insert(conn.path.clone(), Login::Notified(0));
         let nid = center.notify_with_actions(
             &i18n::shell("Sign in to Network"),
             &conn.id,
@@ -231,10 +222,9 @@ impl Portal {
             None,
             gio::DBusSignalFlags::NONE,
             move |_, _, _, _, _, params| {
-                let (Some(p), Some((path, result))) = (
-                    weak.upgrade(),
-                    params.get::<(glib::variant::ObjectPath, u32)>(),
-                ) else {
+                let (Some(p), Some((path, result))) =
+                    (weak.upgrade(), params.get::<(glib::variant::ObjectPath, u32)>())
+                else {
                     return;
                 };
                 p.status_changed(path.as_str(), result);
@@ -335,10 +325,7 @@ mod tests {
     #[test]
     fn portal_on_an_active_connection() {
         let s = state(CONNECTIVITY_PORTAL, true);
-        assert_eq!(
-            wants_login(&s, false).map(|c| c.id.as_str()),
-            Some("Hotel Guest")
-        );
+        assert_eq!(wants_login(&s, false).map(|c| c.id.as_str()), Some("Hotel Guest"));
     }
 
     #[test]

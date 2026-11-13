@@ -288,11 +288,7 @@ impl Center {
     /// any more, one banner says how many arrived meanwhile.
     pub fn set_quiet(self: &Rc<Self>, reason: u8, on: bool) {
         let before = self.quiet.get();
-        let now = if on {
-            before | reason
-        } else {
-            before & !reason
-        };
+        let now = if on { before | reason } else { before & !reason };
         if now == before {
             return;
         }
@@ -309,9 +305,7 @@ impl Center {
         let held: Vec<u32> = self.held.borrow_mut().drain(..).collect();
         let count = {
             let notes = self.notes.borrow();
-            held.iter()
-                .filter(|id| notes.iter().any(|n| n.id == **id))
-                .count()
+            held.iter().filter(|id| notes.iter().any(|n| n.id == **id)).count()
         };
         if count == 0 || !self.banners_enabled() {
             return;
@@ -599,20 +593,14 @@ impl Center {
             // in that moment would still pop up over the game or video.
             // Ask the compositor now; it only delays the banner by a
             // round trip.
-            let first = self
-                .pending_banner
-                .borrow_mut()
-                .insert(note.id, note.clone())
-                .is_none();
+            let first = self.pending_banner.borrow_mut().insert(note.id, note.clone()).is_none();
             if first {
                 let weak = Rc::downgrade(self);
                 let id = note.id;
                 quiet::fullscreen_now(move |fullscreen| {
                     let Some(c) = weak.upgrade() else { return };
                     // Closed meanwhile: nothing to show. Replaced: show the latest.
-                    let Some(note) = c.pending_banner.borrow_mut().remove(&id) else {
-                        return;
-                    };
+                    let Some(note) = c.pending_banner.borrow_mut().remove(&id) else { return };
                     if fullscreen {
                         c.set_quiet(quiet::FULLSCREEN, true);
                     }
@@ -670,8 +658,7 @@ impl Center {
                     let source = n.app_id.as_deref().unwrap_or(n.app_name.as_str());
                     let seen = per_app.entry(source).or_default();
                     *seen += 1;
-                    (n.id != keep && !n.resident && (*seen > PER_APP || i >= MAX_LISTED))
-                        .then_some(n.id)
+                    (n.id != keep && !n.resident && (*seen > PER_APP || i >= MAX_LISTED)).then_some(n.id)
                 })
                 .collect()
         };

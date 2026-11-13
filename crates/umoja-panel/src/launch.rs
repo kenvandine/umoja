@@ -47,12 +47,8 @@ pub fn spawn_app(app_id: &str, argv: &[String], activation_token: Option<&str>) 
 
 /// Start an app in its own scope, like the rest of the panel's launches.
 pub fn launch_info(info: gio::AppInfo, arg: Option<String>) {
-    let Some(cmd) = info.commandline() else {
-        return;
-    };
-    let Ok(words) = glib::shell_parse_argv(cmd.as_os_str()) else {
-        return;
-    };
+    let Some(cmd) = info.commandline() else { return };
+    let Ok(words) = glib::shell_parse_argv(cmd.as_os_str()) else { return };
     let mut argv: Vec<String> = words
         .iter()
         .map(|w| w.to_string_lossy().into_owned())
@@ -61,10 +57,7 @@ pub fn launch_info(info: gio::AppInfo, arg: Option<String>) {
     if let Some(arg) = arg {
         argv.push(arg);
     }
-    let id = info
-        .id()
-        .map(|s| s.trim_end_matches(".desktop").to_string())
-        .unwrap_or_default();
+    let id = info.id().map(|s| s.trim_end_matches(".desktop").to_string()).unwrap_or_default();
     // An activation token, so the compositor focuses the new window.
     let token = gtk4::gdk::Display::default()
         .and_then(|d| d.app_launch_context().startup_notify_id(Some(&info), &[]))

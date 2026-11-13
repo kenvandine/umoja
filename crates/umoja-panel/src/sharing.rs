@@ -68,8 +68,7 @@ fn watch(button: &gtk::Button) {
             None,
             gio::DBusSignalFlags::NONE,
             move |_, _, _, _, _, params| {
-                if let (Some((sharing,)), Some(b)) = (params.get::<(bool,)>(), on_signal.upgrade())
-                {
+                if let (Some((sharing,)), Some(b)) = (params.get::<(bool,)>(), on_signal.upgrade()) {
                     b.set_visible(sharing);
                 }
             },
@@ -88,10 +87,7 @@ fn watch(button: &gtk::Button) {
                 2000,
             )
             .await;
-        if let (Some((true,)), Some(b)) = (
-            reply.ok().and_then(|v| v.get::<(bool,)>()),
-            button.upgrade(),
-        ) {
+        if let (Some((true,)), Some(b)) = (reply.ok().and_then(|v| v.get::<(bool,)>()), button.upgrade()) {
             b.set_visible(true);
         }
         std::mem::forget(conn);

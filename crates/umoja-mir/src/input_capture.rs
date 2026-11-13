@@ -83,12 +83,7 @@ fn failed(msg: impl Into<String>) -> fdo::Error {
 
 /// From Mir's input thread: the pointer went through a barrier.
 #[unsafe(no_mangle)]
-pub extern "C" fn umoja_input_capture_activated(
-    barrier_id: u32,
-    activation_id: u32,
-    x: f64,
-    y: f64,
-) {
+pub extern "C" fn umoja_input_capture_activated(barrier_id: u32, activation_id: u32, x: f64, y: f64) {
     if let Some(tx) = EVENTS.get() {
         let _ = tx.send(Event::Activated {
             barrier: barrier_id,
@@ -111,24 +106,14 @@ pub extern "C" fn umoja_input_capture_deactivated(activation_id: u32) {
 fn zones() -> Vec<(u32, u32, i32, i32)> {
     crate::display_config::outputs()
         .values()
-        .map(|o| {
-            (
-                o.rect.w.max(0) as u32,
-                o.rect.h.max(0) as u32,
-                o.rect.x,
-                o.rect.y,
-            )
-        })
+        .map(|o| (o.rect.w.max(0) as u32, o.rect.h.max(0) as u32, o.rect.x, o.rect.y))
         .collect()
 }
 
 /// A barrier must be a horizontal or vertical line along an outer edge of
 /// a zone, where the pointer is held back (as mutter requires).
 fn valid_barrier(b: &Barrier) -> bool {
-    let rects: Vec<Rect> = crate::display_config::outputs()
-        .values()
-        .map(|o| o.rect)
-        .collect();
+    let rects: Vec<Rect> = crate::display_config::outputs().values().map(|o| o.rect).collect();
     valid_barrier_on(b, &rects)
 }
 
@@ -218,10 +203,7 @@ impl CaptureSession {
 
 #[interface(name = "org.gnome.Mutter.InputCapture.Session")]
 impl CaptureSession {
-    async fn get_zones(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-    ) -> fdo::Result<(u32, Vec<(u32, u32, i32, i32)>)> {
+    async fn get_zones(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<(u32, Vec<(u32, u32, i32, i32)>)> {
         self.check(&header)?;
         let serial = crate::display_config::layout_serial();
         if let Some(s) = sessions().get_mut(&self.path) {
@@ -238,22 +220,14 @@ impl CaptureSession {
     ) -> fdo::Result<u32> {
         self.check(&header)?;
         let (x1, y1, x2, y2) = position;
-        let mut b = Barrier {
-            id: 0,
-            x1,
-            y1,
-            x2,
-            y2,
-        };
+        let mut b = Barrier { id: 0, x1, y1, x2, y2 };
         if !valid_barrier(&b) {
             return Err(fdo::Error::InvalidArgs(format!(
                 "Barrier ({x1}, {y1}, {x2}, {y2}) is not on an outer screen edge"
             )));
         }
         let mut sessions = sessions();
-        let s = sessions
-            .get_mut(&self.path)
-            .ok_or_else(|| failed("Session closed"))?;
+        let s = sessions.get_mut(&self.path).ok_or_else(|| failed("Session closed"))?;
         if serial != s.zones_serial {
             return Err(failed("The zones changed: get them again"));
         }
@@ -273,9 +247,7 @@ impl CaptureSession {
         self.check(&header)?;
         let eis = {
             let mut sessions = sessions();
-            let s = sessions
-                .get_mut(&self.path)
-                .ok_or_else(|| failed("Session closed"))?;
+            let s = sessions.get_mut(&self.path).ok_or_else(|| failed("Session closed"))?;
             s.barriers.clear();
             s.eis
         };
@@ -289,9 +261,7 @@ impl CaptureSession {
         self.check(&header)?;
         let (eis, barriers) = {
             let sessions = sessions();
-            let s = sessions
-                .get(&self.path)
-                .ok_or_else(|| failed("Session closed"))?;
+            let s = sessions.get(&self.path).ok_or_else(|| failed("Session closed"))?;
             (s.eis, s.barriers.clone())
         };
         let previous = enabled().replace(self.path.clone());
@@ -336,9 +306,7 @@ impl CaptureSession {
         self.check(&header)?;
         let caps = {
             let sessions = sessions();
-            let s = sessions
-                .get(&self.path)
-                .ok_or_else(|| failed("Session closed"))?;
+            let s = sessions.get(&self.path).ok_or_else(|| failed("Session closed"))?;
             if s.eis != 0 {
                 return Err(failed("Already connected"));
             }
@@ -382,11 +350,10 @@ impl CaptureSession {
             .and_then(|v| v.try_clone().ok())
             .and_then(|v| <(f64, f64)>::try_from(v).ok());
         let (x, y) = position.unwrap_or((0.0, 0.0));
-        let ended = tokio::task::spawn_blocking(move || unsafe {
-            umoja_input_capture_release(position.is_some(), x, y)
-        })
-        .await
-        .unwrap_or(0);
+        let ended =
+            tokio::task::spawn_blocking(move || unsafe { umoja_input_capture_release(position.is_some(), x, y) })
+                .await
+                .unwrap_or(0);
         if ended != 0 {
             let _ = CaptureSession::deactivated(&emitter, ended).await;
         }
@@ -546,13 +513,7 @@ mod tests {
     use super::*;
 
     fn barrier(x1: i32, y1: i32, x2: i32, y2: i32) -> Barrier {
-        Barrier {
-            id: 0,
-            x1,
-            y1,
-            x2,
-            y2,
-        }
+        Barrier { id: 0, x1, y1, x2, y2 }
     }
 
     #[test]

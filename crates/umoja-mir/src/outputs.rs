@@ -402,10 +402,7 @@ mod tests {
 
     #[test]
     fn hidpi_seed_uses_mir_port_names() {
-        let hidpi = [
-            panel("eDP-1", 2880, 1800, 302, 189),
-            panel("DP-1", 1920, 1080, 527, 296),
-        ];
+        let hidpi = [panel("eDP-1", 2880, 1800, 302, 189), panel("DP-1", 1920, 1080, 527, 296)];
         let y = seed_layout(&hidpi).unwrap();
         assert!(y.contains("      eDP-1:\n"));
         assert!(y.contains("      DisplayPort-1:\n        state: enabled\n        scale: 1\n"));
@@ -455,15 +452,9 @@ mod tests {
 </monitors>"#;
         let layouts = parse_monitors_xml(xml).unwrap();
         let both = ["HDMI-A-1".to_string(), "eDP-1".to_string()];
-        assert_eq!(
-            primary_in_layouts(&layouts, &both).as_deref(),
-            Some("HDMI-A-1")
-        );
+        assert_eq!(primary_in_layouts(&layouts, &both).as_deref(), Some("HDMI-A-1"));
         let laptop = ["eDP-1".to_string()];
-        assert_eq!(
-            primary_in_layouts(&layouts, &laptop).as_deref(),
-            Some("eDP-1")
-        );
+        assert_eq!(primary_in_layouts(&layouts, &laptop).as_deref(), Some("eDP-1"));
         let other = ["DP-2".to_string()];
         assert_eq!(primary_in_layouts(&layouts, &other), None);
     }

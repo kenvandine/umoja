@@ -38,9 +38,7 @@ impl Conn {
     }
 
     pub fn strs(&self, section: &str, key: &str) -> Vec<String> {
-        self.section(section)
-            .map(|p| p.objs(key))
-            .unwrap_or_default()
+        self.section(section).map(|p| p.objs(key)).unwrap_or_default()
     }
 
     pub fn uuid(&self) -> String {
@@ -102,17 +100,16 @@ impl Conn {
         let kind = self.kind();
         let mut sections = vec![kind.clone()];
         match kind.as_str() {
-            "802-11-wireless" => {
-                sections.extend(["802-11-wireless-security".into(), "802-1x".into()])
-            }
+            "802-11-wireless" => sections.extend(["802-11-wireless-security".into(), "802-1x".into()]),
             "802-3-ethernet" => sections.extend(["pppoe".into(), "802-1x".into()]),
             _ => {}
         }
         sections.iter().any(|s| {
             if s == "vpn" {
-                return self.dict("vpn", "data").iter().any(|(k, v)| {
-                    k.ends_with("-flags") && v.parse::<u32>().is_ok_and(|f| f & NOT_SAVED != 0)
-                });
+                return self
+                    .dict("vpn", "data")
+                    .iter()
+                    .any(|(k, v)| k.ends_with("-flags") && v.parse::<u32>().is_ok_and(|f| f & NOT_SAVED != 0));
             }
             secret_keys(s)
                 .iter()
@@ -125,14 +122,7 @@ impl Conn {
 /// libnm marks NM_SETTING_PARAM_SECRET and that hold a string).
 pub fn secret_keys(setting: &str) -> &'static [&'static str] {
     match setting {
-        "802-11-wireless-security" => &[
-            "psk",
-            "wep-key0",
-            "wep-key1",
-            "wep-key2",
-            "wep-key3",
-            "leap-password",
-        ],
+        "802-11-wireless-security" => &["psk", "wep-key0", "wep-key1", "wep-key2", "wep-key3", "leap-password"],
         "802-1x" => &[
             "password",
             "private-key-password",
@@ -228,14 +218,8 @@ fn format1(template: &str, arg: &str) -> String {
 
 /// The dialog for a non-VPN request. `known` holds secrets found in the
 /// keyring, used to fill the entries in.
-pub fn build(
-    conn: &Conn,
-    setting: &str,
-    hints: &[String],
-    known: &HashMap<String, String>,
-) -> Option<Content> {
-    let value =
-        |section: &str, key: &str| known.get(key).cloned().or_else(|| conn.str(section, key));
+pub fn build(conn: &Conn, setting: &str, hints: &[String], known: &HashMap<String, String>) -> Option<Content> {
+    let value = |section: &str, key: &str| known.get(key).cloned().or_else(|| conn.str(section, key));
     let mut c = Content::default();
     match conn.kind().as_str() {
         "802-11-wireless" => {
@@ -248,66 +232,32 @@ pub fn build(
         }
         "802-3-ethernet" => {
             c.title = i18n::shell("Wired 802.1X authentication");
-            c.secrets
-                .push(Secret::show("Network name", Some(conn.id())));
+            c.secrets.push(Secret::show("Network name", Some(conn.id())));
             ieee8021x(conn, setting, hints, &value, &mut c.secrets);
         }
         "pppoe" => {
             c.title = i18n::shell("DSL authentication");
-            c.secrets.push(Secret::ask(
-                "Username",
-                "username",
-                value("pppoe", "username"),
-                false,
-            ));
-            c.secrets.push(Secret::ask(
-                "Service",
-                "service",
-                value("pppoe", "service"),
-                false,
-            ));
-            c.secrets.push(Secret::ask(
-                "Password",
-                "password",
-                value("pppoe", "password"),
-                true,
-            ));
+            c.secrets.push(Secret::ask("Username", "username", value("pppoe", "username"), false));
+            c.secrets.push(Secret::ask("Service", "service", value("pppoe", "service"), false));
+            c.secrets.push(Secret::ask("Password", "password", value("pppoe", "password"), true));
         }
         "gsm" if hints.iter().any(|h| h == "pin") => {
             c.title = i18n::shell("PIN code required");
-            c.message = Some(i18n::shell(
-                "PIN code is needed for the mobile broadband device",
-            ));
-            c.secrets
-                .push(Secret::ask("PIN", "pin", value("gsm", "pin"), true));
+            c.message = Some(i18n::shell("PIN code is needed for the mobile broadband device"));
+            c.secrets.push(Secret::ask("PIN", "pin", value("gsm", "pin"), true));
         }
         kind @ ("gsm" | "cdma" | "bluetooth") => {
             c.title = i18n::shell("Authentication required");
-            c.message = Some(format1(
-                "A password is required to connect to “%s”",
-                &conn.id(),
-            ));
+            c.message = Some(format1("A password is required to connect to “%s”", &conn.id()));
             let section = if kind == "bluetooth" {
-                if conn.section("cdma").is_some() {
-                    "cdma"
-                } else {
-                    "gsm"
-                }
+                if conn.section("cdma").is_some() { "cdma" } else { "gsm" }
             } else {
                 kind
             };
-            c.secrets.push(Secret::ask(
-                "Password",
-                "password",
-                value(section, "password"),
-                true,
-            ));
+            c.secrets.push(Secret::ask("Password", "password", value(section, "password"), true));
         }
         other => {
-            tracing::warn!(
-                kind = other,
-                "network agent: no dialog for this connection type"
-            );
+            tracing::warn!(kind = other, "network agent: no dialog for this connection type");
             return None;
         }
     }
@@ -328,34 +278,23 @@ fn wireless(
     const SEC: &str = "802-11-wireless-security";
     match conn.str(SEC, "key-mgmt").as_deref() {
         Some("wpa-none" | "wpa-psk" | "sae") => {
-            out.push(
-                Secret::ask("Password", "psk", value(SEC, "psk"), true).validated(Validate::WpaPsk),
-            );
+            out.push(Secret::ask("Password", "psk", value(SEC, "psk"), true).validated(Validate::WpaPsk));
         }
         Some("none") => {
             let idx = conn.u32(SEC, "wep-tx-keyidx").unwrap_or(0).min(3);
             let key = format!("wep-key{idx}");
             let kind = conn.u32(SEC, "wep-key-type").unwrap_or(0);
-            out.push(
-                Secret::ask("Key", &key, value(SEC, &key), true).validated(Validate::Wep(kind)),
-            );
+            out.push(Secret::ask("Key", &key, value(SEC, &key), true).validated(Validate::Wep(kind)));
         }
         Some("ieee8021x") => {
             if conn.str(SEC, "auth-alg").as_deref() == Some("leap") {
-                out.push(Secret::ask(
-                    "Password",
-                    "leap-password",
-                    value(SEC, "leap-password"),
-                    true,
-                ));
+                out.push(Secret::ask("Password", "leap-password", value(SEC, "leap-password"), true));
             } else {
                 ieee8021x(conn, setting, hints, value, out);
             }
         }
         Some("wpa-eap" | "wpa-eap-suite-b-192") => ieee8021x(conn, setting, hints, value, out),
-        other => {
-            tracing::warn!(key_mgmt = ?other, "network agent: unknown wireless key management")
-        }
+        other => tracing::warn!(key_mgmt = ?other, "network agent: unknown wireless key management"),
     }
 }
 
@@ -371,20 +310,10 @@ fn ieee8021x(
     if setting == X && !hints.is_empty() {
         let has = |h: &str| hints.iter().any(|x| x == h);
         if has("identity") {
-            out.push(Secret::ask(
-                "Username",
-                "identity",
-                value(X, "identity"),
-                false,
-            ));
+            out.push(Secret::ask("Username", "identity", value(X, "identity"), false));
         }
         if has("password") {
-            out.push(Secret::ask(
-                "Password",
-                "password",
-                value(X, "password"),
-                true,
-            ));
+            out.push(Secret::ask("Password", "password", value(X, "password"), true));
         }
         if has("private-key-password") {
             out.push(Secret::ask(
@@ -400,12 +329,7 @@ fn ieee8021x(
     match eap.first().map(String::as_str) {
         Some("md5" | "leap" | "ttls" | "peap" | "fast" | "pwd") => {
             out.push(Secret::show("Username", value(X, "identity")));
-            out.push(Secret::ask(
-                "Password",
-                "password",
-                value(X, "password"),
-                true,
-            ));
+            out.push(Secret::ask("Password", "password", value(X, "password"), true));
         }
         Some("tls") => {
             out.push(Secret::show("Identity", value(X, "identity")));
@@ -432,22 +356,13 @@ pub fn notification(conn: &Conn, hints: &[String]) -> Option<(String, String)> {
                 &conn.ssid(),
             ),
         ),
-        "802-3-ethernet" => (
-            i18n::shell("Wired 802.1X authentication"),
-            needs_password(&conn.id()),
-        ),
-        "pppoe" => (
-            i18n::shell("DSL authentication"),
-            needs_password(&conn.id()),
-        ),
+        "802-3-ethernet" => (i18n::shell("Wired 802.1X authentication"), needs_password(&conn.id())),
+        "pppoe" => (i18n::shell("DSL authentication"), needs_password(&conn.id())),
         "gsm" if hints.iter().any(|h| h == "pin") => (
             i18n::shell("PIN code required"),
             i18n::shell("PIN code is needed for the mobile broadband device"),
         ),
-        "gsm" | "cdma" | "bluetooth" => (
-            i18n::shell("Authentication required"),
-            needs_password(&conn.id()),
-        ),
+        "gsm" | "cdma" | "bluetooth" => (i18n::shell("Authentication required"), needs_password(&conn.id())),
         "vpn" => (i18n::shell("VPN password"), needs_password(&conn.id())),
         _ => return None,
     })

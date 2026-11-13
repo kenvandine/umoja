@@ -168,11 +168,7 @@ pub fn apply_key(old: VolumeState, key: Key, step: f64, max: f64) -> (VolumeStat
 
 /// 100%, or ~150% with "Over-Amplification" on, like gnome-shell's slider.
 pub fn max_volume() -> f64 {
-    if umoja_common::gsettings::get_bool(
-        "org.gnome.desktop.sound",
-        "allow-volume-above-100-percent",
-        false,
-    ) {
+    if umoja_common::gsettings::get_bool("org.gnome.desktop.sound", "allow-volume-above-100-percent", false) {
         1.5
     } else {
         1.0

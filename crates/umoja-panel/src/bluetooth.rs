@@ -65,8 +65,7 @@ impl BtState {
 /// nothing in the panel shows.
 fn only_radio_noise(params: &glib::Variant) -> bool {
     const NOISE: [&str; 4] = ["RSSI", "TxPower", "ManufacturerData", "ServiceData"];
-    let Some((_, changed, invalidated)) = params.get::<(String, glib::VariantDict, Vec<String>)>()
-    else {
+    let Some((_, changed, invalidated)) = params.get::<(String, glib::VariantDict, Vec<String>)>() else {
         return false;
     };
     let changed = changed.end();

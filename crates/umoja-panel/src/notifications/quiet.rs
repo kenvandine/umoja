@@ -148,8 +148,7 @@ fn watch_fullscreen(conn: &gio::DBusConnection, center: Weak<Center>) {
                 1000,
                 gio::Cancellable::NONE,
                 move |res| {
-                    let Some((rows,)) = res.ok().and_then(|v| v.get::<(Vec<super::WindowRow>,)>())
-                    else {
+                    let Some((rows,)) = res.ok().and_then(|v| v.get::<(Vec<super::WindowRow>,)>()) else {
                         return;
                     };
                     let flags: Vec<u32> = rows.iter().map(|r| r.7).collect();

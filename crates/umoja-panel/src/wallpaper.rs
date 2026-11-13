@@ -98,9 +98,8 @@ impl Wallpaper {
         };
         let color = gs::get_string(gs::BACKGROUND, "primary-color", "#023c88");
         let rgba = gdk::RGBA::parse(color.as_str()).unwrap_or(gdk::RGBA::BLACK);
-        self.color_css.load_from_string(&format!(
-            ".umoja-wallpaper-frame {{ background-color: {rgba}; }}"
-        ));
+        self.color_css
+            .load_from_string(&format!(".umoja-wallpaper-frame {{ background-color: {rgba}; }}"));
         Look { texture, fit }
     }
 

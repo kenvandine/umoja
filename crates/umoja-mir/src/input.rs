@@ -527,11 +527,7 @@ pub fn reload() {
             mods,
             action: CUSTOM_BASE + custom_commands.len() as u32,
         });
-        let name = if name.is_empty() {
-            command.clone()
-        } else {
-            name
-        };
+        let name = if name.is_empty() { command.clone() } else { name };
         shortcuts.push((format!("custom:{name}"), binding));
         custom_commands.push(command);
     }
@@ -565,11 +561,7 @@ pub fn reload() {
             "mouse-button-modifier",
             "<Super>",
         )),
-        resize_with_right_button: gs::get_bool(
-            gs::WM_PREFERENCES,
-            "resize-with-right-button",
-            false,
-        ),
+        resize_with_right_button: gs::get_bool(gs::WM_PREFERENCES, "resize-with-right-button", false),
         workspaces: workspaces::Settings {
             dynamic: gs::get_bool(gs::MUTTER, "dynamic-workspaces", true),
             // mutter caps num-workspaces at 36.

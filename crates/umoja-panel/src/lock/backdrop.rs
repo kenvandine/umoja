@@ -41,11 +41,7 @@ mod imp {
             if let Some(tex) = self.texture.borrow().as_ref() {
                 // "Cover" fit, overscanned so blurred edges never show.
                 let (tw, th) = (tex.width() as f32, tex.height() as f32);
-                let blur = if self.preblurred.get() {
-                    0.0
-                } else {
-                    self.blur.get() as f32
-                };
+                let blur = if self.preblurred.get() { 0.0 } else { self.blur.get() as f32 };
                 let scale = (w / tw).max(h / th);
                 let (dw, dh) = (tw * scale + blur * 4.0, th * scale + blur * 4.0);
                 let dest = graphene::Rect::new((w - dw) / 2.0, (h - dh) / 2.0, dw, dh);
@@ -97,9 +93,7 @@ impl Backdrop {
         let (w, h, scale) = umoja_common::wallpaper::largest_monitor().unwrap_or((3840, 2160, 2.0));
         let need = ((w / 4).max(1), (h / 4).max(1));
         let sigma = self.imp().blur.get() / 2.0 * scale / 4.0;
-        let load = |p: &str| {
-            umoja_common::wallpaper::texture_cover_blurred(std::path::Path::new(p), need, sigma)
-        };
+        let load = |p: &str| umoja_common::wallpaper::texture_cover_blurred(std::path::Path::new(p), need, sigma);
         let texture = path.and_then(load).or_else(|| load(FALLBACK_WALLPAPER));
         self.imp().preblurred.set(texture.is_some());
         *self.imp().texture.borrow_mut() = texture;

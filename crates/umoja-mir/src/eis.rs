@@ -14,12 +14,7 @@ struct Region {
 }
 
 unsafe extern "C" {
-    fn umoja_eis_connect_remote(
-        remote: u64,
-        regions: *const Region,
-        n: usize,
-        out_fd: *mut i32,
-    ) -> u64;
+    fn umoja_eis_connect_remote(remote: u64, regions: *const Region, n: usize, out_fd: *mut i32) -> u64;
     fn umoja_eis_disconnect(handle: u64);
 }
 
@@ -38,8 +33,7 @@ pub fn connect(remote: u64) -> Result<(u64, OwnedFd), String> {
         })
         .collect();
     let mut fd = -1;
-    let handle =
-        unsafe { umoja_eis_connect_remote(remote, regions.as_ptr(), regions.len(), &mut fd) };
+    let handle = unsafe { umoja_eis_connect_remote(remote, regions.as_ptr(), regions.len(), &mut fd) };
     if handle == 0 || fd < 0 {
         return Err("could not set up a libei connection".into());
     }

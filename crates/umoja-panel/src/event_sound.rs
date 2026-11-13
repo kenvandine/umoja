@@ -60,11 +60,9 @@ pub fn playing(id: u32) -> bool {
 /// `theme`, under `id` (replacing whatever `id` was playing).
 pub fn play(id: u32, event: &str, description: &str, theme: &str) {
     let Some(ctx) = context() else { return };
-    let (Ok(event), Ok(description), Ok(theme)) = (
-        CString::new(event),
-        CString::new(description),
-        CString::new(theme),
-    ) else {
+    let (Ok(event), Ok(description), Ok(theme)) =
+        (CString::new(event), CString::new(description), CString::new(theme))
+    else {
         return;
     };
     // SAFETY: ctx is live; the property list is C strings ending in NULL.

@@ -375,8 +375,7 @@ impl Network {
     /// Access points report their signal strength over and over while NM
     /// scans; only the connected one matters, unless the list is open.
     fn matters(&self, path: &str) -> bool {
-        if !path.starts_with("/org/freedesktop/NetworkManager/AccessPoint/") || self.list_open.get()
-        {
+        if !path.starts_with("/org/freedesktop/NetworkManager/AccessPoint/") || self.list_open.get() {
             return true;
         }
         let state = self.state.borrow();
@@ -497,10 +496,7 @@ impl Network {
     }
 }
 
-fn read_access_points(
-    c: &gio::DBusConnection,
-    wifi_path: &str,
-) -> (Vec<AccessPoint>, HashMap<String, String>) {
+fn read_access_points(c: &gio::DBusConnection, wifi_path: &str) -> (Vec<AccessPoint>, HashMap<String, String>) {
     {
         let paths = c
             .call_sync(
@@ -760,12 +756,8 @@ fn read_state(c: &gio::DBusConnection, profiles: &mut HashMap<String, Option<Str
                     state,
                     ..Default::default()
                 };
-                w.ap =
-                    bus::get_all(c, NM, &path, WIRELESS).and_then(|wl| wl.obj("ActiveAccessPoint"));
-                if let Some(ap) =
-                    w.ap.as_deref()
-                        .and_then(|ap| bus::get_all(c, NM, ap, ACCESS_POINT))
-                {
+                w.ap = bus::get_all(c, NM, &path, WIRELESS).and_then(|wl| wl.obj("ActiveAccessPoint"));
+                if let Some(ap) = w.ap.as_deref().and_then(|ap| bus::get_all(c, NM, ap, ACCESS_POINT)) {
                     w.strength = ap.u8("Strength").unwrap_or(0);
                     w.ssid = Some(String::from_utf8_lossy(&ap.bytes("Ssid")).into_owned())
                         .filter(|s| !s.is_empty());
