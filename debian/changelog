@@ -1,3 +1,26 @@
+umoja-desktop (2026.46.8) stonking; urgency=medium
+
+  * Smoother and lighter: logging out returns to the greeter at once, a
+    welcome screen covers the desktop loading after login, and on hybrid
+    Intel+NVIDIA laptops the desktop starts in about a second instead of
+    seven (Mir no longer re-probes empty DisplayPort ports) and the
+    compositor uses about half the CPU for windows on an NVIDIA-wired
+    monitor (client buffers are mapped instead of read back through GL,
+    and the NVIDIA driver sleeps instead of spinning); it no longer
+    crashes at exit. Windows move to the remaining screen when a monitor
+    is unplugged and back when it returns. Live window previews in
+    Alt+Tab, the overview and the dock; the overview opens at once from
+    cached previews. Screen and window sharing through the GNOME portal.
+    In the panel: Wi-Fi, keyring, drive and share password prompts,
+    captive portal sign-in, location permission, a download indicator.
+    Steam menus fixed. File search no longer stalls on a file it cannot
+    index. Installer and image fixes; fixes from a whole-repository
+    review (untrusted image sizes in notifications and tray icons, input
+    capture, screen cast idle spin, lock before suspend). Needs Mir
+    2.28.0-4umoja26.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Fri, 13 Nov 2026 21:12:36 +0000
+
 umoja-desktop (2026.46.7) stonking; urgency=medium
 
   * Installer ISO: a new Umoja installer (umoja-installer +
