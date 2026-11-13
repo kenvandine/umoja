@@ -396,6 +396,29 @@ public:
     void handle_window_ready(WindowInfo& info) override {
         MinimalWindowManager::handle_window_ready(info);
         if (is_lock_surface(info.window())) guarded("lock focus", [&] { ensure_lock_focus(); });
+        else guarded("modal focus", [&] { take_focus_from_grab(info); });
+    }
+
+    // A keyboard-exclusive surface that maps while another one holds the
+    // keyboard gets it: the newest grab wins, as in wlroots compositors.
+    // Mir's select_active_window() never leaves a grabbing window, so a
+    // password dialog (polkit, Wi-Fi, keyring, mounts) opened from Ask
+    // Umoja, an open shell menu or the screensaver showed but never got a
+    // key. Popups of the grabbing window are Mir's to handle; while locked
+    // the lock screen keeps the keyboard.
+    void take_focus_from_grab(WindowInfo const& info) {
+        if (!lock_surfaces.empty() || info.parent()) return;
+        if (info.focus_mode() != mir_focus_mode_grabbing || !info.can_be_active()) return;
+        Window const w = info.window();
+        Window const active = tools.active_window();
+        if (!active || active == w) return;
+        Window root = active;
+        while (auto const parent = tools.info_for(root).parent()) root = parent;
+        if (root == w || tools.info_for(root).focus_mode() != mir_focus_mode_grabbing) return;
+        if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: new keyboard-exclusive surface takes focus from a grab\n");
+        // Selecting no window first drops the old grab (see ensure_lock_focus).
+        tools.select_active_window(Window{});
+        tools.select_active_window(w);
     }
 
     bool is_lock_surface(Window const& w) const {
