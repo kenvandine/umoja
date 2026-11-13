@@ -72,7 +72,10 @@ You can also ask "what did I miss?":
 
 **Quick replies.** Chat and mail notifications get a **Reply** button. It
 offers three short replies drafted from the message, in the message's own
-language. Pick one, edit it, or write your own, then **Send**.
+language. If the same person sent you several messages through the same
+app, the drafts take all of them into account, in the order they arrived,
+along with what you already replied. Pick one, edit it, or write your own,
+then **Send**.
 
 ![A mail notification with three suggested replies and a reply box](images/ai-reply.png)
 

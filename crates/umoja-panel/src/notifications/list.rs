@@ -341,6 +341,8 @@ pub(super) struct Reply {
     status: gtk::Label,
     spinner: gtk::Spinner,
     note: Rc<Note>,
+    /// To look up the rest of the conversation when drafting.
+    center: Weak<Center>,
     drafted: Rc<Cell<bool>>,
     /// Called after the reply went out (the quick-reply window closes).
     sent: Rc<RefCell<Option<Box<dyn Fn()>>>>,
@@ -421,6 +423,7 @@ impl Reply {
             entry.connect_changed(move |e| send.set_sensitive(!e.text().trim().is_empty()));
         }
         let submit = {
+            let center_submit = center.clone();
             let entry = entry.clone();
             let sent = sent.clone();
             move || {
@@ -428,7 +431,7 @@ impl Reply {
                 if text.trim().is_empty() {
                     return;
                 }
-                if let Some(c) = center.upgrade() {
+                if let Some(c) = center_submit.upgrade() {
                     let app = c.note(id).map(|n| n.app_name).unwrap_or_default();
                     if !c.reply(id, &text) {
                         c.notify_internal(
@@ -459,6 +462,7 @@ impl Reply {
             status,
             spinner,
             note: Rc::new(note.clone()),
+            center,
             drafted: Rc::new(Cell::new(false)),
             sent,
         }
@@ -500,7 +504,13 @@ impl Reply {
         self.status.set_visible(true);
         let this = self.clone();
         glib::MainContext::default().spawn_local(async move {
-            let result = assistant::draft_replies(&this.note).await;
+            // Every queued message from this sender, in arrival order.
+            let turns = this
+                .center
+                .upgrade()
+                .and_then(|c| c.conversation(this.note.id))
+                .unwrap_or_default();
+            let result = assistant::draft_replies(&this.note, &turns).await;
             // A stopped spinner still draws a faint ring in Yaru.
             this.spinner.stop();
             this.spinner.set_visible(false);

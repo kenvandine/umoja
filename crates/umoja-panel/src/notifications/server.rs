@@ -207,6 +207,7 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
         resident: hint_bool("resident"),
         expire_timeout,
         time: glib::DateTime::now_local().ok()?,
+        seq: 0, // set by Center::notify
         category: hint_str("category").filter(|c| !c.is_empty()),
         reply_placeholder: hint_str("x-kde-reply-placeholder-text").filter(|c| !c.is_empty()),
     };

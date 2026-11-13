@@ -5,7 +5,8 @@
 //! GetMissed() -> a(ussssx)          id, app name, desktop id, summary, plain body, unix time
 //! GetNotifications() -> a(ussssx)   everything in the message list, newest first
 //! Summarize() -> s                  digest of the missed ones (all, if none are new)
-//! DraftReplies(u id) -> as          up to three suggested replies
+//! DraftReplies(u id) -> as          up to three suggested replies, using the
+//!                                   queued conversation with that sender
 //! Reply(u id, s text) -> b          true if the app took the reply, false if it was
 //!                                   copied to the clipboard and the app raised
 //! OpenReply(u id)                   open the clock menu at the reply field
@@ -120,8 +121,9 @@ pub fn own_name(center: Rc<Center>) {
                             );
                             return;
                         };
+                        let turns = c.conversation(id).unwrap_or_default();
                         glib::MainContext::default().spawn_local(async move {
-                            match assistant::draft_replies(&note).await {
+                            match assistant::draft_replies(&note, &turns).await {
                                 Ok(r) => invocation.return_value(Some(&(r,).to_variant())),
                                 Err(e) => invocation.return_dbus_error(
                                     "org.umoja.Notifications.Error.Assistant",

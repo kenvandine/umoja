@@ -499,6 +499,15 @@ replies drafted from the message, in the message's language, from a direct
 answer to a polite holding reply. Pick one, edit it or write your own,
 then **Send**.
 
+The drafts take the whole conversation into account. When several
+notifications from the same person (or chat) through the same app are
+still in the list, all of them go to the model in the order they arrived,
+along with any replies you already sent from Umoja in the last 12 hours,
+so a "lunch today?" followed by "at 1?" gets one answer to both. To keep
+drafting quick on small models, it uses the newest 12 lines and about
+3,000 characters of that history; the message you're replying to is
+always included.
+
 - Apps that support replies from notifications receive the reply directly.
 - For other chat and mail apps (Thunderbird, Telegram, Signal, Slack,
   Element and many more), the reply is copied and the app is brought to

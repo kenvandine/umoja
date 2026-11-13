@@ -92,6 +92,10 @@ pub struct Note {
     pub resident: bool,
     pub expire_timeout: i32,
     pub time: glib::DateTime,
+    /// Arrival order: set from a counter that only goes up, each time a
+    /// notification arrives or replaces another. Clock times can repeat
+    /// within a minute (or jump), so conversations are ordered by this.
+    pub seq: u64,
     /// `category` hint, e.g. `im.received` or `email.arrived`.
     pub category: Option<String>,
     /// `x-kde-reply-placeholder-text` hint for the reply field.
@@ -138,6 +142,24 @@ const MESSAGING_APPS: &[&str] = &[
 ];
 
 impl Note {
+    /// Who a message is from, for grouping a conversation: the same app
+    /// (desktop id, else its name) and the same sender or chat (chat apps
+    /// put that in the summary), compared without case or extra spaces.
+    pub fn conversation_key(&self) -> (String, String) {
+        let app = self
+            .app_id
+            .as_deref()
+            .filter(|a| !a.is_empty())
+            .unwrap_or(self.app_name.as_str());
+        let norm = |s: &str| {
+            s.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        (norm(app), norm(&self.summary))
+    }
+
     pub fn default_action(&self) -> bool {
         self.actions.iter().any(|(k, _)| k == "default")
     }
@@ -211,9 +233,27 @@ fn open_message_list() {
 /// x, y, width, height, flags).
 pub(crate) type WindowRow = (u64, String, String, i32, i32, i32, i32, u32);
 
+/// A reply the user sent from the message list or quick-reply window.
+pub(crate) struct SentReply {
+    pub key: (String, String),
+    pub seq: u64,
+    pub time: glib::DateTime,
+    pub text: String,
+}
+
+/// How many sent replies to remember, across all conversations.
+const SENT_REPLIES_KEPT: usize = 40;
+/// Older replies are left out of the context: their messages are long gone.
+const SENT_REPLY_MAX_AGE: i64 = 12 * 3600;
+
 /// Shared state between the D-Bus server, the banners and the message list.
 pub struct Center {
     next_id: Cell<u32>,
+    /// Next `Note::seq`: arrival order of notifications and sent replies.
+    next_seq: Cell<u64>,
+    /// Replies the user sent from here, oldest first, so the next drafts
+    /// know what was already said (see `conversation`).
+    sent_replies: RefCell<Vec<SentReply>>,
     /// Newest first: what the message list shows.
     notes: RefCell<Vec<Note>>,
     conn: RefCell<Option<gio::DBusConnection>>,
@@ -245,6 +285,8 @@ impl Center {
     pub fn start(app: &impl IsA<gtk::Application>) -> Rc<Self> {
         let center = Rc::new_cyclic(|weak: &std::rc::Weak<Center>| Self {
             next_id: Cell::new(1),
+            next_seq: Cell::new(1),
+            sent_replies: RefCell::default(),
             notes: RefCell::default(),
             conn: RefCell::default(),
             bubbles: bubbles::Bubbles::new(app.upcast_ref(), weak.clone()),
@@ -288,7 +330,11 @@ impl Center {
     /// any more, one banner says how many arrived meanwhile.
     pub fn set_quiet(self: &Rc<Self>, reason: u8, on: bool) {
         let before = self.quiet.get();
-        let now = if on { before | reason } else { before & !reason };
+        let now = if on {
+            before | reason
+        } else {
+            before & !reason
+        };
         if now == before {
             return;
         }
@@ -305,7 +351,9 @@ impl Center {
         let held: Vec<u32> = self.held.borrow_mut().drain(..).collect();
         let count = {
             let notes = self.notes.borrow();
-            held.iter().filter(|id| notes.iter().any(|n| n.id == **id)).count()
+            held.iter()
+                .filter(|id| notes.iter().any(|n| n.id == **id))
+                .count()
         };
         if count == 0 || !self.banners_enabled() {
             return;
@@ -385,6 +433,7 @@ impl Center {
             resident: false,
             expire_timeout: -1,
             time,
+            seq: 0,
             category: None,
             reply_placeholder: None,
         };
@@ -423,6 +472,7 @@ impl Center {
             resident: false,
             expire_timeout: -1,
             time,
+            seq: 0,
             category: None,
             reply_placeholder: None,
         };
@@ -433,6 +483,55 @@ impl Center {
 
     pub fn note(&self, id: u32) -> Option<Note> {
         self.find(id)
+    }
+
+    fn take_seq(&self) -> u64 {
+        let seq = self.next_seq.get();
+        self.next_seq.set(seq + 1);
+        seq
+    }
+
+    fn remember_reply(&self, note: &Note, text: &str) {
+        let Ok(time) = glib::DateTime::now_local() else {
+            return;
+        };
+        let mut sent = self.sent_replies.borrow_mut();
+        sent.push(SentReply {
+            key: note.conversation_key(),
+            seq: self.take_seq(),
+            time,
+            text: text.to_string(),
+        });
+        let over = sent.len().saturating_sub(SENT_REPLIES_KEPT);
+        sent.drain(..over);
+    }
+
+    /// The conversation `id` belongs to, oldest first: every queued
+    /// message from the same sender through the same app (by arrival
+    /// order), plus what the user replied from here meanwhile. `None` if
+    /// `id` is gone. The prompt bounds how much of it the model sees.
+    pub fn conversation(&self, id: u32) -> Option<Vec<assistant::Turn>> {
+        let target = self.find(id)?;
+        let key = target.conversation_key();
+        let mut msgs: Vec<Note> = self
+            .notes
+            .borrow()
+            .iter()
+            .filter(|n| n.id != id && n.can_reply() && n.conversation_key() == key)
+            .cloned()
+            .collect();
+        msgs.push(target);
+        let now = glib::DateTime::now_local()
+            .map(|t| t.to_unix())
+            .unwrap_or(0);
+        Some(assistant::conversation(
+            &msgs,
+            id,
+            self.sent_replies
+                .borrow()
+                .iter()
+                .filter(|r| r.key == key && now - r.time.to_unix() < SENT_REPLY_MAX_AGE),
+        ))
     }
 
     /// Open the quick-reply window for `id` (the banner's Reply button, or
@@ -470,6 +569,7 @@ impl Center {
         if text.is_empty() {
             return false;
         }
+        self.remember_reply(&note, text);
         if note.inline_reply() {
             self.emit("NotificationReplied", &(id, text).to_variant());
             self.close(id, CloseReason::Dismissed);
@@ -533,6 +633,7 @@ impl Center {
         } else {
             sync_match
         };
+        note.seq = self.take_seq();
         note.id = existing.unwrap_or_else(|| {
             let id = self.next_id.get();
             self.next_id.set(id.wrapping_add(1).max(1));
@@ -593,14 +694,20 @@ impl Center {
             // in that moment would still pop up over the game or video.
             // Ask the compositor now; it only delays the banner by a
             // round trip.
-            let first = self.pending_banner.borrow_mut().insert(note.id, note.clone()).is_none();
+            let first = self
+                .pending_banner
+                .borrow_mut()
+                .insert(note.id, note.clone())
+                .is_none();
             if first {
                 let weak = Rc::downgrade(self);
                 let id = note.id;
                 quiet::fullscreen_now(move |fullscreen| {
                     let Some(c) = weak.upgrade() else { return };
                     // Closed meanwhile: nothing to show. Replaced: show the latest.
-                    let Some(note) = c.pending_banner.borrow_mut().remove(&id) else { return };
+                    let Some(note) = c.pending_banner.borrow_mut().remove(&id) else {
+                        return;
+                    };
                     if fullscreen {
                         c.set_quiet(quiet::FULLSCREEN, true);
                     }
@@ -658,7 +765,8 @@ impl Center {
                     let source = n.app_id.as_deref().unwrap_or(n.app_name.as_str());
                     let seen = per_app.entry(source).or_default();
                     *seen += 1;
-                    (n.id != keep && !n.resident && (*seen > PER_APP || i >= MAX_LISTED)).then_some(n.id)
+                    (n.id != keep && !n.resident && (*seen > PER_APP || i >= MAX_LISTED))
+                        .then_some(n.id)
                 })
                 .collect()
         };
@@ -952,6 +1060,7 @@ pub(crate) mod tests_support {
             resident: false,
             expire_timeout: -1,
             time: glib::DateTime::now_local().unwrap(),
+            seq: 0,
             category: None,
             reply_placeholder: None,
         }
