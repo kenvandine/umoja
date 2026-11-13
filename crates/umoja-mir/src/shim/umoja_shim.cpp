@@ -239,6 +239,9 @@ void guarded(char const* what, F&& f) {
 
 class UmojaWindowManager;
 UmojaWindowManager* g_wm = nullptr;
+// Time between frames of a workspace slide, in microseconds: one refresh
+// of the fastest monitor (set as outputs come and go).
+std::atomic<int> g_slide_frame_us{16000};
 
 class UmojaWindowManager : public MinimalWindowManager {
 public:
@@ -949,6 +952,8 @@ public:
     void advise_output_create(Output const& output) override {
         outputs[output.id()] = output.extents();
         output_names[output.id()] = output.name();
+        output_refresh[output.id()] = output.refresh_rate();
+        update_slide_pace();
         report(output);
         return_windows_to(output.name());
     }
@@ -956,6 +961,8 @@ public:
     void advise_output_update(Output const& updated, Output const&) override {
         outputs[updated.id()] = updated.extents();
         output_names[updated.id()] = updated.name();
+        output_refresh[updated.id()] = updated.refresh_rate();
+        update_slide_pace();
         report(updated);
         return_windows_to(updated.name());
     }
@@ -964,6 +971,8 @@ public:
         auto const gone = output.extents();
         outputs.erase(output.id());
         output_names.erase(output.id());
+        output_refresh.erase(output.id());
+        update_slide_pace();
         umoja_output_remove(output.id());
         if (outputs.empty()) return;
         // Like mutter: windows on an unplugged monitor move to the primary
@@ -989,6 +998,17 @@ public:
 
     std::map<Window, std::string> preferred_output;
     std::map<int, std::string> output_names;
+    std::map<int, double> output_refresh;
+
+    // Workspace slides step once per refresh of the fastest monitor (a
+    // fixed 16 ms juddered on 120 and 144 Hz panels), within 240 to 50 Hz.
+    void update_slide_pace() {
+        double hz = 0;
+        for (auto const& [id, r] : output_refresh) hz = std::max(hz, r);
+        if (hz < 50) hz = 60;
+        if (hz > 240) hz = 240;
+        g_slide_frame_us.store(static_cast<int>(1'000'000.0 / hz), std::memory_order_relaxed);
+    }
     bool rehoming = false;
 
     std::string output_name_at(geom::Point p) const {
@@ -2097,8 +2117,14 @@ private:
     // Frames come from a helper thread that takes the WM lock for each one.
     void run_slide(uint64_t generation) {
         std::thread([generation] {
+            // On a steady beat, so time spent waiting for the WM lock
+            // doesn't stretch the frames after it.
+            auto next = std::chrono::steady_clock::now();
             for (;;) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                next += std::chrono::microseconds(g_slide_frame_us.load(std::memory_order_relaxed));
+                auto const now = std::chrono::steady_clock::now();
+                if (next < now) next = now;
+                std::this_thread::sleep_until(next);
                 bool more = false;
                 guarded("slide frame", [&] {
                     if (!g_wm) return;

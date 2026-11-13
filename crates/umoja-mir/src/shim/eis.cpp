@@ -47,6 +47,10 @@ namespace {
 
 enum class Mode { remote_desktop, input_capture };
 
+struct Connection;
+// The input capture client went away (eis.cpp, "Input capture" below).
+void capture_client_gone(Connection* c);
+
 struct Connection {
     Mode mode;
     uint64_t remote = 0;  // remote_desktop: the session's input
@@ -227,6 +231,7 @@ void Connection::handle(eis_event* event) {
     case EIS_EVENT_CLIENT_DISCONNECT:
         eis_client_disconnect(eis_event_get_client(event));
         if (mode == Mode::remote_desktop && remote) umoja_remote_input_release(remote);
+        if (mode == Mode::input_capture) capture_client_gone(this);
         break;
     case EIS_EVENT_SEAT_BIND:
         add_devices(eis_event_get_seat(event), event);
@@ -340,10 +345,14 @@ uint64_t open(std::shared_ptr<Connection> c, int* out_fd) {
 
 std::mutex g_capture_mutex;
 bool g_capture_enabled = false;
-uint64_t g_capture_eis = 0;
+// Barriers are set: the only state in which pointer motion needs a closer
+// look. Lets the event filter pass every other motion event without
+// taking g_capture_mutex.
+std::atomic<bool> g_capture_armed{false};
+std::atomic<uint64_t> g_capture_eis{0};
 std::vector<UmojaBarrier> g_barriers;
 std::atomic<bool> g_captured{false};
-uint32_t g_activation = 0;
+std::atomic<uint32_t> g_activation{0};
 uint32_t g_next_activation = 1;
 
 // Mir pointer button bit -> evdev code.
@@ -362,6 +371,18 @@ uint32_t evdev_button(MirPointerButton b) {
 }
 
 MirPointerButtons g_last_buttons = 0;
+
+// The client that input is captured for disconnected without releasing
+// it: give the keyboard and pointer back, or they stay swallowed until
+// Super+Escape. Called on the connection's thread with its mutex held, so
+// this must not take g_capture_mutex (the event filter takes that first
+// and the connection's mutex second).
+void capture_client_gone(Connection* c) {
+    if (find(g_capture_eis.load()).get() != c) return;
+    if (!g_captured.exchange(false)) return;
+    c->emulating = false;
+    umoja_input_capture_deactivated(g_activation.load());
+}
 
 void with_capture_device(std::function<void(eis_device*)> const& f) {
     auto const c = find(g_capture_eis);
@@ -457,6 +478,7 @@ extern "C" void umoja_input_capture_enable(uint64_t eis, UmojaBarrier const* bar
     g_capture_enabled = true;
     g_capture_eis = eis;
     g_barriers.assign(barriers, barriers + n);
+    g_capture_armed.store(n > 0, std::memory_order_release);
 }
 
 // Stop capturing (and stop offering barriers). Returns the activation that
@@ -464,6 +486,7 @@ extern "C" void umoja_input_capture_enable(uint64_t eis, UmojaBarrier const* bar
 extern "C" uint32_t umoja_input_capture_disable(void) {
     std::lock_guard lock{g_capture_mutex};
     g_capture_enabled = false;
+    g_capture_armed.store(false, std::memory_order_release);
     g_barriers.clear();
     uint32_t ended = 0;
     if (g_captured.exchange(false)) {
@@ -498,6 +521,7 @@ extern "C" bool umoja_input_capture_filter(MirEvent const* event) {
         if (mir_input_event_get_type(input) != mir_input_event_type_pointer) return false;
         auto const* p = mir_input_event_get_pointer_event(input);
         if (mir_pointer_event_action(p) != mir_pointer_action_motion) return false;
+        if (!g_capture_armed.load(std::memory_order_acquire)) return false;
         std::unique_lock lock{g_capture_mutex};
         if (!g_capture_enabled || g_barriers.empty()) return false;
         float const x = mir_pointer_event_axis_value(p, mir_pointer_axis_x);

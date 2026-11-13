@@ -186,6 +186,11 @@ extern "C" bool umoja_capture_window(uint64_t id, UmojaRect rect, uint32_t size,
                 uint32_t const y = bottom ? h - 1 - dy : dy;
                 for (uint32_t dx = 0; dx < r; dx++) {
                     uint32_t const x = right ? w - 1 - dx : dx;
+                    // Only outside a corner of radius r: a window that
+                    // really is black there (a terminal, a video) used to
+                    // get an r by r square cut out of each corner.
+                    float const cx = (float)r - (float)dx - 0.5f, cy = (float)r - (float)dy - 0.5f;
+                    if (cx * cx + cy * cy <= (float)r * (float)r) break;
                     if (!black(x, y)) break;
                     clear(x, y);
                 }

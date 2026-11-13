@@ -42,6 +42,9 @@ const FLAG_FOCUSED: u32 = 1 << 0;
 const FLAG_MINIMIZED: u32 = 1 << 1;
 const FLAG_CURRENT_WORKSPACE: u32 = 1 << 2;
 
+/// How long window previews are kept after the overview closes.
+const KEEP_PREVIEWS: Duration = Duration::from_secs(60);
+
 /// Gap between previews and around the spread, in logical pixels.
 const GAP: f64 = 32.0;
 /// Workspace thumbnail height as a share of the monitor (GNOME's thumbnails
@@ -201,7 +204,9 @@ pub struct Spread {
     wallpaper: RefCell<Option<gdk::Texture>>,
     /// The file `wallpaper` was decoded from, to notice a new one.
     wallpaper_path: RefCell<Option<std::path::PathBuf>>,
-    previews: RefCell<HashMap<u64, gdk::Texture>>,
+    previews: Rc<RefCell<HashMap<u64, gdk::Texture>>>,
+    /// Drops `previews` a while after the overview closes (see `hide`).
+    drop_previews: Rc<RefCell<Option<glib::SourceId>>>,
     /// Whether umoja-mir can render single windows (CaptureWindow, needs
     /// Umoja's Mir): None until the first try. With it every window gets a
     /// real preview, covered, minimized or on another workspace; without it
@@ -285,7 +290,8 @@ impl Spread {
             opening: Cell::new(false),
             wallpaper: RefCell::default(),
             wallpaper_path: RefCell::default(),
-            previews: RefCell::default(),
+            previews: Rc::default(),
+            drop_previews: Rc::default(),
             window_capture: Cell::new(None),
             state: RefCell::default(),
             refresh_pending: Cell::new(false),
@@ -588,7 +594,25 @@ impl Spread {
 
     pub fn hide(&self) {
         self.cancel_drag();
+        let was_visible = self.window.is_visible();
         self.window.set_visible(false);
+        // Window previews are up to 4 MB each and there is one for every
+        // window on every workspace. Keep them for a while, so opening the
+        // overview again is instant, then let them go: umoja-mir renders
+        // them afresh in a moment. (Without CaptureWindow they are cut from
+        // screen captures taken in the background and have to be kept.)
+        if was_visible && self.window_capture.get() == Some(true) {
+            if let Some(t) = self.drop_previews.take() {
+                t.remove();
+            }
+            let previews = self.previews.clone();
+            let slot = self.drop_previews.clone();
+            let id = glib::timeout_add_local_once(KEEP_PREVIEWS, move || {
+                slot.take();
+                previews.borrow_mut().clear();
+            });
+            self.drop_previews.replace(Some(id));
+        }
     }
 
     pub fn toggle(self: &Rc<Self>) {
@@ -606,6 +630,9 @@ impl Spread {
         if let Some(o) = self.overlay.upgrade() {
             o.hide();
         }
+        if let Some(t) = self.drop_previews.take() {
+            t.remove();
+        }
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let Some(s) = weak.upgrade() else { return };
@@ -621,6 +648,38 @@ impl Spread {
                     })
                     .map(|w| w.id)
                     .collect();
+                // Opened again while the last previews are still here: show
+                // at once with those, and bring them up to date behind.
+                // Rendering every window first cost a GPU pass and a 4 MB
+                // D-Bus reply each before the overview could appear.
+                let cached = s.window_capture.get() == Some(true) && !here.is_empty() && {
+                    let previews = s.previews.borrow();
+                    here.iter().all(|id| previews.contains_key(id))
+                };
+                if cached {
+                    s.previews
+                        .borrow_mut()
+                        .retain(|id, _| state.windows.iter().any(|w| w.id == *id));
+                    let rest: Vec<u64> = state
+                        .windows
+                        .iter()
+                        .map(|w| w.id)
+                        .filter(|id| !here.contains(id))
+                        .collect();
+                    s.opening.set(false);
+                    s.load_wallpaper();
+                    *s.state.borrow_mut() = state;
+                    s.populate();
+                    s.window.present();
+                    s.entry.grab_focus();
+                    if s.capture_windows(&here).await > 0 {
+                        s.queue_refresh();
+                    }
+                    if !rest.is_empty() && s.capture_windows(&rest).await > 0 {
+                        s.queue_refresh();
+                    }
+                    return;
+                }
                 let got = s.capture_windows(&here).await;
                 if got > 0 || (here.is_empty() && s.window_capture.get() == Some(true)) {
                     s.window_capture.set(Some(true));

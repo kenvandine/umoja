@@ -21,15 +21,22 @@ restore_previous_dm() {
     if [ -e "/usr/lib/systemd/system/$name.service" ]; then
         ln -sf "/usr/lib/systemd/system/$name.service" "$DM_UNIT"
     fi
-    if [ -e /usr/share/debconf/confmodule ]; then
-        . /usr/share/debconf/confmodule
+    if [ -n "${DEBIAN_HAS_FRONTEND:-}" ]; then
         db_set shared/default-x-display-manager "$name" || true
     fi
-    echo "umoja-greeter: restored $name as the default display manager (takes effect after reboot)."
+    # To stderr: under debconf, stdout is the frontend's command channel.
+    echo "umoja-greeter: restored $name as the default display manager (takes effect after reboot)." >&2
 }
 
 case "$1" in
 remove)
+    # Sourcing confmodule starts the script again under the debconf
+    # frontend. Do it before anything is changed: sourced from inside
+    # restore_previous_dm, the second run found the default display manager
+    # already switched back and returned before telling debconf.
+    if [ -e /usr/share/debconf/confmodule ]; then
+        . /usr/share/debconf/confmodule
+    fi
     restore_previous_dm
     ;;
 purge)
