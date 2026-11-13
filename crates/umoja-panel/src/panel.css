@@ -650,6 +650,10 @@ window.umoja-end-session {
 .umoja-polkit .polkit-message:backdrop {
   color: @error_color;
 }
+/* The keyring's "remember" choice (keyring_prompt). */
+.umoja-keyring checkbutton.keyring-choice {
+  color: #ffffff;
+}
 .umoja-polkit button.pill,
 .umoja-end-session button.pill {
   color: #ffffff;

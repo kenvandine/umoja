@@ -22,6 +22,7 @@ Build-Depends: debhelper-compat (= 13),
                liblightdm-gobject-1-dev,
                libpolkit-agent-1-dev,
                libpolkit-gobject-1-dev,
+               libgcr-4-dev,
                libpulse-dev,
                libwebkitgtk-6.0-dev,
                libcanberra-dev,
@@ -76,6 +77,9 @@ Recommends: umoja-greeter,
             unzip,
             power-profiles-daemon,
             gnome-keyring,
+            libpam-gnome-keyring,
+            gcr4,
+            openssh-client,
             libsecret-tools,
             tesseract-ocr,
             systemd-coredump,
@@ -94,9 +98,10 @@ Description: AI-native, Rust-based desktop shell for Ubuntu
  runs per user on 127.0.0.1:13345, so it does not conflict with a system
  lemonade-server package on its default port 13305.
  .
- umoja-panel is the session's polkit authentication agent and notification
- server, which is what lets update-manager, update-notifier and
- nm-connection-editor install without GNOME Shell.
+ umoja-panel is the session's polkit authentication agent, gnome-keyring's
+ password prompter and the notification server, which is what lets
+ update-manager, update-notifier and nm-connection-editor install without
+ GNOME Shell.
  .
  It also answers GTK apps' mount questions (org.gtk.MountOperationHandler:
  drive passphrases, network share passwords, "drive is busy") and mounts

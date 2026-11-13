@@ -18,6 +18,7 @@ mod downloads;
 mod event_sound;
 mod events;
 mod fade;
+mod keyring_prompt;
 mod launch;
 mod location;
 mod lock;
@@ -25,6 +26,7 @@ mod login;
 mod media_keys;
 mod menu_api;
 mod menu_gap;
+mod modal;
 mod mount_op;
 mod mpris;
 mod myna;
@@ -175,6 +177,8 @@ fn build(app: &adw::Application) {
     // every app (org.gtk.MountOperationHandler), and automounting drives.
     mount_op::start();
     automount::start();
+    // gnome-keyring's unlock and new-password prompts.
+    keyring_prompt::start();
     // Volume, brightness and playback keys, and their on-screen display.
     osd::init(app);
     media_keys::own_name();

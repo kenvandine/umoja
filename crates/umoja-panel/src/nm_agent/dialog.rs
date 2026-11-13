@@ -3,10 +3,8 @@
 //! styles). One entry per secret, Connect only once every entry is valid.
 
 use super::content::{Content, Secret};
-use gtk::{gdk, glib};
 use gtk::prelude::*;
 use gtk4 as gtk;
-use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::cell::Cell;
 use std::rc::Rc;
 use umoja_common::i18n;
@@ -22,29 +20,8 @@ pub struct Dialog {
 
 impl Dialog {
     pub fn new(content: Content, on_done: impl Fn(Option<Answer>) + 'static) -> Rc<Self> {
-        let window = gtk::Window::builder()
-            .css_classes(["umoja-polkit", "umoja-network-agent"])
-            .decorated(false)
-            .build();
-        window.init_layer_shell();
-        window.set_layer(Layer::Overlay);
-        window.set_namespace("umoja-network-agent");
-        crate::place_on_primary(&window);
-        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            window.set_anchor(edge, true);
-        }
-        window.set_exclusive_zone(-1);
-        window.set_keyboard_mode(KeyboardMode::Exclusive);
-        umoja_common::blur::blur_behind(&window);
-
-        let card = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .width_request(400)
-            .css_classes(["polkit-card"])
-            .build();
+        let crate::modal::Modal { window, card } =
+            crate::modal::new("umoja-network-agent", Some("umoja-network-agent"));
         card.append(
             &gtk::Image::builder()
                 .icon_name("network-wireless-encrypted-symbolic")
@@ -144,20 +121,7 @@ impl Dialog {
         }
         update();
 
-        let buttons = gtk::Box::builder()
-            .spacing(12)
-            .homogeneous(true)
-            .margin_top(12)
-            .build();
-        buttons.append(&cancel);
-        buttons.append(&connect);
-        card.append(&buttons);
-
-        let backdrop = gtk::Box::builder().css_classes(["polkit-backdrop"]).build();
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&backdrop));
-        overlay.add_overlay(&card);
-        window.set_child(Some(&overlay));
+        card.append(&crate::modal::button_row(&cancel, &connect));
 
         let dialog = Rc::new(Self {
             window,
@@ -200,17 +164,11 @@ impl Dialog {
                 }
             }
         });
-        let keys = gtk::EventControllerKey::new();
-        keys.connect_key_pressed(move |_, key, _, _| {
-            if key == gdk::Key::Escape {
-                if let Some(d) = weak.upgrade() {
-                    d.finish(None);
-                }
-                return glib::Propagation::Stop;
+        crate::modal::on_escape(&dialog.window, move || {
+            if let Some(d) = weak.upgrade() {
+                d.finish(None);
             }
-            glib::Propagation::Proceed
         });
-        dialog.window.add_controller(keys);
 
         dialog.window.present();
         if let Some((_, e, _)) = fields.iter().find(|(s, _, _)| s.key.is_some()) {

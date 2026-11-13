@@ -51,6 +51,19 @@ SESSION_VARS="XCURSOR_THEME XCURSOR_SIZE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
 
 log() { echo "umoja-session: $*" >&2; }
 
+# SSH keys: gnome-keyring no longer runs an SSH agent; gcr4's gcr-ssh-agent
+# (a socket unit) wraps ssh-agent and asks for a key's passphrase through
+# the keyring prompter in umoja-panel, offering to keep it in the login
+# keyring so later logins unlock the key without asking. Point SSH at it,
+# as GNOME does, unless something already set an agent up.
+GCR_SSH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gcr/ssh"
+if { [ -z "${SSH_AUTH_SOCK:-}" ] || [ ! -S "$SSH_AUTH_SOCK" ]; } \
+    && systemctl --user -q is-enabled gcr-ssh-agent.socket 2>/dev/null; then
+    systemctl --user start gcr-ssh-agent.socket || log "could not start gcr-ssh-agent.socket"
+    export SSH_AUTH_SOCK="$GCR_SSH_SOCK"
+    SESSION_VARS="$SESSION_VARS SSH_AUTH_SOCK"
+fi
+
 # The language the user picked at the login screen (LightDM sets it from
 # AccountsService) only lives in our environment; the user manager started
 # with the system locale. Hand it over, as gnome-session does, so the shell

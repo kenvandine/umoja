@@ -6,7 +6,6 @@ use super::{Request, ffi};
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use gtk4 as gtk;
-use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -37,30 +36,7 @@ pub struct Dialog {
 
 impl Dialog {
     pub fn new(req: &Request, on_done: impl Fn(bool) + 'static) -> Rc<Self> {
-        let window = gtk::Window::builder()
-            .css_classes(["umoja-polkit"])
-            .decorated(false)
-            .build();
-        window.init_layer_shell();
-        window.set_layer(Layer::Overlay);
-        window.set_namespace("umoja-polkit");
-        crate::place_on_primary(&window);
-        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            window.set_anchor(edge, true);
-        }
-        window.set_exclusive_zone(-1);
-        window.set_keyboard_mode(KeyboardMode::Exclusive);
-        // The card is see-through: blur what is behind it, like the bubbles.
-        umoja_common::blur::blur_behind(&window);
-
-        let card = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .width_request(400)
-            .css_classes(["polkit-card"])
-            .build();
+        let crate::modal::Modal { window, card } = crate::modal::new("umoja-polkit", None);
         card.append(
             &gtk::Label::builder()
                 .label(i18n::shell("Authentication Required"))
@@ -111,11 +87,6 @@ impl Dialog {
             .build();
         card.append(&message);
 
-        let buttons = gtk::Box::builder()
-            .spacing(12)
-            .homogeneous(true)
-            .margin_top(12)
-            .build();
         let cancel = gtk::Button::builder()
             .label(i18n::shell("Cancel"))
             .css_classes(["pill"])
@@ -133,15 +104,7 @@ impl Dialog {
         auth_label.append(&spinner);
         auth_label.append(&gtk::Label::new(Some(&i18n::shell("Authenticate"))));
         authenticate.set_child(Some(&auth_label));
-        buttons.append(&cancel);
-        buttons.append(&authenticate);
-        card.append(&buttons);
-
-        let backdrop = gtk::Box::builder().css_classes(["polkit-backdrop"]).build();
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&backdrop));
-        overlay.add_overlay(&card);
-        window.set_child(Some(&overlay));
+        card.append(&crate::modal::button_row(&cancel, &authenticate));
 
         let dialog = Rc::new(Self {
             window,
@@ -191,20 +154,14 @@ impl Dialog {
             move |_| submit()
         });
         dialog.entry.connect_activate(move |_| submit());
-        let keys = gtk::EventControllerKey::new();
-        keys.connect_key_pressed({
+        crate::modal::on_escape(&dialog.window, {
             let weak = weak.clone();
-            move |_, key, _, _| {
-                if key == gdk::Key::Escape {
-                    if let Some(d) = weak.upgrade() {
-                        d.cancel();
-                    }
-                    return glib::Propagation::Stop;
+            move || {
+                if let Some(d) = weak.upgrade() {
+                    d.cancel();
                 }
-                glib::Propagation::Proceed
             }
         });
-        dialog.window.add_controller(keys);
 
         dialog.show_user();
         dialog.window.present();
