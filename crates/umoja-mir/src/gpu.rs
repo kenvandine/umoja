@@ -140,6 +140,15 @@ pub fn add_quirks(args: &mut Vec<std::ffi::OsString>) {
             // don't touch the environment.
             unsafe { std::env::set_var("MIR_DIRECT_SCANOUT", "0") };
         }
+        // Windows on that screen are copied through the CPU on every
+        // commit (Mir patch 3009). A linear buffer can be mapped for that
+        // instead of read back through GL, which is several times cheaper,
+        // so offer clients only linear buffers (Mir patch 3020).
+        // MIR_DMABUF_LINEAR_ONLY=0 in the environment turns it off.
+        if std::env::var_os("MIR_DMABUF_LINEAR_ONLY").is_none() {
+            // SAFETY: as above.
+            unsafe { std::env::set_var("MIR_DMABUF_LINEAR_ONLY", "1") };
+        }
         return;
     }
     tracing::info!(
