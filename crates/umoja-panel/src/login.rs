@@ -76,6 +76,27 @@ pub fn set_locked_hint(locked: bool) {
 }
 
 /// Log Out: end the graphical session, as gnome-session does.
+/// Stop the user manager's xdg-desktop-portal before the compositor goes.
+/// It outlives the session, and when its GTK backend lost the display at
+/// logout it D-Bus-activated it again at once; the backend exited ("cannot
+/// open display") but dbus-daemon kept that activation pending for 120 s,
+/// and the next login's portal and GTK clients waited behind it (77 s to a
+/// desktop on the XPS 13). With the frontend gone first nothing re-activates
+/// the backends, which exit with the compositor; the next login's clients
+/// activate a fresh portal.
+pub fn stop_portals() {
+    if let Ok(user) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
+        bus::call(
+            &user,
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "StopUnit",
+            Some(("xdg-desktop-portal.service", "replace").to_variant()),
+        );
+    }
+}
+
 pub fn terminate_session() {
     let Some(conn) = bus::system_bus() else {
         return;
