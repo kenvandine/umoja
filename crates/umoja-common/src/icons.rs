@@ -38,7 +38,7 @@ pub fn add_shell_icons() {
     }
 }
 
-/// Apply the desktop's icon theme, theme, font and cursor from GSettings
+/// Apply the desktop's icon theme, font and cursor from GSettings
 /// (org.gnome.desktop.interface) to GTK, and follow later changes.
 ///
 /// GTK 4 on Wayland only learns these from the Settings portal. When the
@@ -50,7 +50,6 @@ pub fn add_shell_icons() {
 /// GTK then doesn't read GSettings either.)
 pub fn follow_desktop_theme() {
     use gio::prelude::*;
-    use gtk4::prelude::*;
     let Some(gs) = crate::gsettings::settings(crate::gsettings::DESKTOP_INTERFACE) else {
         return;
     };
@@ -62,9 +61,7 @@ pub fn follow_desktop_theme() {
         if let Some(v) = text("icon-theme") {
             gtk.set_gtk_icon_theme_name(Some(v.as_str()));
         }
-        if let Some(v) = text("gtk-theme") {
-            gtk.set_gtk_theme_name(Some(v.as_str()));
-        }
+        // Not gtk-theme: libadwaita styles the shell, and warns when it is set.
         if let Some(v) = text("font-name") {
             gtk.set_gtk_font_name(Some(v.as_str()));
         }
