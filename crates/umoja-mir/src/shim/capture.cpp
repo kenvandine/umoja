@@ -126,6 +126,15 @@ bool umoja_scene_filter_consulted(void const* compositor) {
 
 void umoja_capture_setup(mir::Server& server) {
     server.add_init_callback([&server] { g_server = &server; });
+    // Let go of Mir's objects while Mir is still there: left to the static
+    // destructors, the buffers were freed after Mir had unloaded the
+    // graphics platform that made them, and umoja-mir crashed in exit().
+    server.add_stop_callback([] {
+        std::lock_guard lock{g_mutex};
+        g_server = nullptr;
+        g_shooter.reset();
+        g_buffers.clear();
+    });
 }
 
 // Render window `id` (its top left corner at `rect` in the layout) into a
@@ -135,9 +144,10 @@ void umoja_capture_setup(mir::Server& server) {
 // renders. False when Mir can't (no patched Mir, nothing to show...).
 extern "C" bool umoja_capture_window(uint64_t id, UmojaRect rect, uint32_t size, uint8_t* out, uint32_t* out_w,
                                      uint32_t* out_h) {
-    if (!g_server || !out || !out_w || !out_h || rect.w <= 0 || rect.h <= 0) return false;
+    if (!out || !out_w || !out_h || rect.w <= 0 || rect.h <= 0) return false;
     int const n = size <= 512 ? 512 : 1024;
     std::lock_guard lock{g_mutex};
+    if (!g_server) return false;
     try {
         if (!g_shooter) g_shooter = g_server->the_screen_shooter_factory()->create(mir::immediate_executor);
         auto& buffer = g_buffers[n];
