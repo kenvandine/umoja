@@ -15,6 +15,12 @@ ExecStart=/usr/bin/umoja-dock
 Restart=always
 # Restart well inside the 200 ms crash-recovery budget.
 RestartSec=100ms
+# GTK exits with status 1 when it loses the compositor. That only happens
+# at logout (or a compositor crash, after which umoja-session starts the
+# whole target again), so don't restart into the dying session: a restart
+# there woke xdg-desktop-portal-gtk with no display, and its stuck D-Bus
+# activation made the next login wait two minutes on portal timeouts.
+RestartPreventExitStatus=1
 Slice=session.slice
 
 [Install]

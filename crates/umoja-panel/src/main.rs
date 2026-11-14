@@ -56,6 +56,7 @@ const APP_ID: &str = "org.umoja.Panel";
 const PANEL_HEIGHT: i32 = 32;
 
 fn main() -> glib::ExitCode {
+    umoja_common::portals::bypass();
     umoja_common::init_logging("umoja-panel");
     i18n::init();
     // The welcome screen shown while the desktop loads (welcome.rs).
@@ -67,7 +68,10 @@ fn main() -> glib::ExitCode {
         .application_id(APP_ID)
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
-    app.connect_startup(|_| load_css());
+    app.connect_startup(|_| {
+        umoja_common::portals::restore();
+        load_css();
+    });
     // Map nothing while the screen is blanked: Mir has no active output
     // then (see umoja_common::screen).
     app.connect_activate(|app| {
