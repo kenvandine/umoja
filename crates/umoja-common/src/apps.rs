@@ -118,9 +118,20 @@ fn visible_entries() -> Vec<gio::DesktopAppInfo> {
         .collect()
 }
 
-/// `org.gnome.shell favorite-apps`: the pinned apps Ubuntu Dock shows.
+/// `org.umoja.shell favorite-apps`: the apps pinned to the dock. Umoja keeps
+/// its own list instead of GNOME Shell's, so a GNOME session on the same
+/// account keeps its own pins.
 pub fn favorites() -> Vec<String> {
-    crate::gsettings::get_strv(crate::gsettings::SHELL, "favorite-apps")
+    crate::gsettings::get_strv(crate::gsettings::UMOJA_SHELL, FAVORITES_KEY)
+}
+
+/// The key in `org.umoja.shell` that holds the dock's pinned apps.
+pub const FAVORITES_KEY: &str = "favorite-apps";
+
+/// Whether pinning can change the list (it isn't locked down).
+pub fn favorites_writable() -> bool {
+    crate::gsettings::settings(crate::gsettings::UMOJA_SHELL)
+        .is_some_and(|s| s.is_writable(FAVORITES_KEY))
 }
 
 pub fn is_favorite(desktop_id: &str) -> bool {
@@ -129,12 +140,12 @@ pub fn is_favorite(desktop_id: &str) -> bool {
 
 /// Pin (append, as GNOME's "Pin to Dash" does) or unpin a desktop id.
 pub fn set_favorite(desktop_id: &str, pinned: bool) {
-    let Some(s) = crate::gsettings::settings(crate::gsettings::SHELL) else {
+    let Some(s) = crate::gsettings::settings(crate::gsettings::UMOJA_SHELL) else {
         return;
     };
     let favs = with_favorite(favorites(), desktop_id, pinned);
     let refs: Vec<&str> = favs.iter().map(String::as_str).collect();
-    if let Err(e) = s.set_strv("favorite-apps", refs) {
+    if let Err(e) = s.set_strv(FAVORITES_KEY, refs) {
         tracing::warn!(error = %e, desktop_id, "could not update favorite-apps");
     }
 }

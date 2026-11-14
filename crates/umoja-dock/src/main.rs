@@ -1,7 +1,7 @@
 //! umoja-dock: an Ubuntu Dock work-alike.
 //!
 //! Reads the same `org.gnome.shell.extensions.dash-to-dock` keys as Ubuntu
-//! Dock, pins apps from `org.gnome.shell favorite-apps`, and shows running
+//! Dock, pins apps from `org.umoja.shell favorite-apps`, and shows running
 //! windows (with dots) from the compositor's foreign-toplevel protocol.
 
 mod autohide;
@@ -305,8 +305,12 @@ impl Dock {
             self.list.remove(&child);
         }
         let cfg = *self.config.borrow();
+        // Ask Umoja sits next to Show Apps, on the side facing the apps
+        // (just above it at the dock's end). It is a fixed launcher, not a
+        // pin, so it has no menu and can't be unpinned.
         if cfg.show_apps_at_top {
             self.list.append(&self.show_apps_button(cfg.icon_size));
+            self.list.append(&self.ask_umoja_button(cfg.icon_size));
         }
 
         // Favorites first (in order), then running apps that aren't pinned.
@@ -343,6 +347,7 @@ impl Dock {
             spacer.set_vexpand(cfg.position.is_vertical());
             spacer.set_hexpand(!cfg.position.is_vertical());
             self.list.append(&spacer);
+            self.list.append(&self.ask_umoja_button(cfg.icon_size));
             self.list.append(&self.show_apps_button(cfg.icon_size));
         }
         self.update_reserved_space();
@@ -639,7 +644,7 @@ impl Dock {
         }
 
         let id = app.id().map(|s| s.to_string()).unwrap_or_default();
-        if gs::settings(gs::SHELL).is_some_and(|s| s.is_writable("favorite-apps")) {
+        if umoja_common::apps::favorites_writable() {
             separator();
             let label = if pinned {
                 i18n::shell("Unpin")
@@ -747,19 +752,36 @@ impl Dock {
             .css_classes(["flat", "dock-item", "show-apps"])
             .build();
         b.set_tooltip_text(Some(&i18n::shell("Show Apps")));
-        b.connect_clicked(|_| toggle_overlay());
+        b.connect_clicked(|_| call_overlay("Toggle"));
+        b.upcast()
+    }
+
+    fn ask_umoja_button(&self, size: i32) -> gtk::Widget {
+        let image = gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+            "umoja-ask-symbolic",
+            "starred-symbolic",
+        ]));
+        image.set_pixel_size(size * 2 / 3);
+        let b = gtk::Button::builder()
+            .child(&image)
+            .css_classes(["flat", "dock-item", "show-apps", "ask-umoja"])
+            .build();
+        b.set_tooltip_text(Some(&i18n::umoja("Ask Umoja")));
+        b.connect_clicked(|_| call_overlay("ToggleAsk"));
         b.upcast()
     }
 }
 
-fn toggle_overlay() {
+/// Call a no-argument method on the overlay ("Toggle" for the app grid,
+/// "ToggleAsk" for Ask Umoja).
+fn call_overlay(method: &'static str) {
     gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
         let Ok(conn) = conn else { return };
         conn.call(
             Some(dbus::OVERLAY_BUS_NAME),
             dbus::OVERLAY_OBJECT_PATH,
             dbus::OVERLAY_INTERFACE,
-            "Toggle",
+            method,
             None,
             None,
             gio::DBusCallFlags::NONE,

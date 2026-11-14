@@ -16,3 +16,9 @@ over `hicolor/scalable`.
 
 License: GPL-2.0-or-later (gnome-shell), which is fine alongside Umoja's
 GPL-3.0-or-later. See debian/copyright.
+
+## Umoja's own
+
+`hicolor/scalable/actions/umoja-*-symbolic.svg` are Umoja's own icons
+(GPL-3.0-or-later), not from gnome-shell: `umoja-ask-symbolic` is the
+Ask Umoja sparkle on the dock and on Ask Umoja's "Ask" row.

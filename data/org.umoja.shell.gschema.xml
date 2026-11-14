@@ -6,6 +6,17 @@
 -->
 <schemalist gettext-domain="umoja-shell">
   <schema id="org.umoja.shell" path="/org/umoja/shell/">
+    <key name="favorite-apps" type="as">
+      <default>['firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'snap-store_snap-store.desktop', 'org.gnome.Ptyxis.desktop']</default>
+      <summary>Apps pinned to the dock</summary>
+      <description>
+        Desktop file ids of the apps pinned to the dock, in dock order.
+        "Pin to Dock" and "Unpin" change this list. Umoja keeps its own
+        list rather than GNOME Shell's org.gnome.shell favorite-apps, so
+        pinning in Umoja and in a GNOME session on the same account don't
+        affect each other. Ids of apps that aren't installed are skipped.
+      </description>
+    </key>
     <key name="assistant-enabled" type="b">
       <default>true</default>
       <summary>Enable the Lemonade AI assistant in the overlay search</summary>

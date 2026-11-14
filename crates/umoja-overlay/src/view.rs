@@ -1696,6 +1696,7 @@ impl Overlay {
             Item::Emoji { .. } => gtk::Image::new(),
             Item::File(h) => gtk::Image::from_gicon(&crate::files::file_icon(&h.path)),
             Item::Ask { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
+                "umoja-ask-symbolic",
                 "starred-symbolic",
                 "dialog-question-symbolic",
             ])),

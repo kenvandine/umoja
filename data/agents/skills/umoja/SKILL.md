@@ -59,7 +59,7 @@ shell commands. They know the system and enforce Umoja's confirm rules:
 | What | Where |
 | --- | --- |
 | Umoja's own settings | `gsettings list-recursively org.umoja.shell` (assistant model and backend, cloud URL/model, file search, clipboard history, hotkeys, tiling corners) |
-| Dock | `org.gnome.shell.extensions.dash-to-dock` (position `dock-position`, size `dash-max-icon-size`, `extend-height` for panel mode, autohide); pinned apps are `org.gnome.shell favorite-apps` |
+| Dock | `org.gnome.shell.extensions.dash-to-dock` (position `dock-position`, size `dash-max-icon-size`, `extend-height` for panel mode, autohide); pinned apps are `org.umoja.shell favorite-apps` (Umoja's own list, not GNOME Shell's) |
 | Look | `org.gnome.desktop.interface` (`color-scheme`, `accent-color`, `text-scaling-factor`, fonts, `clock-show-*`, `show-battery-percentage`, `enable-hot-corners`, `enable-animations`) |
 | Wallpaper | `org.gnome.desktop.background picture-uri` and `picture-uri-dark` |
 | Window manager | `org.gnome.desktop.wm.preferences` (`button-layout`, focus mode), `org.gnome.mutter` (`dynamic-workspaces`, `workspaces-only-on-primary`, `edge-tiling`, `center-new-windows`) |
@@ -94,7 +94,7 @@ Logs for a unit: `journalctl --user -u umoja-panel -b`. The hostname may be
 ## Common asks
 
 - "Move the dock to the bottom": `gsettings set org.gnome.shell.extensions.dash-to-dock dock-position BOTTOM`
-- "Pin an app": append its `.desktop` id to `org.gnome.shell favorite-apps`.
+- "Pin an app": append its `.desktop` id to `org.umoja.shell favorite-apps`.
 - "Add a shortcut that runs X": add a custom keybinding under
   `org.gnome.settings-daemon.plugins.media-keys custom-keybindings`, as GNOME
   Settings does; Umoja runs those too.

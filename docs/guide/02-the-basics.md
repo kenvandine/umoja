@@ -16,8 +16,9 @@ There are four ways to open an app. Use whichever you like.
   typing to search: apps come first and matching files are listed under
   them.
 - **From the overview.** Press **Super** and type the app's name.
-- **From Ask Umoja.** Press **Copilot** (or tap **Alt**), type a few
-  letters of the app's name and press **Enter**. This is usually the
+- **From Ask Umoja.** Press **Copilot** (or tap **Alt**, or click the
+  sparkle just above Show Apps on the dock), type a few letters of the
+  app's name and press **Enter**. This is usually the
   quickest, and it also finds an app's own actions, such as "firefox
   private" for a new private window.
 
@@ -34,8 +35,14 @@ Right-click an app on the dock (or in the app grid) for its menu:
 - **App Details**, which opens the app in App Center
 - **Quit**, which closes all of its windows
 
-To rearrange the dock, drag an icon to a new place. The dock uses Ubuntu
-Dock's settings, so **Settings › Ubuntu Desktop** changes its size, its
+The dock starts with Firefox, Files, App Center and the Terminal pinned.
+Pinned apps stay in the order you pinned them, and new pins go at the end.
+Umoja keeps its own list of pins, so pinning here doesn't change the dock
+in a GNOME session on the same account, and the other way round. The
+Ask Umoja sparkle above Show Apps is always there; it isn't a pin, so it
+has no menu.
+
+The dock uses Ubuntu Dock's settings, so **Settings › Ubuntu Desktop** changes its size, its
 position (left, bottom or right) and whether it hides when a window
 touches it. You can also just ask: "put the dock at the bottom".
 

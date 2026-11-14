@@ -66,7 +66,7 @@ pub fn launch_action(info: &gio::DesktopAppInfo, action: &str) {
     info.launch_action(action, Some(&context()));
 }
 
-/// `org.gnome.shell favorite-apps`, the same pinned list Ubuntu Dock uses.
+/// `org.umoja.shell favorite-apps`: the apps pinned to the dock, in order.
 pub fn favorites() -> Vec<gio::DesktopAppInfo> {
     umoja_common::apps::favorites()
         .iter()

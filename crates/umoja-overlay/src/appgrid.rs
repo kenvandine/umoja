@@ -313,7 +313,7 @@ impl AppGrid {
     }
 
     /// GNOME's app-grid menu: the app's desktop actions, Pin to Dock /
-    /// Unpin (org.gnome.shell favorite-apps, which the dock follows) and
+    /// Unpin (org.umoja.shell favorite-apps, which the dock follows) and
     /// App Details.
     fn show_tile_menu(self: &Rc<Self>, parent: &gtk::Widget, app: &gio::DesktopAppInfo) {
         let col = gtk::Box::new(gtk::Orientation::Vertical, 2);

@@ -36,9 +36,8 @@ expect() { # schema key value
 expect org.gnome.shell.extensions.dash-to-dock dock-position "'LEFT'"
 # Umoja's own override (data/90_umoja.gschema.override): a floating dock.
 expect org.gnome.shell.extensions.dash-to-dock extend-height false
-# Ubuntu's pinned apps (ubuntu-settings), also without GNOME Shell.
-fav=$(gsettings get org.gnome.shell favorite-apps 2>&1)
-[[ "$fav" == *firefox_firefox.desktop* ]] && pass "dock pins Ubuntu's favorite apps" || fail "org.gnome.shell favorite-apps is $fav"
+# The dock's pins are Umoja's own list, not GNOME Shell's.
+expect org.umoja.shell favorite-apps "['firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'snap-store_snap-store.desktop', 'org.gnome.Ptyxis.desktop']"
 expect org.gnome.desktop.interface gtk-theme "'Yaru'"
 expect org.gnome.desktop.interface icon-theme "'Yaru'"
 expect org.gnome.desktop.interface font-name "'Ubuntu Sans 11'"

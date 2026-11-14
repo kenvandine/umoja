@@ -21,6 +21,10 @@ Comment: All symbolic icons from GNOME Shell 51.0 (data/icons/scalable),
  unchanged; GNOME Shell draws them from its own resources rather than an
  icon theme. See data/icons/README.md.
 
+Files: data/icons/hicolor/scalable/actions/umoja-*
+Copyright: 2026 Umoja Desktop Contributors
+License: GPL-3.0-or-later
+
 Files: data/schemas/ubuntu-extensions/*
 Copyright:
     2012-2022 Michele Gaio <micxgx@gmail.com>

@@ -54,12 +54,11 @@ impl Docks {
                 d.update_badge(key);
             }
         });
-        let mut settings = Vec::new();
-        for schema in [gs::DASH_TO_DOCK, gs::SHELL] {
-            if let Some(s) = gs::settings(schema) {
-                settings.push(s);
-            }
-        }
+        let dock_settings = gs::settings(gs::DASH_TO_DOCK);
+        // Pins live in Umoja's own schema; only that key there matters.
+        let pin_settings = gs::settings(gs::UMOJA_SHELL);
+        let settings: Vec<gio::Settings> =
+            dock_settings.iter().chain(&pin_settings).cloned().collect();
         let docks = Rc::new(Docks {
             app: app.clone(),
             shared: Shared {
@@ -69,11 +68,11 @@ impl Docks {
                 entries,
             },
             docks: RefCell::default(),
-            _settings: settings.clone(),
+            _settings: settings,
         });
         DOCKS.with(|d| *d.borrow_mut() = Some(docks.clone()));
 
-        for s in &settings {
+        if let Some(s) = &dock_settings {
             s.connect_changed(None, |_, key| {
                 for d in all() {
                     *d.config.borrow_mut() = crate::Config::load();
@@ -88,6 +87,15 @@ impl Docks {
                     sync();
                 }
             });
+        }
+        if let Some(s) = &pin_settings {
+            s.connect_changed(Some(umoja_common::apps::FAVORITES_KEY), |_, _| {
+                for d in all() {
+                    d.rebuild();
+                }
+            });
+            // GSettings only reports changes to keys this object has read.
+            let _ = s.strv(umoja_common::apps::FAVORITES_KEY);
         }
 
         if let Some(t) = tracker {
