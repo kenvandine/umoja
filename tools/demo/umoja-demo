@@ -504,15 +504,65 @@ class Demo:
 
     # ---- setup / teardown --------------------------------------------
 
+    def missing_tools(self, scenes, trailer_only=False):
+        """What this run needs and isn't installed, as (what, Ubuntu package,
+        why). The tour refuses to start without them rather than leaving
+        scenes or clips out half-way through."""
+        need = []  # (command, package, why)
+        if trailer_only:
+            need += [("ffmpeg", "ffmpeg", "stitches the trailer"),
+                     ("fc-match", "fontconfig", "finds the trailer's caption font")]
+        else:
+            need.append(("grim", "grim", "takes the stills"))
+            if self.video:
+                need += [("wf-recorder", "wf-recorder", "films the clips"),
+                         ("ffmpeg", "ffmpeg", "turns clips into GIFs and MP4s, and stitches the trailer")]
+                if not self.opts.no_trailer:
+                    need.append(("fc-match", "fontconfig", "finds the trailer's caption font"))
+            if "ai-captions" in scenes:
+                need.append(("parec", "pulseaudio-utils", "feeds Live Captions in the ai-captions scene"))
+            if "screensaver" in scenes:
+                need.append(("umoja-screensaver", "umoja-desktop", "the screensaver scene"))
+            if "ai-btop" in scenes or "ai-opencode" in scenes:
+                need.append(("snap", "snapd", "the ai-btop and ai-opencode scenes install snaps"))
+            need += [("dpkg-query", "dpkg", "reads the umoja-desktop version"),
+                     ("pgrep", "procps", "finds btop and the terminal")]
+        missing = [(cmd, pkg, why) for cmd, pkg, why in need if not shutil.which(cmd)]
+        if not trailer_only:
+            if not self.opts.no_apps:
+                for app, pkg in (("org.gnome.Nautilus.desktop", "nautilus"),
+                                 ("org.gnome.TextEditor.desktop", "gnome-text-editor")):
+                    if DesktopAppInfo.new(app) is None:
+                        missing.append((app, pkg, "most scenes show Files and Text Editor"))
+            if "ai-rewrite" in scenes:
+                r = subprocess.run([sys.executable, "-c", "import gi; gi.require_version('Gtk', '4.0'); "
+                                    "from gi.repository import Gtk"], capture_output=True)
+                if r.returncode != 0:
+                    missing.append(("GTK 4 for Python", "gir1.2-gtk-4.0", "the ai-rewrite scene's note window"))
+        return missing
+
+    def check_tools(self, scenes, trailer_only=False):
+        missing = self.missing_tools(scenes, trailer_only)
+        if not missing:
+            return
+        for what, pkg, why in missing:
+            log(f"! {what} is missing ({pkg}): {why}")
+        pkgs = sorted({pkg for _w, pkg, _y in missing if pkg != "umoja-desktop"})
+        if pkgs:
+            log(f"install them with: sudo apt install {' '.join(pkgs)}")
+        if any(pkg == "umoja-desktop" for _w, pkg, _y in missing):
+            log("umoja-screensaver comes with umoja-desktop; or leave the scene out with --skip screensaver")
+        if self.dry:
+            log("(dry run: carrying on anyway)")
+            return
+        sys.exit(1)
+
     def preflight(self):
         problems = []
         if not os.environ.get("WAYLAND_DISPLAY"):
             problems.append("run this inside the Umoja session (no WAYLAND_DISPLAY)")
         if "Umoja" not in os.environ.get("XDG_CURRENT_DESKTOP", ""):
             problems.append("XDG_CURRENT_DESKTOP doesn't say Umoja; is this an Umoja session?")
-        for tool in ["grim"] + (["wf-recorder"] if self.video else []):
-            if not shutil.which(tool):
-                problems.append(f"{tool} is missing (sudo apt install {tool})")
         for target in (OVERLAY, PANEL, COMPOSITOR):
             if not self.bus.has_name(target[0]):
                 problems.append(f"{target[0]} isn't on the session bus")
@@ -521,9 +571,6 @@ class Demo:
                 log(f"! {p}")
             sys.exit(1)
         self.ffmpeg = bool(shutil.which("ffmpeg"))
-        if self.video and not self.ffmpeg:
-            log("note: ffmpeg is missing, so clips stay .webm (no GIFs for the README). "
-                "sudo apt install ffmpeg, then rerun.")
         self.output, self.area = self.monitor()
         if self.opts.output:
             self.output = self.opts.output
@@ -2268,6 +2315,7 @@ class Demo:
         readme = self.out / "README.md"
         if not readme.exists():
             sys.exit(f"no {readme}: run the tour first")
+        self.check_tools([], trailer_only=True)
         self.ffmpeg = bool(shutil.which("ffmpeg"))
         _conn, self.area = self.monitor()
         pat = re.compile(r"^\[!\[(?P<cap>.*)\]\((?P<gif>[^)]*)\)\]\((?P<mp4>[^)]*\.mp4)\)$")
@@ -2303,13 +2351,14 @@ class Demo:
     def run(self):
         if self.opts.trailer_only:
             return self.trailer_only()
-        self.preflight()
         def picked(s, names):
             return s in names or (s in AI_SCENES and "assistant" in names)
         scenes = [s for s in SCENES if (not self.opts.only or picked(s, self.opts.only))
                   and not picked(s, self.opts.skip or [])]
         if self.opts.ask:
             scenes = [s for s in scenes if not s.startswith("ai-")] + ["ai-custom"]
+        self.check_tools(scenes)
+        self.preflight()
         if not self.dry:
             self.check_screen()
             log("Keep your hands off the keyboard and mouse (the tour moves the pointer out of the")

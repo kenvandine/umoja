@@ -5,9 +5,17 @@ captures screenshots and short clips, then writes a Markdown page ready to
 commit.
 
 ```sh
-sudo apt install ffmpeg          # optional: GIFs + MP4s (otherwise clips stay .webm)
+sudo apt install grim wf-recorder ffmpeg fontconfig pulseaudio-utils gir1.2-gtk-4.0
 tools/demo/umoja-demo            # from a terminal inside your Umoja session
 ```
+
+It checks for everything the scenes you picked need before it starts, and
+stops with the `sudo apt install` line for whatever is missing:
+grim (stills), wf-recorder and ffmpeg (clips, GIFs, MP4s and the trailer,
+not needed with `--no-video`), fc-match from fontconfig (the trailer's
+captions), parec from pulseaudio-utils (`ai-captions`), GTK 4 for Python
+(`ai-rewrite`'s note window), snapd (`ai-btop`, `ai-opencode`), Files and
+Text Editor (unless `--no-apps`) and umoja-screensaver (`screensaver`).
 
 Before each scene it moves the pointer to the right screen edge, out of the
 shots (needs the compositor's `MovePointer`; with an older build, park the
