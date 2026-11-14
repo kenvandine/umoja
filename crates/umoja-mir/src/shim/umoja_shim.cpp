@@ -2968,6 +2968,15 @@ private:
         untile(w);
         tile_action.erase(w);
         if (forget_untiled) untiled.erase(w);
+        // A window hidden on another workspace stays hidden: minimizing it
+        // only changes what it comes back as when that workspace is shown
+        // (else unhide() would restore it there, minimized or not).
+        if (state == mir_window_state_minimized) {
+            if (auto const it = hidden_states.find(w); it != hidden_states.end()) {
+                it->second = state;
+                return true;
+            }
+        }
         WindowSpecification spec;
         spec.state() = state;
         tools.place_and_size_for_state(spec, info);

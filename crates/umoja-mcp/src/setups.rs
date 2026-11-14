@@ -284,12 +284,28 @@ async fn open_setup(a: Value) -> Outcome {
             let _ = desktop::tile(id, &p.position).await;
         }
     }
-    if let Some(first) = setup.windows.first() {
+    if let Some(ws) = main_workspace(&setup.windows) {
         let count = desktop::workspaces().await.map(|(_, n)| n).unwrap_or(1);
-        let _ = desktop::show_workspace((first.workspace - 1).min(count.saturating_sub(1))).await;
+        let _ = desktop::show_workspace((ws - 1).min(count.saturating_sub(1))).await;
     }
     let done = format!("Opened “{}”", setup.name);
     Outcome::ok(if notes.is_empty() { done } else { format!("{done} ({})", notes.join("; ")) }).hide()
+}
+
+/// The workspace (1-based) to show after opening a setup: the one with the
+/// most of its windows, the earliest-listed one's on a tie. Not simply the
+/// first window's: that is the oldest, often a terminal parked on a
+/// workspace of its own.
+fn main_workspace(places: &[Place]) -> Option<u32> {
+    let count = |ws: u32| places.iter().filter(|p| p.workspace == ws).count();
+    let mut best: Option<(u32, usize)> = None;
+    for p in places {
+        let n = count(p.workspace);
+        if best.is_none_or(|(_, m)| n > m) {
+            best = Some((p.workspace, n));
+        }
+    }
+    best.map(|(ws, _)| ws)
 }
 
 fn list_setups() -> Outcome {
@@ -387,6 +403,14 @@ mod tests {
         assert_eq!(find(&v, "  WRITING ").unwrap().name, "Writing");
         assert_eq!(find(&v, "writ").unwrap().name, "Writing");
         assert!(find(&v, "gaming").is_none());
+    }
+
+    #[test]
+    fn shows_the_busiest_workspace() {
+        let at = |ws| Place { app: "a.desktop".into(), name: "A".into(), workspace: ws, position: String::new() };
+        assert_eq!(main_workspace(&[at(3), at(1), at(1)]), Some(1));
+        assert_eq!(main_workspace(&[at(2), at(1)]), Some(2));
+        assert_eq!(main_workspace(&[]), None);
     }
 
     #[test]
