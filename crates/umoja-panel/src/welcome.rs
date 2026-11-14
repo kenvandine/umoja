@@ -100,7 +100,17 @@ pub fn run() -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
+/// The installer's live session (casper) runs as a generic live user, so
+/// greeting it by name reads "Welcome, Umoja": say just "Welcome" there.
+fn is_live_session() -> bool {
+    std::fs::read_to_string("/proc/cmdline")
+        .is_ok_and(|cmdline| cmdline.split_whitespace().any(|arg| arg == "boot=casper"))
+}
+
 fn greeting() -> String {
+    if is_live_session() {
+        return i18n::umoja("Welcome");
+    }
     let name = glib::real_name().to_string_lossy().trim().to_string();
     // The first name, as other desktops greet: "Welcome, Ken".
     let first = name.split_whitespace().next().unwrap_or_default();
