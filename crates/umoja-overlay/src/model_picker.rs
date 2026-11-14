@@ -368,6 +368,34 @@ pub fn quiet_tooltip_while_open(button: &gtk::MenuButton) {
     });
 }
 
+/// Open the popover on the side of `button` with more room, and no taller
+/// than that room (`fit` scrolls the rest).
+///
+/// With a window focused, Ask Umoja's card is taller and the gear sits
+/// lower. The popover wants about 680 px with the model list filled in;
+/// on a 1536x864 XPS 13 that fitted neither above nor below, Mir squeezed
+/// it to 293 px below the gear, under GTK's minimum, and GTK closed it:
+/// the settings flickered open and shut.
+fn fit_popover(button: &gtk::MenuButton, fit: &gtk::ScrolledWindow) {
+    let Some(root) = button.root() else { return };
+    let root: &gtk::Widget = root.upcast_ref();
+    let Some(b) = button.compute_bounds(root) else { return };
+    // Ask Umoja is a full-screen layer surface: its height is the monitor's.
+    let height = root.height() as f32;
+    let above = b.y();
+    let below = height - (b.y() + b.height());
+    let (position, room) = if below >= above {
+        (gtk::PositionType::Bottom, below)
+    } else {
+        (gtk::PositionType::Top, above)
+    };
+    if let Some(p) = button.popover() {
+        p.set_position(position);
+    }
+    // Leave room for the arrow, the popover's padding and a margin.
+    fit.set_max_content_height((room - 48.0).max(160.0) as i32);
+}
+
 pub fn button() -> gtk::MenuButton {
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -464,7 +492,15 @@ pub fn button() -> gtk::MenuButton {
     let agent_row = AgentRow::new();
     AGENT_ROW.with(|r| r.replace(Rc::downgrade(&agent_row)));
     content.append(&agent_row.root);
-    popover.set_child(Some(&content));
+    // The whole popover scrolls when the screen has less room than it
+    // wants (see fit_popover).
+    let fit = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_height(true)
+        .propagate_natural_width(true)
+        .child(&content)
+        .build();
+    popover.set_child(Some(&fit));
     {
         let popover = popover.clone();
         list.connect_row_activated(move |_, row| {
@@ -487,6 +523,7 @@ pub fn button() -> gtk::MenuButton {
         .build();
 
     quiet_tooltip_while_open(&button);
+    button.set_create_popup_func(move |b| fit_popover(b, &fit));
     BUTTON.with(|b| b.replace(Some(button.downgrade())));
     popover.connect_show(move |popover| {
         let page = OPEN_ON.with(|o| o.take()).unwrap_or(if backend::current().cloud {
