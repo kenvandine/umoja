@@ -68,6 +68,18 @@ pub fn started(wayland_display: &str) {
 /// backends now; on a fresh login they start after us and are left alone.
 /// xdg-desktop-portal-gtk may also have hit its start limit crash-looping
 /// on the missing X display, so its failed state is cleared too.
+///
+/// Then start xdg-desktop-portal-gtk ourselves. At a logout the portal
+/// frontend (which outlives the session) re-activates the GTK backend the
+/// moment it loses the display; the backend exits ("cannot open display")
+/// but dbus-daemon keeps that activation pending for 120 s, and the next
+/// login's portal and every GTK client's portal calls wait behind it (two
+/// minutes to a desktop, and default icons in the shell, on the XPS 13).
+/// The panel's Log Out stops the frontend first, but logind, the greeter
+/// or a crash can end the session without it. Once the backend owns its
+/// name again the stale activation completes and everything waiting on it
+/// goes on; on a clean login this is only the start the frontend would
+/// have asked for anyway.
 fn restart_stale_portals(ready_at: u64) {
     run("systemctl", &["--user", "reset-failed", "xdg-desktop-portal-gtk.service"]);
     for unit in ["xdg-desktop-portal-gnome.service", "xdg-desktop-portal-gtk.service"] {
@@ -77,6 +89,7 @@ fn restart_stale_portals(ready_at: u64) {
             run("systemctl", &["--user", "try-restart", "--no-block", unit]);
         }
     }
+    run("systemctl", &["--user", "start", "--no-block", "xdg-desktop-portal-gtk.service"]);
 }
 
 /// When `unit` last became active (CLOCK_MONOTONIC, µs), or 0 when it isn't
