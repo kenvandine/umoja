@@ -25,7 +25,6 @@ pub mod icons;
 pub mod lemonade;
 #[cfg(feature = "monitors")]
 pub mod monitors;
-pub mod portals;
 pub mod recall;
 pub mod screen;
 pub mod terminal;
