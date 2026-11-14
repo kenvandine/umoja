@@ -13,6 +13,7 @@
 #                        0 is CI's straight-in install, no prefetch
 #   USB_MBPS=100         USB stick read speed in MB/s (0 = unlimited)
 #   CPUS=4
+#   EXTRA_ARGS=          more kernel arguments, e.g. toram
 #
 # Boots the ISO's kernel directly (no GRUB, Secure Boot off) so it can add
 # umoja.autoinstall-wait=N; the install itself is the same. Needs
@@ -52,6 +53,7 @@ run_one() { # ram wait
     fallocate -l 40G "$dir/disk.img"
     local args="boot=casper layerfs-path=umoja.live.squashfs umoja.autoinstall noprompt noeject console=ttyS0"
     [ "$wait" -gt 0 ] && args="$args umoja.autoinstall-wait=$wait"
+    [ -n "${EXTRA_ARGS:-}" ] && args="$args $EXTRA_ARGS"
     echo "== RAM $ram, wait ${wait}s, USB ${USB_MBPS} MB/s"
     local start=$(date +%s)
     qemu-system-x86_64 \
