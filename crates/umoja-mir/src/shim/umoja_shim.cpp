@@ -460,10 +460,23 @@ public:
     // Mir's select_active_window() never leaves a grabbing window, so a
     // password dialog (polkit, Wi-Fi, keyring, mounts) opened from Ask
     // Umoja, an open shell menu or the screensaver showed but never got a
-    // key. Popups of the grabbing window are Mir's to handle; while locked
-    // the lock screen keeps the keyboard.
+    // key. Popups are Mir's to handle: a grabbing xdg_popup (a GTK popover,
+    // such as Ask Umoja's settings) is a menu, and a layer surface's popup
+    // may have no parent here, so taking focus for it dropped the very grab
+    // it belongs to and Mir closed it at once. While locked the lock screen
+    // keeps the keyboard.
     void take_focus_from_grab(WindowInfo const& info) {
         if (!lock_surfaces.empty() || info.parent()) return;
+        switch (info.type()) {
+        case mir_window_type_menu:
+        case mir_window_type_tip:
+        case mir_window_type_gloss:
+        case mir_window_type_satellite:
+        case mir_window_type_inputmethod:
+            return;
+        default:
+            break;
+        }
         if (info.focus_mode() != mir_focus_mode_grabbing || !info.can_be_active()) return;
         Window const w = info.window();
         Window const active = tools.active_window();
