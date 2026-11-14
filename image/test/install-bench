@@ -1,0 +1,115 @@
+#!/bin/bash
+# Headless install benchmark: run the automatic install from an
+# --autoinstall ISO (image/iso/build) in QEMU with different amounts of RAM,
+# the ISO attached as a speed-limited USB stick, and with or without a
+# "user" pause in which the installer prefetches the image, then print the
+# step times from each run's umoja-install log.
+#
+#   image/test/install-bench umoja-auto.iso out-dir
+#
+# Settings (environment):
+#   RAMS="8G 16G"        guest memory sizes to try
+#   WAITS="0 90"         seconds the installer waits (prefetching) first;
+#                        0 is CI's straight-in install, no prefetch
+#   USB_MBPS=100         USB stick read speed in MB/s (0 = unlimited)
+#   CPUS=4
+#
+# Boots the ISO's kernel directly (no GRUB, Secure Boot off) so it can add
+# umoja.autoinstall-wait=N; the install itself is the same. Needs
+# qemu-system-x86, ovmf and xorriso; uses KVM when /dev/kvm is usable.
+set -euo pipefail
+
+ISO=$(realpath "${1:?ISO}")
+OUT=$(realpath -m "${2:?output directory}")
+RAMS=${RAMS:-8G 16G}
+WAITS=${WAITS:-0 90}
+USB_MBPS=${USB_MBPS:-100}
+CPUS=${CPUS:-4}
+TIMEOUT=${TIMEOUT:-1200}
+mkdir -p "$OUT"
+
+accel=tcg
+[ -w /dev/kvm ] && accel=kvm
+
+# The live kernel and initrd, to boot with our own command line.
+xorriso -osirrox on -indev "$ISO" \
+    -extract /casper/vmlinuz "$OUT/vmlinuz" \
+    -extract /casper/initrd "$OUT/initrd" >/dev/null 2>&1
+chmod u+w "$OUT/vmlinuz" "$OUT/initrd"
+SQUASH_SIZE=$(xorriso -indev "$ISO" -find /casper/umoja.squashfs -exec lsdl 2>/dev/null \
+    | awk '/umoja.squashfs/ {print $5; exit}')
+
+throttle=
+[ "$USB_MBPS" -gt 0 ] && throttle=",throttling.bps-read=$((USB_MBPS * 1000000))"
+
+run_one() { # ram wait
+    local ram=$1 wait=$2 dir="$OUT/ram$1-wait$2" pid t=0
+    mkdir -p "$dir"
+    cp /usr/share/OVMF/OVMF_VARS_4M.fd "$dir/vars.fd"
+    # Raw, preallocated, host cache off: the guest's writes reach the
+    # host disk instead of the host's RAM.
+    rm -f "$dir/disk.img"
+    fallocate -l 40G "$dir/disk.img"
+    local args="boot=casper layerfs-path=umoja.live.squashfs umoja.autoinstall noprompt noeject console=ttyS0"
+    [ "$wait" -gt 0 ] && args="$args umoja.autoinstall-wait=$wait"
+    echo "== RAM $ram, wait ${wait}s, USB ${USB_MBPS} MB/s"
+    local start=$(date +%s)
+    qemu-system-x86_64 \
+        -machine q35,accel=$accel -cpu max -smp "$CPUS" -m "$ram" \
+        -drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+        -drive if=pflash,format=raw,unit=1,file="$dir/vars.fd" \
+        -kernel "$OUT/vmlinuz" -initrd "$OUT/initrd" -append "$args" \
+        -drive file="$dir/disk.img",format=raw,if=virtio,cache=none,aio=native \
+        -device qemu-xhci \
+        -drive if=none,id=stick,file="$ISO",format=raw,readonly=on,cache=none$throttle \
+        -device usb-storage,drive=stick,removable=on \
+        -device virtio-vga -display none -nic none \
+        -serial file:"$dir/serial.log" &
+    pid=$!
+    while kill -0 $pid 2>/dev/null; do
+        sleep 5; t=$((t + 5))
+        if [ $t -ge "$TIMEOUT" ]; then
+            kill $pid; echo "  timed out after ${TIMEOUT}s" >&2; return 0
+        fi
+    done
+    wait $pid || true
+    echo "  powered off after $(( $(date +%s) - start ))s"
+    rm -f "$dir/disk.img"
+}
+
+# "[+12345ms] step" lines umoja-install mirrors to the serial console.
+ms_at() { # log pattern -> ms
+    grep -a "umoja-install: \[+[0-9]*ms\] *$2" "$1" | head -1 | sed -E 's/.*\[\+([0-9]+)ms\].*/\1/'
+}
+sec() { [ -n "$1" ] && awk -v a="$1" -v b="${2:-0}" 'BEGIN {printf "%.1f", (a - b) / 1000}' || echo "?"; }
+
+for ram in $RAMS; do
+    for wait in $WAITS; do
+        run_one "$ram" "$wait"
+    done
+done
+
+{
+    echo "Umoja install benchmark, $(date -u +%Y-%m-%dT%H:%MZ), $(basename "$ISO")"
+    echo "squashfs ${SQUASH_SIZE:-?} bytes, USB ${USB_MBPS} MB/s, $CPUS CPUs, accel=$accel"
+    printf '%-6s %-5s %-8s %-6s %-6s %-6s %-6s %-8s %s\n' RAM wait disk luks copy setup total MB/s cache-line
+    for ram in $RAMS; do
+        for wait in $WAITS; do
+            log="$OUT/ram$ram-wait$wait/serial.log"
+            [ -f "$log" ] || continue
+            parts=$(ms_at "$log" "partitions ready")
+            luks=$(ms_at "$log" "small partitions done")
+            copy0=$(ms_at "$log" "Copying Umoja")
+            setup=$(ms_at "$log" "Setting up the system")
+            fin=$(ms_at "$log" "Finishing")
+            rate="?"
+            if [ -n "$copy0" ] && [ -n "$setup" ] && [ -n "${SQUASH_SIZE:-}" ]; then
+                rate=$(awk -v s="$SQUASH_SIZE" -v ms=$((setup - copy0)) 'BEGIN {printf "%.0f", s / 1e6 / (ms / 1000)}')
+            fi
+            cached=$(grep -a 'umoja-install: squashfs .* cached' "$log" | head -1 | sed 's/.*umoja-install: //')
+            printf '%-6s %-5s %-8s %-6s %-6s %-6s %-6s %-8s %s\n' "$ram" "$wait" \
+                "$(sec "$parts")" "$(sec "$luks" "$parts")" "$(sec "$setup" "$copy0")" \
+                "$(sec "$fin" "$setup")" "$(sec "$fin")" "$rate" "${cached:-?}"
+        done
+    done
+} | tee "$OUT/results.txt"

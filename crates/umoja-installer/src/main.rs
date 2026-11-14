@@ -602,7 +602,18 @@ fn start_auto(ui: &Rc<Ui>) {
         a.password = "umoja-install".into();
         a.timezone = "UTC".into();
     }
-    run(ui);
+    // Benchmarks (image/test/install-bench): umoja.autoinstall-wait=N
+    // prefetches the image and waits N seconds first, like a person
+    // answering the questions would.
+    match system::autoinstall_wait() {
+        Some(secs) => {
+            tracing::info!(secs, "prefetching, then waiting before the automatic install");
+            system::prefetch_squashfs();
+            let ui = ui.clone();
+            glib::timeout_add_seconds_local_once(secs, move || run(&ui));
+        }
+        None => run(ui),
+    }
 }
 
 fn run(ui: &Rc<Ui>) {

@@ -264,6 +264,19 @@ pub fn autoinstall() -> bool {
         .unwrap_or(false)
 }
 
+/// umoja.autoinstall-wait=N on the kernel command line, for benchmarks.
+pub fn autoinstall_wait() -> Option<u32> {
+    let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
+    parse_autoinstall_wait(&cmdline)
+}
+
+fn parse_autoinstall_wait(cmdline: &str) -> Option<u32> {
+    cmdline
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("umoja.autoinstall-wait="))
+        .and_then(|n| n.parse().ok())
+}
+
 /// "Ken Vandine" -> "ken"
 pub fn username_from(full_name: &str) -> String {
     let first = full_name.split_whitespace().next().unwrap_or("");
@@ -416,6 +429,13 @@ mod tests {
         assert_eq!(parse_line("PROGRESS 140 x"), Event::Progress(100, "x".into()));
         assert_eq!(parse_line("ERROR no disk"), Event::Error("no disk".into()));
         assert_eq!(parse_line("mke2fs 1.47"), Event::Log);
+    }
+
+    #[test]
+    fn autoinstall_wait_from_cmdline() {
+        assert_eq!(parse_autoinstall_wait("quiet umoja.autoinstall umoja.autoinstall-wait=90 ---"), Some(90));
+        assert_eq!(parse_autoinstall_wait("quiet umoja.autoinstall"), None);
+        assert_eq!(parse_autoinstall_wait("umoja.autoinstall-wait=x"), None);
     }
 
     #[test]
