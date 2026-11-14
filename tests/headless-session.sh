@@ -38,7 +38,12 @@ expect org.gnome.shell.extensions.dash-to-dock dock-position "'LEFT'"
 expect org.gnome.shell.extensions.dash-to-dock extend-height false
 # The dock's pins are Umoja's own list, not GNOME Shell's.
 expect org.umoja.shell favorite-apps "['firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'snap-store_snap-store.desktop', 'org.gnome.Ptyxis.desktop']"
-expect org.gnome.desktop.interface gtk-theme "'Yaru'"
+# Umoja's override: Dark Style by default, with the GTK theme to match,
+# and Ubuntu's colourful wallpaper for both styles.
+expect org.gnome.desktop.interface color-scheme "'prefer-dark'"
+expect org.gnome.desktop.interface gtk-theme "'Yaru-dark'"
+expect org.gnome.desktop.background picture-uri "'file:///usr/share/backgrounds/warty-final-ubuntu.png'"
+expect org.gnome.desktop.background picture-uri-dark "'file:///usr/share/backgrounds/warty-final-ubuntu.png'"
 expect org.gnome.desktop.interface icon-theme "'Yaru'"
 expect org.gnome.desktop.interface font-name "'Ubuntu Sans 11'"
 
