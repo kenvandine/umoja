@@ -761,7 +761,9 @@ impl Dock {
         // every name in a theme before moving on to the next theme, so a
         // fallback that Yaru has would always beat our hicolor icon.
         let image = gtk::Image::from_icon_name("umoja-ask-symbolic");
-        image.set_pixel_size(size * 2 / 3);
+        // Full app-icon size, like the pinned apps around it (Show Apps
+        // stays smaller, as in Ubuntu Dock).
+        image.set_pixel_size(size);
         let b = gtk::Button::builder()
             .child(&image)
             .css_classes(["flat", "dock-item", "show-apps", "ask-umoja"])
