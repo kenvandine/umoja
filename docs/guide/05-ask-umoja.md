@@ -1,8 +1,8 @@
 # 5. Ask Umoja
 
 Ask Umoja is the heart of the desktop. Press **Copilot**, or tap **Alt** on
-a keyboard without one, or click the sparkle just above Show Apps on the
-dock. A card floats over the window you're in, ready for
+a keyboard without one, or click the circle of friends just above Show Apps on
+the dock. A card floats over the window you're in, ready for
 you to type.
 
 ![Ask Umoja with nothing typed: the Text Editor chip beside the search box, the editor's New Window action, frequently used apps and suggestions](images/ask-empty.png)

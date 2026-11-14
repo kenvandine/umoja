@@ -21,4 +21,6 @@ GPL-3.0-or-later. See debian/copyright.
 
 `hicolor/scalable/actions/umoja-*-symbolic.svg` are Umoja's own icons
 (GPL-3.0-or-later), not from gnome-shell: `umoja-ask-symbolic` is the
-Ask Umoja sparkle on the dock and on Ask Umoja's "Ask" row.
+Ask Umoja button on the dock and Ask Umoja's "Ask" row: three friends
+around a ring with a sparkle in the middle, after Ubuntu's circle of
+friends.

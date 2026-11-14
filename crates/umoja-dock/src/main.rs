@@ -757,10 +757,10 @@ impl Dock {
     }
 
     fn ask_umoja_button(&self, size: i32) -> gtk::Widget {
-        let image = gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
-            "umoja-ask-symbolic",
-            "starred-symbolic",
-        ]));
+        // Shipped with Umoja (data/icons), so no fallback names: GTK tries
+        // every name in a theme before moving on to the next theme, so a
+        // fallback that Yaru has would always beat our hicolor icon.
+        let image = gtk::Image::from_icon_name("umoja-ask-symbolic");
         image.set_pixel_size(size * 2 / 3);
         let b = gtk::Button::builder()
             .child(&image)

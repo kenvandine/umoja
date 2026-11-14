@@ -68,8 +68,8 @@ usual. Once Umoja has seen a Copilot key, Alt goes back to your apps.
    sound, Bluetooth, Dark Style, power and more.
 5. **The dock**, with your favourite apps and the apps that are running. A
    small orange dot beside an icon means the app is open. Firefox, Files,
-   App Center and the Terminal are pinned to start with. The sparkle just
-   above Show Apps opens **Ask Umoja**.
+   App Center and the Terminal are pinned to start with. The circle of
+   friends just above Show Apps opens **Ask Umoja**.
 6. **Show Apps** opens the app grid with all your apps.
 7. **Windows.** Your apps, which you can move, resize, tile and spread over
    workspaces and monitors.

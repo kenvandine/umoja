@@ -1695,11 +1695,8 @@ impl Overlay {
             Item::Sum(_) => gtk::Image::from_icon_name("accessories-calculator-symbolic"),
             Item::Emoji { .. } => gtk::Image::new(),
             Item::File(h) => gtk::Image::from_gicon(&crate::files::file_icon(&h.path)),
-            Item::Ask { .. } => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
-                "umoja-ask-symbolic",
-                "starred-symbolic",
-                "dialog-question-symbolic",
-            ])),
+            // Ours (data/icons): no fallbacks, or Yaru's would win.
+            Item::Ask { .. } => gtk::Image::from_icon_name("umoja-ask-symbolic"),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
             Item::Setup(_) => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "view-grid-symbolic",
