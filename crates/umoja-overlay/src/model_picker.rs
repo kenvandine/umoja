@@ -343,6 +343,31 @@ pub fn close() {
     }
 }
 
+/// No tooltip on `button` while its popover is open.
+///
+/// GTK can still show the button's tooltip just after the popover opens
+/// (the pointer is still over the button). The tooltip is an xdg_popup on
+/// the same layer surface, beside the popover rather than on it, and Mir
+/// then dismisses the popover's grab: clicking Ask Umoja's settings gear
+/// showed the popover for a flicker. It happened while another window was
+/// on screen (a terminal, Text Editor), whose pointer enter/leave makes
+/// GTK re-show the tooltip.
+pub fn quiet_tooltip_while_open(button: &gtk::MenuButton) {
+    let Some(popover) = button.popover() else { return };
+    let weak = button.downgrade();
+    popover.connect_show(move |_| {
+        if let Some(b) = weak.upgrade() {
+            b.set_has_tooltip(false);
+        }
+    });
+    let weak = button.downgrade();
+    popover.connect_closed(move |_| {
+        if let Some(b) = weak.upgrade() {
+            b.set_has_tooltip(true);
+        }
+    });
+}
+
 pub fn button() -> gtk::MenuButton {
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -461,6 +486,7 @@ pub fn button() -> gtk::MenuButton {
         .popover(&popover)
         .build();
 
+    quiet_tooltip_while_open(&button);
     BUTTON.with(|b| b.replace(Some(button.downgrade())));
     popover.connect_show(move |popover| {
         let page = OPEN_ON.with(|o| o.take()).unwrap_or(if backend::current().cloud {

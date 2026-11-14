@@ -335,6 +335,7 @@ impl Overlay {
             .css_classes(["circular", "context-button"])
             .popover(&gtk::Popover::builder().child(&picks).build())
             .build();
+        crate::model_picker::quiet_tooltip_while_open(&context_button);
         let clip_button = gtk::ToggleButton::builder()
             .icon_name("edit-paste-symbolic")
             .tooltip_text(i18n::umoja("Clipboard History"))
