@@ -230,8 +230,10 @@ Markdown marks are left out.
 
 The voice is [Piper](https://github.com/OHF-Voice/piper1-gpl)'s British
 "Alan", which runs on this computer. Piper comes from the `piper-tts` snap.
-A deb can't depend on a snap, so the first time something is read out
-without it, Umoja installs the snap (you're asked for your password, as for
+Umoja's installer puts the snap and the Alan voice on the computer, so
+reading out works from the first login, offline too. On a system installed
+another way, a deb can't depend on a snap, so the first time something is
+read out without it, Umoja installs the snap (you're asked for your password, as for
 any software install). If that's declined or there's no internet,
 speech-dispatcher's voice reads instead. To install it yourself:
 

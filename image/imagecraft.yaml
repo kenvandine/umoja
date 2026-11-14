@@ -173,6 +173,10 @@ parts:
       - desktop-security-center
       - prompting-client
       - snapd-desktop-integration
+      # Umoja's read-aloud voice (crates/umoja-overlay/src/speech.rs);
+      # without it the first read-aloud has to install it, which needs
+      # the password and the internet.
+      - piper-tts
     # Download from latest/stable, but have every snap track Ubuntu's
     # release branch, as Ubuntu Desktop does. A closed or expired branch
     # falls back to latest/stable on refresh; prepare-image itself
@@ -209,8 +213,31 @@ parts:
     # overlay layer is captured, so the seed never reached the image.
     # Staged normally, var/lib/snapd/seed is primed into the rootfs.
 
-  system-config:
+  # The default read-aloud voice (Piper en_GB "alan"), so reading out works
+  # offline from the first login. Its files go to /usr/share/umoja/piper-voices,
+  # which the piper-tts snap can't read; umoja-overlay copies them into the
+  # user's voices folder the first time it finds Piper (speech.rs).
+  piper-voice:
     after: [seed-snaps]
+    plugin: nil
+    build-packages: [curl, ca-certificates]
+    override-build: |
+      set -eux
+      dir="$CRAFT_PART_INSTALL/usr/share/umoja/piper-voices"
+      mkdir -p "$dir"
+      url=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium
+      for f in en_GB-alan-medium.onnx en_GB-alan-medium.onnx.json; do
+        curl -fL --retry 5 --retry-all-errors --retry-delay 10 \
+          -o "$dir/$f.partial" "$url/$f?download=true"
+        mv "$dir/$f.partial" "$dir/$f"
+      done
+      # A truncated or HTML error page instead of the model fails here.
+      [ "$(stat -c %s "$dir/en_GB-alan-medium.onnx")" -gt 50000000 ]
+      grep -q '"sample_rate"' "$dir/en_GB-alan-medium.onnx.json"
+      chmod 0644 "$dir"/*
+
+  system-config:
+    after: [piper-voice]
     plugin: nil
     overlay-script: |
       set -eux

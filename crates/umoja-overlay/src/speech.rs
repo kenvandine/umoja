@@ -18,6 +18,11 @@
 //! asks for the password through polkit, whose agent is umoja-panel). The
 //! voice picker (see `voice_picker`) offers the same. If that's declined
 //! or offline, `spd-say` reads instead.
+//!
+//! The installer image seeds the snap and puts the default voice in
+//! [`SYSTEM_VOICES`]. A confined snap can't read that folder, so the
+//! first time Piper is found its voices are copied into the user's
+//! voices folder, and reading out works offline from the first login.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -35,6 +40,11 @@ const CATALOG_URL: &str =
     "https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json?download=true";
 const SNAP_CLI: &str = "/snap/bin/piper-tts.piper-cli";
 pub const SNAP_NAME: &str = "piper-tts";
+/// Voices that came with the system (the installer image's default voice).
+const SYSTEM_VOICES: &str = "/usr/share/umoja/piper-voices";
+/// In a user's voices folder once [`SYSTEM_VOICES`] were copied there, so
+/// a voice the user removes doesn't come back.
+const SEEDED_MARK: &str = ".umoja-system-voices";
 /// Longest text read out in one go.
 const MAX_CHARS: usize = 6000;
 
@@ -191,8 +201,15 @@ fn home() -> PathBuf {
     glib::home_dir()
 }
 
-/// Blocking: may run `piper --help`.
+/// Blocking: may run `piper --help`, and copies the system's voices
+/// into the user's voices folder the first time.
 pub fn find_piper() -> Option<Piper> {
+    let piper = find_piper_cli()?;
+    copy_system_voices(Path::new(SYSTEM_VOICES), &piper.voices);
+    Some(piper)
+}
+
+fn find_piper_cli() -> Option<Piper> {
     if Path::new(SNAP_CLI).exists() {
         return Some(Piper {
             cli: SNAP_CLI.into(),
@@ -215,6 +232,49 @@ pub fn find_piper() -> Option<Piper> {
         });
     }
     None
+}
+
+/// Copy each voice in `system` (model plus config) that `voices` lacks,
+/// once per user: [`SEEDED_MARK`] records that it was done. Files are
+/// written under a temporary name and renamed, so a copy cut short is
+/// never taken for a voice.
+fn copy_system_voices(system: &Path, voices: &Path) {
+    let mark = voices.join(SEEDED_MARK);
+    if mark.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(system) else {
+        return;
+    };
+    if std::fs::create_dir_all(voices).is_err() {
+        return;
+    }
+    let mut ok = true;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(voice) = name.to_str().and_then(|n| n.strip_suffix(".onnx")) else {
+            continue;
+        };
+        if !valid_voice(voice) {
+            continue;
+        }
+        for file in [format!("{voice}.onnx"), format!("{voice}.onnx.json")] {
+            let (from, to) = (system.join(&file), voices.join(&file));
+            if to.exists() {
+                continue;
+            }
+            let tmp = voices.join(format!(".{file}.copying"));
+            let copied = std::fs::copy(&from, &tmp).and_then(|_| std::fs::rename(&tmp, &to));
+            if let Err(e) = copied {
+                tracing::warn!(error = %e, file = %from.display(), "could not copy voice");
+                let _ = std::fs::remove_file(&tmp);
+                ok = false;
+            }
+        }
+    }
+    if ok {
+        let _ = std::fs::write(&mark, b"");
+    }
 }
 
 /// snapd is here to install the piper-tts snap.
@@ -733,6 +793,25 @@ fn strip_inline(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_voices_are_copied_once() {
+        let root = std::env::temp_dir().join(format!("umoja-voices-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (system, user) = (root.join("system"), root.join("user/voices"));
+        std::fs::create_dir_all(&system).unwrap();
+        std::fs::write(system.join("en_GB-alan-medium.onnx"), b"model").unwrap();
+        std::fs::write(system.join("en_GB-alan-medium.onnx.json"), b"{}").unwrap();
+        copy_system_voices(&system, &user);
+        assert_eq!(std::fs::read(user.join("en_GB-alan-medium.onnx")).unwrap(), b"model");
+        assert!(user.join("en_GB-alan-medium.onnx.json").exists());
+        assert!(user.join(SEEDED_MARK).exists());
+        // Removed by the user: stays removed.
+        std::fs::remove_file(user.join("en_GB-alan-medium.onnx")).unwrap();
+        copy_system_voices(&system, &user);
+        assert!(!user.join("en_GB-alan-medium.onnx").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn voice_names_map_to_their_folder() {
