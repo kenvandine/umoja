@@ -1,8 +1,6 @@
 # A tour of Umoja
 
-Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026.46.6+git202611121043.39b3bb7).
-
-**[Watch the trailer](videos/trailer.mp4)** (all the clips below in one video, real time).
+Captured hands-free by `tools/demo/umoja-demo` on 2026-11-14 (umoja-desktop 2026.46.8).
 
 ## Ask Umoja: type-ahead
 
@@ -26,9 +24,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *A question puts “Ask Umoja” first: Enter or Tab hands it to the assistant.*
 
-[![Ask Umoja: apps, switches, Settings, sums and questions as you type.](videos/ask-umoja.gif)](videos/ask-umoja.mp4)
-
-*Ask Umoja: apps, switches, Settings, sums and questions as you type.* ([video](videos/ask-umoja.mp4))
+[Ask Umoja: apps, switches, Settings, sums and questions as you type. (video)](videos/ask-umoja.webm)
 
 ## Ask Umoja: install and run btop
 
@@ -44,11 +40,17 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *btop running in your terminal: one word typed, two prompts allowed.*
 
-[![Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step.](videos/ai-btop.gif)](videos/ai-btop.mp4)
-
-*Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step.* ([video](videos/ai-btop.mp4))
+[Type “btop”: Umoja installs it (snap first) and runs it in a terminal, asking before each step. (video)](videos/ai-btop.webm)
 
 ## Coding agent: OpenCode
+
+![OpenCode isn't installed: Umoja offers its snap, and connects it to your desktop and your model.](images/ai-opencode-install.png)
+
+*OpenCode isn't installed: Umoja offers its snap, and connects it to your desktop and your model.*
+
+![Installed, connected to Umoja's tools and signed in with the assistant's cloud model.](images/ai-opencode-installed.png)
+
+*Installed, connected to Umoja's tools and signed in with the assistant's cloud model.*
 
 ![Ask Umoja's settings: OpenCode is now the coding agent, so coding jobs go to it.](images/ai-opencode-default.png)
 
@@ -62,9 +64,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *hello-gtk/src/main.rs: a GTK 4 window saying Hello, World.*
 
-[![Make OpenCode the coding agent, then just ask: “write an app in Rust”. It runs on your model, with Umoja's tools, and writes the project.](videos/ai-opencode.gif)](videos/ai-opencode.mp4)
-
-*Make OpenCode the coding agent, then just ask: “write an app in Rust”. It runs on your model, with Umoja's tools, and writes the project.* ([video](videos/ai-opencode.mp4))
+[“Install OpenCode”, make it the coding agent, then “write an app in Rust”: OpenCode comes set up on your model and writes the project. (video)](videos/ai-opencode.webm)
 
 ## Assistant: tile windows
 
@@ -72,9 +72,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Tiling by asking for it, in plain words.*
 
-[![Tiling by asking for it, in plain words.](videos/ai-tiling.gif)](videos/ai-tiling.mp4)
-
-*Tiling by asking for it, in plain words.* ([video](videos/ai-tiling.mp4))
+[Tiling by asking for it, in plain words. (video)](videos/ai-tiling.webm)
 
 ## Assistant: saved setups
 
@@ -90,9 +88,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *The setup back, each window in its half.*
 
-[![“Save this layout as my Writing setup”, then later just type “writing” and pick it: every window goes back in its place.](videos/ai-setups.gif)](videos/ai-setups.mp4)
-
-*“Save this layout as my Writing setup”, then later just type “writing” and pick it: every window goes back in its place.* ([video](videos/ai-setups.mp4))
+[“Save this layout as my Writing setup”, then later just type “writing” and pick it: every window goes back in its place. (video)](videos/ai-setups.webm)
 
 ## Assistant: change settings
 
@@ -104,9 +100,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Every change the assistant makes has an Undo button.*
 
-[![Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.](videos/ai-settings.gif)](videos/ai-settings.mp4)
-
-*Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.* ([video](videos/ai-settings.mp4))
+[Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back. (video)](videos/ai-settings.webm)
 
 ## Rewrite selected text
 
@@ -122,9 +116,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Replaced in the app itself.*
 
-[![Select text in any app, press Super+Shift+A and pick a rewrite: Replace types it over your selection.](videos/ai-rewrite.gif)](videos/ai-rewrite.mp4)
-
-*Select text in any app, press Super+Shift+A and pick a rewrite: Replace types it over your selection.* ([video](videos/ai-rewrite.mp4))
+[Select text in any app, press Super+Shift+A and pick a rewrite: Replace types it over your selection. (video)](videos/ai-rewrite.webm)
 
 ## Live captions
 
@@ -136,9 +128,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Summarize: what was said, in a line or two.*
 
-[![Live captions of anything playing, here Umoja's own read-aloud voice; Summarize hands the transcript to the assistant.](videos/ai-captions.gif)](videos/ai-captions.mp4)
-
-*Live captions of anything playing, here Umoja's own read-aloud voice; Summarize hands the transcript to the assistant.* ([video](videos/ai-captions.mp4))
+[Live captions of anything playing, here Umoja's own read-aloud voice; Summarize hands the transcript to the assistant. (video)](videos/ai-captions.webm)
 
 ## Assistant: install an app
 
@@ -146,9 +136,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *“I need VLC”: it finds the snap or deb and asks before installing.*
 
-[![“I need VLC”: it finds the snap or deb and asks before installing.](videos/ai-install.gif)](videos/ai-install.mp4)
-
-*“I need VLC”: it finds the snap or deb and asks before installing.* ([video](videos/ai-install.mp4))
+[“I need VLC”: it finds the snap or deb and asks before installing. (video)](videos/ai-install.webm)
 
 ## Assistant: software updates
 
@@ -160,13 +148,9 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Installing updates: it shows what will change and asks first.*
 
-[![Checking for updates, debs and snaps together.](videos/ai-updates.gif)](videos/ai-updates.mp4)
+[Checking for updates, debs and snaps together. (video)](videos/ai-updates.webm)
 
-*Checking for updates, debs and snaps together.* ([video](videos/ai-updates.mp4))
-
-[![Installing updates: it shows what will change and asks first.](videos/ai-updates-install.gif)](videos/ai-updates-install.mp4)
-
-*Installing updates: it shows what will change and asks first.* ([video](videos/ai-updates-install.mp4))
+[Installing updates: it shows what will change and asks first. (video)](videos/ai-updates-install.webm)
 
 ## Assistant: troubleshooting
 
@@ -174,9 +158,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Asking about the hardware: answered from a live system report, not a guess.*
 
-[![Asking about the hardware: answered from a live system report, not a guess.](videos/ai-troubleshoot.gif)](videos/ai-troubleshoot.mp4)
-
-*Asking about the hardware: answered from a live system report, not a guess.* ([video](videos/ai-troubleshoot.mp4))
+[Asking about the hardware: answered from a live system report, not a guess. (video)](videos/ai-troubleshoot.webm)
 
 ## Notifications
 
@@ -188,9 +170,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *The date menu keeps the notification list next to the calendar.*
 
-[![Notification bubbles stack up, then fade on their own.](videos/notifications.gif)](videos/notifications.mp4)
-
-*Notification bubbles stack up, then fade on their own.* ([video](videos/notifications.mp4))
+[Notification bubbles stack up, then fade on their own. (video)](videos/notifications.webm)
 
 ## Assistant: reply to a notification
 
@@ -198,9 +178,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Drafting a reply to a notification. Nothing is sent until you press Send.*
 
-[![Drafting a reply to a notification. Nothing is sent until you press Send.](videos/ai-reply.gif)](videos/ai-reply.mp4)
-
-*Drafting a reply to a notification. Nothing is sent until you press Send.* ([video](videos/ai-reply.mp4))
+[Drafting a reply to a notification. Nothing is sent until you press Send. (video)](videos/ai-reply.webm)
 
 ## Assistant: notification digest
 
@@ -208,9 +186,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *A digest of the notifications that came in.*
 
-[![A digest of the notifications that came in.](videos/ai-summary.gif)](videos/ai-summary.mp4)
-
-*A digest of the notifications that came in.* ([video](videos/ai-summary.mp4))
+[A digest of the notifications that came in. (video)](videos/ai-summary.webm)
 
 ## Desktop
 
@@ -228,9 +204,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Drag to a corner for a quarter; tiled windows resize together.*
 
-[![Drag-to-tile: halves at the screen edges, quarters in the corners.](videos/tiling.gif)](videos/tiling.mp4)
-
-*Drag-to-tile: halves at the screen edges, quarters in the corners.* ([video](videos/tiling.mp4))
+[Drag-to-tile: halves at the screen edges, quarters in the corners. (video)](videos/tiling.webm)
 
 ## App grid and search
 
@@ -244,9 +218,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *The Activities overview (Super): windows, workspace thumbnails and their neighbours.*
 
-[![Desktop, overview and app grid are steps on one ladder, as in GNOME.](videos/overview.gif)](videos/overview.mp4)
-
-*Desktop, overview and app grid are steps on one ladder, as in GNOME.* ([video](videos/overview.mp4))
+[Desktop, overview and app grid are steps on one ladder, as in GNOME. (video)](videos/overview.webm)
 
 ## Workspaces
 
@@ -254,9 +226,7 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *Dynamic workspaces, switched with Super+Page Down or a three-finger swipe.*
 
-[![Workspaces slide like GNOME's, with a popup showing where you are.](videos/workspaces.gif)](videos/workspaces.mp4)
-
-*Workspaces slide like GNOME's, with a popup showing where you are.* ([video](videos/workspaces.mp4))
+[Workspaces slide like GNOME's, with a popup showing where you are. (video)](videos/workspaces.webm)
 
 ## Quick Settings
 
@@ -282,6 +252,4 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-12 (umoja-desktop 2026
 
 *The screensaver: "umoja" drawn in glowing dots, a new effect each cycle.*
 
-[![Screensaver preview (umoja-screensaver).](videos/screensaver.gif)](videos/screensaver.mp4)
-
-*Screensaver preview (umoja-screensaver).* ([video](videos/screensaver.mp4))
+[Screensaver preview (umoja-screensaver). (video)](videos/screensaver.webm)
