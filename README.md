@@ -132,6 +132,25 @@ More screenshots and clips are in the [tour](docs/demo/README.md).
 
 ## Installing on Ubuntu 26.10
 
+### What you need
+
+| | Memory (RAM) |
+|---|---|
+| **Recommended** | **16 GB** |
+| Minimum | 8 GB |
+
+Umoja asks for more memory than a typical desktop because its assistant
+runs **on your computer**: a local language model stays loaded next to
+your apps, so Ask Umoja answers instantly, works offline, and nothing you
+type, say or show it leaves the machine. With 16 GB there is room for a
+capable model and everything else you run. With 8 GB Umoja picks a smaller,
+lighter model automatically and still runs the whole desktop; a cloud model
+is an optional switch if you'd rather keep the memory for your apps.
+
+The memory pays off in the installer too: with 16 GB it reads the whole
+system into memory while you answer its questions, and the install itself
+then takes about 15 seconds.
+
 Umoja targets **Ubuntu 26.10** (amd64 and arm64) with the standard Ubuntu
 desktop installed. Releases are published to
 [ppa:ken-vandine/umoja](https://launchpad.net/~ken-vandine/+archive/ubuntu/umoja),
