@@ -7,6 +7,17 @@
 # GNOME did before it changed the default to false.
 [org.gnome.desktop.interface:Umoja]
 gtk-enable-primary-paste=true
+# Dark Style by default (Quick Settings > Dark Style, or Settings >
+# Appearance, still switches to light). The Yaru GTK theme follows, as the
+# Dark Style tile does, so GTK 3 apps match.
+color-scheme='prefer-dark'
+gtk-theme='Yaru-dark'
+
+# Ubuntu's colourful default wallpaper for both styles, instead of Ubuntu's
+# pair that swaps with the style. The greeter shows the same picture.
+[org.gnome.desktop.background:Umoja]
+picture-uri='file:///usr/share/backgrounds/warty-final-ubuntu.png'
+picture-uri-dark='file:///usr/share/backgrounds/warty-final-ubuntu.png'
 
 # The dock floats off the screen edge (Ubuntu's own default is the
 # full-height "panel mode"); Settings > Ubuntu Desktop > Panel mode still

@@ -157,7 +157,8 @@ Click the status icons at the right of the top bar.
     (only if you have VPN connections set up)
   - **Bluetooth**
   - **Power Mode**: Performance, Balanced or Power Saver
-  - **Dark Style** and **Night Light**
+  - **Dark Style** (on to start with; turn it off for the light style)
+    and **Night Light**
   - **Keyboard** backlight, on laptops that have one
 
 On Wi-Fi that wants you to log in first, as in hotels, airports and

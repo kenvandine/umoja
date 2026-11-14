@@ -391,7 +391,7 @@ class Demo:
         self.area = None  # (x, y, w, h) of the captured monitor, layout pixels
         self.terminal = None  # the window we were started from, minimized
         self.terminal_name = ""
-        self.dark = None  # (color-scheme, gtk-theme) before the dark style ask
+        self.dark = None  # (color-scheme, gtk-theme) before the style ask
         self.ready = False  # the assistant can be asked
         self.until = None  # wait() returns early once this says so
         self.events = []  # (signal, args, time.monotonic()) from org.umoja.Overlay
@@ -1263,21 +1263,21 @@ class Demo:
             self.dark = (iface.get_string("color-scheme"), iface.get_string("gtk-theme"))
         if nl and self.night_light is None:
             self.night_light = nl.get_boolean(NIGHT_LIGHT[1])
-        # Always show light -> dark: start from light style with Night Light
-        # off (all put back at the end).
-        if iface.get_string("color-scheme") == "prefer-dark":
-            iface.set_string("color-scheme", "default")
+        # Dark style is Umoja's default, so always show dark -> light: start
+        # from dark style with Night Light off (all put back at the end).
+        if iface.get_string("color-scheme") != "prefer-dark":
+            iface.set_string("color-scheme", "prefer-dark")
             theme = iface.get_string("gtk-theme")
-            if theme.startswith("Yaru") and theme.endswith("-dark"):
-                iface.set_string("gtk-theme", theme[: -len("-dark")])
+            if theme.startswith("Yaru") and not theme.endswith("-dark"):
+                iface.set_string("gtk-theme", theme + "-dark")
         if nl:
             nl.set_boolean(NIGHT_LIGHT[1], False)
         Gio.Settings.sync()
         self.wait(1.5)
-        # Dark style last: its row gets the answer's Undo button, and dark
+        # Light style last: its row gets the answer's Undo button, and the
         # style (unlike Night Light's tint) shows in a recording.
-        q = "Turn on Night Light and switch to dark style"
-        self.ask("ai-settings", q, "Settings in plain words: Night Light and dark style in one ask, "
+        q = "Turn on Night Light and switch to light style"
+        self.ask("ai-settings", q, "Settings in plain words: Night Light and light style in one ask, "
                  "and Undo puts the style back.", expect_steps=2, keep_open=True,
                  then=lambda: self.press_undo(iface))
         self.bus.call(OVERLAY, "Hide")
@@ -1288,8 +1288,8 @@ class Demo:
         self.wait(1.5)
 
     def press_undo(self, iface):
-        """Press the answer's Undo button (the last change: dark style) and
-        let the desktop go light again on camera."""
+        """Press the answer's Undo button (the last change: light style) and
+        let the desktop go dark again on camera."""
         if self.dry:
             log("  press Undo")
             return
@@ -1306,11 +1306,11 @@ class Demo:
             log("  ! no Undo button to press")
             return
         for _ in range(16):
-            if iface.get_string("color-scheme") != "prefer-dark":
+            if iface.get_string("color-scheme") == "prefer-dark":
                 break
             self.wait(0.5)
         else:
-            log("  ! Undo didn't put the light style back (it may have undone Night Light)")
+            log("  ! Undo didn't put the dark style back (it may have undone Night Light)")
         self.wait(2.0)
         self.shot("ai-settings-undo", "Every change the assistant makes has an Undo button.")
 

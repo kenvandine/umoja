@@ -11,7 +11,7 @@ it afterwards.
 2. Type what you want, in plain words.
 3. Press **Enter** on the **Ask Umoja** row, or **Tab** from anywhere.
 
-![“Switch to dark style and turn on Night Light”: two ticked steps, then “Dark Style and Night Light are both on now.”](images/ai-settings.png)
+![“Turn on Night Light and switch to light style”: two ticked steps, then an answer saying Night Light is on and Dark Style is off](images/ai-settings.png)
 
 Each thing the assistant does shows up as a line with a tick when it's
 done. The answer appears under your question, with a **Copy** button.
