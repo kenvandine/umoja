@@ -107,17 +107,13 @@ struct Badge {
 }
 
 fn main() -> glib::ExitCode {
-    umoja_common::portals::bypass();
     umoja_common::init_logging("umoja-dock");
     i18n::init();
     let app = adw::Application::builder()
         .application_id(APP_ID)
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
-    app.connect_startup(|_| {
-        umoja_common::portals::restore();
-        load_css();
-    });
+    app.connect_startup(|_| load_css());
     // Map nothing while the screen is blanked: Mir has no active output
     // then (see umoja_common::screen).
     app.connect_activate(|app| {

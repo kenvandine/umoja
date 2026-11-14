@@ -201,17 +201,13 @@ const IFACE_XML: &str = r#"
 </node>"#;
 
 fn main() -> glib::ExitCode {
-    umoja_common::portals::bypass();
     umoja_common::init_logging("umoja-overlay");
     i18n::init();
     let app = adw::Application::builder()
         .application_id(APP_ID)
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
-    app.connect_startup(|_| {
-        umoja_common::portals::restore();
-        load_css();
-    });
+    app.connect_startup(|_| load_css());
     app.connect_activate(|app| {
         let overlay = view::Overlay::new(app);
         let grid = appgrid::AppGrid::new(app);
