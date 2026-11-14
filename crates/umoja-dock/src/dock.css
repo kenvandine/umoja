@@ -33,6 +33,10 @@ window.umoja-dock.bottom .dock-list {
 .dock-item.focused {
   background-color: alpha(#ffffff, 0.12);
 }
+/* Ask Umoja (a symbolic icon) in the accent color, like the running dots. */
+.dock-item.ask-umoja image {
+  color: @accent_bg_color;
+}
 .running-dot {
   min-width: 5px;
   min-height: 5px;
