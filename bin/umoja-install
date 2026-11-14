@@ -155,6 +155,10 @@ mkdir -p "$TARGET/boot/efi"
 mount "$(part 1)" "$TARGET/boot/efi"
 
 progress 8 "Copying Umoja"
+# For tuning: how much of the image the installer's prefetch got into RAM
+# (the rest is read from the install medium during the copy).
+echo "squashfs $(stat -c %s "$SQUASHFS") bytes, cached $(fincore -nbo RES "$SQUASHFS" 2>/dev/null || echo '?')," \
+     "MemAvailable $(awk '/^MemAvailable:/ {print $2 * 1024}' /proc/meminfo) bytes"
 # unsquashfs -percentage prints one number per update. Only security.*
 # xattrs (file capabilities such as snap-confine's): the first xattr the
 # target can't store (a user.* one on the FAT /boot/efi) makes unsquashfs

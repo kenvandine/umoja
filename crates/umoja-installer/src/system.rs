@@ -134,6 +134,11 @@ const SQUASHFS: [&str; 2] = [
 /// stick. Only a read: if memory gets tight the kernel just drops it, and
 /// the copy reads the stick as before. Idle I/O priority, so the live
 /// session stays responsive.
+///
+/// On a small laptop (the XPS 13 has 6.8 GB) the whole image doesn't fit,
+/// so as much of it as fits is read: the tail first (squashfs keeps its
+/// inode and directory tables there, and unsquashfs reads those before any
+/// file), then the start, which unsquashfs copies first.
 pub fn prefetch_squashfs() {
     let Some(path) = SQUASHFS.into_iter().find(|p| std::path::Path::new(p).is_file()) else {
         return;
@@ -143,17 +148,30 @@ pub fn prefetch_squashfs() {
         .ok()
         .and_then(|m| mem_available(&m))
         .unwrap_or(0);
-    if !worth_prefetching(size, available) {
+    let Some(budget) = prefetch_budget(size, available) else {
         tracing::info!(size, available, "not prefetching the system image: not enough memory");
         return;
-    }
-    tracing::info!(path, size, "prefetching the system image");
+    };
+    tracing::info!(path, size, available, budget, "prefetching the system image");
+    // Sizes in MiB for head and tail (a small image is just read whole).
+    let head = (budget - PREFETCH_TAIL.min(size)) >> 20;
+    let script = format!(
+        "tail -c {tail}M \"$1\" >/dev/null; head -c {head}M \"$1\" >/dev/null",
+        tail = PREFETCH_TAIL >> 20,
+    );
     let _ = Command::new("ionice")
-        .args(["-c3", "nice", "-n19", "cat", path])
+        .args(["-c3", "nice", "-n19", "sh", "-c", &script, "prefetch", path])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
 }
+
+/// The squashfs tail read first: its metadata tables (tens of MiB).
+const PREFETCH_TAIL: u64 = 128 << 20;
+/// Memory left for the live session after caching.
+const PREFETCH_HEADROOM: u64 = 2 << 30;
+/// Below this much it isn't worth the I/O.
+const PREFETCH_MIN: u64 = PREFETCH_TAIL + (256 << 20);
 
 /// MemAvailable from /proc/meminfo, in bytes.
 fn mem_available(meminfo: &str) -> Option<u64> {
@@ -163,9 +181,14 @@ fn mem_available(meminfo: &str) -> Option<u64> {
     })
 }
 
-/// Keep at least 2 GiB free for the live session after caching the image.
-fn worth_prefetching(size: u64, available: u64) -> bool {
-    size.saturating_add(2 << 30) <= available
+/// How many bytes of the image to cache, keeping 2 GiB free for the live
+/// session: all of it when it fits, else what fits, or none if that's tiny.
+fn prefetch_budget(size: u64, available: u64) -> Option<u64> {
+    if size == u64::MAX {
+        return None;
+    }
+    let budget = available.saturating_sub(PREFETCH_HEADROOM).min(size);
+    (budget >= PREFETCH_MIN.min(size)).then_some(budget)
 }
 
 /// The disk the live session was started from, so it isn't offered.
@@ -399,8 +422,14 @@ mod tests {
     fn prefetch_needs_room() {
         let m = "MemTotal:       16000000 kB\nMemAvailable:    8388608 kB\n";
         assert_eq!(mem_available(m), Some(8 << 30));
-        assert!(worth_prefetching(4 << 30, 8 << 30));
-        assert!(!worth_prefetching(4 << 30, 5 << 30));
-        assert!(!worth_prefetching(u64::MAX, 8 << 30));
+        // Fits: all of it.
+        assert_eq!(prefetch_budget(4 << 30, 8 << 30), Some(4 << 30));
+        // Doesn't fit: what leaves 2 GiB free.
+        assert_eq!(prefetch_budget(4 << 30, 5 << 30), Some(3 << 30));
+        // Too little to bother.
+        assert_eq!(prefetch_budget(4 << 30, (2 << 30) + (100 << 20)), None);
+        assert_eq!(prefetch_budget(u64::MAX, 8 << 30), None);
+        // A tiny image is read whole.
+        assert_eq!(prefetch_budget(100 << 20, 3 << 30), Some(100 << 20));
     }
 }
