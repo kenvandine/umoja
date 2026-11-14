@@ -11,6 +11,9 @@ screensaver, and writes
     <out>/README.md        a tour page with every shot and clip
     <out>/snippet.md       a short gallery to paste into the top-level README
     <out>/images/*.png     stills (grim)
+    <out>/images/layout.json  where windows, Ask Umoja's card and its settings
+                           popover were in each still (tools/guide/make-images
+                           crops the guide's pictures to them)
     <out>/videos/*.gif     short clips that GitHub plays inline (needs ffmpeg)
     <out>/videos/*.mp4     the same clips as H.264 (needs ffmpeg)
 
@@ -400,6 +403,8 @@ class Demo:
         self.spots = {}  # window id -> where its title bar sits when floating
         self.names = {}  # window id -> app name, for the assistant
         self.shots = {}  # scene -> [(file, caption)]
+        self.layout = {}  # shot name -> screen_layout(), written to images/layout.json
+        self.overlay_bounds = None  # whether the overlay answers TestAction "bounds"
         self.clips = []  # (raw webm, caption, scene, fast-forward spans)
         self.videos = {}  # scene -> [(gif or None, mp4/webm, caption)]
         self.scene = None
@@ -461,7 +466,41 @@ class Demo:
                 log(f"  ! grim failed: {r.stderr.strip()}")
                 return
             log(f"  shot {path.name}")
+            self.layout[name] = self.screen_layout()
         self.shots.setdefault(self.scene, []).append((path, caption))
+
+    def screen_layout(self):
+        """Where things were for a shot, in the shot's pixels, so
+        tools/guide/make-images can crop to them on any screen size: the
+        monitor's size, the windows on it, and Ask Umoja's card and settings
+        popover when they show (Overlay TestAction "bounds")."""
+        x0, y0, w, h = self.area
+        out = {"screen": [w, h], "windows": [], "regions": {}}
+        for wid, app, title, x, y, ww, wh, flags in self.windows():
+            if flags & 2 or not flags & 4:  # minimized, or on another workspace
+                continue
+            out["windows"].append({"app": app, "title": title, "demo": wid in self.opened,
+                                   "rect": [x - x0, y - y0, ww, wh]})
+        if self.overlay_bounds is None:
+            self.overlay_bounds = self.bus.has_method(OVERLAY, "TestAction")
+        if self.overlay_bounds:
+            flag = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "umoja-demo"
+            made = not flag.exists()
+            if made:
+                flag.touch()
+            try:
+                res = self.bus.call(OVERLAY, "TestAction", GLib.Variant("(s)", ("bounds",)), "(bs)", quiet=True)
+            finally:
+                if made:
+                    flag.unlink(missing_ok=True)
+            for line in (res[1] if res and res[0] else "").splitlines():
+                parts = line.split()
+                if len(parts) == 5:
+                    try:
+                        out["regions"][parts[0]] = [round(float(v)) for v in parts[1:]]
+                    except ValueError:
+                        pass
+        return out
 
     # ---- setup / teardown --------------------------------------------
 
@@ -2207,6 +2246,10 @@ class Demo:
         if not self.dry:
             (self.out / "snippet.md").write_text("\n".join(snippet))
             files = [self.rel(p) for v in self.shots.values() for p, _ in v]
+            if self.layout:
+                layout = self.img_dir / "layout.json"
+                layout.write_text(json.dumps(self.layout, indent=1, sort_keys=True) + "\n")
+                files.append(self.rel(layout))
             files += [self.rel(p) for v in self.videos.values() for g, m, _ in v for p in (g, m) if p]
             if self.trailer:
                 files.append(self.rel(self.trailer))

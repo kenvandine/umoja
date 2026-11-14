@@ -2151,6 +2151,20 @@ impl Overlay {
             a if a.starts_with("voice-search:") => {
                 (crate::voice_picker::test_search(&a[13..]), String::new())
             }
+            // Where the card and the settings popover are on screen, for
+            // tools/guide: "name x y w h" lines, logical pixels.
+            "bounds" => {
+                let mut lines = Vec::new();
+                if self.card.is_mapped()
+                    && let Some(r) = self.card.compute_bounds(&self.window)
+                {
+                    lines.push(format!("card {} {} {} {}", r.x(), r.y(), r.width(), r.height()));
+                }
+                if let Some((x, y, w, h)) = crate::model_picker::popover_bounds() {
+                    lines.push(format!("popover {x} {y} {w} {h}"));
+                }
+                (!lines.is_empty(), lines.join("\n"))
+            }
             _ => (false, format!("unknown action {action}")),
         }
     }

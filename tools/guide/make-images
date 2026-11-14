@@ -1,18 +1,25 @@
 #!/usr/bin/python3
 """Make the user guide's pictures from the tour's screenshots.
 
-The tour (tools/demo/umoja-demo) captures whole screens at 1920x1200. The
-guide wants the part that matters, big enough to read: this crops each
-shot to its subject, scales the full-screen ones down, and draws numbered
-callouts on the desktop map. Output goes to docs/guide/images.
+The tour (tools/demo/umoja-demo) captures whole screens. The guide wants the
+part that matters, big enough to read: this crops each shot to its subject,
+scales the full-screen ones down, and draws numbered callouts on the desktop
+map. Output goes to docs/guide/images.
 
     tools/guide/make-images [--shots docs/demo/images] [--out docs/guide/images]
 
-Run it again after a new tour capture; boxes are in 1920x1200 pixels.
-Needs python3-pil.
+Works for a capture from any screen size. The tour writes images/layout.json
+with where Ask Umoja's card, its settings popover and the windows were in
+each shot, and crops follow those. Without it (an older capture, or an
+overlay without the "bounds" test hook) the boxes below are used: they are
+in 1920x1200 pixels and move with the edge or centre of the screen the
+subject is pinned to, which is right for the panel, menus and Ask Umoja.
+
+Run it again after a new tour capture. Needs python3-pil.
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -22,29 +29,37 @@ except ImportError:
     sys.exit("make-images needs Pillow: sudo apt install python3-pil")
 
 ROOT = Path(__file__).resolve().parents[2]
+REF_W, REF_H = 1920, 1200
 
-# name in the guide: (tour shot, (left, top, right, bottom) or None for the
-# whole screen)
+# Ask Umoja's card is centred, 96 px from the top.
+ASK = ("center", "top", (590, 60, 1330, 620))
+ANSWER = ("center", "top", (480, 70, 1450, 480))
+
+# name in the guide: (tour shot, how to crop, or None for the whole screen).
+# How to crop: ("card", fallback), ("popover", fallback), ("window", app id,
+# fallback), or a fallback alone: (x anchor, y anchor, box in 1920x1200).
 CROPS = {
-    "ask-empty": ("ask-umoja", (590, 60, 1330, 620)),
-    "ask-switch": ("ask-switch", (590, 60, 1330, 620)),
-    "ask-sum": ("ask-sum", (590, 60, 1330, 620)),
-    "ask-settings": ("ask-settings", (590, 60, 1330, 620)),
-    "ask-question": ("ask-question", (590, 60, 1330, 620)),
-    "ai-btop-install": ("ai-btop-1", (480, 70, 1450, 480)),
-    "ai-btop-run": ("ai-btop-2", (480, 70, 1450, 480)),
-    "ai-install": ("ai-install", (480, 70, 1450, 480)),
-    "ai-updates": ("ai-updates-install", (480, 70, 1450, 480)),
-    "ai-summary": ("ai-summary", (540, 70, 1400, 500)),
-    "ai-settings": ("ai-settings", (620, 90, 1340, 390)),
-    "ai-troubleshoot": ("ai-troubleshoot", (40, 60, 1880, 420)),
-    "ai-reply": ("ai-reply", (740, 40, 1200, 440)),
-    "ai-opencode-default": ("ai-opencode-default", (1035, 590, 1480, 1062)),
-    "ai-opencode": ("ai-opencode", (1078, 242, 1894, 852)),
-    "quick-settings": ("quick-settings", (1520, 20, 1920, 340)),
-    "date-menu": ("calendar", (600, 20, 1360, 580)),
-    "notifications": ("notifications", (770, 30, 1150, 430)),
-    "screenshot-toolbar": ("screenshot-ui", (580, 1000, 1340, 1200)),
+    "ask-empty": ("ask-umoja", ("card", ASK)),
+    "ask-switch": ("ask-switch", ("card", ASK)),
+    "ask-sum": ("ask-sum", ("card", ASK)),
+    "ask-settings": ("ask-settings", ("card", ASK)),
+    "ask-question": ("ask-question", ("card", ASK)),
+    "ai-btop-install": ("ai-btop-1", ("card", ANSWER)),
+    "ai-btop-run": ("ai-btop-2", ("card", ANSWER)),
+    "ai-install": ("ai-install", ("card", ANSWER)),
+    "ai-updates": ("ai-updates-install", ("card", ANSWER)),
+    "ai-summary": ("ai-summary", ("card", ("center", "top", (540, 70, 1400, 500)))),
+    "ai-settings": ("ai-settings", ("card", ("center", "top", (620, 90, 1340, 390)))),
+    "ai-troubleshoot": ("ai-troubleshoot", ("card", ("center", "top", (40, 60, 1880, 420)))),
+    "ai-reply": ("ai-reply", ("center", "top", (740, 40, 1200, 440))),
+    # The settings popover opens beside or under the card's gear, wherever
+    # there is room; without layout.json take the card and its right side.
+    "ai-opencode-default": ("ai-opencode-default", ("popover", ("center", "top", (630, 60, 1500, 1160)))),
+    "ai-opencode": ("ai-opencode", ("window", "org.gnome.TextEditor", None)),
+    "quick-settings": ("quick-settings", ("right", "top", (1520, 20, 1920, 340))),
+    "date-menu": ("calendar", ("center", "top", (600, 20, 1360, 580))),
+    "notifications": ("notifications", ("center", "top", (700, 30, 1220, 430))),
+    "screenshot-toolbar": ("screenshot-ui", ("center", "bottom", (580, 1000, 1340, 1200))),
     # Whole screens, scaled down.
     "screenshot-ui": ("screenshot-ui", None),
     "overview": ("overview", None),
@@ -58,18 +73,24 @@ CROPS = {
     "screensaver": ("screensaver", None),
 }
 
+# Room left around a card, popover or window found in layout.json.
+MARGIN = {"card": 36, "popover": 28, "window": 16}
+
 FULL_WIDTH = 1600
 ORANGE = (233, 84, 32)
 
-# The desktop map: (number, dot position, label position) in 1920x1200.
+# The desktop map: (number, anchor, dot, label offset from the dot), the
+# dot in 1920x1200 pixels moved with its anchor. "dock-end" is the Show Apps
+# button, found in the shot; "window" is a demo window's title bar from
+# layout.json.
 CALLOUTS = [
-    (1, (48, 16), (150, 90)),  # workspace indicator / Activities
-    (2, (960, 16), (960, 90)),  # clock and date menu
-    (3, (1790, 16), (1700, 100)),  # tray icons
-    (4, (1880, 16), (1860, 100)),  # status menu (Quick Settings)
-    (5, (37, 560), (150, 560)),  # dock
-    (6, (37, 910), (150, 960)),  # show apps
-    (7, (700, 420), (760, 700)),  # a window
+    (1, ("left", "top"), (48, 16), (102, 74)),  # workspace indicator / Activities
+    (2, ("center", "top"), (960, 16), (0, 74)),  # clock and date menu
+    (3, ("right", "top"), (1790, 16), (-90, 84)),  # tray icons
+    (4, ("right", "top"), (1880, 16), (-20, 84)),  # status menu (Quick Settings)
+    (5, ("left", "center"), (37, 560), (113, 0)),  # dock
+    (6, "dock-end", (37, 910), (113, 50)),  # show apps
+    (7, "window", (700, 420), (60, 280)),  # a window
 ]
 
 
@@ -90,10 +111,97 @@ def badge(draw, xy, n, r=26):
     draw.text((x, y + 1), str(n), fill=(255, 255, 255), font=f, anchor="mm")
 
 
-def desktop_map(src, out):
+def shift(anchor, size, ref):
+    """How far a point pinned to `anchor` moves from a `ref` screen to `size`."""
+    return {"center": (size - ref) / 2, "right": size - ref, "bottom": size - ref}.get(anchor, 0)
+
+
+def anchored(spec, w, h):
+    """A fallback box, moved with its anchors to a w x h screen and kept on it."""
+    ax, ay, (l, t, r, b) = spec
+    dx, dy = shift(ax, w, REF_W), shift(ay, h, REF_H)
+    return clamp((l + dx, t + dy, r + dx, b + dy), w, h)
+
+
+def clamp(box, w, h):
+    l, t, r, b = box
+    return (max(0, round(l)), max(0, round(t)), min(w, round(r)), min(h, round(b)))
+
+
+def padded(rect, m, w, h):
+    x, y, rw, rh = rect
+    return clamp((x - m, y - m, x + rw + m, y + rh + m), w, h)
+
+
+def window_rect(layout, app):
+    """The demo window of `app` in a shot's layout (any window if none is the
+    demo's), or None."""
+    wins = [w for w in layout.get("windows", []) if not app or w["app"] == app]
+    wins.sort(key=lambda w: not w.get("demo"))
+    return wins[0]["rect"] if wins else None
+
+
+def crop_box(how, layout, w, h, scale):
+    """The box to crop for `how` from a w x h shot, or None for the whole shot."""
+    kind = how[0]
+    if kind in ("card", "popover", "window"):
+        fallback = how[-1]
+        rect = None
+        if kind == "window":
+            rect = window_rect(layout, how[1]) if layout else None
+        elif layout:
+            rect = layout.get("regions", {}).get(kind)
+        if rect:
+            return padded([v * scale for v in rect], MARGIN[kind] * scale, w, h)
+        if fallback is None:
+            return None
+        how = fallback
+    ax, ay, box = how
+    lw, lh = w / scale, h / scale
+    l, t, r, b = anchored((ax, ay, box), lw, lh)
+    return clamp((l * scale, t * scale, r * scale, b * scale), w, h)
+
+
+def show_apps_dot(im, scale):
+    """The Show Apps button: the lowest accent-coloured mark in the dock's
+    column (the dock draws it, and Ask Umoja's launcher, in the accent)."""
+    px = im.load()
+    x_end = min(im.width, round(80 * scale))
+    for y in range(im.height - 1, -1, -1):
+        if sum(is_accent(px[x, y]) for x in range(x_end)) >= 2:
+            # The button's dots: every accent pixel in the 28 px above.
+            pts = [(x, yy) for yy in range(max(0, y - round(28 * scale)), y + 1)
+                   for x in range(x_end) if is_accent(px[x, yy])]
+            return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+    return None
+
+
+def is_accent(p):
+    r, g, b = p[:3]
+    return r > 180 and 40 < g < 150 and b < 90 and r - g > 80
+
+
+def desktop_map(src, out, layout):
     im = Image.open(src).convert("RGB")
+    lw, lh = (layout or {}).get("screen") or (im.width, im.height)
+    scale = im.width / lw
     d = ImageDraw.Draw(im)
-    for n, dot, label in CALLOUTS:
+    for n, anchor, (x, y), (ox, oy) in CALLOUTS:
+        dot = None
+        if anchor == "dock-end":
+            dot = show_apps_dot(im, scale)
+            anchor = ("left", "center")
+        elif anchor == "window":
+            rect = window_rect(layout, None) if layout else None
+            if rect:
+                dot = ((rect[0] + rect[2] / 2) * scale, (rect[1] + 24) * scale)
+            anchor = ("center", "center")
+        if dot is None:
+            ax, ay = anchor
+            dot = ((x + shift(ax, lw, REF_W)) * scale, (y + shift(ay, lh, REF_H)) * scale)
+        label = (min(max(dot[0] + ox * scale, 40), im.width - 40), min(max(dot[1] + oy * scale, 40), im.height - 40))
+        dot = tuple(round(v) for v in dot)
+        label = tuple(round(v) for v in label)
         d.line((dot, label), fill=(255, 255, 255), width=4)
         d.ellipse((dot[0] - 7, dot[1] - 7, dot[0] + 7, dot[1] + 7), fill=(255, 255, 255))
         badge(d, label, n)
@@ -107,20 +215,34 @@ def main():
     p.add_argument("--out", type=Path, default=ROOT / "docs/guide/images")
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
-    for name, (shot, box) in CROPS.items():
+    layouts = {}
+    lj = a.shots / "layout.json"
+    if lj.exists():
+        layouts = json.loads(lj.read_text())
+    else:
+        print(f"note: no {lj}, so crops use the fixed boxes (an older tour capture)", file=sys.stderr)
+    for name, (shot, how) in CROPS.items():
         src = a.shots / f"{shot}.png"
         if not src.exists():
             print(f"skip {name}: no {src}", file=sys.stderr)
             continue
         im = Image.open(src).convert("RGB")
+        layout = layouts.get(shot)
+        lw = (layout or {}).get("screen", [im.width])[0]
+        box = crop_box(how, layout, im.width, im.height, im.width / lw) if how else None
         if box:
             im.crop(box).save(a.out / f"{name}.png", optimize=True)
         else:
+            if how:
+                print(f"note: {name}: nothing to crop to in {shot}, using the whole screen", file=sys.stderr)
+                # The guide links a .png for crops; keep the name it expects.
+                im.save(a.out / f"{name}.png", optimize=True)
+                continue
             im = im.resize((FULL_WIDTH, im.height * FULL_WIDTH // im.width), Image.LANCZOS)
             im.save(a.out / f"{name}.jpg", quality=86, optimize=True)
     desktop = a.shots / "desktop.png"
     if desktop.exists():
-        desktop_map(desktop, a.out / "desktop-map.jpg")
+        desktop_map(desktop, a.out / "desktop-map.jpg", layouts.get("desktop"))
     print(f"wrote {a.out}")
 
 

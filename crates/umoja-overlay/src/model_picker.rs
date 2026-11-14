@@ -337,6 +337,28 @@ pub fn show_page(page: &'static str) -> bool {
 }
 
 /// Close the settings popover.
+/// Where the settings popover's content is on screen, as (x, y, width, height)
+/// in the layer surface's (= the monitor's) logical pixels, while it is
+/// open (tools/guide crops the tour's shots to it).
+pub fn popover_bounds() -> Option<(f32, f32, f32, f32)> {
+    let b = BUTTON.with(|b| b.borrow().as_ref().and_then(|w| w.upgrade()))?;
+    let p = b.popover()?;
+    if !p.is_mapped() {
+        return None;
+    }
+    let popup = p.surface()?.downcast::<gtk::gdk::Popup>().ok()?;
+    let (sx, sy) = p.surface_transform();
+    let child = p.child()?;
+    let r = child.compute_bounds(&p)?;
+    // The popover's content, without its padding (callers add a margin).
+    Some((
+        popup.position_x() as f32 + sx as f32 + r.x(),
+        popup.position_y() as f32 + sy as f32 + r.y(),
+        r.width(),
+        r.height(),
+    ))
+}
+
 pub fn close() {
     if let Some(b) = BUTTON.with(|b| b.borrow().as_ref().and_then(|w| w.upgrade())) {
         b.popdown();
