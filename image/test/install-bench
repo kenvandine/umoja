@@ -79,7 +79,7 @@ run_one() { # ram wait
 
 # "[+12345ms] step" lines umoja-install mirrors to the serial console.
 ms_at() { # log pattern -> ms
-    grep -a "umoja-install: \[+[0-9]*ms\] *$2" "$1" | head -1 | sed -E 's/.*\[\+([0-9]+)ms\].*/\1/'
+    grep -a "umoja-install: \[+[0-9]*ms\] *$2" "$1" | head -1 | sed -E 's/.*\[\+([0-9]+)ms\].*/\1/' || true
 }
 sec() { [ -n "$1" ] && awk -v a="$1" -v b="${2:-0}" 'BEGIN {printf "%.1f", (a - b) / 1000}' || echo "?"; }
 
@@ -106,7 +106,7 @@ done
             if [ -n "$copy0" ] && [ -n "$setup" ] && [ -n "${SQUASH_SIZE:-}" ]; then
                 rate=$(awk -v s="$SQUASH_SIZE" -v ms=$((setup - copy0)) 'BEGIN {printf "%.0f", s / 1e6 / (ms / 1000)}')
             fi
-            cached=$(grep -a 'umoja-install: squashfs .* cached' "$log" | head -1 | sed 's/.*umoja-install: //')
+            cached=$(grep -a 'umoja-install: squashfs .* cached' "$log" | head -1 | sed 's/.*umoja-install: //' || true)
             printf '%-6s %-5s %-8s %-6s %-6s %-6s %-6s %-8s %s\n' "$ram" "$wait" \
                 "$(sec "$parts")" "$(sec "$luks" "$parts")" "$(sec "$setup" "$copy0")" \
                 "$(sec "$fin" "$setup")" "$(sec "$fin")" "$rate" "${cached:-?}"
