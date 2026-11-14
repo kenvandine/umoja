@@ -101,8 +101,6 @@ pub fn to_black(app: &gtk::Application, then: fn()) {
 /// Log Out from the panel: fade the screen to black, then end the session.
 pub fn log_out() {
     use gtk::gio;
-    // During the fade, so it is gone before the compositor (login.rs).
-    crate::login::stop_portals();
     match gio::Application::default().and_downcast::<gtk::Application>() {
         Some(app) => to_black(&app, crate::login::terminate_session),
         None => crate::login::terminate_session(),

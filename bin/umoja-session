@@ -131,11 +131,6 @@ mir_pid=""
 stop_session() {
     [ $stopping = yes ] && return
     stopping=yes
-    # The portal frontend first: it outlives the session and re-activated
-    # its GTK backend the moment that lost the display, leaving a D-Bus
-    # activation pending for 120 s that the next login waited on (see
-    # stop_portals in crates/umoja-panel/src/login.rs).
-    systemctl --user stop --no-block xdg-desktop-portal.service
     systemctl --user stop --no-block umoja-session.target
     [ -n "$mir_pid" ] && kill -TERM "$mir_pid" 2>/dev/null
 }

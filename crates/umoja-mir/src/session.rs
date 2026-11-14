@@ -69,17 +69,17 @@ pub fn started(wayland_display: &str) {
 /// xdg-desktop-portal-gtk may also have hit its start limit crash-looping
 /// on the missing X display, so its failed state is cleared too.
 ///
-/// Then start xdg-desktop-portal-gtk ourselves. At a logout the portal
+/// Then start xdg-desktop-portal and its GTK backend ourselves. At a
+/// logout something always asks for a portal as the session dies: the
 /// frontend (which outlives the session) re-activates the GTK backend the
-/// moment it loses the display; the backend exits ("cannot open display")
-/// but dbus-daemon keeps that activation pending for 120 s, and the next
-/// login's portal and every GTK client's portal calls wait behind it (two
-/// minutes to a desktop, and default icons in the shell, on the XPS 13).
-/// The panel's Log Out stops the frontend first, but logind, the greeter
-/// or a crash can end the session without it. Once the backend owns its
-/// name again the stale activation completes and everything waiting on it
-/// goes on; on a clean login this is only the start the frontend would
-/// have asked for anyway.
+/// moment that loses the display, and a dying shell client re-activates the
+/// frontend if it was stopped first. The service exits or its start job is
+/// cancelled, but the session's dbus-daemon keeps the activation pending
+/// for 120 s, and the next login's portal calls all wait behind it (one to
+/// two minutes to a desktop, and default icons in the shell, on the XPS
+/// 13). Once the service owns its name again the stale activation completes
+/// and everything waiting on it goes on, however the last session ended; on
+/// a clean login these are only the starts D-Bus would have made anyway.
 fn restart_stale_portals(ready_at: u64) {
     run("systemctl", &["--user", "reset-failed", "xdg-desktop-portal-gtk.service"]);
     for unit in ["xdg-desktop-portal-gnome.service", "xdg-desktop-portal-gtk.service"] {
@@ -89,7 +89,10 @@ fn restart_stale_portals(ready_at: u64) {
             run("systemctl", &["--user", "try-restart", "--no-block", unit]);
         }
     }
-    run("systemctl", &["--user", "start", "--no-block", "xdg-desktop-portal-gtk.service"]);
+    run(
+        "systemctl",
+        &["--user", "start", "--no-block", "xdg-desktop-portal.service", "xdg-desktop-portal-gtk.service"],
+    );
 }
 
 /// When `unit` last became active (CLOCK_MONOTONIC, µs), or 0 when it isn't
