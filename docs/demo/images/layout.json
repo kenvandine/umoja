@@ -1,0 +1,1443 @@
+{
+ "ai-btop-1": {
+  "regions": {
+   "card": [
+    348,
+    96,
+    840,
+    406
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ai-btop-2": {
+  "regions": {
+   "card": [
+    348,
+    96,
+    840,
+    438
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ai-btop-running": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Ptyxis",
+    "demo": false,
+    "rect": [
+     478,
+     203,
+     652,
+     489
+    ],
+    "title": "btop"
+   }
+  ]
+ },
+ "ai-captions": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-captions-summary": {
+  "regions": {
+   "card": [
+    400,
+    96,
+    735,
+    357
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-install": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    406
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-opencode": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.Ptyxis",
+    "demo": false,
+    "rect": [
+     478,
+     203,
+     652,
+     489
+    ],
+    "title": "OC | Rust GTK 4 hello-gtk project"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-opencode-agent": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Ptyxis",
+    "demo": false,
+    "rect": [
+     478,
+     203,
+     652,
+     489
+    ],
+    "title": "OC | Rust GTK 4 hello-gtk project"
+   }
+  ]
+ },
+ "ai-opencode-default": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    480
+   ],
+   "popover": [
+    859,
+    82,
+    413,
+    444
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ai-reply": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-rewrite": {
+  "regions": {
+   "card": [
+    53,
+    96,
+    1430,
+    273
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.umoja.FeatureTestPad",
+    "demo": false,
+    "rect": [
+     388,
+     174,
+     760,
+     420
+    ],
+    "title": "Note to Priya"
+   }
+  ]
+ },
+ "ai-rewrite-replaced": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.umoja.FeatureTestPad",
+    "demo": false,
+    "rect": [
+     388,
+     174,
+     760,
+     420
+    ],
+    "title": "Note to Priya"
+   }
+  ]
+ },
+ "ai-rewrite-rows": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    496
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.umoja.FeatureTestPad",
+    "demo": false,
+    "rect": [
+     388,
+     174,
+     760,
+     420
+    ],
+    "title": "Note to Priya"
+   }
+  ]
+ },
+ "ai-settings": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    277
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-settings-undo": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    277
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-setups": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     72,
+     32,
+     732,
+     832
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     804,
+     32,
+     732,
+     832
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-setups-row": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    344
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     443,
+     243,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     123,
+     372,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-setups-saved": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    245
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     72,
+     32,
+     732,
+     832
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     804,
+     32,
+     732,
+     832
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-summary": {
+  "regions": {
+   "card": [
+    380,
+    96,
+    776,
+    337
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-tiling": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     72,
+     32,
+     732,
+     832
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     804,
+     32,
+     732,
+     832
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-troubleshoot": {
+  "regions": {
+   "card": [
+    309,
+    96,
+    917,
+    249
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-updates": {
+  "regions": {
+   "card": [
+    193,
+    96,
+    1149,
+    245
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ai-updates-install": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    374
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "app-grid": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "ask-question": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    286
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ask-settings": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    499
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ask-sum": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    286
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ask-switch": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    402
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "ask-umoja": {
+  "regions": {
+   "card": [
+    448,
+    96,
+    640,
+    480
+   ]
+  },
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "calendar": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "desktop": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "notifications": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "overview": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "quick-settings": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   }
+  ]
+ },
+ "screensaver": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   }
+  ]
+ },
+ "screenshot-ui": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   }
+  ]
+ },
+ "shortcuts": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     536,
+     174,
+     970,
+     520
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     70,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   }
+  ]
+ },
+ "tiling-halves": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     72,
+     32,
+     732,
+     832
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     804,
+     32,
+     732,
+     832
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "tiling-quarter": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     72,
+     32,
+     732,
+     832
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     804,
+     32,
+     732,
+     416
+    ],
+    "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
+   }
+  ]
+ },
+ "workspace-2": {
+  "regions": {},
+  "screen": [
+   1536,
+   864
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Calculator",
+    "demo": true,
+    "rect": [
+     588,
+     139,
+     360,
+     616
+    ],
+    "title": "Calculator"
+   }
+  ]
+ }
+}
