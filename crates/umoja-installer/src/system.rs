@@ -3,6 +3,7 @@
 
 use serde::Deserialize;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Smallest disk worth offering: the image's root is 16 GiB, plus /boot
 /// and the EFI partition and some room to live in.
@@ -132,15 +133,24 @@ const SQUASHFS: [&str; 2] = [
 /// Read the system image into the page cache in the background while the
 /// user answers the questions, so the copy reads RAM instead of a slow USB
 /// stick. Only a read: if memory gets tight the kernel just drops it, and
-/// the copy reads the stick as before. Idle I/O priority, so the live
-/// session stays responsive.
+/// the copy reads the stick as before.
 ///
 /// On a small laptop (the XPS 13 has 6.8 GB) the whole image doesn't fit,
 /// so as much of it as fits is read: the tail first (squashfs keeps its
 /// inode and directory tables there, and unsquashfs reads those before any
 /// file), then the start, which unsquashfs copies first.
+///
+/// The live session itself runs from the same stick, so the reads are
+/// paced: one chunk, then a pause as long as the chunk took. A plain
+/// `head`/`tail` read at idle I/O priority starved it on the XPS 13 (the
+/// idle class only exists with BFQ): Install Umoja needed lsblk from the
+/// stick and the screen showed nothing for minutes. [`stop_prefetch`]
+/// ends it when the install starts, as the copy then wants the stick.
 pub fn prefetch_squashfs() {
-    let Some(path) = SQUASHFS.into_iter().find(|p| std::path::Path::new(p).is_file()) else {
+    let Some(path) = SQUASHFS
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+    else {
         return;
     };
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
@@ -149,21 +159,94 @@ pub fn prefetch_squashfs() {
         .and_then(|m| mem_available(&m))
         .unwrap_or(0);
     let Some(budget) = prefetch_budget(size, available) else {
-        tracing::info!(size, available, "not prefetching the system image: not enough memory");
+        tracing::info!(
+            size,
+            available,
+            "not prefetching the system image: not enough memory"
+        );
         return;
     };
-    tracing::info!(path, size, available, budget, "prefetching the system image");
-    // Sizes in MiB for head and tail (a small image is just read whole).
-    let head = (budget - PREFETCH_TAIL.min(size)) >> 20;
-    let script = format!(
-        "tail -c {tail}M \"$1\" >/dev/null; head -c {head}M \"$1\" >/dev/null",
-        tail = PREFETCH_TAIL >> 20,
+    tracing::info!(
+        path,
+        size,
+        available,
+        budget,
+        "prefetching the system image"
     );
-    let _ = Command::new("ionice")
-        .args(["-c3", "nice", "-n19", "sh", "-c", &script, "prefetch", path])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    PREFETCH_STOP.store(false, Ordering::Relaxed);
+    let tail = PREFETCH_TAIL.min(size);
+    let ranges = [
+        (size - tail, tail),
+        (0, budget.saturating_sub(tail).min(size - tail)),
+    ];
+    let _ = std::thread::Builder::new()
+        .name("prefetch".into())
+        .spawn(move || {
+            // Idle I/O class (honoured by BFQ) and lowest CPU priority, as
+            // well as the pacing.
+            // SAFETY: plain syscalls on the calling thread.
+            unsafe {
+                const IOPRIO_WHO_PROCESS: libc::c_long = 1;
+                const IOPRIO_CLASS_IDLE: libc::c_long = 3;
+                libc::syscall(
+                    libc::SYS_ioprio_set,
+                    IOPRIO_WHO_PROCESS,
+                    0,
+                    IOPRIO_CLASS_IDLE << 13,
+                );
+                libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+            }
+            let started = std::time::Instant::now();
+            let read = prefetch_ranges(path, &ranges);
+            tracing::info!(
+                read,
+                secs = started.elapsed().as_secs(),
+                stopped = PREFETCH_STOP.load(Ordering::Relaxed),
+                "prefetch done"
+            );
+        });
+}
+
+/// Stop the background prefetch (the install is starting).
+pub fn stop_prefetch() {
+    PREFETCH_STOP.store(true, Ordering::Relaxed);
+}
+
+static PREFETCH_STOP: AtomicBool = AtomicBool::new(false);
+/// One paced read: small enough that whatever the live session needs from
+/// the stick waits at most this long.
+const PREFETCH_CHUNK: usize = 2 << 20;
+
+/// Read `(offset, len)` ranges of `path` chunk by chunk, resting after each
+/// chunk as long as it took. Returns the bytes read.
+fn prefetch_ranges(path: &str, ranges: &[(u64, u64)]) -> u64 {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return 0;
+    };
+    let mut buf = vec![0u8; PREFETCH_CHUNK];
+    let mut total = 0;
+    for &(offset, len) in ranges {
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            continue;
+        }
+        let mut left = len;
+        while left > 0 {
+            if PREFETCH_STOP.load(Ordering::Relaxed) {
+                return total;
+            }
+            let want = left.min(PREFETCH_CHUNK as u64) as usize;
+            let t = std::time::Instant::now();
+            let n = match file.read(&mut buf[..want]) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            total += n as u64;
+            left -= n as u64;
+            std::thread::sleep(t.elapsed());
+        }
+    }
+    total
 }
 
 /// The squashfs tail read first: its metadata tables (tens of MiB).
@@ -176,7 +259,11 @@ const PREFETCH_MIN: u64 = PREFETCH_TAIL + (256 << 20);
 /// MemAvailable from /proc/meminfo, in bytes.
 fn mem_available(meminfo: &str) -> Option<u64> {
     meminfo.lines().find_map(|l| {
-        let kb = l.strip_prefix("MemAvailable:")?.trim().strip_suffix("kB")?.trim();
+        let kb = l
+            .strip_prefix("MemAvailable:")?
+            .trim()
+            .strip_suffix("kB")?
+            .trim();
         kb.parse::<u64>().ok().map(|k| k * 1024)
     })
 }
@@ -252,7 +339,11 @@ pub fn timezone_label(zone: &str) -> String {
 pub fn current_timezone() -> String {
     output("timedatectl", &["show", "-p", "Timezone", "--value"])
         .filter(|s| !s.is_empty())
-        .or_else(|| std::fs::read_to_string("/etc/timezone").ok().map(|s| s.trim().to_string()))
+        .or_else(|| {
+            std::fs::read_to_string("/etc/timezone")
+                .ok()
+                .map(|s| s.trim().to_string())
+        })
         .unwrap_or_else(|| "UTC".into())
 }
 
@@ -294,9 +385,31 @@ pub fn username_from(full_name: &str) -> String {
 
 /// Names useradd and the system already use.
 const RESERVED: &[&str] = &[
-    "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp",
-    "proxy", "www-data", "backup", "list", "irc", "nobody", "systemd-network", "messagebus",
-    "syslog", "lightdm", "admin", "sudo", "adm", "users",
+    "root",
+    "daemon",
+    "bin",
+    "sys",
+    "sync",
+    "games",
+    "man",
+    "lp",
+    "mail",
+    "news",
+    "uucp",
+    "proxy",
+    "www-data",
+    "backup",
+    "list",
+    "irc",
+    "nobody",
+    "systemd-network",
+    "messagebus",
+    "syslog",
+    "lightdm",
+    "admin",
+    "sudo",
+    "adm",
+    "users",
 ];
 
 pub fn check_username(name: &str) -> Result<(), &'static str> {
@@ -382,7 +495,10 @@ mod tests {
         let paths: Vec<_> = d.iter().map(|d| d.path.as_str()).collect();
         assert_eq!(paths, ["/dev/sda", "/dev/nvme0n1"]);
         assert_eq!(d[0].model, "QEMU HARDDISK");
-        assert_eq!(d[1].description(), "Samsung SSD 990 PRO 1TB · 1.0 TB · NVMe");
+        assert_eq!(
+            d[1].description(),
+            "Samsung SSD 990 PRO 1TB · 1.0 TB · NVMe"
+        );
     }
 
     #[test]
@@ -418,24 +534,52 @@ mod tests {
 
     #[test]
     fn timezone_labels() {
-        assert_eq!(timezone_label("America/New_York"), "New York (America/New_York)");
-        assert_eq!(timezone_label("America/Argentina/Buenos_Aires"), "Buenos Aires (America/Argentina/Buenos_Aires)");
+        assert_eq!(
+            timezone_label("America/New_York"),
+            "New York (America/New_York)"
+        );
+        assert_eq!(
+            timezone_label("America/Argentina/Buenos_Aires"),
+            "Buenos Aires (America/Argentina/Buenos_Aires)"
+        );
         assert_eq!(timezone_label("UTC"), "UTC");
     }
 
     #[test]
     fn lines() {
-        assert_eq!(parse_line("PROGRESS 42 Copying Umoja"), Event::Progress(42, "Copying Umoja".into()));
-        assert_eq!(parse_line("PROGRESS 140 x"), Event::Progress(100, "x".into()));
+        assert_eq!(
+            parse_line("PROGRESS 42 Copying Umoja"),
+            Event::Progress(42, "Copying Umoja".into())
+        );
+        assert_eq!(
+            parse_line("PROGRESS 140 x"),
+            Event::Progress(100, "x".into())
+        );
         assert_eq!(parse_line("ERROR no disk"), Event::Error("no disk".into()));
         assert_eq!(parse_line("mke2fs 1.47"), Event::Log);
     }
 
     #[test]
     fn autoinstall_wait_from_cmdline() {
-        assert_eq!(parse_autoinstall_wait("quiet umoja.autoinstall umoja.autoinstall-wait=90 ---"), Some(90));
+        assert_eq!(
+            parse_autoinstall_wait("quiet umoja.autoinstall umoja.autoinstall-wait=90 ---"),
+            Some(90)
+        );
         assert_eq!(parse_autoinstall_wait("quiet umoja.autoinstall"), None);
         assert_eq!(parse_autoinstall_wait("umoja.autoinstall-wait=x"), None);
+    }
+
+    #[test]
+    fn prefetch_reads_the_ranges() {
+        let path = std::env::temp_dir().join(format!("umoja-prefetch-{}", std::process::id()));
+        std::fs::write(&path, vec![7u8; (5 << 20) + 3]).unwrap();
+        let p = path.to_str().unwrap();
+        // The tail past the end is cut short; the head is read in chunks.
+        assert_eq!(
+            prefetch_ranges(p, &[((5 << 20) - 1, 100), (0, 3 << 20)]),
+            4 + (3 << 20)
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

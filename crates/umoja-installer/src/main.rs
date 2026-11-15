@@ -620,6 +620,8 @@ fn run(ui: &Rc<Ui>) {
     if ui.running.replace(true) {
         return;
     }
+    // The copy wants the stick to itself now.
+    system::stop_prefetch();
     ui.stack.set_visible_child_name("progress");
     ui.progress_bar.set_fraction(0.0);
     ui.started.set(Some(Instant::now()));
