@@ -86,10 +86,13 @@ In <https://github.com/kenvandine/umoja/settings/secrets/actions>:
 
 1. In the dashboard open **Workers & Pages** once; if asked, pick your
    `workers.dev` subdomain (e.g. `kenvandine.workers.dev`).
-2. Run the **Downloads Worker** workflow (Actions tab, Run workflow, main).
+2. Enable **Analytics Engine** (free) at
+   <https://dash.cloudflare.com/?to=/:account/workers/analytics-engine>;
+   without it the deploy fails with code 10089.
+3. Run the **Downloads Worker** workflow (Actions tab, Run workflow, main).
    It deploys to `https://umoja-downloads.<subdomain>.workers.dev`; the log
    prints the URL.
-3. Add the repository **variable** (Variables tab, same settings page)
+4. Add the repository **variable** (Variables tab, same settings page)
    `DOWNLOAD_URL` = that URL, so release notes link to it.
 
 The workflow redeploys by itself whenever `infra/downloads/` changes on main.
