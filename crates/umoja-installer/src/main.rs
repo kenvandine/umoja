@@ -215,6 +215,24 @@ fn build(app: &adw::Application, preview: bool) {
     } else if !preview {
         system::prefetch_squashfs();
     }
+    // Pause the image prefetch while the user is using the installer, so
+    // what GTK loads from the stick doesn't wait behind it.
+    let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    motion.connect_motion(|_, _, _| system::note_activity());
+    window.add_controller(motion);
+    let click = gtk::GestureClick::new();
+    click.set_button(0);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    click.connect_pressed(|_, _, _, _| system::note_activity());
+    window.add_controller(click);
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(|_, _, _, _| {
+        system::note_activity();
+        glib::Propagation::Proceed
+    });
+    window.add_controller(keys);
     window.fullscreen();
     window.present();
 }
