@@ -37,4 +37,5 @@ dch --append "Let miral::window_for() resolve an xdg_toplevel to its window, for
 dch --append "Let the server pick which surfaces its own screen shooter renders (mir_scene_filter_hook), for Umoja's live window thumbnails in Alt+Tab, the overview and the dock."
 dch --append "Cross-GPU copy: map linear client buffers instead of reading them back through GL (MIR_DMABUF_LINEAR_ONLY=1 offers clients only linear buffers), and release spare copy buffers."
 dch --append "Read connector state from the kernel without forcing a probe, so empty DisplayPort ports do not add seconds of black screen to every start."
+dch --append "Answer frame callbacks whose buffer the compositor has not used after half a second, so a window that starts fully covered (the installer under the welcome screen) does not stop drawing until a VT switch."
 echo "$PWD"

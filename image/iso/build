@@ -183,6 +183,21 @@ for unit in umoja-panel.service umoja-tray-ready.service umoja-dock.service \
         umoja-welcome.service umoja-ibus.service umoja-automations.service; do
     ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
 done
+# Nor the rest of Ubuntu's session extras: update and disk-health
+# notifiers, snapd's desktop helper, media-key and SSH agents, file
+# indexing, the geoclue demo agent. Accessibility (AT-SPI, Orca) and
+# PipeWire (Orca speaks through it) stay.
+for unit in snap.snapd-desktop-integration.snapd-desktop-integration.service \
+        mpris-proxy.service ssh-agent.service ssh-agent.socket \
+        gcr-ssh-agent.service gcr-ssh-agent.socket; do
+    ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
+done
+mkdir -p "$LIVE/etc/xdg/autostart"
+for entry in update-notifier org.gnome.SettingsDaemon.DiskUtilityNotify \
+        snap-userd-autostart geoclue-demo-agent localsearch-3; do
+    printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\nHidden=true\n' "$entry" \
+        > "$LIVE/etc/xdg/autostart/$entry.desktop"
+done
 
 chroot "$LIVE" update-initramfs -c -k "$KVER"
 cp "$LIVE/boot/initrd.img-$KVER" "$ISO/casper/initrd"

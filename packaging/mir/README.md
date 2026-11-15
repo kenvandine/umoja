@@ -59,6 +59,16 @@ Umoja PPA:
   reports as disconnected is no longer probed; connected ones and other
   drivers still are (umoja26: nvidia-drm needs the probe to notice an
   unplug). `MIR_DRM_ALWAYS_PROBE=1` turns it off.
+- `patches/3022_unconsumed-frame-callbacks.patch` (umoja27): Mir answers
+  `wl_surface.frame` only when a compositor uses the committed buffer, and
+  skips the buffers of fully covered surfaces. The live session's installer
+  starts under the full-screen welcome screen; its frame callback waited,
+  GTK stopped drawing, and uncovering it didn't bring a composite that used
+  the buffer, so Install Umoja seemed dead (clicks worked, the screen never
+  changed) until a VT switch redrew everything. Callbacks still waiting
+  0.5–1 s after their commit are now answered anyway, so a covered client
+  redraws at about 1 Hz instead of stalling; a visible one never waits that
+  long.
 - `patches/3020_cross-gpu-map-linear.patch`: the 3009 copy cost 5.5 ms of
   `glReadPixels` per 6 MB buffer on the compositing thread (measured on
   p16g3: 450 MB/s, 4 s of every 10 s, with two windows redrawing on the
