@@ -114,6 +114,27 @@ Analytics Engine keeps data for three months. The Worker's page in the
 dashboard (Workers & Pages › umoja-downloads › Metrics) also shows request
 counts and bandwidth.
 
+## Sending events to your own analytics (optional)
+
+The Worker can also send each landing-page view and ISO download, server
+side, to a Plausible, Umami or Matomo server (e.g. one on PikaPods). No
+cookies or scripts reach the visitor. In the dashboard open Workers & Pages
+› umoja-downloads › Settings › Variables and secrets and add:
+
+| Variable | Value |
+|---|---|
+| `ANALYTICS` | `plausible`, `umami` or `matomo` |
+| `ANALYTICS_URL` | the server, e.g. `https://my-stats.pikapod.net` |
+| `ANALYTICS_SITE` | Plausible: the site's domain as added there; Umami: the website ID; Matomo: the site ID |
+| `ANALYTICS_TOKEN` | Matomo only, optional, as a *secret*: a `token_auth`, so Matomo sees the visitor's IP (country) instead of Cloudflare's |
+
+Downloads arrive as a custom event named `Download` (Plausible: add a goal
+called `Download` to see it; props `tag`, `file`, `client`), a Umami event
+with the same data, or a Matomo download. Deploys keep these variables
+(`keep_vars`). Plausible and Umami drop requests from bot-like user agents
+such as curl and wget, so their counts are browser downloads only; the
+Analytics Engine count above has all of them.
+
 ## Local testing
 
 ```sh

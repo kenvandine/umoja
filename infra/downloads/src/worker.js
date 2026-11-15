@@ -18,7 +18,10 @@ export default {
     }
     const path = decodeURIComponent(url.pathname);
 
-    if (path === "/" || path === "/index.html") return index(request, env);
+    if (path === "/" || path === "/index.html") {
+      if (request.method === "GET") forward(request, env, ctx, "pageview", "/");
+      return index(request, env);
+    }
     if (path === "/latest" || path === "/latest.iso") {
       const latest = await manifest(env);
       if (!latest) return new Response("No release published yet\n", { status: 404 });
@@ -73,10 +76,10 @@ async function serve(request, env, ctx, key, cacheControl) {
     status = 206;
     // Download managers fetch an ISO in several ranges; count the one that
     // starts at byte 0 only.
-    if (offset === 0) count(request, env, key, obj.size);
+    if (offset === 0) count(request, env, ctx, key, obj.size);
   } else {
     headers.set("Content-Length", String(obj.size));
-    count(request, env, key, obj.size);
+    count(request, env, ctx, key, obj.size);
   }
   return new Response(obj.body, { status, headers });
 }
@@ -95,7 +98,7 @@ function objectHeaders(obj, cacheControl) {
 //   index1 = tag, blob1 = file, blob2 = tag, blob3 = country,
 //   blob4 = client ("browser", "curl", "wget", "other"), double1 = 1,
 //   double2 = ISO size in bytes.
-function count(request, env, key, size) {
+function count(request, env, ctx, key, size) {
   if (!key.endsWith(".iso") || !env.DOWNLOADS) return;
   const [, tag = "", file = ""] = key.split("/");
   const ua = (request.headers.get("User-Agent") || "").toLowerCase();
@@ -110,6 +113,54 @@ function count(request, env, key, size) {
   } catch (e) {
     console.error("writeDataPoint failed", e);
   }
+  forward(request, env, ctx, "Download", "/" + key, { tag, file, client });
+}
+
+// Optionally send the same events to a web analytics server, server side
+// (no cookies, no client script). Set as Worker variables (dashboard or
+// wrangler.toml [vars]):
+//   ANALYTICS       plausible | umami | matomo
+//   ANALYTICS_URL   the server's base URL, e.g. https://stats.example.org
+//   ANALYTICS_SITE  Plausible: site domain; Umami: website id; Matomo: idsite
+//   ANALYTICS_TOKEN (secret, Matomo only, optional) token_auth so Matomo
+//                   takes the visitor's IP instead of Cloudflare's
+function forward(request, env, ctx, name, path, props = {}) {
+  const kind = (env.ANALYTICS || "").toLowerCase();
+  if (!kind || !env.ANALYTICS_URL || !env.ANALYTICS_SITE) return;
+  const base = env.ANALYTICS_URL.replace(/\/+$/, "");
+  const page = new URL(path, request.url).toString();
+  const ip = request.headers.get("CF-Connecting-IP") || "";
+  const ua = request.headers.get("User-Agent") || "unknown";
+  const referrer = request.headers.get("Referer") || "";
+  const headers = { "Content-Type": "application/json", "User-Agent": ua, "X-Forwarded-For": ip };
+  let req;
+  if (kind === "plausible") {
+    req = fetch(`${base}/api/event`, {
+      method: "POST", headers,
+      body: JSON.stringify({ name, url: page, domain: env.ANALYTICS_SITE, referrer, props }),
+    });
+  } else if (kind === "umami") {
+    const u = new URL(page);
+    req = fetch(`${base}/api/send`, {
+      method: "POST", headers,
+      body: JSON.stringify({ type: "event", payload: {
+        website: env.ANALYTICS_SITE, hostname: u.hostname, url: u.pathname, referrer,
+        language: (request.headers.get("Accept-Language") || "").split(",")[0],
+        ...(name === "pageview" ? {} : { name, data: props }),
+      } }),
+    });
+  } else if (kind === "matomo") {
+    const q = new URLSearchParams({ idsite: env.ANALYTICS_SITE, rec: "1", apiv: "1", url: page,
+      urlref: referrer, ua, rand: String(Math.random()).slice(2) });
+    if (name === "pageview") q.set("action_name", "Umoja downloads");
+    else q.set("download", page);
+    if (env.ANALYTICS_TOKEN) { q.set("token_auth", env.ANALYTICS_TOKEN); q.set("cip", ip); }
+    req = fetch(`${base}/matomo.php?${q}`, { headers: { "User-Agent": ua } });
+  } else {
+    return;
+  }
+  ctx.waitUntil(req.then((r) => { if (!r.ok) console.error(`${kind} answered ${r.status}`); })
+    .catch((e) => console.error(`${kind} failed`, e)));
 }
 
 async function index(request, env) {

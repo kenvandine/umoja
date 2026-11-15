@@ -4,6 +4,9 @@ name = "umoja-downloads"
 main = "src/worker.js"
 compatibility_date = "2025-09-01"
 workers_dev = true
+# Keep variables set in the dashboard (ANALYTICS, ANALYTICS_URL,
+# ANALYTICS_SITE; see forward() in src/worker.js) across deploys.
+keep_vars = true
 
 # To serve from your own domain (one on this Cloudflare account), uncomment
 # and set DOWNLOAD_URL (a repository variable) to https://<that domain>.
