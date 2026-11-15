@@ -93,6 +93,11 @@ endif
 	install -D -m 0644 data/myna/lightdm-myna-setup.conf \
 		$(DESKTOP)/usr/lib/systemd/system/lightdm.service.d/umoja-myna-setup.conf
 
+	# Fetch snapd's store catalog once online, so command-not-found
+	# suggests snaps from the first boot (see the script).
+	install -D -m 0755 data/snapd/90-umoja-snap-catalog \
+		$(DESKTOP)/usr/lib/NetworkManager/dispatcher.d/90-umoja-snap-catalog
+
 	# Lock screen PAM service
 	install -D -m 0644 data/pam/umoja-lock $(DESKTOP)/etc/pam.d/umoja-lock
 

@@ -1,0 +1,38 @@
+#!/bin/sh
+# NetworkManager dispatcher: make sure snapd has its store catalog, so
+# command-not-found can suggest snaps ("sudo snap install ...").
+#
+# snapd downloads the catalog (/var/cache/snapd/commands.db, names,
+# sections) once right after first-boot seeding, and if that attempt
+# fails it does not retry for 24-30 hours. A fresh install usually seeds
+# before anyone has joined a Wi-Fi network, so the first attempt fails
+# and command-not-found only offers apt packages for the first day.
+# snapd schedules a refresh straight away when it starts without a
+# catalog, so restarting it once we are online fetches it. Snaps keep
+# running across a snapd restart.
+
+case "$2" in
+up) ;;
+connectivity-change) [ "$CONNECTIVITY_STATE" = FULL ] || exit 0 ;;
+*) exit 0 ;;
+esac
+
+[ -e /var/cache/snapd/commands.db ] && exit 0
+# Seeding finished (catalog refreshes wait for it).
+systemctl -q is-active snapd.seeded.service || exit 0
+systemctl -q is-active snapd.service || exit 0
+
+# At most once every 10 minutes, however many connections come up.
+stamp=/run/umoja-snap-catalog
+if [ -e "$stamp" ] && [ -z "$(find "$stamp" -mmin +10 2>/dev/null)" ]; then
+    exit 0
+fi
+
+# Never in the middle of an install or refresh.
+if snap changes 2>/dev/null | awk 'NR > 1 && $2 ~ /^(Do|Doing|Undo|Undoing|Wait)$/ { busy = 1 } END { exit !busy }'; then
+    exit 0
+fi
+
+touch "$stamp"
+logger -t umoja-snap-catalog "no snap catalog yet; restarting snapd to fetch it"
+systemctl --no-block try-restart snapd.service
