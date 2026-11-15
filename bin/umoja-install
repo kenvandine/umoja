@@ -163,7 +163,16 @@ echo "squashfs $(stat -c %s "$SQUASHFS") bytes, cached $(fincore -nbo RES "$SQUA
 # xattrs (file capabilities such as snap-confine's): the first xattr the
 # target can't store (a user.* one on the FAT /boot/efi) makes unsquashfs
 # drop every xattr after it, and snaps then can't start.
-unsquashfs -f -d "$TARGET" -processors "$(nproc)" -xattrs-include '^security\.' \
+# The copy runs in a scope with its own memory ceiling: the page cache its
+# writes (and its reads of the uncached part of the image) fill is charged
+# to it and reclaimed inside it, so it can't push out the part of the image
+# the installer prefetched into RAM (charged to the installer) before the
+# copy gets to it. Without systemd (a chroot, a container) it runs as is.
+COPY_SCOPE=()
+if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null; then
+    COPY_SCOPE=(systemd-run --scope --quiet --collect -p MemoryHigh=1536M --)
+fi
+"${COPY_SCOPE[@]}" unsquashfs -f -d "$TARGET" -processors "$(nproc)" -xattrs-include '^security\.' \
     -percentage "$SQUASHFS" | while read -r pct; do
     case "$pct" in ''|*[!0-9]*) continue ;; esac
     progress $((8 + pct * 72 / 100)) "Copying Umoja"
