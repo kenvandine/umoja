@@ -172,10 +172,15 @@ LIGHTDM
 # First-login setup is for installed systems.
 mkdir -p "$LIVE/etc/systemd/user"
 ln -sf /dev/null "$LIVE/etc/systemd/user/umoja-agent-setup.service"
-# The live session only runs the installer: no top panel. umoja-tray-ready
+# The live session only runs the installer: none of the desktop's own
+# services (top bar, dock, Ask Umoja, the local AI, file search, the
+# welcome screen, input methods, automations), only the compositor, the
+# portals GTK needs and the installer (an autostart entry). umoja-tray-ready
 # waits for the panel's tray, so it goes too, or autostart (the installer)
 # would wait 30 s for it.
-for unit in umoja-panel.service umoja-tray-ready.service; do
+for unit in umoja-panel.service umoja-tray-ready.service umoja-dock.service \
+        umoja-overlay.service umoja-lemonade.service umoja-files.service \
+        umoja-welcome.service umoja-ibus.service umoja-automations.service; do
     ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
 done
 
