@@ -27,6 +27,23 @@ pub const MYNA_BUS_NAME: &str = "com.canonical.Myna.Dictation";
 pub const MYNA_OBJECT_PATH: &str = "/com/canonical/Myna/Dictation";
 pub const MYNA_INTERFACE: &str = "com.canonical.Myna.Dictation";
 
+/// The command Myna Settings gives its shortcut (and Umoja too, when it
+/// binds Super+J for a fresh install): the daemon's `Toggle`, with no
+/// `snap run` start-up in the way.
+pub const MYNA_TOGGLE_COMMAND: &str = "gdbus call --session --dest com.canonical.Myna.Dictation \
+     --object-path /com/canonical/Myna/Dictation --method com.canonical.Myna.Dictation.Toggle";
+
+/// Whether a custom shortcut's command starts or stops Myna dictation: the
+/// daemon's `Toggle` over D-Bus, or the snap's `myna.toggle` app.
+pub fn is_myna_toggle(command: &str) -> bool {
+    let c = command.trim();
+    (c.contains(MYNA_BUS_NAME) && c.contains(".Toggle"))
+        || c.split_whitespace()
+            .next()
+            .is_some_and(|w| w == "myna.toggle" || w.ends_with("/myna.toggle"))
+        || c.starts_with("snap run myna.toggle")
+}
+
 /// Window management API served by umoja-mir (window list for the overview,
 /// activation, Alt+Tab clicks, tiling).
 pub const COMPOSITOR_BUS_NAME: &str = "org.umoja.Compositor";
@@ -84,3 +101,18 @@ pub const PORTAL_HELPER_XML: &str = r#"<node>
 pub const PORTAL_CANCELLED: u32 = 0;
 pub const PORTAL_COMPLETED: u32 = 1;
 pub const PORTAL_RECHECK: u32 = 2;
+
+#[cfg(test)]
+mod myna_tests {
+    use super::*;
+
+    #[test]
+    fn myna_toggle_commands_are_recognised() {
+        assert!(is_myna_toggle(MYNA_TOGGLE_COMMAND));
+        assert!(is_myna_toggle("/snap/bin/myna.toggle"));
+        assert!(is_myna_toggle("myna.toggle"));
+        assert!(is_myna_toggle("snap run myna.toggle"));
+        assert!(!is_myna_toggle("gnome-text-editor"));
+        assert!(!is_myna_toggle("gdbus call --session --dest org.umoja.Overlay --method org.umoja.Overlay.Toggle"));
+    }
+}

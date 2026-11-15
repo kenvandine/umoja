@@ -14,6 +14,8 @@ mod clipboard;
 mod clipwatch;
 mod cloud;
 mod context;
+mod dictation;
+mod dictation_page;
 mod downloads;
 mod files;
 mod lemonade;
@@ -58,6 +60,15 @@ const IFACE_XML: &str = r#"
     <method name="Show"/>
     <method name="Hide"/>
     <method name="ToggleDictation"/>
+    <!-- Open Ask Umoja and start Myna dictating into it (the panel's first-run tip) -->
+    <method name="TryDictation"/>
+    <!-- The assistant's start_dictation tool: close the overlay and start Myna
+         in the window underneath. ready = false when Myna isn't set up (the
+         settings' Dictation page opens instead); shortcut like "Super+J". -->
+    <method name="StartDictation">
+      <arg name="ready" type="b" direction="out"/>
+      <arg name="shortcut" type="s" direction="out"/>
+    </method>
     <method name="ToggleCaptions"/>
     <method name="AskAboutScreen"/>
     <method name="LaunchAgent"/>
@@ -324,6 +335,12 @@ fn export(
                         guide.toggle();
                     }
                     "StopScreencast" => shots.recorder().stop(),
+                    "StartDictation" => {
+                        let ready = methods.start_dictation();
+                        let shortcut = crate::dictation::shortcut().unwrap_or_default();
+                        invocation.return_value(Some(&(ready, shortcut).to_variant()));
+                        return;
+                    }
                     "IsScreencasting" => {
                         invocation
                             .return_value(Some(&(shots.recorder().is_recording(),).to_variant()));
@@ -528,6 +545,13 @@ fn export(
                         grid.hide()
                     }
                     "ToggleDictation" => methods.toggle_dictation(),
+                    "TryDictation" => {
+                        spread.hide();
+                        grid.hide();
+                        chrome.hide_switcher();
+                        menu.hide();
+                        methods.try_dictation()
+                    }
                     "ToggleCaptions" => methods.toggle_captions(),
                     "AskAboutScreen" => {
                         spread.hide();

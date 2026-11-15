@@ -200,6 +200,15 @@ stops these notifications for that app.
 
 ## Dictation
 
-If you install **Myna** (set it up with Myna Settings), press **Super+J**
-to talk instead of type, in any app. The microphone button on Ask Umoja's
-card dictates a question.
+Talk instead of typing, in any app: press **Super+J** in a text box,
+speak, and press **Super+J** again to stop. A microphone in the top bar
+shows while it listens; click it to stop too. The microphone button on
+Ask Umoja's card dictates a question, and you can ask Umoja to "start
+dictation".
+
+Dictation is **Myna**, which turns speech into text on your computer.
+Umoja comes with it and its Parakeet model, which knows English and 24
+other languages. To pick another model (Whisper for the most languages,
+FunASR for Chinese, Japanese and Korean), open Ask Umoja's settings and
+choose **Dictation**. On a computer without Myna, the same page has
+**Set Up Dictation**.

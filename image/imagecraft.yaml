@@ -236,8 +236,40 @@ parts:
       grep -q '"sample_rate"' "$dir/en_GB-alan-medium.onnx.json"
       chmod 0644 "$dir"/*
 
-  system-config:
+  # Myna dictation (canonical/myna) with the Parakeet model, Myna's pick
+  # for English, so talking to type works offline from the first login.
+  # Myna can't be in the seed above: its daemon is a user daemon (snapd
+  # wants experimental.user-daemons for it, and a seed install that fails
+  # fails all of first-boot seeding) and its model is a snap component,
+  # which classic seeds can't hold. So the snaps, the model component and
+  # their store assertions go to /var/lib/umoja/myna, and
+  # umoja-myna-setup.service (data/myna) installs them on first boot.
+  # Myna is only published to latest/edge.
+  myna:
     after: [piper-voice]
+    plugin: nil
+    override-build: |
+      set -eux
+      dir="$CRAFT_PART_INSTALL/var/lib/umoja/myna"
+      mkdir -p "$dir"
+      cd "$dir"
+      for want in myna myna-parakeet+model-parakeet-int8; do
+        for attempt in 1 2 3 4; do
+          snap download --edge "$want" && break
+          [ "$attempt" = 4 ] && exit 1
+          rm -f ./*.partial
+          sleep 30
+        done
+      done
+      ls -la
+      # Both snaps, the model and the assertions that let snapd install
+      # them as store snaps (not --dangerous).
+      ls myna_*.snap myna_*.assert myna-parakeet_*.snap myna-parakeet_*.assert
+      [ "$(stat -c %s myna-parakeet+model-parakeet-int8_*.comp)" -gt 500000000 ]
+      chmod 0644 ./*
+
+  system-config:
+    after: [myna]
     plugin: nil
     overlay-script: |
       set -eux

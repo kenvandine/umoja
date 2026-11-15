@@ -321,7 +321,8 @@ pub fn test_pick_agent(id: &str) -> bool {
     }
 }
 
-/// Open the settings popover on a page ("local", "cloud" or "voice").
+/// Open the settings popover on a page ("local", "cloud", "voice" or
+/// "dictation").
 /// False when the button isn't on screen (Ask Umoja is closed).
 pub fn show_page(page: &'static str) -> bool {
     let Some(b) = BUTTON.with(|b| b.borrow().as_ref().and_then(|w| w.upgrade())) else {
@@ -498,6 +499,8 @@ pub fn button() -> gtk::MenuButton {
     stack.add_titled(&cloud.page, Some("cloud"), &i18n::umoja("Cloud"));
     let voice = crate::voice_picker::VoicePage::new();
     stack.add_titled(&voice.page, Some("voice"), &i18n::umoja("Voice"));
+    let dictation = crate::dictation_page::DictationPage::new();
+    stack.add_titled(&dictation.page, Some("dictation"), &i18n::umoja("Dictation"));
     let switcher = gtk::StackSwitcher::builder()
         .stack(&stack)
         .halign(gtk::Align::Center)
@@ -539,7 +542,7 @@ pub fn button() -> gtk::MenuButton {
     }
     let button = gtk::MenuButton::builder()
         .icon_name("preferences-system-symbolic")
-        .tooltip_text(i18n::umoja("Assistant model and voice"))
+        .tooltip_text(i18n::umoja("Assistant model, voice and dictation"))
         .css_classes(["circular", "model-pill"])
         .popover(&popover)
         .build();
@@ -556,6 +559,7 @@ pub fn button() -> gtk::MenuButton {
         stack.set_visible_child_name(page);
         cloud.load();
         voice.load();
+        dictation.load();
         agent_row.refresh();
         let list = list.clone();
         let popover = popover.clone();

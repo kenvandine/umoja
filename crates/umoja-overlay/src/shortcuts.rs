@@ -257,6 +257,7 @@ const CATALOG: &[(&str, Group, &str)] = &[
         Group::Screenshots,
         "Copy text from the screen",
     ),
+    ("dictation-hotkey", Group::Assistant, "Dictate: talk to type"),
     (
         "ask-about-screen-hotkey",
         Group::Assistant,
@@ -272,7 +273,6 @@ const CATALOG: &[(&str, Group, &str)] = &[
         Group::Assistant,
         "Open your coding agent",
     ),
-    ("dictation-hotkey", Group::Assistant, "Dictate with Myna"),
 ];
 
 /// Reverse directions: the group's note says "add Shift" instead.

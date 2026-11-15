@@ -85,6 +85,14 @@ ifeq (,$(filter nodoc,$(DEB_BUILD_OPTIONS)))
 		$(DESKTOP)/usr/share/applications/umoja-user-guide.desktop
 endif
 
+	# First-boot Myna dictation install from the image's copy
+	# (image/imagecraft.yaml, part myna); the login screen waits for it.
+	install -D -m 0755 data/myna/umoja-myna-setup $(DESKTOP)/usr/libexec/umoja-myna-setup
+	install -D -m 0644 data/myna/umoja-myna-setup.service \
+		$(DESKTOP)/usr/lib/systemd/system/umoja-myna-setup.service
+	install -D -m 0644 data/myna/lightdm-myna-setup.conf \
+		$(DESKTOP)/usr/lib/systemd/system/lightdm.service.d/umoja-myna-setup.conf
+
 	# Lock screen PAM service
 	install -D -m 0644 data/pam/umoja-lock $(DESKTOP)/etc/pam.d/umoja-lock
 

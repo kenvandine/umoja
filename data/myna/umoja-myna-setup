@@ -1,0 +1,57 @@
+#!/bin/sh
+# Install Myna dictation from the copies the Umoja image carries.
+#
+# Myna can't be an ordinary seeded snap: its daemon is a user daemon, which
+# snapd only installs with experimental.user-daemons on (myna's snap-id isn't
+# on snapd's allowlist), and its model is a snap component, which classic
+# seeds can't hold. A seed that fails to install fails all of first-boot
+# seeding, so the image instead carries the snaps, the Parakeet English model
+# and their store assertions in /var/lib/umoja/myna (image/imagecraft.yaml,
+# part myna), and this installs them on first boot, offline, the way Myna
+# Settings sets Myna up: the flag, the app, the model, the backend
+# connection. Then they track latest/edge, the only channel Myna is
+# published to, so refreshes keep them current.
+#
+# The folder is removed once Myna is in, so later boots do nothing. On a
+# failure it stays and the next boot tries again; Ask Umoja's settings
+# (Dictation) can also set Myna up from the store.
+set -u
+
+DIR=${UMOJA_MYNA_DIR:-/var/lib/umoja/myna}
+BACKEND=myna-parakeet
+
+log() { echo "umoja-myna-setup: $*"; }
+
+[ -d "$DIR" ] || exit 0
+snap wait system seed.loaded
+
+snap set system experimental.user-daemons=true || exit 1
+for a in "$DIR"/*.assert; do
+    [ -e "$a" ] || { log "no assertions in $DIR"; exit 1; }
+    snap ack "$a" || exit 1
+done
+
+# The app, then the model snap with its component (one install, as a
+# component's install must be).
+if ! snap list myna >/dev/null 2>&1; then
+    set -- "$DIR"/myna_*.snap
+    [ -e "$1" ] || { log "no myna snap in $DIR"; exit 1; }
+    snap install "$1" || exit 1
+fi
+if ! snap list "$BACKEND" >/dev/null 2>&1; then
+    set -- "$DIR"/"$BACKEND"_*.snap
+    [ -e "$1" ] || { log "no $BACKEND snap in $DIR"; exit 1; }
+    snap install "$1" "$DIR"/"$BACKEND"+*.comp || exit 1
+fi
+
+# Local installs track nothing; follow the channel Myna publishes to.
+snap switch --channel=latest/edge myna || true
+snap switch --channel=latest/edge "$BACKEND" || true
+
+# The connections the store grants on a store install; harmless if made.
+snap connect myna:pipewire 2>/dev/null || true
+snap connect "$BACKEND":hardware-observe 2>/dev/null || true
+snap connect myna:backend "$BACKEND":provider || exit 1
+
+rm -rf "$DIR"
+log "Myna is set up with $BACKEND"

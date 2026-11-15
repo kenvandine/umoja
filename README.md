@@ -75,7 +75,8 @@ card floats over the window you're in.
   an [MCP](https://modelcontextprotocol.io) server that other AI apps
   (Claude Code, for example) can use too. At login Umoja sets it up, with
   a skill describing the desktop, for the coding agents it finds.
-- **Voice dictation** through Myna, if it is installed.
+- **Voice dictation** (Super+J) through Myna, installed with its Parakeet
+  model by default.
 - **Rewrite selected text** in any app (fix spelling, shorter, friendlier,
   more formal, translate, or your own words), typed back in place.
 - **Undo** for everything the assistant changes.

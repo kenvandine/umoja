@@ -13,13 +13,10 @@ By default all of it runs on your computer, on Umoja's own copy of
 cloud model if you prefer; see [Using a cloud model](#using-a-cloud-model)
 and [Privacy](#privacy).
 
-Voice dictation is handled by Myna, not by Umoja. Set it up with Myna
-Settings (`myna-config`), which binds its shortcut (**Super+J** by default)
-as a GNOME custom shortcut; Umoja runs GNOME custom shortcuts just as
-Ubuntu's GNOME session does, so whatever key Myna Settings chooses works
-here. While Myna records, a microphone shows in the top bar (click it to
-stop) and Myna's own pill with the voice wave shows at the bottom of the
-screen, as in Ubuntu. Ask Umoja's card also has a microphone button.
+Voice dictation (talk instead of typing, in any app) is
+[Myna](https://github.com/canonical/myna), Canonical's offline
+speech-to-text, the same as on Ubuntu. Press **Super+J** in any text box,
+speak, and press it again to stop; see [Dictation](#dictation).
 
 For a friendlier tour of the whole desktop, with screenshots, see the
 [User Guide](guide/README.md). This page is the detailed reference.
@@ -137,9 +134,10 @@ loads; later ones take a few seconds.
 ## Choosing the model
 
 The round settings button beside the search entry opens **Assistant**
-settings. It has three pages: **This Computer** and **Cloud** pick the
-model, and **Voice** picks the read-aloud voice (see
-[Choosing a voice](#choosing-a-voice)).
+settings. It has four pages: **This Computer** and **Cloud** pick the
+model, **Voice** picks the read-aloud voice (see
+[Choosing a voice](#choosing-a-voice)) and **Dictation** sets up Myna and
+picks its speech model (see [Dictation](#dictation)).
 
 **This Computer** lists the chat models Lemonade can run here that fit in
 half of your computer's memory, smallest first. Models that are good at
@@ -267,6 +265,52 @@ This is separate from the screen reader: Orca keeps its own voice, and
 `speak-answers` is skipped while Orca is on, since it reads answers
 already.
 
+
+## Dictation
+
+Press **Super+J** in any text box and speak; Myna types what you say.
+Press **Super+J** again (or click the microphone in the top bar) to stop.
+While it listens, a microphone shows in the top bar and Myna's pill with
+the voice wave at the bottom of the screen, as in Ubuntu. The microphone
+button on Ask Umoja's card dictates a question, and you can ask the
+assistant to "start dictation". Everything is turned into text on this
+computer; no audio leaves it.
+
+Umoja's installer puts Myna and its **Parakeet** model (Myna's pick for
+English and 24 other European languages, about 780 MB) on the computer,
+so dictation works from the first login, offline too. Myna can't be an
+ordinary seeded snap (its daemon needs snapd's
+`experimental.user-daemons`, and its model is a snap component), so the
+image carries the snaps in `/var/lib/umoja/myna` and
+`umoja-myna-setup.service` installs them on first boot, then has them
+follow `latest/edge`, the only channel Myna is published to.
+
+The first time Umoja sees Myna it binds **Super+J** (Myna's own default)
+as the GNOME custom shortcut **Dictation**, unless Myna already has a
+shortcut, and shows a one-time tip whose **Try it** opens Ask Umoja and
+starts dictating into it. Change the key in Settings › Keyboard › Custom
+Shortcuts; a shortcut you remove is not put back. The shortcuts guide
+(**Super+/**) lists it under Assistant.
+
+### Choosing the dictation model
+
+The **Dictation** page of Ask Umoja's settings lists the models Myna can
+use: **Parakeet** (the default), **Whisper** (the most languages, with
+uneven accuracy) and **FunASR** (best for Chinese, Japanese and Korean).
+Picking one downloads it if needed, connects it to Myna and restarts
+dictation, as Myna Settings does; you may be asked for your password. On
+a computer without Myna the page offers **Set Up Dictation**, which turns
+on `experimental.user-daemons`, installs `myna` and `myna-parakeet` from
+`latest/edge` and connects them. By hand:
+
+```sh
+sudo snap set system experimental.user-daemons=true
+sudo snap install --edge myna myna-parakeet
+sudo snap connect myna:backend myna-parakeet:provider
+```
+
+Myna Settings (`myna-config`, from Myna's PPA) works here too, for its
+finer settings.
 ## Doing things on the desktop
 
 Ask in plain words and the assistant does it, instead of telling you how.
@@ -716,12 +760,12 @@ keyboard shortcut.
 | **Super+Shift+A** | Ask about the selected text or the current window |
 | **Super+Shift+V** | Show the clipboard history |
 | **Super+Ctrl+Print** | Copy the text in a screen area |
-| **Super+J** | Start or stop Myna dictation (set in Myna Settings) |
+| **Super+J** | Start or stop dictation (Myna) |
 | **Escape** | Close Ask Umoja |
 
 The three Umoja shortcuts can be changed with the `ask-about-screen-hotkey`,
-`clipboard-history-hotkey` and `copy-text-hotkey` keys below. Myna's shortcut is changed in
-Myna Settings.
+`clipboard-history-hotkey` and `copy-text-hotkey` keys below. The dictation key is a GNOME
+custom shortcut (Settings › Keyboard › Custom Shortcuts › Dictation).
 
 ## Settings reference
 
@@ -744,7 +788,8 @@ All in the `org.umoja.shell` schema, for example
 | `ai-agent-hotkey` | `[]` | Open the coding agent in a terminal |
 | `crash-notifications` | `true` | Notify when an app crashes, with **Ask Why** |
 | `crash-notifications-muted` | `[]` | Programs whose crashes don't notify |
-| `dictation-hotkey` | `[]` | Extra key for Myna dictation (Myna Settings owns Super+J) |
+| `dictation-hotkey` | `[]` | Extra key for Myna dictation (Super+J is a GNOME custom shortcut) |
+| `dictation-introduced` | `false` | Set once Umoja has bound Super+J for Myna and shown the dictation tip |
 | `ask-umoja-alt-tap` | `true` | A tap of Alt opens Ask Umoja, until a Copilot key is seen |
 | `ask-umoja-copilot-seen` | `false` | Set on the first Copilot key press; reset it to use Alt again |
 | `auto-do-not-disturb` | `true` | Hold notification banners while recording the screen or in full screen |

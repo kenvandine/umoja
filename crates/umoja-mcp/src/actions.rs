@@ -40,6 +40,13 @@ pub fn tools() -> Vec<Tool> {
             "Read aloud".into()
         }),
         Tool::new(
+            "start_dictation",
+            "Start voice dictation (Myna): the user talks and their words are typed into the app they were using. Use for \"let me dictate\", \"voice typing\", \"talk to type\", \"start dictation\", \"how do I dictate\". If dictation isn't set up yet, this opens its settings instead.",
+            obj(json!({}), &[]),
+            |_| Box::pin(start_dictation()),
+        )
+        .with_summary(|_| "Start dictation".into()),
+        Tool::new(
             "set_volume",
             "Change the sound volume or mute/unmute the speakers or the microphone. Use for \"turn it up\", \"volume to 30%\", \"mute\", \"mute my mic\".",
             obj(json!({
@@ -514,6 +521,45 @@ async fn read_aloud(a: Value) -> Outcome {
              nothing else: don't repeat the text and don't bring up other topics.",
         ),
         Err(e) => Outcome::err(format!("could not read aloud: {e}")),
+    }
+}
+
+/// Ask the overlay to close and start Myna in the window underneath.
+async fn start_dictation() -> Outcome {
+    let c = match session_bus().await {
+        Ok(c) => c,
+        Err(e) => return Outcome::err(e),
+    };
+    let reply = c
+        .call_future(
+            Some(dbus::OVERLAY_BUS_NAME),
+            dbus::OVERLAY_OBJECT_PATH,
+            dbus::OVERLAY_INTERFACE,
+            "StartDictation",
+            None,
+            Some(glib::VariantTy::new("(bs)").unwrap()),
+            gio::DBusCallFlags::NONE,
+            2000,
+        )
+        .await;
+    match reply.ok().and_then(|v| v.get::<(bool, String)>()) {
+        Some((true, key)) => {
+            let stop = if key.is_empty() {
+                "click the microphone in the top bar".to_owned()
+            } else {
+                format!("press {key} again (or click the microphone in the top bar)")
+            };
+            Outcome::ok(format!(
+                "Dictation is starting in the user's window. Answer with one short sentence: \
+                 they can speak now, and to stop, {stop}.{}",
+                if key.is_empty() { String::new() } else { format!(" Mention that {key} starts it in any app next time.") }
+            ))
+        }
+        Some((false, _)) => Outcome::ok(
+            "Dictation isn't set up yet; its settings page is now open. Answer with one short sentence: \
+             choose Set Up Dictation there (it downloads Myna and its speech model, and may ask for the password).",
+        ),
+        None => Outcome::err("could not start dictation"),
     }
 }
 

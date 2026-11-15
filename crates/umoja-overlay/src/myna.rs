@@ -67,6 +67,16 @@ impl Myna {
         }
     }
 
+    /// The daemon is on the bus.
+    pub fn available(&self) -> bool {
+        self.proxy.borrow().as_ref().is_some_and(|p| p.name_owner().is_some())
+    }
+
+    /// Myna is recording now.
+    pub fn listening(&self) -> bool {
+        self.proxy.borrow().as_ref().is_some_and(listening)
+    }
+
     pub fn toggle(&self) {
         let Some(proxy) = self.proxy.borrow().clone() else {
             tracing::warn!("myna is not available");

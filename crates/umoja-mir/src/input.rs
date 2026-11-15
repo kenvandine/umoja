@@ -528,7 +528,14 @@ pub fn reload() {
             action: CUSTOM_BASE + custom_commands.len() as u32,
         });
         let name = if name.is_empty() { command.clone() } else { name };
-        shortcuts.push((format!("custom:{name}"), binding));
+        // Myna's shortcut is listed as dictation (the shortcuts guide's
+        // Assistant group), whatever Myna Settings named it.
+        let id = if umoja_common::dbus::is_myna_toggle(&command) {
+            "dictation-hotkey".to_string()
+        } else {
+            format!("custom:{name}")
+        };
+        shortcuts.push((id, binding));
         custom_commands.push(command);
     }
     let overlay = gs::get_string(gs::MUTTER, "overlay-key", "Super_L");

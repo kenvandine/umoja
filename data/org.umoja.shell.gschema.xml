@@ -118,6 +118,16 @@
         additional one.
       </description>
     </key>
+    <key name="dictation-introduced" type="b">
+      <default>false</default>
+      <summary>Myna dictation has been introduced</summary>
+      <description>
+        Set the first time the panel sees Myna's daemon: it then binds
+        Super+J to dictation (Myna's own default) unless a Myna shortcut
+        exists already, and shows a one-time tip. Reset it to see the tip
+        again; a shortcut you removed is never put back while this is true.
+      </description>
+    </key>
     <key name="ask-umoja-alt-tap" type="b">
       <default>true</default>
       <summary>Tap Alt to open Ask Umoja on keyboards without a Copilot key</summary>

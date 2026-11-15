@@ -288,7 +288,7 @@ impl Overlay {
         entry.update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Ask Umoja"))]);
         let myna_pill = gtk::Button::builder()
             .icon_name("audio-input-microphone-symbolic")
-            .tooltip_text(i18n::umoja("Dictate with Myna"))
+            .tooltip_text(i18n::umoja("Dictate: talk to type"))
             .css_classes(["circular", "myna-pill"])
             .valign(gtk::Align::Center)
             .build();
@@ -687,7 +687,12 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         self.myna_pill.connect_clicked(move |_| {
             if let Some(o) = weak.upgrade() {
-                o.myna.toggle();
+                // Without Myna, the button leads to setting it up.
+                if o.myna.available() {
+                    o.myna.toggle();
+                } else {
+                    crate::model_picker::show_page("dictation");
+                }
             }
         });
 
@@ -941,9 +946,57 @@ impl Overlay {
         self.myna.toggle();
     }
 
+    /// Close Ask Umoja and start dictating into the window it was over.
+    /// False (and the settings' Dictation page opens) without Myna.
+    pub fn start_dictation(self: &Rc<Self>) -> bool {
+        if !self.myna.available() {
+            crate::model_picker::show_page("dictation");
+            return false;
+        }
+        let weak = Rc::downgrade(self);
+        // Let the answer show for a moment, then give the keyboard back.
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
+            if let Some(o) = weak.upgrade() {
+                o.hide();
+                let weak = Rc::downgrade(&o);
+                glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+                    if let Some(o) = weak.upgrade()
+                        && !o.myna.listening()
+                    {
+                        o.myna.toggle();
+                    }
+                });
+            }
+        });
+        true
+    }
+
+    /// Show Ask Umoja and start dictating into its box, once it has the
+    /// keyboard (Myna types into whatever is focused).
+    pub fn try_dictation(self: &Rc<Self>) {
+        self.show();
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+            if let Some(o) = weak.upgrade() {
+                if o.myna.available() {
+                    o.myna.toggle();
+                } else {
+                    crate::model_picker::show_page("dictation");
+                }
+            }
+        });
+    }
+
     fn on_myna(self: &Rc<Self>, ev: MynaEvent) {
         match ev {
-            MynaEvent::Available(a) => self.myna_pill.set_sensitive(a),
+            MynaEvent::Available(a) => {
+                let tip = match (a, crate::dictation::shortcut()) {
+                    (true, Some(k)) => format!("{} ({k})", i18n::umoja("Dictate: talk to type")),
+                    (true, None) => i18n::umoja("Dictate: talk to type"),
+                    (false, _) => i18n::umoja("Set up dictation"),
+                };
+                self.myna_pill.set_tooltip_text(Some(&tip));
+            }
             MynaEvent::Listening(on) => {
                 if on {
                     self.myna_pill.add_css_class("listening");
@@ -2144,6 +2197,8 @@ impl Overlay {
             }
             "voice-rows" => crate::voice_picker::test_rows(),
             "voice-state" => crate::voice_picker::test_state(),
+            "dictation-page" => (crate::model_picker::show_page("dictation"), String::new()),
+            "dictation-state" => crate::dictation_page::test_state(),
             a if a.starts_with("voice-pick:") => (crate::voice_picker::test_pick(&a[11..]), String::new()),
             a if a.starts_with("voice-remove:") => {
                 (crate::voice_picker::test_remove(&a[13..]), String::new())

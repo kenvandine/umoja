@@ -25,7 +25,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | --- | --- |
 | **Super+Shift+A** | Ask about (or rewrite) the selected text, or the current window |
 | **Super+Shift+V** | Clipboard history |
-| **Super+J** | Dictation, with Myna |
+| **Super+J** | Dictate: talk to type, in any app |
 
 ## Inside Ask Umoja
 

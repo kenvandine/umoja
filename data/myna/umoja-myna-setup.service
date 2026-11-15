@@ -1,0 +1,25 @@
+[Unit]
+Description=Set up Myna dictation from the copy in the Umoja image
+Documentation=https://github.com/kenvandine/umoja
+# The image carries Myna, its Parakeet model and their assertions in
+# /var/lib/umoja/myna; this installs them once, offline, then removes the
+# folder (see /usr/libexec/umoja-myna-setup). The login screen waits for it
+# (lightdm.service.d/umoja-myna-setup.conf), so dictation works in the very
+# first session, but only Wants it: a failure never keeps anyone out.
+ConditionPathExists=/var/lib/umoja/myna
+# Not in the installer's live session.
+ConditionKernelCommandLine=!boot=casper
+Wants=snapd.socket
+After=snapd.socket snapd.service snapd.seeded.service umoja-wait-for-snaps.service
+Before=lightdm.service display-manager.service plymouth-quit.service plymouth-quit-wait.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/bin/plymouth display-message --text=Setting\x20up\x20dictation…
+ExecStart=/usr/libexec/umoja-myna-setup
+# On the console too, so the image test's serial log shows how it went.
+StandardOutput=journal+console
+ExecStartPost=-/usr/bin/plymouth display-message --text=
+TimeoutStartSec=10min
+

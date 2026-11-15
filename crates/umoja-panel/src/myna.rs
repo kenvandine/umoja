@@ -42,6 +42,49 @@ const HEALTHY_UPTIME: Duration = Duration::from_secs(60);
 const KILL_GRACE: Duration = Duration::from_secs(3);
 const MYNA_SHORTCUT_PATH: &str =
     "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/myna/";
+/// What Umoja names the shortcut it binds: Myna Settings' own name.
+const SHORTCUT_NAME: &str = "Dictation";
+/// The key Umoja binds when nothing has: Myna's own default.
+pub const DEFAULT_SHORTCUT: &str = "<Super>j";
+/// How long after the daemon first appears the tip waits, so it doesn't
+/// land under the welcome screen's fade at the first login.
+const TIP_DELAY: Duration = Duration::from_secs(8);
+
+/// The key of the GNOME custom shortcut that starts and stops Myna, if
+/// there is one (Myna Settings', or the one Umoja bound).
+pub fn myna_binding() -> Option<String> {
+    let media = gs::settings(gs::MEDIA_KEYS).filter(|s| gs::has_key(s, "custom-keybindings"))?;
+    media.strv("custom-keybindings").iter().find_map(|path| {
+        let s = gs::settings_at(gs::CUSTOM_KEYBINDING, path.as_str())?;
+        if !dbus::is_myna_toggle(&s.string("command")) {
+            return None;
+        }
+        Some(s.string("binding").to_string()).filter(|b| !b.trim().is_empty())
+    })
+}
+
+/// Bind [`DEFAULT_SHORTCUT`] to dictation as Myna Settings would (same
+/// path, name and command), so Myna Settings sees it as its own.
+fn bind_default_shortcut() -> bool {
+    let Some(media) = gs::settings(gs::MEDIA_KEYS).filter(|s| gs::has_key(s, "custom-keybindings"))
+    else {
+        return false;
+    };
+    let Some(entry) = gs::settings_at(gs::CUSTOM_KEYBINDING, MYNA_SHORTCUT_PATH) else {
+        return false;
+    };
+    let ok = entry.set_string("name", SHORTCUT_NAME).is_ok()
+        && entry.set_string("command", dbus::MYNA_TOGGLE_COMMAND).is_ok()
+        && entry.set_string("binding", DEFAULT_SHORTCUT).is_ok();
+    let mut paths: Vec<String> =
+        media.strv("custom-keybindings").iter().map(|p| p.to_string()).collect();
+    if ok && !paths.iter().any(|p| p == MYNA_SHORTCUT_PATH) {
+        paths.push(MYNA_SHORTCUT_PATH.to_string());
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        return media.set_strv("custom-keybindings", refs.as_slice()).is_ok();
+    }
+    ok
+}
 
 /// What the top bar shows for a `State` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +258,7 @@ impl Myna {
         let owned = self.proxy().and_then(|p| p.name_owner()).is_some();
         tracing::info!(owned, "myna: dictation daemon");
         if owned {
+            self.introduce();
             self.hud.failures.set(0);
             self.hud.registered.set(false);
             self.hud.wanted.set(true);
@@ -225,6 +269,74 @@ impl Myna {
             self.stop_hud();
         }
         self.update();
+    }
+
+    /// The first time Myna's daemon is seen (a fresh install, or Myna
+    /// set up later): give it a shortcut if nothing has, and say once how
+    /// to use it.
+    fn introduce(self: &Rc<Self>) {
+        let Some(shell) =
+            gs::settings(gs::UMOJA_SHELL).filter(|s| gs::has_key(s, "dictation-introduced"))
+        else {
+            return;
+        };
+        if shell.boolean("dictation-introduced") {
+            return;
+        }
+        let _ = shell.set_boolean("dictation-introduced", true);
+        let key = myna_binding()
+            .or_else(|| bind_default_shortcut().then(|| DEFAULT_SHORTCUT.to_string()));
+        let body = match &key {
+            Some(k) => i18n::umoja(
+                "Press {key} in any text box and speak, then press it again to stop. \
+                 Your words are turned into text on this computer.",
+            )
+            .replace("{key}", &pretty_accelerator(k)),
+            None => i18n::umoja(
+                "Click the microphone in Ask Umoja and speak. \
+                 Your words are turned into text on this computer.",
+            ),
+        };
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(TIP_DELAY, move || {
+            let Some(center) = crate::notification_center() else { return };
+            let weak = weak.clone();
+            center.notify_with_actions(
+                &i18n::umoja("Talk instead of typing"),
+                &body,
+                "audio-input-microphone-symbolic",
+                &[("try", &i18n::umoja("Try it"))],
+                move |action| {
+                    if action == "try"
+                        && let Some(m) = weak.upgrade()
+                    {
+                        m.try_it();
+                    }
+                },
+            );
+        });
+    }
+
+    /// The tip's "Try it": open Ask Umoja and start dictating into it.
+    fn try_it(self: &Rc<Self>) {
+        if let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
+            bus.call(
+                Some(dbus::OVERLAY_BUS_NAME),
+                dbus::OVERLAY_OBJECT_PATH,
+                dbus::OVERLAY_INTERFACE,
+                "TryDictation",
+                None,
+                None,
+                gio::DBusCallFlags::NONE,
+                2000,
+                gio::Cancellable::NONE,
+                |r| {
+                    if let Err(e) = r {
+                        tracing::warn!(error = %e, "myna: couldn't open Ask Umoja");
+                    }
+                },
+            );
+        }
     }
 
     fn state(&self) -> String {
@@ -238,10 +350,7 @@ impl Myna {
         let shown = indication(&self.state());
         let b = &self.button;
         b.set_visible(shown != Indication::Hidden);
-        let key = gs::settings_at(gs::CUSTOM_KEYBINDING, MYNA_SHORTCUT_PATH)
-            .map(|s| s.string("binding").to_string())
-            .filter(|k| !k.is_empty())
-            .map(|k| pretty_accelerator(&k));
+        let key = myna_binding().map(|k| pretty_accelerator(&k));
         let tip = match (shown, key) {
             (Indication::Recording, Some(k)) => {
                 format!(
