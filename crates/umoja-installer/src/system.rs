@@ -197,6 +197,9 @@ pub fn prefetch_squashfs() {
                 );
                 libc::setpriority(libc::PRIO_PROCESS, 0, 19);
             }
+            // Let the first page come up first: start-up is when the
+            // session reads the most from the stick.
+            std::thread::sleep(PREFETCH_DELAY);
             let started = std::time::Instant::now();
             let read = prefetch_ranges(path, &ranges);
             tracing::info!(
@@ -216,7 +219,9 @@ pub fn stop_prefetch() {
 static PREFETCH_STOP: AtomicBool = AtomicBool::new(false);
 /// One paced read: small enough that whatever the live session needs from
 /// the stick waits at most this long.
-const PREFETCH_CHUNK: usize = 1 << 20;
+const PREFETCH_CHUNK: usize = 256 << 10;
+/// Wait before the first read.
+const PREFETCH_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 /// Rest after each chunk, as a multiple of the time the chunk took: the
 /// prefetch gets about a third of the stick.
 const PREFETCH_REST: u32 = 2;
