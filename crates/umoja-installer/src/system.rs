@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Smallest disk worth offering: the image's root is 16 GiB, plus /boot
 /// and the EFI partition and some room to live in.
@@ -141,12 +141,11 @@ const SQUASHFS: [&str; 2] = [
 /// file), then the start, which unsquashfs copies first.
 ///
 /// The live session itself runs from the same stick, so the reads are
-/// paced: one chunk, then a rest twice as long as the chunk took, and no
-/// reads at all while the user is moving, clicking or typing (GTK loads
-/// icons, fonts and the next page from the stick then; the installer felt
-/// laggy on the XPS 13 otherwise). The idle I/O class this thread also sets
-/// only works with BFQ. [`stop_prefetch`] ends it when the install starts,
-/// as the copy then wants the stick.
+/// paced: one chunk, then a rest as long as the chunk took. (Pausing on
+/// every key press and resting twice as long halved it on the XPS 13 and
+/// didn't fix the typing lag, which was the backdrop.) The idle I/O class
+/// this thread also sets only works with BFQ. [`stop_prefetch`] ends it
+/// when the install starts, as the copy then wants the stick.
 pub fn prefetch_squashfs() {
     let Some(path) = SQUASHFS
         .into_iter()
@@ -223,31 +222,8 @@ const PREFETCH_CHUNK: usize = 256 << 10;
 /// Wait before the first read.
 const PREFETCH_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 /// Rest after each chunk, as a multiple of the time the chunk took: the
-/// prefetch gets about a third of the stick.
-const PREFETCH_REST: u32 = 2;
-/// No reads this soon after the user last moved, clicked or typed: GTK
-/// then loads icons, fonts and the next page from the same stick.
-const PREFETCH_QUIET: std::time::Duration = std::time::Duration::from_millis(1500);
-
-/// Milliseconds since [`epoch`] of the user's last input, 0 for none.
-static LAST_ACTIVITY: AtomicU64 = AtomicU64::new(0);
-
-fn epoch() -> std::time::Instant {
-    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    *EPOCH.get_or_init(std::time::Instant::now)
-}
-
-/// The user is using the installer: pause the prefetch for a moment.
-/// Cheap enough to call on every pointer motion.
-pub fn note_activity() {
-    let ms = epoch().elapsed().as_millis() as u64;
-    LAST_ACTIVITY.store(ms.max(1), Ordering::Relaxed);
-}
-
-fn user_active() -> bool {
-    let last = LAST_ACTIVITY.load(Ordering::Relaxed);
-    last != 0 && epoch().elapsed().as_millis() as u64 - last < PREFETCH_QUIET.as_millis() as u64
-}
+/// prefetch gets about half of the stick.
+const PREFETCH_REST: u32 = 1;
 
 /// Read `(offset, len)` ranges of `path` chunk by chunk, resting after each
 /// chunk as long as it took. Returns the bytes read.
@@ -266,10 +242,6 @@ fn prefetch_ranges(path: &str, ranges: &[(u64, u64)]) -> u64 {
         while left > 0 {
             if PREFETCH_STOP.load(Ordering::Relaxed) {
                 return total;
-            }
-            if user_active() {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                continue;
             }
             let want = left.min(PREFETCH_CHUNK as u64) as usize;
             let t = std::time::Instant::now();

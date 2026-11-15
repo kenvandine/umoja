@@ -215,24 +215,6 @@ fn build(app: &adw::Application, preview: bool) {
     } else if !preview {
         system::prefetch_squashfs();
     }
-    // Pause the image prefetch while the user is using the installer, so
-    // what GTK loads from the stick doesn't wait behind it.
-    let motion = gtk::EventControllerMotion::new();
-    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-    motion.connect_motion(|_, _, _| system::note_activity());
-    window.add_controller(motion);
-    let click = gtk::GestureClick::new();
-    click.set_button(0);
-    click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    click.connect_pressed(|_, _, _, _| system::note_activity());
-    window.add_controller(click);
-    let keys = gtk::EventControllerKey::new();
-    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-    keys.connect_key_pressed(|_, _, _, _| {
-        system::note_activity();
-        glib::Propagation::Proceed
-    });
-    window.add_controller(keys);
     window.fullscreen();
     window.present();
 }
@@ -782,8 +764,8 @@ fn fail(ui: &Rc<Ui>, message: &str) {
 /// The screensaver's word in dots, in the space above the card.
 fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
     let card = card.downgrade();
+    let card_ref = card.clone();
     let word = Rc::new(sample_word().unwrap_or_else(|| art::word_from_mask(1, 1, |_, _| false)));
-    let start = Instant::now();
     let area = gtk::DrawingArea::builder().hexpand(true).vexpand(true).build();
     area.set_draw_func(move |_, cr, w, h| {
         let (w, h) = (w as f64, h as f64);
@@ -801,7 +783,10 @@ fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
         // give it a taller box centred on the free space so the word fills
         // about half of that space.
         let box_h = free * 1.8;
-        let elapsed = start.elapsed().as_secs_f64();
+        // A still of the word just formed. It used to drift at 30 fps,
+        // but each frame repainted the whole screen and the card's blur,
+        // and typing on the XPS 13 lagged behind it.
+        let elapsed = art::FORM + 0.5;
         // The screensaver moves the word about each cycle; here it stays
         // centred in the free space.
         let l = art::layout(&word, w, box_h, &art::cycle_at(elapsed, Some(4)));
@@ -819,11 +804,12 @@ fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
         }
         cr.restore().ok();
     });
-    // 30 fps is plenty for slowly drifting dots.
-    let last = std::cell::Cell::new(Instant::now());
+    // Redraw only when the card's height (which decides where the word
+    // goes) changes, as it does between pages.
+    let drawn_h = std::cell::Cell::new(-1);
     area.add_tick_callback(move |area, _| {
-        if last.get().elapsed() >= std::time::Duration::from_millis(33) {
-            last.set(Instant::now());
+        let h = card_ref.upgrade().map_or(0, |c| c.height());
+        if drawn_h.replace(h) != h {
             area.queue_draw();
         }
         glib::ControlFlow::Continue
