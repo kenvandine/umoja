@@ -37,6 +37,7 @@ gpg-agent
 gsettings-ubuntu-schemas
 gst-audio-thumbnailer
 gst-video-thumbnailer
+gstreamer1.0-libav
 gvfs-fuse
 hplip
 ibus
