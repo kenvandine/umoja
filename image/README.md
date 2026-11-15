@@ -46,6 +46,10 @@ debs to add, it also builds the installer ISO:
 `ubuntu-umoja-desktop-vVERSION+HASH_amd64` holds the `.iso`, its
 `.sha256` and the `.list` package manifest (kept 7 days), and the `.list`
 is also uploaded on its own, unzipped.
+For a release (the commit carries the `v<version>` tag from the Packages
+release run) the ISO drops the hash, `ubuntu-umoja-desktop-vVERSION_amd64`,
+and is published to Cloudflare R2 for download; see
+[infra/downloads](../infra/downloads/README.md).
 
 ## Installer ISO
 

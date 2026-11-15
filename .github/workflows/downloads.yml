@@ -1,0 +1,46 @@
+# Deploy the downloads Worker (infra/downloads) that serves release ISOs
+# from Cloudflare R2 and counts downloads. Runs when the Worker changes on
+# main, or by hand. Skips (with a warning) until the Cloudflare secrets are
+# set; see infra/downloads/README.md.
+#
+# Secrets: CLOUDFLARE_API_TOKEN (Workers Scripts: Edit, plus Workers R2
+# Storage: Read), CLOUDFLARE_ACCOUNT_ID.
+
+name: Downloads Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/downloads/**
+      - .github/workflows/downloads.yml
+  workflow_dispatch:
+
+concurrency:
+  group: downloads-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-24.04
+    env:
+      HAVE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the secrets
+        if: env.HAVE_TOKEN != 'true'
+        run: echo "::warning::CLOUDFLARE_API_TOKEN is not set; not deploying (see infra/downloads/README.md)"
+
+      - uses: cloudflare/wrangler-action@v3
+        if: env.HAVE_TOKEN == 'true'
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: infra/downloads
+          wranglerVersion: "4.162.0"
+          command: deploy

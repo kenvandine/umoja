@@ -13,6 +13,16 @@
 # add, the installer ISO: ubuntu-umoja-desktop-vVERSION+HASH_amd64 (the
 # .iso, its .sha256 and the .list package manifest, kept 7 days) plus the
 # .list on its own, unzipped.
+#
+# Releases: when the commit built is a release (tagged v<debian/changelog
+# version>, as the Packages workflow's "release" run does), the ISO is
+# named ubuntu-umoja-desktop-vVERSION_amd64 and the "Publish" job uploads
+# it, its .sha256 and .list to Cloudflare R2 (releases/vVERSION/), then
+# latest.json, and links it from the GitHub release. The downloads Worker
+# (infra/downloads) serves and counts them. Secrets: CLOUDFLARE_ACCOUNT_ID,
+# R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY; variables: R2_BUCKET (default
+# umoja-releases), DOWNLOAD_URL (the Worker's address, for the release
+# notes). Without the secrets the job warns and does nothing.
 
 name: Image
 
@@ -33,8 +43,10 @@ on:
         description: Packages workflow run id whose debs-amd64 to add (empty = PPA only)
         default: ""
 
+# Release runs come from a manual Packages run, edge runs from pushes: keep
+# them in separate groups so a push to main never cancels a release ISO.
 concurrency:
-  group: image-${{ github.event.pull_request.number || github.ref }}
+  group: image-${{ github.event.pull_request.number || github.ref }}-${{ github.event.workflow_run.event || github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -49,10 +61,14 @@ jobs:
     timeout-minutes: 180
     env:
       GH_TOKEN: ${{ github.token }}
+    outputs:
+      iso: ${{ steps.iso.outputs.name }}
+      release: ${{ steps.iso.outputs.release }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || '' }}
+          fetch-depth: 0
 
       - name: Free disk space
         run: |
@@ -152,6 +168,13 @@ jobs:
           # The commit built, not the pull request's merge commit.
           sha="${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}"
           name="ubuntu-umoja-desktop-v${version}+${sha:0:8}_amd64"
+          # A release: the commit carries the v<version> tag (the Packages
+          # release run pushes it before it finishes).
+          tagged=$(git rev-parse -q --verify "refs/tags/v${version}^{commit}" || true)
+          if [ "$tagged" = "$(git rev-parse HEAD)" ] && [ "${{ github.event_name }}" != pull_request ]; then
+            name="ubuntu-umoja-desktop-v${version}_amd64"
+            echo "release=v${version}" >> "$GITHUB_OUTPUT"
+          fi
           sudo image/iso/build image/umoja.img iso-debs "iso/$name.iso"
           sudo chown -R "$(id -u):$(id -g)" iso
           (cd iso && sha256sum "$name.iso" > "$name.iso.sha256")
@@ -185,3 +208,77 @@ jobs:
           path: umoja.img.zst
           retention-days: 7
           compression-level: 0
+
+  publish:
+    name: Publish the release ISO to R2
+    needs: image
+    if: needs.image.outputs.release != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.image.outputs.release }}
+      NAME: ${{ needs.image.outputs.iso }}
+      BUCKET: ${{ vars.R2_BUCKET || 'umoja-releases' }}
+      DOWNLOAD_URL: ${{ vars.DOWNLOAD_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: auto
+      # R2 doesn't take the CRC checksums newer AWS CLIs send by default.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - name: Check the secrets
+        id: secrets
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "::warning::R2 secrets are not set; $NAME.iso is not published (see infra/downloads/README.md)"
+            exit 0
+          fi
+          echo "ok=1" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.secrets.outputs.ok
+        with:
+          name: ${{ needs.image.outputs.iso }}
+          path: iso
+
+      - name: Upload to R2
+        if: steps.secrets.outputs.ok
+        working-directory: iso
+        run: |
+          ls -l
+          sha256sum -c "$NAME.iso.sha256"
+          r2() { aws s3 --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" "$@"; }
+          dest="s3://$BUCKET/releases/$TAG"
+          r2 cp "$NAME.iso" "$dest/$NAME.iso" --content-type application/x-iso9660-image --no-progress
+          r2 cp "$NAME.iso.sha256" "$dest/$NAME.iso.sha256" --content-type text/plain --no-progress
+          r2 cp "$NAME.list" "$dest/$NAME.list" --content-type "text/plain; charset=utf-8" --no-progress
+          # Last, so /latest only moves once the files are all there.
+          jq -n --arg tag "$TAG" --arg iso "$NAME.iso" \
+            --arg sha256 "$(cut -d' ' -f1 "$NAME.iso.sha256")" \
+            --argjson size "$(stat -c %s "$NAME.iso")" \
+            --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{tag: $tag, version: ($tag | ltrimstr("v")), iso: $iso, sha256: $sha256, size: $size, published: $published}' \
+            > latest.json
+          cat latest.json
+          r2 cp latest.json "s3://$BUCKET/latest.json" --content-type application/json --no-progress
+          r2 ls "$dest/"
+
+      - name: Link it from the GitHub release
+        if: steps.secrets.outputs.ok && env.DOWNLOAD_URL != ''
+        run: |
+          url="${DOWNLOAD_URL%/}/releases/$TAG/$NAME.iso"
+          sha=$(cut -d' ' -f1 iso/$NAME.iso.sha256)
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Umoja ${TAG#v}" --notes "Install from ppa:ken-vandine/umoja."
+          notes=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          case "$notes" in *"$url"*) exit 0 ;; esac
+          printf '%s\n\n**Installer ISO:** [%s](%s) (%s GiB)  \nSHA-256: `%s`\n' \
+            "$notes" "$NAME.iso" "$url" "$(numfmt --to-unit=1073741824 --format=%.1f "$(stat -c %s iso/$NAME.iso)")" "$sha" \
+            > notes.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md

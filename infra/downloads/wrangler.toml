@@ -1,0 +1,19 @@
+# Cloudflare Worker that serves Umoja release ISOs from R2 and counts
+# downloads (see README.md). Deployed by .github/workflows/downloads.yml.
+name = "umoja-downloads"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# To serve from your own domain (one on this Cloudflare account), uncomment
+# and set DOWNLOAD_URL (a repository variable) to https://<that domain>.
+# routes = [{ pattern = "download.example.org", custom_domain = true }]
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "umoja-releases"
+
+# One data point per ISO download; created on first write.
+[[analytics_engine_datasets]]
+binding = "DOWNLOADS"
+dataset = "umoja_downloads"

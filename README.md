@@ -318,6 +318,8 @@ Releases are numbered `vYYYY.WW.REVISION`: the ISO year and week, then a
 counter that starts at 1 each week (`v2026.46.6`). Daily builds in the edge
 PPA are the latest release plus the commits since it, so they always sort
 above the release they build on.
+Release installer ISOs are published to Cloudflare R2 and served by a
+small download Worker ([infra/downloads](infra/downloads/README.md)).
 
 ### Testing on a real machine
 

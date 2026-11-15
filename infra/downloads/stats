@@ -1,0 +1,29 @@
+#!/bin/sh
+# Download counts for Umoja release ISOs, from the Worker's Analytics
+# Engine dataset (see README.md).
+#
+#   CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_STATS_TOKEN=... infra/downloads/stats [DAYS] [by]
+#
+# DAYS defaults to 90 (Analytics Engine keeps three months). "by" is one of
+# tag (default), day, country or client.
+set -eu
+days=${1:-90}
+by=${2:-tag}
+case "$days" in *[!0-9]*|'') echo "DAYS must be a number" >&2; exit 2 ;; esac
+case "$by" in
+  tag) col="blob2" ;;
+  day) col="toStartOfInterval(timestamp, INTERVAL '1' DAY)" ;;
+  country) col="blob3" ;;
+  client) col="blob4" ;;
+  *) echo "usage: $0 [DAYS] [tag|day|country|client]" >&2; exit 2 ;;
+esac
+: "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID}"
+: "${CLOUDFLARE_STATS_TOKEN:?set CLOUDFLARE_STATS_TOKEN (Account Analytics: Read)}"
+
+curl -fsS "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/analytics_engine/sql" \
+  -H "Authorization: Bearer $CLOUDFLARE_STATS_TOKEN" \
+  --data "SELECT $col AS $by, SUM(_sample_interval) AS downloads
+          FROM umoja_downloads
+          WHERE timestamp > NOW() - INTERVAL '$days' DAY
+          GROUP BY $by ORDER BY $by DESC
+          FORMAT TabSeparated"
