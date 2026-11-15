@@ -278,11 +278,13 @@ computer; no audio leaves it.
 
 Umoja's installer puts Myna and its **Parakeet** model (Myna's pick for
 English and 24 other European languages, about 780 MB) on the computer,
-so dictation works from the first login, offline too. Myna can't be an
+so dictation works offline from the first login (it finishes setting
+up in the background, about 20 seconds into the first session). Myna can't be an
 ordinary seeded snap (its daemon needs snapd's
 `experimental.user-daemons`, and its model is a snap component), so the
 image carries the snaps in `/var/lib/umoja/myna` and
-`umoja-myna-setup.service` installs them on first boot, then has them
+`umoja-myna-setup.service` installs them on first boot, alongside the
+login screen rather than before it, then has them
 follow `latest/edge`, the only channel Myna is published to.
 
 The first time Umoja sees Myna it binds **Super+J** (Myna's own default)
