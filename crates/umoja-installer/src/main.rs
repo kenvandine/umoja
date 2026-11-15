@@ -206,7 +206,25 @@ fn build(app: &adw::Application, preview: bool) {
     card.append(&stack);
 
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&backdrop(&card)));
+    let backdrop = backdrop(&card);
+    // The word sits in the space above the card, so follow the card while
+    // it changes height between pages (the only time the still backdrop
+    // needs redrawing, besides resizes).
+    stack.connect_visible_child_notify({
+        let backdrop = backdrop.downgrade();
+        move |stack| {
+            let Some(backdrop) = backdrop.upgrade() else { return };
+            let stack = stack.downgrade();
+            backdrop.add_tick_callback(move |area, _| {
+                area.queue_draw();
+                match stack.upgrade() {
+                    Some(s) if s.is_transition_running() => glib::ControlFlow::Continue,
+                    _ => glib::ControlFlow::Break,
+                }
+            });
+        }
+    });
+    overlay.set_child(Some(&backdrop));
     overlay.add_overlay(&card);
     window.set_child(Some(&overlay));
 
@@ -783,8 +801,13 @@ fn fail(ui: &Rc<Ui>, message: &str) {
 fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
     let card = card.downgrade();
     let word = Rc::new(sample_word().unwrap_or_else(|| art::word_from_mask(1, 1, |_, _| false)));
-    let start = Instant::now();
     let area = gtk::DrawingArea::builder().hexpand(true).vexpand(true).build();
+    // A still picture: the word as it rests mid-"hold". Animated, the
+    // backdrop was redrawn with cairo (on the CPU) 30 times a second over
+    // the whole screen, and on the XPS 13's panel typing in the installer
+    // lagged behind it. Now it's drawn only when the window or the card
+    // changes size.
+    const STILL: f64 = art::FORM + art::HOLD / 2.0;
     area.set_draw_func(move |_, cr, w, h| {
         let (w, h) = (w as f64, h as f64);
         // Ubuntu aubergine, darker at the bottom.
@@ -801,14 +824,13 @@ fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
         // give it a taller box centred on the free space so the word fills
         // about half of that space.
         let box_h = free * 1.8;
-        let elapsed = start.elapsed().as_secs_f64();
         // The screensaver moves the word about each cycle; here it stays
         // centred in the free space.
-        let l = art::layout(&word, w, box_h, &art::cycle_at(elapsed, Some(4)));
+        let l = art::layout(&word, w, box_h, &art::cycle_at(STILL, Some(4)));
         cr.save().ok();
         cr.translate(w / 2.0 - l.cx, free / 2.0 - l.cy);
         // The "rings" effect holds the word in place, so it stays calm.
-        let frame = art::frame(&word, w, box_h, elapsed, Some(4));
+        let frame = art::frame(&word, w, box_h, STILL, Some(4));
         for m in &frame.marks {
             if m.rgba.3 <= 0.005 || m.radius <= 0.1 {
                 continue;
@@ -818,15 +840,6 @@ fn backdrop(card: &gtk::Box) -> gtk::DrawingArea {
             let _ = cr.fill();
         }
         cr.restore().ok();
-    });
-    // 30 fps is plenty for slowly drifting dots.
-    let last = std::cell::Cell::new(Instant::now());
-    area.add_tick_callback(move |area, _| {
-        if last.get().elapsed() >= std::time::Duration::from_millis(33) {
-            last.set(Instant::now());
-            area.queue_draw();
-        }
-        glib::ControlFlow::Continue
     });
     area
 }
