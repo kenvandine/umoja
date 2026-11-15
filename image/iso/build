@@ -174,8 +174,12 @@ mkdir -p "$LIVE/etc/systemd/user"
 ln -sf /dev/null "$LIVE/etc/systemd/user/umoja-agent-setup.service"
 # The live session only runs the installer: no top panel. umoja-tray-ready
 # waits for the panel's tray, so it goes too, or autostart (the installer)
-# would wait 30 s for it.
-for unit in umoja-panel.service umoja-tray-ready.service; do
+# would wait 30 s for it. No welcome screen either: it waits for the panel,
+# so it covered the installer for its full 8 s, and it is the likely cause
+# of the installer not redrawing afterwards (Install Umoja clicked, nothing
+# shown until a VT switch: Mir frame callbacks for a surface mapped under an
+# overlay). The installer has its own welcome page.
+for unit in umoja-panel.service umoja-tray-ready.service umoja-welcome.service; do
     ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
 done
 
