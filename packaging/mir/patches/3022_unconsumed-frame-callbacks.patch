@@ -1,0 +1,254 @@
+Description: Answer frame callbacks whose buffer is never used
+ Mir answers wl_surface.frame callbacks committed with a buffer when a
+ compositor uses (consumes) that buffer, and it skips the buffers of fully
+ covered surfaces. Umoja's live session starts the installer under the
+ full-screen welcome screen: the installer's frame callback waited, GTK
+ stopped drawing, and uncovering it did not bring a composite that used
+ the waiting buffer. The installer kept working (a click moved it to the
+ next page) but the screen never changed until a VT switch redrew
+ everything.
+ .
+ Callbacks still waiting 0.5 s after their commit (checked by a second
+ FrameExecutor with a 500 ms delay, so 0.5-1 s) are now answered anyway,
+ as other compositors throttle hidden surfaces instead of stalling them. A
+ covered GTK window redraws at about 1 Hz (34% CPU instead of 333% for the
+ installer's animation on llvmpipe in a VM); a visible one has its buffer
+ used within a frame and never reaches the fallback.
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/server/frontend_wayland/frame_executor.cpp
++++ b/src/server/frontend_wayland/frame_executor.cpp
+@@ -23,23 +23,19 @@
+ 
+ namespace mf = mir::frontend;
+ 
+-namespace
+-{
+-auto const delay = std::chrono::milliseconds{16};
+-}
+-
+ struct mf::FrameExecutor::Callbacks
+ {
+     std::mutex mutex;
+     std::vector<std::function<void()>> queued;
+ };
+ 
+-mf::FrameExecutor::FrameExecutor(time::AlarmFactory& alarm_factory)
++mf::FrameExecutor::FrameExecutor(time::AlarmFactory& alarm_factory, std::chrono::milliseconds delay)
+     : callbacks{std::make_shared<Callbacks>()},
+       alarm{alarm_factory.create_alarm([weak_callbacks = std::weak_ptr<Callbacks>{callbacks}]()
+           {
+               fire_callbacks(weak_callbacks);
+-          })}
++          })},
++      delay{delay}
+ {
+ }
+ 
+--- a/src/server/frontend_wayland/frame_executor.h
++++ b/src/server/frontend_wayland/frame_executor.h
+@@ -19,6 +19,7 @@
+ 
+ #include <mir/executor.h>
+ 
++#include <chrono>
+ #include <memory>
+ 
+ namespace mir
+@@ -36,7 +37,9 @@ namespace frontend
+ class FrameExecutor : public Executor
+ {
+ public:
+-    explicit FrameExecutor(time::AlarmFactory& alarm_factory);
++    explicit FrameExecutor(
++        time::AlarmFactory& alarm_factory,
++        std::chrono::milliseconds delay = std::chrono::milliseconds{16});
+     ~FrameExecutor() override;
+ 
+     // This can be called from any thread. Given callback is run on the main loop thread. The wayland executor is NOT
+@@ -48,6 +51,7 @@ private:
+ 
+     std::shared_ptr<Callbacks> const callbacks; // shared_ptr so it can potentially outlive this object
+     std::unique_ptr<time::Alarm> const alarm;
++    std::chrono::milliseconds const delay;
+ 
+     static void fire_callbacks(std::weak_ptr<Callbacks> const& weak_callbacks);
+ };
+--- a/src/server/frontend_wayland/wayland_connector.cpp
++++ b/src/server/frontend_wayland/wayland_connector.cpp
+@@ -79,11 +79,13 @@ public:
+         struct wl_display* display,
+         std::shared_ptr<mir::Executor> const& wayland_executor,
+         std::shared_ptr<mir::Executor> const& frame_callback_executor,
++        std::shared_ptr<mir::Executor> const& unconsumed_frame_executor,
+         std::shared_ptr<mg::GraphicBufferAllocator> const& allocator)
+         : Global(display, Version<6>()),
+           allocator{allocator},
+           wayland_executor{wayland_executor},
+-          frame_callback_executor{frame_callback_executor}
++          frame_callback_executor{frame_callback_executor},
++          unconsumed_frame_executor{unconsumed_frame_executor}
+     {
+     }
+ 
+@@ -93,6 +95,7 @@ private:
+     std::shared_ptr<mg::GraphicBufferAllocator> const allocator;
+     std::shared_ptr<mir::Executor> const wayland_executor;
+     std::shared_ptr<mir::Executor> const frame_callback_executor;
++    std::shared_ptr<mir::Executor> const unconsumed_frame_executor;
+     std::map<std::pair<wl_client*, uint32_t>, std::vector<std::function<void(WlSurface*)>>> surface_callbacks;
+ 
+     class Instance : wayland::Compositor
+@@ -136,7 +139,8 @@ void WlCompositor::Instance::create_surf
+         new_surface,
+         compositor->wayland_executor,
+         compositor->frame_callback_executor,
+-        compositor->allocator};
++        compositor->allocator,
++        compositor->unconsumed_frame_executor};
+     auto const key = std::make_pair(wl_resource_get_client(new_surface), wl_resource_get_id(new_surface));
+     auto const callbacks = compositor->surface_callbacks.find(key);
+     if (callbacks != compositor->surface_callbacks.end())
+@@ -313,6 +317,7 @@ mf::WaylandConnector::WaylandConnector(
+         display.get(),
+         executor,
+         std::make_shared<FrameExecutor>(*main_loop),
++        std::make_shared<FrameExecutor>(*main_loop, std::chrono::milliseconds{500}),
+         this->allocator);
+     subcompositor_global = std::make_unique<mf::WlSubcompositor>(display.get());
+     auto const surface_registry = std::make_shared<mf::SurfaceRegistry>();
+--- a/src/server/frontend_wayland/wl_surface.cpp
++++ b/src/server/frontend_wayland/wl_surface.cpp
+@@ -121,13 +121,15 @@ mf::WlSurface::WlSurface(
+     wl_resource* new_resource,
+     std::shared_ptr<Executor> const& wayland_executor,
+     std::shared_ptr<Executor> const& frame_callback_executor,
+-    std::shared_ptr<graphics::GraphicBufferAllocator> const& allocator)
++    std::shared_ptr<graphics::GraphicBufferAllocator> const& allocator,
++    std::shared_ptr<Executor> const& unconsumed_frame_executor)
+     : Surface(new_resource, Version<6>()),
+         session{client->client_session()},
+         stream{session->create_buffer_stream({{}, mir_pixel_format_invalid, graphics::BufferUsage::undefined})},
+         allocator{allocator},
+         wayland_executor{wayland_executor},
+         frame_callback_executor{frame_callback_executor},
++        unconsumed_frame_executor{unconsumed_frame_executor},
+         null_role{this},
+         role{&null_role}
+ {
+@@ -395,6 +397,55 @@ void mf::WlSurface::send_frame_callbacks
+     list.clear();
+ }
+ 
++namespace
++{
++/// How long frame callbacks wait for the compositor to use their buffer
++/// before they are answered anyway.
++auto const unconsumed_frame_timeout = std::chrono::milliseconds{500};
++}
++
++/* Frame callbacks committed with a buffer are answered when a compositor
++ * uses (consumes) that buffer. A surface that is fully covered, such as a
++ * window starting under a full-screen layer surface, has its buffers
++ * skipped as occluded, so its callbacks wait, and toolkits that draw only
++ * on a frame callback (GTK) stop drawing. Uncovering the surface does not
++ * always lead to a composite that uses the waiting buffer, so the client
++ * stayed frozen (input still worked) until something redrew the whole
++ * screen, such as a VT switch.
++ *
++ * So answer callbacks whose buffer has not been used after a while, as
++ * other compositors throttle hidden surfaces rather than stall them. A
++ * hidden client animates at about 1 Hz; a visible one has its buffer used
++ * within a frame and never gets here.
++ */
++void mf::WlSurface::schedule_unconsumed_frame_fallback()
++{
++    if (!unconsumed_frame_executor || unconsumed_frame_fallback_scheduled)
++        return;
++    unconsumed_frame_fallback_scheduled = true;
++    unconsumed_frame_executor->spawn(
++        [executor = wayland_executor, weak_self = mw::make_weak(this)]
++        {
++            executor->spawn(
++                [weak_self]()
++                {
++                    if (!weak_self)
++                        return;
++                    auto& self = weak_self.value();
++                    self.unconsumed_frame_fallback_scheduled = false;
++                    if (self.frame_callbacks.empty())
++                        return;
++                    if (std::chrono::steady_clock::now() - self.frame_callbacks_since < unconsumed_frame_timeout)
++                    {
++                        // Committed just before this batch fired: give it a full wait.
++                        self.schedule_unconsumed_frame_fallback();
++                        return;
++                    }
++                    self.send_frame_callbacks(self.frame_callbacks);
++                });
++        });
++}
++
+ void mf::WlSurface::attach(std::optional<wl_resource*> const& buffer, int32_t x, int32_t y)
+ {
+     if (x != 0 || y != 0)
+@@ -499,6 +550,8 @@ void mf::WlSurface::commit(WlSurfaceStat
+         // We're going to lose the value of state, so copy the frame_callbacks first. We have to maintain a list of
+         // callbacks in wl_surface because if a client commits multiple times before the first buffer is handled, all the
+         // callbacks should be sent at once.
++        if (frame_callbacks.empty())
++            frame_callbacks_since = std::chrono::steady_clock::now();
+         frame_callbacks.insert(end(frame_callbacks), begin(state.frame_callbacks), end(state.frame_callbacks));
+ 
+         mw::Weak<ResourceLifetimeTracker> const& weak_buffer = state.buffer.value();
+@@ -572,6 +625,8 @@ void mf::WlSurface::commit(WlSurfaceStat
+             }
+ 
+             needs_buffer_submission = true;
++            if (!frame_callbacks.empty())
++                schedule_unconsumed_frame_fallback();
+         }
+     }
+     else
+--- a/src/server/frontend_wayland/wl_surface.h
++++ b/src/server/frontend_wayland/wl_surface.h
+@@ -25,6 +25,7 @@
+ #include "wl_surface_role.h"
+ 
+ #include <mir/geometry/displacement.h>
++#include <chrono>
+ #include <mir/geometry/size.h>
+ #include <mir/geometry/point.h>
+ #include <mir/geometry/rectangle.h>
+@@ -129,7 +130,8 @@ public:
+     WlSurface(wl_resource* new_resource,
+               std::shared_ptr<mir::Executor> const& wayland_executor,
+               std::shared_ptr<mir::Executor> const& frame_callback_executor,
+-              std::shared_ptr<graphics::GraphicBufferAllocator> const& allocator);
++              std::shared_ptr<graphics::GraphicBufferAllocator> const& allocator,
++              std::shared_ptr<mir::Executor> const& unconsumed_frame_executor = nullptr);
+ 
+     ~WlSurface();
+ 
+@@ -203,6 +205,9 @@ private:
+     std::shared_ptr<mir::graphics::GraphicBufferAllocator> const allocator;
+     std::shared_ptr<mir::Executor> const wayland_executor;
+     std::shared_ptr<mir::Executor> const frame_callback_executor;
++    /// Runs the fallback that answers frame callbacks whose buffer the
++    /// compositor never used (see schedule_unconsumed_frame_fallback()).
++    std::shared_ptr<mir::Executor> const unconsumed_frame_executor;
+ 
+     NullWlSurfaceRole null_role;
+     WlSurfaceRole* role;
+@@ -238,6 +243,10 @@ private:
+     using CallbackList = std::vector<wayland::Weak<WlSurfaceState::Callback>>;
+     CallbackList frame_callbacks;
+     CallbackList heartbeat_quirk_frame_callbacks;
++    /// When frame_callbacks last went from empty to waiting on a buffer.
++    std::chrono::steady_clock::time_point frame_callbacks_since;
++    bool unconsumed_frame_fallback_scheduled{false};
++    void schedule_unconsumed_frame_fallback();
+     std::optional<std::vector<mir::geometry::Rectangle>> input_shape;
+     std::vector<SceneSurfaceCreatedCallback> scene_surface_created_callbacks;
+     wayland::Weak<Viewport> viewport;
