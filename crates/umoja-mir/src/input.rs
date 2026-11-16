@@ -1272,6 +1272,19 @@ mod tests {
             resize_with_right_button: false,
             workspaces: workspaces::Settings::default(),
             custom_commands: Vec::new(),
+            hot_corners: true,
+            animations: true,
+            focus: FocusSettings {
+                mode: FOCUS_CLICK,
+                auto_raise: false,
+                auto_raise_delay_ms: 500,
+                raise_on_click: true,
+                new_windows_strict: false,
+            },
+            auto_maximize: true,
+            app_switcher_current_workspace: false,
+            window_switcher_current_workspace: false,
+            rtl: false,
             shortcuts: Vec::new(),
         };
         assert_eq!(lookup('H' as u32, MOD_SUPER), Action::Minimize as u32);
