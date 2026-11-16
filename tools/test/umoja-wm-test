@@ -73,9 +73,10 @@ FOCUSED, MINIMIZED, CURRENT_WS, MAXIMIZED, FULLSCREEN, TILED = 1, 2, 4, 8, 16, 3
 ATTENTION = 512
 # tiling::Action numbers (TileWindow).
 TILE_LEFT, TOGGLE_MAXIMIZED = 1, 13
-# GdkToplevelState bits (testpad "state").
+# GdkToplevelState bits (testpad "state"): 1 << 6 is FOCUSED, and each
+# side has a TILED bit followed by a RESIZABLE one.
 GDK_MAXIMIZED, GDK_TILED, GDK_TOP_TILED, GDK_RIGHT_TILED, GDK_BOTTOM_TILED, GDK_LEFT_TILED = (
-    1 << 1, 1 << 6, 1 << 7, 1 << 9, 1 << 11, 1 << 13)
+    1 << 1, 1 << 7, 1 << 8, 1 << 10, 1 << 12, 1 << 14)
 
 MARK = "4711"
 PAD_APP = "org.umoja.WmTestPad"
