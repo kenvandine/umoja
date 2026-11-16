@@ -12,7 +12,6 @@
 
 #include <mir/events/scroll_axis.h>
 #include <mir/events/touch_contact.h>
-#include <mir/executor.h>
 #include <mir/input/device.h>
 #include <mir/input/event_builder.h>
 #include <mir/input/input_device_registry.h>
@@ -22,16 +21,22 @@
 #include <mir_toolkit/events/enums.h>
 
 #include <linux/input-event-codes.h>
+#include <pthread.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
+#include <exception>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <thread>
 
 namespace geom = mir::geometry;
 namespace mi = mir::input;
@@ -40,6 +45,57 @@ namespace mev = mir::events;
 namespace {
 
 mir::Server* g_server = nullptr;
+
+// Remote input runs on a thread of its own, one event after another in the
+// order it arrived. Not on mir::linearising_executor: an event goes through
+// the window manager, which can be busy with a resize on the Wayland thread,
+// and that resize waits for its output tracking to run on the same
+// linearising executor, behind the event. That froze umoja-mir for good
+// (umoja-wm-test's title-bar drag, 2026-11-16).
+class InputQueue {
+public:
+    void spawn(std::function<void()> work) {
+        {
+            std::lock_guard lock{mutex};
+            queue.push_back(std::move(work));
+            if (!started) {
+                started = true;
+                std::thread{[this] { run(); }}.detach();
+            }
+        }
+        wake.notify_one();
+    }
+
+private:
+    void run() {
+        pthread_setname_np(pthread_self(), "umoja-remote-in");
+        for (;;) {
+            std::function<void()> work;
+            {
+                std::unique_lock lock{mutex};
+                wake.wait(lock, [this] { return !queue.empty(); });
+                work = std::move(queue.front());
+                queue.pop_front();
+            }
+            try {
+                work();
+            } catch (std::exception const& e) {
+                std::fprintf(stderr, "umoja-mir: remote input: %s\n", e.what());
+            }
+        }
+    }
+
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::deque<std::function<void()>> queue;
+    bool started = false;
+};
+
+// Never destroyed: its thread may still be draining at exit.
+InputQueue& input_queue() {
+    static auto* const q = new InputQueue;
+    return *q;
+}
 
 auto now() -> std::chrono::nanoseconds {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -76,7 +132,7 @@ public:
     ~Remote() {
         release_all();
         // After the releases, on the same executor, so nothing races them.
-        mir::linearising_executor.spawn([keyboard = keyboard, pointer = pointer, touch = touch,
+        input_queue().spawn([keyboard = keyboard, pointer = pointer, touch = touch,
                                          registry = g_server->the_input_device_registry()] {
             registry->remove_device(keyboard);
             registry->remove_device(pointer);
@@ -94,7 +150,7 @@ public:
 
     void motion(double dx, double dy) {
         MirPointerButtons const buttons = current_buttons();
-        mir::linearising_executor.spawn([pointer = pointer, buttons, dx, dy] {
+        input_queue().spawn([pointer = pointer, buttons, dx, dy] {
             pointer->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                 sink->handle_input(builder->pointer_event(now(), mir_pointer_action_motion, buttons, std::nullopt,
                                                           geom::DisplacementF{dx, dy}, mir_pointer_axis_source_none,
@@ -105,7 +161,7 @@ public:
 
     void absolute(double x, double y) {
         MirPointerButtons const buttons = current_buttons();
-        mir::linearising_executor.spawn([pointer = pointer, buttons, x, y] {
+        input_queue().spawn([pointer = pointer, buttons, x, y] {
             pointer->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                 sink->handle_input(builder->pointer_event(now(), mir_pointer_action_motion, buttons,
                                                           geom::PointF{x, y}, geom::DisplacementF{},
@@ -126,7 +182,7 @@ public:
             after = buttons;
         }
         auto const action = pressed ? mir_pointer_action_button_down : mir_pointer_action_button_up;
-        mir::linearising_executor.spawn([pointer = pointer, action, after] {
+        input_queue().spawn([pointer = pointer, action, after] {
             pointer->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                 sink->handle_input(builder->pointer_event(now(), action, after, std::nullopt, geom::DisplacementF{},
                                                           mir_pointer_axis_source_none, {}, {}));
@@ -155,7 +211,7 @@ public:
             v.stop = finish && dy == 0;
         }
         MirPointerButtons const buttons = current_buttons();
-        mir::linearising_executor.spawn([pointer = pointer, buttons, source, h, v] {
+        input_queue().spawn([pointer = pointer, buttons, source, h, v] {
             pointer->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                 sink->handle_input(builder->pointer_event(now(), mir_pointer_action_motion, buttons, std::nullopt,
                                                           geom::DisplacementF{}, source, h, v));
@@ -210,7 +266,7 @@ public:
         }
         for (uint32_t code : held_keys) send_key(code, false);
         if (held_buttons) {
-            mir::linearising_executor.spawn([pointer = pointer] {
+            input_queue().spawn([pointer = pointer] {
                 pointer->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                     sink->handle_input(builder->pointer_event(now(), mir_pointer_action_button_up, 0, std::nullopt,
                                                               geom::DisplacementF{}, mir_pointer_axis_source_none,
@@ -236,7 +292,7 @@ private:
 
     void send_key(uint32_t code, bool pressed) {
         auto const action = pressed ? mir_keyboard_action_down : mir_keyboard_action_up;
-        mir::linearising_executor.spawn([keyboard = keyboard, action, code] {
+        input_queue().spawn([keyboard = keyboard, action, code] {
             keyboard->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                 sink->handle_input(builder->key_event(now(), action, 0, (int)code));
             });
@@ -244,7 +300,7 @@ private:
     }
 
     void send_touch(std::vector<mev::TouchContact> contacts) {
-        mir::linearising_executor.spawn([touch = touch, contacts = std::move(contacts)] {
+        input_queue().spawn([touch = touch, contacts = std::move(contacts)] {
             touch->if_started_then([&](mi::InputSink* sink, mi::EventBuilder* builder) {
                 sink->handle_input(builder->touch_event(now(), contacts));
             });
