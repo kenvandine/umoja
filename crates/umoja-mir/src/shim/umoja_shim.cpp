@@ -2138,6 +2138,14 @@ public:
         guarded("move pointer", [&] { tools.move_cursor_to(geom::PointF{float(x), float(y)}); });
     }
 
+    // Where the pointer last was, in layout pixels (GetPointer).
+    bool pointer_position(int32_t* x, int32_t* y) const {
+        if (!have_pointer) return false;
+        *x = last_pointer.x.as_int();
+        *y = last_pointer.y.as_int();
+        return true;
+    }
+
     // org.umoja.Compositor.DragWindow: a title-bar drag driven by points
     // instead of the pointer, through the same drag-to-snap path (tile
     // preview, layout picker, drop). Phase 0 grabs the window's title bar
@@ -4023,6 +4031,14 @@ extern "C" bool umoja_wm_script_drag(uint64_t id, uint32_t phase, int32_t x, int
 // way (tools/demo parks it so it isn't over what a clip shows).
 extern "C" void umoja_wm_move_pointer(int32_t x, int32_t y) {
     with_wm("move pointer", [&] { g_wm->move_pointer(x, y); });
+}
+
+extern "C" bool umoja_wm_pointer(int32_t* out_x, int32_t* out_y) {
+    bool ok = false;
+    *out_x = 0;
+    *out_y = 0;
+    with_wm("pointer", [&] { ok = g_wm->pointer_position(out_x, out_y); });
+    return ok;
 }
 
 extern "C" void umoja_wm_workspaces(uint32_t* out_current, uint32_t* out_count) {

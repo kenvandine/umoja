@@ -846,6 +846,35 @@ def t_thumbnail_drag(run):
     run.close_overview()
 
 
+@test("overview-app-drop", "Drag an app from the dock onto a workspace thumbnail to open it there (O3)")
+def t_overview_app_drop(run):
+    need_workspaces(run)
+    cur, _ = run.go_to_new_workspace()
+    Pad(run, "a")
+    index, icon = pad_icon(run)
+    if icon is None:
+        raise AssertionError("the test pad isn't in the dock")
+    st = run.open_overview()
+    if not run.bus.has_method(OVERLAY, "AppDrag"):
+        raise Skip("this umoja-overlay has no AppDrag (older build)")
+    target = cur + 1
+    tr = _thumb_rect(st, target)
+    if not tr:
+        raise AssertionError(f"no thumbnail {target}: {st.get('thumbnail_rects')}")
+    before = [w[0] for w in run.windows() if w[1] == PAD_APP]
+    run.input.drag(dock_point(run, icon), centre(tr), seconds=1.2, hold=0.6)
+    run.shot("dropped", "the app dropped on the next workspace's thumbnail")
+    new = run.wait(15, lambda: [w[0] for w in run.windows() if w[1] == PAD_APP and w[0] not in before])
+    run.check(new, "a new window of the app opened", new)
+    if new:
+        ws = run.wait(5, lambda: run.workspace_of(new[0]) == target and target)
+        run.check(ws == target, "it is on the workspace it was dropped on", run.workspace_of(new[0]))
+        run.shot("opened", "the new window in that thumbnail")
+    run.close_overview()
+    for wid in new or []:
+        run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
+
+
 @test("thumbnail-place", "Drop a window inside a thumbnail to place it there (O4)")
 def t_thumbnail_place(run):
     need_workspaces(run)

@@ -277,6 +277,19 @@ struct State {
     count: u32,
 }
 
+/// Where an app dropped from the dock opens.
+#[derive(Clone, Copy, Debug)]
+enum AppDrop {
+    Workspace(u32),
+    NewWorkspace(u32),
+}
+
+/// The dragged app icon's size over the overview.
+const APP_GHOST: i32 = 64;
+
+/// How long a dropped app has to open its window.
+const LAUNCH_WAIT: Duration = Duration::from_secs(15);
+
 struct Drag {
     id: u64,
     workspace: i32,
@@ -336,6 +349,12 @@ pub struct Spread {
     selected: Cell<Option<(usize, usize)>>,
     stack: gtk::Overlay,
     shown: RefCell<Shown>,
+    /// An app icon dragged out of the dock: the target it is over, and a
+    /// counter so a pointer answer arriving after the drop is ignored.
+    app_target: RefCell<Option<(gtk::Widget, DropKind)>>,
+    app_drag_seq: Cell<u64>,
+    /// The dragged app's icon under the pointer, and the layer it is on.
+    app_ghost: RefCell<Option<(gtk::Fixed, gtk::Widget)>>,
 }
 
 /// Fade a view in (gnome-shell animates into the overview; a fade is the
@@ -459,6 +478,9 @@ impl Spread {
             selected: Cell::new(None),
             stack,
             shown: RefCell::default(),
+            app_target: RefCell::default(),
+            app_drag_seq: Cell::new(0),
+            app_ghost: RefCell::default(),
         });
         this.connect_signals(&content);
         this.watch_workspaces();
@@ -774,6 +796,8 @@ impl Spread {
 
     pub fn hide(&self) {
         self.cancel_drag();
+        self.set_app_target(None);
+        self.move_app_ghost("", None);
         let was_visible = self.window.is_visible();
         self.window.set_visible(false);
         for s in self.sides.borrow().iter() {
@@ -1868,6 +1892,162 @@ impl Spread {
                 self.place_window(d.id, -1, x, y);
             }
         }
+    }
+
+    /// An app icon dragged out of the dock (umoja-dock's AppDrag): phase 0
+    /// it moved, 1 it was dropped, 2 the drag ended without a drop. Dropped
+    /// on a workspace thumbnail, a peek or a card, a new window of the app
+    /// opens there; between two thumbnails, on a new workspace there
+    /// (gnome-shell's app drop on a workspace).
+    pub fn app_drag(self: &Rc<Self>, desktop_id: String, phase: u32) {
+        let seq = self.app_drag_seq.get() + 1;
+        self.app_drag_seq.set(seq);
+        if phase > 1 || !self.is_visible() {
+            self.set_app_target(None);
+            self.move_app_ghost(&desktop_id, None);
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let p = compositor_query::<(bool, i32, i32)>("GetPointer", "(bii)").await;
+            let Some(s) = weak.upgrade() else { return };
+            if s.app_drag_seq.get() != seq {
+                return;
+            }
+            let at = match p {
+                Some((true, x, y)) => s.app_target_at(x as f64, y as f64),
+                _ => None,
+            };
+            let target = at.as_ref().and_then(|(_, _, t)| t.clone());
+            if phase == 0 {
+                s.move_app_ghost(&desktop_id, at.as_ref().map(|(root, p, _)| (root, *p)));
+                s.set_app_target(target);
+                return;
+            }
+            s.move_app_ghost(&desktop_id, None);
+            s.set_app_target(None);
+            let Some((_, kind)) = target else { return };
+            let to = match kind {
+                DropKind::Peek(i) | DropKind::Thumb { index: i, .. } | DropKind::Card { index: i, .. } => {
+                    AppDrop::Workspace(i)
+                }
+                DropKind::Gap(i) => AppDrop::NewWorkspace(i),
+                DropKind::Screen { .. } => return,
+            };
+            s.launch_on(&desktop_id, to);
+        });
+    }
+
+    /// The overview surface at (`x`, `y`) in layout pixels, the point in
+    /// it, and the drop target there.
+    #[allow(clippy::type_complexity)]
+    fn app_target_at(
+        &self,
+        x: f64,
+        y: f64,
+    ) -> Option<(gtk::Widget, (f64, f64), Option<(gtk::Widget, DropKind)>)> {
+        let mut roots: Vec<gtk::Widget> = vec![self.window.clone().upcast()];
+        roots.extend(self.sides.borrow().iter().map(|s| s.window.clone().upcast()));
+        roots.into_iter().find_map(|root| {
+            if !root.is_visible() {
+                return None;
+            }
+            let (ox, oy) = self.surface_origin(&root)?;
+            let (lx, ly) = (x - ox as f64, y - oy as f64);
+            if lx < 0.0 || ly < 0.0 || lx >= root.width() as f64 || ly >= root.height() as f64 {
+                return None;
+            }
+            let target = self
+                .target_at(&root, lx, ly)
+                .filter(|(_, k)| !matches!(k, DropKind::Screen { .. }));
+            Some((root, (lx, ly), target))
+        })
+    }
+
+    /// Show the dragged app's icon at `at` (a point in an overview
+    /// surface), or take it away.
+    fn move_app_ghost(&self, desktop_id: &str, at: Option<(&gtk::Widget, (f64, f64))>) {
+        let layer = at.and_then(|(root, _)| self.layer_for(root));
+        let mut ghost = self.app_ghost.borrow_mut();
+        if ghost.as_ref().map(|(l, _)| l) != layer.as_ref()
+            && let Some((l, g)) = ghost.take()
+        {
+            l.remove(&g);
+        }
+        let (Some(layer), Some((root, (x, y)))) = (layer, at) else {
+            return;
+        };
+        if ghost.is_none() {
+            let icon = gio::DesktopAppInfo::new(desktop_id)
+                .and_then(|a| a.icon())
+                .unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast());
+            let img = gtk::Image::from_gicon(&icon);
+            img.set_pixel_size(APP_GHOST);
+            img.add_css_class("spread-drag-ghost");
+            img.set_can_target(false);
+            layer.put(&img, 0.0, 0.0);
+            *ghost = Some((layer.clone(), img.upcast()));
+        }
+        let half = APP_GHOST as f32 / 2.0;
+        if let Some((l, g)) = ghost.as_ref()
+            && let Some(p) = root.compute_point(l, &gtk::graphene::Point::new(x as f32 - half, y as f32 - half))
+        {
+            l.move_(g, p.x() as f64, p.y() as f64);
+        }
+    }
+
+    fn set_app_target(&self, new: Option<(gtk::Widget, DropKind)>) {
+        let mut cur = self.app_target.borrow_mut();
+        let old_w = cur.as_ref().map(|t| t.0.clone());
+        let new_w = new.as_ref().map(|t| t.0.clone());
+        if old_w != new_w {
+            if let Some(o) = old_w {
+                o.remove_css_class("drop-target");
+            }
+            if let Some(n) = &new_w {
+                n.add_css_class("drop-target");
+            }
+        }
+        *cur = new;
+    }
+
+    /// Open a new window of `desktop_id` and move it to the workspace
+    /// `to` names once it maps (it opens on the current one first; the
+    /// overview shows it move).
+    fn launch_on(self: &Rc<Self>, desktop_id: &str, to: AppDrop) {
+        let Some(app) = gio::DesktopAppInfo::new(desktop_id) else {
+            tracing::warn!(desktop_id, "dropped app not found");
+            return;
+        };
+        let before: Vec<u64> = self.state.borrow().windows.iter().map(|w| w.id).collect();
+        crate::appgrid::launch_app(self.window.upcast_ref(), app.upcast_ref());
+        let want = desktop_id.to_string();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let mut before = before;
+            if before.is_empty() {
+                before = fetch_windows().await.iter().map(|w| w.id).collect();
+            }
+            for _ in 0..(LAUNCH_WAIT.as_millis() / 250) {
+                glib::timeout_future(Duration::from_millis(250)).await;
+                let new = fetch_windows().await.into_iter().find(|w| {
+                    !before.contains(&w.id)
+                        && apps::app_for_window(&w.app_id)
+                            .and_then(|a| a.id())
+                            .is_some_and(|id| id.as_str() == want)
+                });
+                let Some(w) = new else { continue };
+                let Some(s) = weak.upgrade() else { return };
+                match to {
+                    AppDrop::Workspace(i) => s.send_to_workspace(w.id, i),
+                    AppDrop::NewWorkspace(i) => {
+                        s.call_then_refresh("SendWindowToNewWorkspace", (w.id, i))
+                    }
+                }
+                return;
+            }
+            tracing::info!(desktop_id = want, "no new window to move");
+        });
     }
 
     fn cancel_drag(&self) {

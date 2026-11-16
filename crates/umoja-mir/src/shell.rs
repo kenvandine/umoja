@@ -514,6 +514,7 @@ unsafe extern "C" {
     fn umoja_wm_switcher_pick(index: u32);
     fn umoja_wm_tile(id: u64, action: u32);
     fn umoja_wm_move_pointer(x: i32, y: i32);
+    fn umoja_wm_pointer(out_x: *mut i32, out_y: *mut i32) -> bool;
     fn umoja_wm_script_drag(
         id: u64,
         phase: u32,
@@ -741,6 +742,18 @@ impl Compositor {
     /// button events reach any client.
     async fn move_pointer(&self, x: i32, y: i32) {
         let _ = tokio::task::spawn_blocking(move || unsafe { umoja_wm_move_pointer(x, y) }).await;
+    }
+
+    /// (known, x, y): where the pointer is in layout pixels. The overview
+    /// asks when an app icon dragged out of the dock is over it.
+    async fn get_pointer(&self) -> (bool, i32, i32) {
+        tokio::task::spawn_blocking(|| {
+            let (mut x, mut y) = (0i32, 0i32);
+            let known = unsafe { umoja_wm_pointer(&mut x, &mut y) };
+            (known, x, y)
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// (current, count): the active workspace (0-based) and how many exist.

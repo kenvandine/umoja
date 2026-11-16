@@ -154,6 +154,7 @@ machine whose windows you don't mind in the clips.
 | `overview-monitor` | Overview on the primary monitor, a card on every other (O12, M1) |
 | `overview-close-button` | Closing a window from the overview keeps it in place (O12) |
 | `thumbnail-drag` | Drag a small window from one thumbnail to another (O1) |
+| `overview-app-drop` | Drag an app from the dock onto a workspace thumbnail to open it there (O3) |
 | `thumbnail-place` | Drop a window inside a thumbnail to place it there (O4) |
 | `new-workspace-gap` | Drop between two thumbnails makes a workspace there (O2) |
 | `current-thumbnail-click` | Clicking the current workspace's thumbnail closes the overview (O5) |
