@@ -92,13 +92,14 @@ pub extern "C" fn umoja_copilot_key() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn umoja_xwayland_grab_allowed(app_id: *const c_char) -> bool {
+pub extern "C" fn umoja_keyboard_grab_allowed(app_id: *const c_char, xwayland: bool) -> bool {
     if app_id.is_null() {
         return false;
     }
     let app_id = unsafe { CStr::from_ptr(app_id) }.to_string_lossy().into_owned();
-    let allowed = guard("xwayland_grab", false, || crate::xwayland_grab::allowed(&app_id));
-    tracing::info!(app_id, allowed, "X11 keyboard grab");
+    let allowed = guard("keyboard_grab", false, || crate::xwayland_grab::allowed(&app_id));
+    let kind = if xwayland { "X11 keyboard grab" } else { "shortcuts inhibitor" };
+    tracing::info!(app_id, allowed, "{kind}");
     allowed
 }
 

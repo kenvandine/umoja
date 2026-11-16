@@ -126,7 +126,12 @@ so they work inside the VM. Volume and brightness keys still work on your
 computer. Press **Super+Escape** to take the keys back. This works for
 Wayland viewers (GNOME Boxes, virt-manager, QEMU's GTK window) and for
 X11 ones such as QEMU's SDL window, which quickemu uses, VirtualBox,
-Remmina and VMware.
+Remmina and VMware. Other apps never take your shortcuts. To let another
+app have them, add its app id to GNOME's list:
+
+```
+gsettings set org.gnome.mutter.wayland xwayland-grab-access-rules "['my-viewer']"
+```
 
 ## Display scale and HiDPI
 

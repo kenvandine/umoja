@@ -132,7 +132,7 @@ struct Inhibitor {
     bool active = false;
     bool revoked = false; // Super+Escape took it back
     // An X11 app's keyboard grab passed on by Xwayland: no active/inactive
-    // events, and only apps the grab rules allow (umoja_xwayland_grab_allowed).
+    // events, and only apps the grab rules allow (umoja_keyboard_grab_allowed).
     bool xwayland = false;
     wl_listener surface_destroyed{};
 };
@@ -162,23 +162,21 @@ void inhibitor_resource_destroyed(wl_resource* resource) {
     delete i;
 }
 
-// GNOME asks the user once per app; Umoja grants it, and Super+Escape
-// takes it back (restore_shortcuts).
+// GNOME asks the user once per app. Umoja has no dialog: VM and remote
+// desktop viewers get the keys (umoja_keyboard_grab_allowed), any other
+// app never does (GTK asks on its own for keyboard grabs), and
+// Super+Escape takes them back (restore_shortcuts).
 void activate(Inhibitor* i) {
     if (i->active || i->revoked || !i->surface) return;
     if (!i->window) i->window = miral::window_for(i->surface);
     if (!i->window) return;
-    if (i->xwayland) {
-        std::string const app = umoja_fx::app_id_of(i->window);
-        if (!umoja_xwayland_grab_allowed(app.c_str())) {
-            i->revoked = true; // not asked again for this grab
-            return;
-        }
-        i->active = true;
+    std::string const app = umoja_fx::app_id_of(i->window);
+    if (!umoja_keyboard_grab_allowed(app.c_str(), i->xwayland)) {
+        i->revoked = true; // not asked again for this inhibitor
         return;
     }
     i->active = true;
-    zwp_keyboard_shortcuts_inhibitor_v1_send_active(i->resource);
+    if (!i->xwayland) zwp_keyboard_shortcuts_inhibitor_v1_send_active(i->resource);
 }
 
 void inhibitor_destroy(wl_client*, wl_resource* resource) { wl_resource_destroy(resource); }

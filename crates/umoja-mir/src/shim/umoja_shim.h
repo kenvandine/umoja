@@ -193,10 +193,11 @@ void umoja_copilot_key(void);
 // The overlay key (Super) went down or up: the dock shows its Super+1..9
 // numbers while it is held.
 void umoja_super_held(bool held);
-// Whether an X11 app (its WM_CLASS app id) may take every key with a
-// keyboard grab: org.gnome.mutter.wayland xwayland-grab-access-rules plus
-// Umoja's own list (VM and remote desktop viewers).
-bool umoja_xwayland_grab_allowed(char const* app_id);
+// Whether an app may take every key, with an X11 keyboard grab (xwayland,
+// WM_CLASS app id) or a Wayland shortcuts inhibitor:
+// org.gnome.mutter.wayland xwayland-grab-access-rules plus Umoja's own
+// list (VM and remote desktop viewers).
+bool umoja_keyboard_grab_allowed(char const* app_id, bool xwayland);
 // The minimize animation's target: the app's icon on the dock on the
 // monitor `monitor`, in that dock's surface coordinates (dock_icons.rs).
 bool umoja_dock_icon(char const* app_id, UmojaRect monitor, UmojaRect* out);

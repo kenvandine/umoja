@@ -1,16 +1,22 @@
-//! Which X11 apps may take every key with a keyboard grab (Xwayland's
-//! xwayland-keyboard-grab, shim/wm_protocols.cpp). As mutter: the patterns
+//! Which apps may take every key (shim/wm_protocols.cpp): an X11 app's
+//! keyboard grab through Xwayland's xwayland-keyboard-grab, and a Wayland
+//! app's keyboard-shortcuts-inhibit. As mutter does for X11: the patterns
 //! of `org.gnome.mutter.wayland xwayland-grab-access-rules` (a leading `!`
-//! denies), matched against the window's app id (WM_CLASS), plus Umoja's
-//! own list of virtual machine and remote desktop viewers. Super+Escape
-//! takes the keys back either way.
+//! denies), matched against the window's app id (WM_CLASS or xdg app id),
+//! plus Umoja's own list of virtual machine and remote desktop viewers.
+//! GNOME asks the user before a Wayland app gets the keys; Umoja has no
+//! such dialog, so other apps never get them. GTK asks for them on its own
+//! (keyboard grabs), and granting every app left Super, Alt+Tab and
+//! Super+Left dead in Files. Super+Escape takes the keys back either way.
 
 use umoja_common::gsettings as gs;
 
 const MUTTER_WAYLAND: &str = "org.gnome.mutter.wayland";
 
-/// mutter's built-in rules, and the X11 viewers Umoja users run (QEMU's
-/// SDL window under quickemu, VMware, TigerVNC, FreeRDP, Xephyr).
+/// mutter's built-in rules, the X11 viewers Umoja users run (QEMU's SDL
+/// window under quickemu, VMware, TigerVNC, FreeRDP, Xephyr) and the
+/// Wayland ones (GNOME Boxes and Connections, virt-manager, virt-viewer
+/// and remote-viewer, QEMU's GTK window, KRDC, FreeRDP).
 const DEFAULT_RULES: &[&str] = &[
     "VirtualBox Machine",
     "Remmina",
@@ -20,6 +26,14 @@ const DEFAULT_RULES: &[&str] = &[
     "Vncviewer",
     "xfreerdp*",
     "Xephyr",
+    "org.gnome.Boxes",
+    "org.gnome.Connections",
+    "virt-manager",
+    "org.virt-manager.virt-manager",
+    "virt-viewer",
+    "remote-viewer",
+    "org.kde.krdc",
+    "*freerdp*",
 ];
 
 pub fn allowed(app_id: &str) -> bool {
@@ -97,7 +111,10 @@ mod tests {
     fn viewers_are_allowed_others_not() {
         assert!(decide("qemu-system-x86_64", &[]));
         assert!(decide("Remmina", &[]));
+        assert!(decide("org.gnome.Boxes", &[]));
+        assert!(decide("remote-viewer", &[]));
         assert!(!decide("firefox", &[]));
+        assert!(!decide("org.gnome.Nautilus", &[]));
         assert!(!decide("", &rules(&["*"])));
     }
 

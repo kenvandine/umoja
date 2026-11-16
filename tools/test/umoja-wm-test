@@ -1274,9 +1274,22 @@ def t_not_responding(run):
     run.check(gone, "it went away by itself when the app answered again")
 
 
-@test("shortcut-inhibit", "An app can take the system shortcuts; Super+Escape takes them back (F9)")
+@test("shortcut-inhibit", "A VM viewer can take the system shortcuts, other apps can't; Super+Escape takes them back (F9)")
 def t_inhibit(run):
     run.go_to_new_workspace()
+    # Only VM and remote desktop viewers get the keys: the pad is allowed
+    # here the way a user would add an app, the second pad stays out.
+    run.gset("org.gnome.mutter.wayland", "xwayland-grab-access-rules", GLib.Variant("as", [PAD_APP]))
+    b = Pad(run, "b", app=PAD_APP2)
+    b.focus()
+    b.cmd("inhibit")
+    run.wait(0.8)
+    run.input.press("Super")
+    opened = run.wait(2, run.overview_visible)
+    run.shot("not-allowed", "Super pressed while an app that isn't a VM viewer asks for the shortcuts")
+    run.check(opened, "an app not on the list doesn't get the shortcuts: Super opens the overview")
+    run.close_overview()
+    b.cmd("uninhibit")
     a = Pad(run, "a")
     a.focus()
     a.cmd("inhibit")
