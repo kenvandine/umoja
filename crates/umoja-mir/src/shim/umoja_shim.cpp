@@ -3681,6 +3681,15 @@ private:
             guarded("dock icon", [&] { a.icon = dock_icon_for(tools.info_for(w)); });
         }
         animations[w] = a;
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: animate %s %s, dock icon %s\n",
+                         kind == Anim::open ? "open" : kind == Anim::minimize ? "minimize" : "restore",
+                         describe(tools.info_for(w)).c_str(),
+                         a.icon ? (std::to_string(a.icon->top_left.x.as_int()) + "," +
+                                   std::to_string(a.icon->top_left.y.as_int()) + " " +
+                                   std::to_string(a.icon->size.width.as_int()) + "x" +
+                                   std::to_string(a.icon->size.height.as_int())).c_str()
+                                : "none");
         if (kind == Anim::open || (kind == Anim::restore && !a.icon)) umoja_fx::set_look(w, 0.0f, 0.94f);
         if (kind == Anim::restore && a.icon) fly(w, a, 1.0);
         run_animations();
@@ -3692,7 +3701,11 @@ private:
         auto const type = info.type();
         if (type != mir_window_type_normal && type != mir_window_type_dialog) return;
         if (info.state() == mir_window_state_minimized || info.state() == mir_window_state_hidden) return;
-        if (umoja_fx::begin_close(info.window(), 150.0)) run_animations();
+        bool const started = umoja_fx::begin_close(info.window(), 150.0);
+        if (debug_windows())
+            std::fprintf(stderr, "umoja-mir: wm: animate close %s: %s\n", describe(info).c_str(),
+                         started ? "started" : "not visible");
+        if (started) run_animations();
     }
 
     // Start the frame thread unless it is running.
@@ -3742,6 +3755,8 @@ public:
                 else umoja_fx::set_look(w, 1.0f, 1.0f);
                 continue;
             }
+            if (debug_windows())
+                std::fprintf(stderr, "umoja-mir: wm: animation frame t=%.2f\n", t);
             double const out = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
             double const in = t * t * t;                                // ease-in cubic
             auto const& a = it->second;
@@ -3790,9 +3805,18 @@ private:
         Window const w = info.window();
         auto const to = spec.state().value();
         auto const id = window_id(w);
-        if (to == mir_window_state_minimized && w == tools.active_window()) {
+        if (to == mir_window_state_minimized) {
+            // Its own minimize button shrinks it into the dock too: the
+            // state is applied when the animation ends (finish_minimize).
+            bool const active = w == tools.active_window();
+            if (showing(w) && info.state() != mir_window_state_minimized && umoja_animations_enabled()) {
+                spec.state().consume();
+                if (active) focus_away_from(w);
+                animate(w, Anim::minimize);
+                return false;
+            }
             cancel_animation(w);
-            focus_away_from(w);
+            if (active) focus_away_from(w);
             return false;
         }
         if ((to == mir_window_state_maximized || to == mir_window_state_fullscreen) && tiled.count(id)) {
