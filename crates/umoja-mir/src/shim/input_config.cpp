@@ -16,13 +16,22 @@
 #include <mir/input/device.h>
 #include <mir/input/input_device_hub.h>
 #include <mir/input/input_device_observer.h>
+#include <mir/input/keymap.h>
+#include <mir/input/mir_keyboard_config.h>
 #include <mir/input/mir_pointer_config.h>
+#include <mir/input/parameter_keymap.h>
 #include <mir/server.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -104,7 +113,73 @@ struct TouchpadObserver : mir::input::InputDeviceObserver {
     void changes_complete() override {}
 };
 
+// ---- keyboard layouts (keymap.rs) -------------------------------------------
+//
+// GNOME's input sources on every keyboard, as miral::Keymap does, except a
+// zwp_virtual_keyboard_v1 device (wtype, on-screen keyboards, dictation
+// typing): it brings its own keymap, and MirAL's observer replaced it with
+// the layout whenever the device was announced after the client's keymap
+// request, so its keys came out as other keys (wtype's Alt as Escape).
+
+std::mutex g_keymap_mutex;
+std::string g_layout, g_variant, g_options;
+std::vector<std::shared_ptr<mir::input::Device>> g_keyboards;
+
+// Mir's virtual keyboard device (frontend_wayland/virtual_keyboard_v1.cpp).
+bool brings_own_keymap(mir::input::Device const& device) { return device.name() == "virtual-keyboard"; }
+
+// With g_keymap_mutex held.
+void apply_keymap(std::shared_ptr<mir::input::Device> const& keyboard) {
+    if (g_layout.empty()) return;  // not set yet: the device keeps Mir's default
+    std::string model = mir::input::ParameterKeymap::default_model;
+    auto const config = keyboard->keyboard_configuration();
+    if (config.is_set()) model = config.value().device_keymap()->model();
+    try {
+        keyboard->apply_keyboard_configuration(MirKeyboardConfig{
+            std::make_shared<mir::input::ParameterKeymap>(model, g_layout, g_variant, g_options)});
+    } catch (std::exception const& e) {
+        std::fprintf(stderr, "umoja-mir: keymap for %s failed: %s\n", keyboard->name().c_str(), e.what());
+    }
+}
+
+struct KeymapObserver : mir::input::InputDeviceObserver {
+    void device_added(std::shared_ptr<mir::input::Device> const& device) override {
+        if (!contains(device->capabilities(), mir::input::DeviceCapability::keyboard)) return;
+        if (brings_own_keymap(*device)) return;
+        std::lock_guard lock{g_keymap_mutex};
+        if (std::find(g_keyboards.begin(), g_keyboards.end(), device) != g_keyboards.end()) return;
+        g_keyboards.push_back(device);
+        apply_keymap(device);
+    }
+    void device_changed(std::shared_ptr<mir::input::Device> const& device) override {
+        if (contains(device->capabilities(), mir::input::DeviceCapability::keyboard)) device_added(device);
+        else device_removed(device);
+    }
+    void device_removed(std::shared_ptr<mir::input::Device> const& device) override {
+        std::lock_guard lock{g_keymap_mutex};
+        g_keyboards.erase(std::remove(g_keyboards.begin(), g_keyboards.end(), device), g_keyboards.end());
+    }
+    void changes_complete() override {}
+};
+
 }  // namespace
+
+// "layout+variant+options", as miral::Keymap::set_keymap.
+extern "C" void umoja_set_keymap(char const* keymap) {
+    if (!keymap || !*keymap) return;
+    std::string_view rest{keymap};
+    auto next = [&rest] {
+        auto const plus = rest.find('+');
+        std::string const token{rest.substr(0, plus)};
+        rest = plus == std::string_view::npos ? std::string_view{} : rest.substr(plus + 1);
+        return token;
+    };
+    std::lock_guard lock{g_keymap_mutex};
+    g_layout = next();
+    g_variant = next();
+    g_options = next();
+    for (auto const& keyboard : g_keyboards) apply_keymap(keyboard);
+}
 
 void umoja_input_setup(mir::Server& server) {
     g_config(server);
@@ -112,6 +187,7 @@ void umoja_input_setup(mir::Server& server) {
     // so the input hub is wired up by then.
     server.add_init_callback([&server] {
         server.the_input_device_hub()->add_observer(std::make_shared<TouchpadObserver>());
+        server.the_input_device_hub()->add_observer(std::make_shared<KeymapObserver>());
         std::lock_guard lock{g_mutex};
         g_ready = true;
         if (g_pending) apply(*g_pending);
