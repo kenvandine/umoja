@@ -3625,7 +3625,7 @@ private:
         geom::Rectangle rect;
     };
     static constexpr double OPEN_MS = 150.0;
-    static constexpr double MINIMIZE_MS = 220.0;
+    static constexpr double MINIMIZE_MS = 250.0;
 
     // umoja-dock's windows (one per monitor), for the minimize target.
     std::vector<Window> dock_windows;
@@ -3765,10 +3765,13 @@ public:
             if (debug_windows())
                 std::fprintf(stderr, "umoja-mir: wm: animation frame t=%.2f\n", t);
             double const out = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
-            double const in = t * t * t;                                // ease-in cubic
+            // The flight to and from the dock covers a long way: ease in and
+            // out, so no frame jumps much further than the average (ease-in
+            // cubic moved a fifth of the way in its last frame: choppy).
+            double const io = t < 0.5 ? 4.0 * t * t * t : 1.0 - std::pow(-2.0 * t + 2.0, 3.0) / 2.0;
             auto const& a = it->second;
-            if (a.kind == Anim::minimize && a.icon) fly(w, a, in);       // speeds up into the icon
-            else if (a.kind == Anim::restore && a.icon) fly(w, a, 1.0 - out);
+            if (a.kind == Anim::minimize && a.icon) fly(w, a, io);
+            else if (a.kind == Anim::restore && a.icon) fly(w, a, 1.0 - io);
             else if (a.kind == Anim::minimize) umoja_fx::set_look(w, float(1.0 - out), float(1.0 - 0.15 * out));
             else umoja_fx::set_look(w, float(out), float(0.94 + 0.06 * out));
             ++it;
