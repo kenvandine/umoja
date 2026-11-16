@@ -184,7 +184,7 @@ machine whose windows you don't mind in the clips.
 | `title-bar-on-screen` | A window can't be dragged with its title bar off screen (P5) |
 | `edge-snap` | Windows snap to the screen edge while moved (P8) |
 | `window-menu-csd` | Right-click on an app's own title bar opens the window menu (P6) |
-| `animations` | Windows animate when they open, minimize and come back (P7) |
+| `animations` | Windows animate when they open, minimize, come back and close (P7) |
 | `fullscreen-per-monitor` | A fullscreen window stays on top of its monitor (M2) (two monitors) |
 | `dock-focus-or-previews` | A dock click focuses an app with several windows first (D1) |
 | `dock-middle-click` | Middle-click on a dock icon opens a new window (D2) |

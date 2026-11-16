@@ -1,0 +1,188 @@
+Description: Let the server keep drawing a closing window while it fades out
+ Umoja animates windows opening and minimizing by fading and scaling their
+ scene surface, but a closing window's surface left the scene the moment
+ the client destroyed it, so there was nothing to animate. If the server
+ executable exports a C function named mir_surface_linger_hook, the
+ surface stack asks it when removing a surface whether to keep drawing it
+ (non-zero). Such a surface leaves the stack as usual (no input, observers
+ told it is gone) but is still drawn on top of its old layer, and the
+ stack is asked again at each scene until it answers 0. Alpha and
+ transformation changes on it redraw the scene. Compositors the scene
+ filter hook (3018) speaks for don't show it. Without the hook nothing
+ changes; no ABI change.
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/server/scene/surface_stack.h
++++ b/src/server/scene/surface_stack.h
+@@ -30,6 +30,8 @@
+ #include <mir/scene/surface_observer.h>
+ #include <mir/observer_multiplexer.h>
+ 
++#include <mutex>
++
+ #include <atomic>
+ #include <map>
+ #include <memory>
+@@ -171,6 +173,19 @@
+     std::atomic<bool> is_locked = false;
+     std::shared_ptr<SurfaceObserver> surface_observer;
+     SessionLockObserverMultiplexer multiplexer;
++
++    /// Surfaces removed while the server's mir_surface_linger_hook still
++    /// wanted them drawn (a closing window fading out): drawn on top of
++    /// their old layer, without input, until the hook lets them go.
++    struct Lingering
++    {
++        std::shared_ptr<Surface> surface;
++        size_t layer;
++        std::shared_ptr<RenderingTracker> tracker;
++    };
++    std::mutex lingering_mutex;
++    std::vector<Lingering> lingering;
++    std::shared_ptr<SurfaceObserver> const lingering_observer;
+ };
+ 
+ }
+--- a/src/server/scene/surface_stack.cpp
++++ b/src/server/scene/surface_stack.cpp
+@@ -127,12 +127,49 @@
+ private:
+     ms::SurfaceStack* stack;
+ };
++
++/// Redraws a lingering surface when the server fades or scales it (the
++/// compositor stopped watching it when it was removed).
++struct LingeringSurfaceObserver : ms::NullSurfaceObserver
++{
++    LingeringSurfaceObserver(ms::SurfaceStack* stack)
++        : stack{stack}
++    {
++    }
++
++    void alpha_set_to(ms::Surface const*, float) override
++    {
++        stack->emit_scene_changed();
++    }
++
++    void transformation_set_to(ms::Surface const*, glm::mat4 const&) override
++    {
++        stack->emit_scene_changed();
++    }
++
++private:
++    ms::SurfaceStack* stack;
++};
++
++// Close animations. A server that exports this C function is asked, when
++// a surface is removed, whether to keep drawing it (non-zero), and then at
++// each scene whether it still wants it drawn; it fades or scales the
++// surface meanwhile. Without it nothing changes.
++using LingerHook = int (*)(void const* surface);
++
++auto linger_hook() -> LingerHook
++{
++    static LingerHook const hook =
++        reinterpret_cast<LingerHook>(dlsym(RTLD_DEFAULT, "mir_surface_linger_hook"));
++    return hook;
++}
+ }
+ 
+ ms::SurfaceStack::SurfaceStack(std::shared_ptr<SceneReport> const& report) :
+     report{report},
+     surface_observer{std::make_shared<SurfaceDepthLayerObserver>(this)},
+-    multiplexer(linearising_executor)
++    multiplexer(linearising_executor),
++    lingering_observer{std::make_shared<LingeringSurfaceObserver>(this)}
+ {
+ }
+ 
+@@ -146,6 +183,11 @@
+             surface->unregister_interest(*surface_observer);
+         }
+     }
++    std::lock_guard lk{lingering_mutex};
++    for (auto const& l : lingering)
++    {
++        l.surface->unregister_interest(*lingering_observer);
++    }
+ }
+ 
+ namespace
+@@ -170,9 +212,43 @@
+     RecursiveReadLock lg(guard);
+ 
+     auto const filter = scene_filter();
++
++    // Closing windows still fading out; those the server let go are dropped.
++    std::vector<Lingering> fading;
++    if (auto const hook = linger_hook())
++    {
++        std::lock_guard lk{lingering_mutex};
++        std::erase_if(lingering, [&](Lingering const& l)
++            {
++                if (hook(l.surface.get()))
++                {
++                    fading.push_back(l);
++                    return false;
++                }
++                l.surface->unregister_interest(*lingering_observer);
++                return true;
++            });
++    }
++
+     mc::SceneElementSequence elements;
+-    for (auto const& layer : surface_layers)
++    // A layer's fading surfaces go on top of it. A compositor the filter
++    // speaks for (a window thumbnail) doesn't show them.
++    auto const add_fading = [&](size_t layer_index)
++        {
++            for (auto const& l : fading)
++            {
++                if (l.layer != layer_index || (filter && filter(id, l.surface.get()) != -1))
++                    continue;
++                for (auto& renderable : l.surface->generate_renderables(id))
++                {
++                    elements.emplace_back(
++                        std::make_shared<SurfaceSceneElement>(l.surface->name(), renderable, l.tracker, id));
++                }
++            }
++        };
++    for (size_t layer_index = 0; layer_index < surface_layers.size(); ++layer_index)
+     {
++        auto const& layer = surface_layers[layer_index];
+         for (auto const& surface : layer)
+         {
+             int const filtered = filter ? filter(id, surface.get()) : -1;
+@@ -191,6 +267,7 @@
+                 }
+             }
+         }
++        add_fading(layer_index);
+     }
+     // Overlays (drag icons) are not part of any window: a filtered
+     // compositor answers 0 for "no surface".
+@@ -278,13 +355,22 @@
+     {
+         RecursiveWriteLock lg(guard);
+ 
+-        for (auto& layer : surface_layers)
++        for (size_t layer_index = 0; layer_index < surface_layers.size(); ++layer_index)
+         {
++            auto& layer = surface_layers[layer_index];
+             auto const surface = std::find(layer.begin(), layer.end(), keep_alive);
+ 
+             if (surface != layer.end())
+             {
+                 layer.erase(surface);
++                auto const tracker = rendering_trackers.find(keep_alive.get());
++                if (auto const hook = linger_hook();
++                    hook && keep_alive && tracker != rendering_trackers.end() && hook(keep_alive.get()))
++                {
++                    std::lock_guard lk{lingering_mutex};
++                    lingering.push_back(Lingering{keep_alive, layer_index, tracker->second});
++                    keep_alive->register_interest(lingering_observer, immediate_executor);
++                }
+                 rendering_trackers.erase(keep_alive.get());
+                 keep_alive->unregister_interest(*surface_observer);
+                 found_surface = true;

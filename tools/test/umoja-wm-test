@@ -1427,7 +1427,7 @@ def t_csd_menu(run):
     run.input.press("Escape")
 
 
-@test("animations", "Windows animate when they open, minimize and come back (P7)")
+@test("animations", "Windows animate when they open, minimize, come back and close (P7)")
 def t_animations(run):
     run.go_to_new_workspace()
     a = Pad(run, "a")
@@ -1438,7 +1438,14 @@ def t_animations(run):
     run.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (a.id,)))
     run.wait(1.0)
     run.check(not a.flags() & MINIMIZED, "back", a.flags())
-    run.note("watch the video: the window should fade and shrink in about 150 ms each way")
+    # Closing: Mir (patch 3027) keeps drawing it while it fades out.
+    run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (a.id,)))
+    gone = run.wait(3, lambda: all(w[0] != a.id for w in run.windows()))
+    run.check(gone, "closed", gone)
+    run.wait(1.0)
+    run.shot("closed", "a second after closing: nothing of the window may be left on screen")
+    run.note("watch the video: the window should fade and shrink in about 150 ms when it opens, "
+             "minimizes, comes back and closes; after closing nothing of it may stay on screen")
 
 
 @test("fullscreen-per-monitor", "A fullscreen window stays on top of its monitor (M2)", monitors=2)
