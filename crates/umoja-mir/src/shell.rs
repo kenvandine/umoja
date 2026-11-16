@@ -500,7 +500,8 @@ pub struct WindowDesc {
 }
 
 // Flags: 1 focused, 2 minimized, 4 on the current workspace, 8 maximized,
-// 16 fullscreen, 32 tiled (UMOJA_WINDOW_* in the shim header).
+// 16 fullscreen, 32 tiled, 512 wants attention (UMOJA_WINDOW_* in the shim
+// header).
 
 unsafe extern "C" {
     fn umoja_wm_list_windows(
@@ -527,6 +528,9 @@ unsafe extern "C" {
     fn umoja_wm_show_workspace(index: u32);
     fn umoja_wm_send_to_workspace(id: u64, index: u32);
     fn umoja_wm_workspace_settings_changed();
+    fn umoja_wm_send_to_new_workspace(id: u64, index: u32) -> bool;
+    fn umoja_wm_place_window(id: u64, workspace: i32, x: i32, y: i32) -> bool;
+    fn umoja_wm_window_pid(id: u64) -> i32;
     fn umoja_wm_window_rect(id: u64, out: *mut Rect) -> bool;
     fn umoja_capture_window(
         id: u64,
@@ -603,6 +607,11 @@ fn scripted_drag(id: u64, x: i32, y: i32, duration_ms: u32) -> bool {
     std::thread::sleep(std::time::Duration::from_millis(350));
     unsafe { umoja_wm_script_drag(id, 2, 0, 0, std::ptr::null_mut(), std::ptr::null_mut()) };
     true
+}
+
+/// Activate a window (switching to its workspace), as the dock does.
+pub fn activate(id: u64) {
+    unsafe { umoja_wm_activate(id) }
 }
 
 /// Re-apply GNOME's workspace settings after they changed.
@@ -785,6 +794,49 @@ impl Compositor {
         let _ =
             tokio::task::spawn_blocking(move || unsafe { umoja_wm_send_to_workspace(id, index) })
                 .await;
+    }
+
+    /// Insert a new workspace at `index` (0-based; the count to append)
+    /// and put the window on it, without following it: the overview's drop
+    /// between two thumbnails (gnome-shell's insertWorkspace). False if the
+    /// window can't go there (on every workspace, or no such window).
+    async fn send_window_to_new_workspace(&self, id: u64, index: u32) -> bool {
+        tokio::task::spawn_blocking(move || unsafe { umoja_wm_send_to_new_workspace(id, index) })
+            .await
+            .unwrap_or(false)
+    }
+
+    /// Move a window so its top left corner is at (x, y) in layout pixels,
+    /// on workspace `workspace` (0-based, -1 to leave it), without
+    /// following it: dropping a window inside a thumbnail of the overview,
+    /// or on another monitor's view. A maximized, fullscreen or tiled
+    /// window keeps that state on the monitor at (x, y). False when it
+    /// can't be placed.
+    async fn place_window(&self, id: u64, workspace: i32, x: i32, y: i32) -> bool {
+        tokio::task::spawn_blocking(move || unsafe { umoja_wm_place_window(id, workspace, x, y) })
+            .await
+            .unwrap_or(false)
+    }
+
+    /// Kill the process behind a window that stopped responding ("Force
+    /// Quit" in the not-responding dialog). False when there is none.
+    async fn force_quit_window(&self, id: u64) -> bool {
+        let pid = tokio::task::spawn_blocking(move || unsafe { umoja_wm_window_pid(id) })
+            .await
+            .unwrap_or(0);
+        if pid <= 1 || pid == std::process::id() as i32 {
+            return false;
+        }
+        tracing::info!(pid, "force quit");
+        unsafe { libc::kill(pid, libc::SIGKILL) == 0 }
+    }
+
+    /// Super+P's display modes: 0 mirror, 1 join, 2 external only, 3
+    /// built-in only. False when the mode doesn't apply here.
+    async fn switch_display_config(&self, mode: u32) -> bool {
+        tokio::task::spawn_blocking(move || crate::display_config::switch_config(mode))
+            .await
+            .unwrap_or(false)
     }
 
     /// (id, accelerator) for every keyboard shortcut the compositor

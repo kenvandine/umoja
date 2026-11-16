@@ -1,0 +1,84 @@
+Description: Tell the server which raises the user asked for
+ A raise reaches the window manager the same way whether a dock activated
+ the window, a launcher's xdg-activation token did, or the client raised
+ itself, so a chat app raising itself on another workspace pulled the user
+ over there. Mir now calls mir_user_activation_hook (looked up in the
+ executable) with the scene::Surface just before a foreign-toplevel activate
+ or a valid xdg-activation token raises it, and mir_activation_refused_hook
+ when an activation request carries an invalid token, so the server can
+ mark the window as wanting attention (GNOME's "is ready" notification)
+ instead of doing nothing. A server without the hooks behaves as before.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-16
+---
+--- a/src/server/frontend_wayland/xdg_activation_v1.cpp
++++ b/src/server/frontend_wayland/xdg_activation_v1.cpp
+@@ -31,6 +31,7 @@
+ #include "wl_seat.h"
+ #include "wl_surface.h"
+ 
++#include <dlfcn.h>
+ #include <algorithm>
+ #include <chrono>
+ #include <memory>
+@@ -380,7 +381,23 @@
+ 
+     // Invalid token, ignore it
+     if(!token)
++    {
++        // Umoja: tell the server the window asked for attention, so it can
++        // mark it (GNOME's "is ready" notification) instead of nothing.
++        using Hook = void (*)(void const* surface);
++        static auto const refused = reinterpret_cast<Hook>(dlsym(RTLD_DEFAULT, "mir_activation_refused_hook"));
++        if (refused)
++        {
++            if (auto const wl_surface = mf::WlSurface::from(surface))
++            {
++                if (auto const scene_surface = wl_surface->scene_surface())
++                {
++                    refused(scene_surface.value().get());
++                }
++            }
++        }
+         return;
++    }
+ 
+     // Grab a reference to the token data before removing it
+     //
+@@ -434,6 +451,12 @@
+         auto const& scene_surface = scene_surface_opt.value();
+         auto const now = std::chrono::steady_clock::now().time_since_epoch();
+         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds >(now).count();
++        // Umoja: this raise carries a valid token, so the user asked for it
++        // (the server may switch workspace for it; a bare raise it won't).
++        using Hook = void (*)(void const* surface);
++        static auto const user_activation =
++            reinterpret_cast<Hook>(dlsym(RTLD_DEFAULT, "mir_user_activation_hook"));
++        if (user_activation) user_activation(scene_surface.get());
+         shell->raise_surface(wl_surface->session, scene_surface, ns);
+     });
+ }
+--- a/src/server/frontend_wayland/foreign_toplevel_manager_v1.cpp
++++ b/src/server/frontend_wayland/foreign_toplevel_manager_v1.cpp
+@@ -21,6 +21,7 @@
+ #include "foreign_toplevel_handle_creation.h"
+ 
+ #include <mir/constexpr_utils.h>
++#include <dlfcn.h>
+ #include <mir/executor.h>
+ #include <mir/frontend/surface_stack.h>
+ #include <mir/log.h>
+@@ -765,6 +766,12 @@
+     auto const session = surface ? surface->session().lock() : nullptr;
+     if (shell && session && surface)
+     {
++        // Umoja: a taskbar or dock activating a window is the user's choice
++        // (the server may switch workspace for it; a bare raise it won't).
++        using Hook = void (*)(void const* surface);
++        static auto const user_activation =
++            reinterpret_cast<Hook>(dlsym(RTLD_DEFAULT, "mir_user_activation_hook"));
++        if (user_activation) user_activation(surface.get());
+         shell->raise_surface(session, surface, timestamp);
+     }
+ }

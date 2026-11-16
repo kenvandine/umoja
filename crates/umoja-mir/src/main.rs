@@ -6,6 +6,7 @@
 //! systemd once the compositor is ready, so a crash there never takes the
 //! session down.
 
+mod attention;
 mod display_config;
 mod edge_pressure;
 mod eis;
@@ -13,10 +14,12 @@ mod ffi;
 mod gestures;
 mod gpu;
 mod greeter;
+mod hot_corner;
 mod idle;
 mod input;
 mod input_capture;
 mod introspect;
+mod keymap;
 mod media_keys;
 mod numlock;
 mod outputs;

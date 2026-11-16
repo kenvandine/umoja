@@ -83,7 +83,40 @@ pub enum Action {
     /// Ask Umoja: the Copilot key, or a lone tap of Alt on keyboards
     /// without one (see input.rs).
     AskUmoja = 59,
+    /// GNOME's show-desktop (Ubuntu: Super+D): hide every window of the
+    /// workspace, a second press brings them back.
+    ShowDesktop = 60,
+    /// gnome-shell's panel-run-dialog (Alt+F2): the overview's search.
+    RunDialog = 61,
+    /// gnome-shell's toggle-quick-settings (Super+S).
+    ToggleQuickSettings = 62,
+    /// gnome-shell's focus-active-notification (Super+N).
+    FocusActiveNotification = 63,
+    /// mutter's raise, lower and raise-or-lower (no default key).
+    Raise = 64,
+    Lower = 65,
+    RaiseOrLower = 66,
+    /// mutter's move-to-center, maximize-vertically/-horizontally.
+    MoveToCenter = 67,
+    MaximizeVertically = 68,
+    MaximizeHorizontally = 69,
+    /// mutter's switch-monitor (Super+P, XF86Display): display modes.
+    SwitchMonitor = 70,
+    /// gnome-shell's switch-input-source(-backward) (Super+Space).
+    SwitchInputSource = 71,
+    SwitchInputSourceBackward = 72,
+    /// mutter's move-to-corner-{nw,ne,sw,se} and move-to-side-{n,s,e,w}.
+    MoveToCornerNw = 73,
+    MoveToCornerNe = 74,
+    MoveToCornerSw = 75,
+    MoveToCornerSe = 76,
+    MoveToSideN = 77,
+    MoveToSideS = 78,
+    MoveToSideE = 79,
+    MoveToSideW = 80,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
+    // 300+n / 400+n: switch-to-application-n / open-new-window-application-n
+    // (the dock's n-th app, see input.rs APP_BASE).
 }
 
 impl Action {
@@ -149,6 +182,27 @@ impl Action {
             57 => ShowShortcuts,
             58 => LaunchAgent,
             59 => AskUmoja,
+            60 => ShowDesktop,
+            61 => RunDialog,
+            62 => ToggleQuickSettings,
+            63 => FocusActiveNotification,
+            64 => Raise,
+            65 => Lower,
+            66 => RaiseOrLower,
+            67 => MoveToCenter,
+            68 => MaximizeVertically,
+            69 => MaximizeHorizontally,
+            70 => SwitchMonitor,
+            71 => SwitchInputSource,
+            72 => SwitchInputSourceBackward,
+            73 => MoveToCornerNw,
+            74 => MoveToCornerNe,
+            75 => MoveToCornerSw,
+            76 => MoveToCornerSe,
+            77 => MoveToSideN,
+            78 => MoveToSideS,
+            79 => MoveToSideE,
+            80 => MoveToSideW,
             _ => None,
         }
     }
