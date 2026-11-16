@@ -34,6 +34,7 @@ mod snap;
 mod switcher;
 mod tiling;
 mod workspaces;
+mod xwayland_grab;
 
 /// Mir looks for `<argv0 basename>.display` in $XDG_CONFIG_HOME.
 const DISPLAY_CONFIG_FILE: &str = "umoja-mir.display";

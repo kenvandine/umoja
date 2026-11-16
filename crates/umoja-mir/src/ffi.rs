@@ -92,6 +92,17 @@ pub extern "C" fn umoja_copilot_key() {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn umoja_xwayland_grab_allowed(app_id: *const c_char) -> bool {
+    if app_id.is_null() {
+        return false;
+    }
+    let app_id = unsafe { CStr::from_ptr(app_id) }.to_string_lossy().into_owned();
+    let allowed = guard("xwayland_grab", false, || crate::xwayland_grab::allowed(&app_id));
+    tracing::info!(app_id, allowed, "X11 keyboard grab");
+    allowed
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn umoja_super_held(held: bool) {
     if crate::greeter::enabled() {
         return;

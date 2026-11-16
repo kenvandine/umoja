@@ -193,6 +193,10 @@ void umoja_copilot_key(void);
 // The overlay key (Super) went down or up: the dock shows its Super+1..9
 // numbers while it is held.
 void umoja_super_held(bool held);
+// Whether an X11 app (its WM_CLASS app id) may take every key with a
+// keyboard grab: org.gnome.mutter.wayland xwayland-grab-access-rules plus
+// Umoja's own list (VM and remote desktop viewers).
+bool umoja_xwayland_grab_allowed(char const* app_id);
 bool umoja_tile_geometry(uint32_t action, UmojaRect area, UmojaRect* out);
 void umoja_tiling_register(uint64_t id, uint32_t action, UmojaRect rect);
 void umoja_tiling_unregister(uint64_t id);

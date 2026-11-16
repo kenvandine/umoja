@@ -117,6 +117,17 @@ icon lights up and a notification says it's ready; click either to go to
 it. An app that stops responding gets a dialog after a few seconds where
 you can **Wait** or **Force Quit** it.
 
+## Virtual machines and remote desktops
+
+A virtual machine or remote desktop window that has grabbed the keyboard
+(click inside it, or its grab key such as **Ctrl+Alt+G**) gets every key
+while it has focus, **Super**, **Alt+Tab** and **Print Screen** included,
+so they work inside the VM. Volume and brightness keys still work on your
+computer. Press **Super+Escape** to take the keys back. This works for
+Wayland viewers (GNOME Boxes, virt-manager, QEMU's GTK window) and for
+X11 ones such as QEMU's SDL window, which quickemu uses, VirtualBox,
+Remmina and VMware.
+
 ## Display scale and HiDPI
 
 On a high-resolution screen everything can look tiny. Umoja picks a

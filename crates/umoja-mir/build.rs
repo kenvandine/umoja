@@ -24,6 +24,7 @@ fn main() {
     println!("cargo:rerun-if-changed=protocols/xdg-session-management-v1.xml");
     println!("cargo:rerun-if-changed=protocols/xdg-dialog-v1.xml");
     println!("cargo:rerun-if-changed=protocols/keyboard-shortcuts-inhibit-unstable-v1.xml");
+    println!("cargo:rerun-if-changed=protocols/xwayland-keyboard-grab-unstable-v1.xml");
 
     // Probe without emitting link flags yet: the static shim must come
     // before libmiral on the linker line, or `--as-needed` drops miral.
@@ -76,6 +77,7 @@ fn main() {
         "xdg-session-management-v1",
         "xdg-dialog-v1",
         "keyboard-shortcuts-inhibit-unstable-v1",
+        "xwayland-keyboard-grab-unstable-v1",
     ] {
         let xml = format!("protocols/{name}.xml");
         let header = out.join(format!("{name}-server-protocol.h"));

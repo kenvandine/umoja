@@ -6,6 +6,8 @@
 
 #include <miral/window.h>
 
+#include <string>
+
 namespace umoja_fx {
 
 // Edge bits as MirTiledEdge: 1 north, 2 east, 4 south, 8 west.
@@ -20,5 +22,8 @@ void set_look(miral::Window const& window, float alpha, float scale);
 bool begin_close(miral::Window const& window, double ms);
 // One frame of every close animation; true while any is still running.
 bool step_closing();
+
+// The window's application id (for X11 windows, from WM_CLASS).
+std::string app_id_of(miral::Window const& window);
 
 } // namespace umoja_fx
