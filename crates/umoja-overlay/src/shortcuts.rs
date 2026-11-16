@@ -22,6 +22,7 @@ use umoja_common::{dbus, i18n};
 pub enum Group {
     Desktop,
     Apps,
+    Dock,
     Windows,
     Tiling,
     Workspaces,
@@ -36,6 +37,7 @@ impl Group {
         match self {
             Group::Desktop => "Desktop",
             Group::Apps => "Switching",
+            Group::Dock => "Dock",
             Group::Windows => "Windows",
             Group::Tiling => "Tiling",
             Group::Workspaces => "Workspaces",
@@ -50,6 +52,7 @@ impl Group {
         match self {
             Group::Desktop => &["user-desktop-symbolic", "computer-symbolic"],
             Group::Apps => &["view-app-grid-symbolic", "view-grid-symbolic"],
+            Group::Dock => &["user-bookmarks-symbolic", "view-app-grid-symbolic"],
             Group::Windows => &["focus-windows-symbolic", "window-new-symbolic"],
             Group::Tiling => &["view-grid-symbolic", "view-app-grid-symbolic"],
             Group::Workspaces => &["view-paged-symbolic", "view-dual-symbolic"],
@@ -67,6 +70,7 @@ impl Group {
     fn note(self) -> Option<&'static str> {
         match self {
             Group::Apps => Some("Add Shift to go backwards."),
+            Group::Dock => Some("Hold Super to see each app's number on the dock."),
             Group::Custom => Some("Added in Settings › Keyboard."),
             _ => None,
         }
@@ -102,6 +106,29 @@ const CATALOG: &[(&str, Group, &str)] = &[
         Group::Desktop,
         "Cycle focus through top bar and dock",
     ),
+    (
+        "toggle-quick-settings",
+        Group::Desktop,
+        "Quick Settings",
+    ),
+    (
+        "focus-active-notification",
+        Group::Desktop,
+        "Go to the newest notification",
+    ),
+    ("show-desktop", Group::Desktop, "Show the desktop"),
+    ("panel-run-dialog", Group::Desktop, "Run a command"),
+    ("switch-monitor", Group::Desktop, "Switch display mode"),
+    (
+        "switch-input-source",
+        Group::Desktop,
+        "Next keyboard layout",
+    ),
+    (
+        "restore-shortcuts",
+        Group::Desktop,
+        "Take the keys back from a VM or remote desktop",
+    ),
     ("screensaver", Group::Desktop, "Lock the screen"),
     (
         "shortcuts-guide-hotkey",
@@ -117,6 +144,16 @@ const CATALOG: &[(&str, Group, &str)] = &[
         "Cycle the app's windows, no popup",
     ),
     ("cycle-windows", Group::Apps, "Cycle all windows, no popup"),
+    (
+        "switch-to-application-#",
+        Group::Dock,
+        "Open or switch to app #",
+    ),
+    (
+        "open-new-window-application-#",
+        Group::Dock,
+        "New window of app #",
+    ),
     ("close", Group::Windows, "Close"),
     ("minimize", Group::Windows, "Hide"),
     ("maximize", Group::Windows, "Maximize"),
@@ -126,6 +163,28 @@ const CATALOG: &[(&str, Group, &str)] = &[
     ("activate-window-menu", Group::Windows, "Window menu"),
     ("begin-move", Group::Windows, "Move with the keyboard"),
     ("begin-resize", Group::Windows, "Resize with the keyboard"),
+    ("raise", Group::Windows, "Raise"),
+    ("lower", Group::Windows, "Lower"),
+    ("raise-or-lower", Group::Windows, "Raise or lower"),
+    ("move-to-center", Group::Windows, "Move to the center"),
+    (
+        "maximize-vertically",
+        Group::Windows,
+        "Maximize vertically",
+    ),
+    (
+        "maximize-horizontally",
+        Group::Windows,
+        "Maximize horizontally",
+    ),
+    ("move-to-corner-nw", Group::Windows, "Move to the top-left corner"),
+    ("move-to-corner-ne", Group::Windows, "Move to the top-right corner"),
+    ("move-to-corner-sw", Group::Windows, "Move to the bottom-left corner"),
+    ("move-to-corner-se", Group::Windows, "Move to the bottom-right corner"),
+    ("move-to-side-n", Group::Windows, "Move to the top edge"),
+    ("move-to-side-s", Group::Windows, "Move to the bottom edge"),
+    ("move-to-side-e", Group::Windows, "Move to the right edge"),
+    ("move-to-side-w", Group::Windows, "Move to the left edge"),
     ("always-on-top", Group::Windows, "Always on top"),
     (
         "toggle-on-all-workspaces",
@@ -284,6 +343,7 @@ const HIDDEN: &[&str] = &[
     "cycle-windows-backward",
     "switch-panels-backward",
     "cycle-panels-backward",
+    "switch-input-source-backward",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -434,6 +494,9 @@ pub fn model(shortcuts: &[(String, String)]) -> Vec<(Group, Vec<Row>)> {
         }
         let Some(caps) = keycaps(accel) else { continue };
         let (group, label, order) = classify(id, seq as u32);
+        let Some((label, caps)) = collapse_numbered(id, label, caps) else {
+            continue;
+        };
         let rows = match groups.iter_mut().find(|(g, _)| *g == group) {
             Some((_, rows)) => rows,
             None => {
@@ -461,6 +524,31 @@ pub fn model(shortcuts: &[(String, String)]) -> Vec<(Group, Vec<Row>)> {
     }
     groups.sort_by_key(|(g, _)| *g);
     groups
+}
+
+/// Super+1 … Super+9 for the dock's apps read as one row, "Super 1–9",
+/// while their keys follow the app's number; `None` for 2 to 9 then.
+fn collapse_numbered(id: &str, label: String, mut caps: Vec<String>) -> Option<(String, Vec<String>)> {
+    let n = ["switch-to-application-", "open-new-window-application-"]
+        .iter()
+        .find_map(|p| id.strip_prefix(p)?.parse::<u32>().ok());
+    let Some(n) = n else {
+        return Some((label, caps));
+    };
+    if caps.last().map(String::as_str) != Some(n.to_string().as_str()) {
+        return Some((label, caps));
+    }
+    if n != 1 {
+        return None;
+    }
+    if let Some(last) = caps.last_mut() {
+        *last = "1–9".to_string();
+    }
+    let label = match label.strip_suffix('1') {
+        Some(stem) => format!("{stem}1–9"),
+        None => label,
+    };
+    Some((label, caps))
 }
 
 async fn fetch() -> Vec<(String, String)> {
@@ -942,6 +1030,10 @@ mod tests {
             s("custom:Myna", "<Super>j"),
             s("some-new-key", "<Super>y"),
             s("toggle-overview", "<Super>s"),
+            s("switch-to-application-1", "<Super>1"),
+            s("switch-to-application-2", "<Super>2"),
+            s("open-new-window-application-1", "<Super><Control>1"),
+            s("open-new-window-application-2", "<Super><Control>2"),
         ]);
         let groups: Vec<Group> = m.iter().map(|(g, _)| *g).collect();
         assert_eq!(
@@ -949,6 +1041,7 @@ mod tests {
             [
                 Group::Desktop,
                 Group::Apps,
+                Group::Dock,
                 Group::Tiling,
                 Group::Workspaces,
                 Group::Custom,
@@ -973,6 +1066,11 @@ mod tests {
         assert_eq!(ws[0].keys.len(), 2);
         assert_eq!(ws[1].label, "Workspace 1");
         assert_eq!(rows(Group::Apps).len(), 1, "backward variants are a note");
+        let dock = rows(Group::Dock);
+        assert_eq!(dock.len(), 2, "Super+1..9 is one row");
+        assert_eq!(dock[0].label, "Open or switch to app 1–9");
+        assert_eq!(dock[0].keys, vec![vec!["Super", "1–9"]]);
+        assert_eq!(dock[1].keys, vec![vec!["Super", "Ctrl", "1–9"]]);
         assert_eq!(rows(Group::Custom)[0].label, "Myna");
         assert_eq!(rows(Group::Other)[0].label, "Some new key");
     }

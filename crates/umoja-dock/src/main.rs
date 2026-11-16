@@ -706,7 +706,7 @@ impl Dock {
     }
 
     /// Super+1..9 (switch-to-application-N): the app at `index` as a click
-    /// would, or a new window of it (Super+Shift, Ubuntu Dock's hot-keys).
+    /// would, or a new window of it (Super+Ctrl, gnome-shell and Ubuntu Dock).
     pub fn activate_app(self: &Rc<Self>, index: u32, new_window: bool) {
         let entry = self.apps.borrow().get(index as usize).cloned();
         let Some((app, button, wins)) = entry else {
