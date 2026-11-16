@@ -197,6 +197,16 @@ mod tests {
     }
 
     #[test]
+    fn codes_clear_of_other_actions() {
+        // Super+9 once changed the brightness: the dock's app keys shared 300+.
+        let end = BASE + KEYS.len() as u32;
+        assert!(end <= crate::input::APP_SWITCH_BASE);
+        assert!(BASE > crate::workspaces::MOVE_BASE + 99);
+        assert_eq!(classify(crate::input::APP_SWITCH_BASE + 9), NOT_MEDIA);
+        assert_eq!(classify(crate::input::APP_NEW_WINDOW_BASE + 4), NOT_MEDIA);
+    }
+
+    #[test]
     fn classifies_codes() {
         let up = KEYS.iter().position(|k| k.name == "volume-up").unwrap() as u32;
         let mute = KEYS.iter().position(|k| k.name == "volume-mute").unwrap() as u32;

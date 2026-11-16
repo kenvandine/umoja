@@ -95,9 +95,9 @@ enum {
     UMOJA_ACTION_MOVE_TO_SIDE_S = 78,
     UMOJA_ACTION_MOVE_TO_SIDE_E = 79,
     UMOJA_ACTION_MOVE_TO_SIDE_W = 80,
-    /* 300 + n / 400 + n: the dock's n-th app (input.rs APP_BASE). */
-    UMOJA_ACTION_SWITCH_TO_APP_BASE = 300,
-    UMOJA_ACTION_NEW_WINDOW_APP_BASE = 400,
+    /* 500 + n / 600 + n (300+ are media keys): the dock's n-th app (input.rs APP_BASE). */
+    UMOJA_ACTION_SWITCH_TO_APP_BASE = 500,
+    UMOJA_ACTION_NEW_WINDOW_APP_BASE = 600,
     /* 1000 + n: run GNOME custom shortcut n (input.rs CUSTOM_BASE). */
     UMOJA_ACTION_CUSTOM_BASE = 1000,
     // 100 + n: switch to workspace n; 200 + n: move window to workspace n.

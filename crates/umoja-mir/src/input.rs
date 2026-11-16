@@ -457,8 +457,9 @@ const SOURCES: &[(&str, &str, Action)] = &[
 /// gnome-shell's switch-to-application-n (Super+n) and
 /// open-new-window-application-n (Super+Ctrl+n), the dock's n-th app.
 /// Mirrors `UMOJA_ACTION_SWITCH_TO_APP_BASE` in the shim.
-pub const APP_SWITCH_BASE: u32 = 300;
-pub const APP_NEW_WINDOW_BASE: u32 = 400;
+/// Not 300 or 400: media keys are 300 + n (media_keys.rs BASE).
+pub const APP_SWITCH_BASE: u32 = 500;
+pub const APP_NEW_WINDOW_BASE: u32 = 600;
 /// gnome-shell has keys for apps 1 to 9.
 pub const MAX_APP_KEYS: u32 = 9;
 
