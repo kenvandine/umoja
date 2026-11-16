@@ -15,6 +15,7 @@
 // snapshotter, and only then `mutex`).
 
 #include "session_management.h"
+#include "surface_effects.h"
 
 #include <miral/wayland_extensions.h>
 
@@ -575,7 +576,7 @@ auto bound_windows() -> std::vector<miral::Window> {
 void update(miral::Window const& window, SavedToplevel const& state) {
     std::lock_guard lock{mutex};
     for (auto const& [token, b] : bindings_by_token) {
-        if (!(b->window == window) || !b->session) continue;
+        if (!umoja_fx::same_window(b->window, window) || !b->session) continue;
         auto& saved = b->session->toplevels[b->name];
         auto next = state;
         // Keep the last known floating geometry if this one has none.
@@ -592,7 +593,7 @@ void update(miral::Window const& window, SavedToplevel const& state) {
 void window_closed(miral::Window const& window) {
     std::lock_guard lock{mutex};
     for (auto const& [token, b] : bindings_by_token)
-        if (b->window == window) b->window = {};
+        if (umoja_fx::same_window(b->window, window)) b->window = {};
 }
 
 void set_snapshotter(std::function<void()> snapshot) {
