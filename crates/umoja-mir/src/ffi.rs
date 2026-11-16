@@ -379,6 +379,16 @@ pub extern "C" fn umoja_window_gone(id: u64) {
     })
 }
 
+/// The overview held the keyboard while something else activated a window
+/// (the dock, a notification, a launcher): the overview closes, as GNOME's
+/// does when a window is activated from outside it.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_overview_dismiss() {
+    guard("overview_dismiss", (), || {
+        crate::session::overlay_call("ExternalActivation", ());
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_center_new_windows() -> bool {
     guard("center_new_windows", false, || {

@@ -79,6 +79,25 @@ Umoja PPA:
   ones plugged in later, follows it, toggling it on one toggles it and the
   LED on all, and `mir_num_lock_changed_hook` hears each change so
   umoja-mir can save it. No hooks, no change; no ABI change.
+- `patches/3024_mru-skip-minimized.patch` (umoja29): Mir's focus fallback
+  (closing or minimizing the active window) picked from every window not
+  hidden, so a minimized one, even one from another workspace, came back on
+  its own. `MRUWindowList::visible()` now skips minimized windows too, as
+  mutter's focus_default_window does. Explicit activation (dock, Alt+Tab)
+  still restores them.
+- `patches/3025_xdg-window-menu-and-ping.patch` (umoja29): Mir 2.28 leaves
+  `xdg_toplevel.show_window_menu` and `xdg_wm_base.pong` as TODO stubs.
+  The first now calls `mir_show_window_menu_hook(surface, x, y)` (right-click
+  on a GTK header bar opens umoja-mir's window menu), and xdg-shell hands
+  `mir_xdg_ping_setup_hook` a function that pings every `xdg_wm_base` of a
+  process, with each pong going to `mir_xdg_pong_hook` (GNOME's "App is not
+  responding" dialog). Hooks found with `dlsym`; none, no change.
+- `patches/3026_activation-hooks.patch` (umoja29): before raising a window
+  for a valid xdg-activation token or a foreign-toplevel `activate` (the
+  dock), Mir calls `mir_user_activation_hook(surface)`, and for a refused
+  token `mir_activation_refused_hook(surface)`. umoja-mir uses them to tell
+  the user's activations (which may switch workspace) from an app raising
+  itself (which only asks for attention, GNOME's "is ready").
 - `patches/3020_cross-gpu-map-linear.patch`: the 3009 copy cost 5.5 ms of
   `glReadPixels` per 6 MB buffer on the compositing thread (measured on
   p16g3: 450 MB/s, 4 s of every 10 s, with two windows redrawing on the

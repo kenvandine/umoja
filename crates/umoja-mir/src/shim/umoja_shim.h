@@ -267,6 +267,46 @@ void umoja_workspaces_changed(size_t current, size_t count);
 // Cheap: only bumps a counter; Rust coalesces bursts into WindowsChanged.
 void umoja_windows_changed(void);
 bool umoja_is_tile_action(uint32_t action);
+// org.gnome.mutter dynamic-workspaces.
+bool umoja_workspaces_dynamic(void);
+// The locale is right-to-left: workspaces run from right to left.
+bool umoja_workspaces_rtl(void);
+// org.gnome.desktop.interface enable-animations.
+bool umoja_animations_enabled(void);
+// org.gnome.mutter auto-maximize.
+bool umoja_auto_maximize(void);
+enum {
+    UMOJA_FOCUS_CLICK = 0,
+    UMOJA_FOCUS_SLOPPY = 1,
+    UMOJA_FOCUS_MOUSE = 2,
+};
+// org.gnome.desktop.wm.preferences focus-mode, auto-raise(-delay),
+// raise-on-click and focus-new-windows ("strict").
+typedef struct {
+    uint32_t mode;
+    bool auto_raise;
+    uint32_t auto_raise_delay_ms;
+    bool raise_on_click;
+    bool new_windows_strict;
+} UmojaFocusSettings;
+void umoja_focus_settings(UmojaFocusSettings* out);
+// Whether a switcher action lists only the current workspace's windows
+// (org.gnome.shell.app-switcher / window-switcher current-workspace-only).
+bool umoja_switcher_current_workspace_only(uint32_t action);
+// Pointer motion against a hot corner's barriers (hot_corner.rs).
+void umoja_hot_corner_motion(float dx, float dy, bool on_left, bool on_top);
+// A window asked for attention (refused activation): "is ready" notice.
+void umoja_window_attention(uint64_t id, char const* app_id, char const* title);
+void umoja_window_attention_cleared(uint64_t id);
+// The user clicked or closed a window: ping its client (attention.rs).
+void umoja_check_alive(uint64_t id, int32_t pid, char const* app_id, char const* title);
+void umoja_window_gone(uint64_t id);
+// A window was activated from outside the overview while it held the keyboard.
+void umoja_overview_dismiss(void);
+
+// Implemented by the shim: the keymap ("layout+variant+options", or
+// several layouts comma-separated) for every keyboard (keymap.rs).
+void umoja_set_keymap(char const* keymap);
 
 // Implemented by the shim, called from Rust's D-Bus thread. Each takes the
 // window manager lock, so they are safe from any thread except Mir's own.
@@ -288,6 +328,13 @@ void umoja_wm_show_workspace(uint32_t index);
 void umoja_wm_send_to_workspace(uint64_t id, uint32_t index);
 // Workspace GSettings changed: re-apply count and primary-only membership.
 void umoja_wm_workspace_settings_changed(void);
+// The overview: drop a window between two thumbnails (a new workspace at
+// `index`), or inside one at (x, y) on the primary monitor's layout
+// (workspace -1: the current one).
+bool umoja_wm_send_to_new_workspace(uint64_t id, uint32_t index);
+bool umoja_wm_place_window(uint64_t id, int32_t workspace, int32_t x, int32_t y);
+// The window's client process, 0 if unknown.
+int32_t umoja_wm_window_pid(uint64_t id);
 
 // Screen blanking (src/idle.rs, src/shim/idle.cpp). Seconds before the
 // outputs turn off, unlocked and on the lock screen; 0 = never.
