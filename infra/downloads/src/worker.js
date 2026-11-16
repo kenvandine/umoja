@@ -126,7 +126,12 @@ function count(request, env, ctx, key, size) {
 //                   takes the visitor's IP instead of Cloudflare's
 function forward(request, env, ctx, name, path, props = {}) {
   const kind = (env.ANALYTICS || "").toLowerCase();
-  if (!kind || !env.ANALYTICS_URL || !env.ANALYTICS_SITE) return;
+  if (!kind || !env.ANALYTICS_URL || !env.ANALYTICS_SITE) {
+    if (kind || env.ANALYTICS_URL || env.ANALYTICS_SITE) {
+      console.error("analytics: set all of ANALYTICS, ANALYTICS_URL and ANALYTICS_SITE");
+    }
+    return;
+  }
   const base = env.ANALYTICS_URL.replace(/\/+$/, "");
   const page = new URL(path, request.url).toString();
   const ip = request.headers.get("CF-Connecting-IP") || "";
@@ -159,8 +164,14 @@ function forward(request, env, ctx, name, path, props = {}) {
   } else {
     return;
   }
-  ctx.waitUntil(req.then((r) => { if (!r.ok) console.error(`${kind} answered ${r.status}`); })
-    .catch((e) => console.error(`${kind} failed`, e)));
+  // Log every answer (Workers Logs, see [observability] in wrangler.toml):
+  // Umami answers 200 with {"beep":"boop"} when it drops a hit as a bot,
+  // and a 4xx body names what it rejected.
+  ctx.waitUntil(req.then(async (r) => {
+    const body = (await r.text()).slice(0, 300);
+    const line = `${kind} ${name} ${path}: ${r.status} ${body}`;
+    if (!r.ok || body.includes("beep")) console.error(line); else console.log(line);
+  }).catch((e) => console.error(`${kind} ${name} ${path} failed`, e)));
 }
 
 async function index(request, env) {

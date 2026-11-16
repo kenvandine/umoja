@@ -20,3 +20,8 @@ bucket_name = "umoja-releases"
 [[analytics_engine_datasets]]
 binding = "DOWNLOADS"
 dataset = "umoja_downloads"
+
+# Keep the Worker's console output (analytics forwarding results) in the
+# dashboard's Logs tab, not only in a live tail.
+[observability]
+enabled = true
