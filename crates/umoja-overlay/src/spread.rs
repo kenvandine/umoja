@@ -1576,7 +1576,6 @@ impl Spread {
         let stack = gtk::Overlay::new();
         stack.set_child(Some(&body));
         stack.add_overlay(&badge);
-        stack.add_overlay(&close);
         stack.set_overflow(gtk::Overflow::Visible);
 
         let button = gtk::Button::builder()
@@ -1604,8 +1603,17 @@ impl Spread {
             .opacity(0.0)
             .build();
 
+        // The close button sits over the preview button, not inside it: a
+        // button inside a button let the click through to the preview, so
+        // the X went to the window and left the overview instead of
+        // closing it (umoja-wm-test overview-close-button).
+        let framed = gtk::Overlay::new();
+        framed.set_child(Some(&button));
+        framed.add_overlay(&close);
+        framed.set_overflow(gtk::Overflow::Visible);
+
         let cell = gtk::Box::new(gtk::Orientation::Vertical, 18);
-        cell.append(&button);
+        cell.append(&framed);
         cell.append(&title);
 
         // Title and close button appear on hover.
