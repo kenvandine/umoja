@@ -307,6 +307,28 @@ struct Drag {
     target: Option<(gtk::Widget, DropKind)>,
     /// The pointer, in `root`'s coordinates.
     at: (f64, f64),
+    /// What the ghost shows, for its copy on another monitor's view.
+    thumb: Option<gdk::Texture>,
+    icon: gio::Icon,
+    /// That copy, while the pointer is over another monitor's view.
+    remote: Option<(gtk::Fixed, gtk::Widget)>,
+}
+
+/// The copy of a dragged window that follows the pointer.
+fn ghost_widget(thumb: Option<&gdk::Texture>, icon: &gio::Icon, (w, h): (f64, f64)) -> gtk::Widget {
+    let ghost: gtk::Widget = match thumb {
+        Some(t) => TexPane::new(Some(t), false, 1, 1).upcast(),
+        None => {
+            let img = gtk::Image::from_gicon(icon);
+            img.set_pixel_size(64);
+            img.add_css_class("spread-card");
+            img.upcast()
+        }
+    };
+    ghost.set_size_request(w as i32, h as i32);
+    ghost.add_css_class("spread-drag-ghost");
+    ghost.set_can_target(false);
+    ghost
 }
 
 pub struct Spread {
@@ -1725,18 +1747,7 @@ impl Spread {
                 // Small windows from a thumbnail grow to a usable size.
                 let gw = (width as f64).clamp(120.0, 240.0);
                 let gh = gw * height.max(1) as f64 / width.max(1) as f64;
-                let ghost: gtk::Widget = match &thumb {
-                    Some(t) => TexPane::new(Some(t), false, 1, 1).upcast(),
-                    None => {
-                        let img = gtk::Image::from_gicon(&icon);
-                        img.set_pixel_size(64);
-                        img.add_css_class("spread-card");
-                        img.upcast()
-                    }
-                };
-                ghost.set_size_request(gw as i32, gh as i32);
-                ghost.add_css_class("spread-drag-ghost");
-                ghost.set_can_target(false);
+                let ghost = ghost_widget(thumb.as_ref(), &icon, (gw, gh));
                 layer.put(&ghost, 0.0, 0.0);
                 cell_w.set_opacity(0.3);
                 let mons: Vec<Geo> = monitor_geos().iter().map(|(_, g)| *g).collect();
@@ -1757,6 +1768,9 @@ impl Spread {
                     size: (gw, gh),
                     target: None,
                     at: (0.0, 0.0),
+                    thumb: thumb.clone(),
+                    icon: icon.clone(),
+                    remote: None,
                 });
             }
             let Some(p) = cell_w.compute_point(
@@ -1808,6 +1822,18 @@ impl Spread {
 
     fn drag_motion(&self, root: &gtk::Widget, x: f64, y: f64) {
         let target = self.target_at(root, x, y);
+        // Past the edge of this view: the other monitor's view under the
+        // pointer, to show the ghost there too.
+        let inside = x >= 0.0 && y >= 0.0 && x < root.width() as f64 && y < root.height() as f64;
+        let elsewhere = if inside {
+            None
+        } else {
+            self.surface_origin(root).and_then(|(ox, oy)| {
+                self.app_target_at(ox as f64 + x, oy as f64 + y)
+                    .filter(|(r, _, _)| r != root)
+                    .and_then(|(r, p, _)| Some((self.layer_for(&r)?, r, p)))
+            })
+        };
         let mut drag = self.drag.borrow_mut();
         let Some(d) = drag.as_mut() else { return };
         d.at = (x, y);
@@ -1817,6 +1843,24 @@ impl Spread {
             &gtk::graphene::Point::new(to.0 as f32, to.1 as f32),
         ) {
             d.layer.move_(&d.ghost, p.x() as f64, p.y() as f64);
+        }
+        if d.remote.as_ref().map(|(l, _)| l) != elsewhere.as_ref().map(|(l, _, _)| l)
+            && let Some((l, g)) = d.remote.take()
+        {
+            l.remove(&g);
+        }
+        if let Some((layer, other, (ox, oy))) = elsewhere {
+            if d.remote.is_none() {
+                let g = ghost_widget(d.thumb.as_ref(), &d.icon, d.size);
+                layer.put(&g, 0.0, 0.0);
+                d.remote = Some((layer.clone(), g));
+            }
+            let to = (ox - d.grab.0 * d.size.0, oy - d.grab.1 * d.size.1);
+            if let Some((l, g)) = d.remote.as_ref()
+                && let Some(p) = other.compute_point(l, &gtk::graphene::Point::new(to.0 as f32, to.1 as f32))
+            {
+                l.move_(g, p.x() as f64, p.y() as f64);
+            }
         }
         // Dropping where the window already is does nothing.
         let (workspace, mon) = (d.workspace, d.mon);
@@ -1846,6 +1890,9 @@ impl Spread {
             return;
         };
         d.layer.remove(&d.ghost);
+        if let Some((l, g)) = &d.remote {
+            l.remove(g);
+        }
         let Some((widget, kind)) = d.target.clone() else {
             d.cell.set_opacity(1.0);
             return;
@@ -2053,6 +2100,9 @@ impl Spread {
     fn cancel_drag(&self) {
         if let Some(d) = self.drag.borrow_mut().take() {
             d.layer.remove(&d.ghost);
+            if let Some((l, g)) = &d.remote {
+                l.remove(g);
+            }
             d.cell.set_opacity(1.0);
             if let Some((t, _)) = d.target {
                 t.remove_css_class("drop-target");
