@@ -2,15 +2,15 @@
  "ai-btop-1": {
   "regions": {
    "card": [
-    348,
+    544,
     96,
-    840,
+    640,
     406
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -18,7 +18,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -28,9 +28,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -40,15 +40,15 @@
  "ai-btop-2": {
   "regions": {
    "card": [
-    348,
+    544,
     96,
-    840,
+    640,
     438
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -56,7 +56,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -66,9 +66,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -78,8 +78,8 @@
  "ai-btop-running": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -87,7 +87,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -97,9 +97,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -108,8 +108,8 @@
     "app": "org.gnome.Ptyxis",
     "demo": false,
     "rect": [
-     478,
-     203,
+     574,
+     311,
      652,
      489
     ],
@@ -120,8 +120,8 @@
  "ai-captions": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -129,7 +129,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -139,9 +139,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -151,15 +151,15 @@
  "ai-captions-summary": {
   "regions": {
    "card": [
-    400,
+    512,
     96,
-    735,
+    703,
     357
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -167,7 +167,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -177,9 +177,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -189,15 +189,15 @@
  "ai-install": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
     406
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -205,7 +205,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -215,9 +215,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -227,8 +227,8 @@
  "ai-opencode": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -236,7 +236,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -246,8 +246,8 @@
     "app": "org.gnome.Ptyxis",
     "demo": false,
     "rect": [
-     478,
-     203,
+     574,
+     311,
      652,
      489
     ],
@@ -257,9 +257,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -269,8 +269,8 @@
  "ai-opencode-agent": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -278,7 +278,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -288,9 +288,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -299,8 +299,8 @@
     "app": "org.gnome.Ptyxis",
     "demo": false,
     "rect": [
-     478,
-     203,
+     574,
+     311,
      652,
      489
     ],
@@ -311,21 +311,21 @@
  "ai-opencode-default": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
-    480
+    396
    ],
    "popover": [
-    859,
-    82,
-    413,
-    444
+    888,
+    504,
+    546,
+    545
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -333,7 +333,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -343,9 +343,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -355,8 +355,8 @@
  "ai-reply": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -364,7 +364,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -374,9 +374,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -386,15 +386,15 @@
  "ai-rewrite": {
   "regions": {
    "card": [
-    53,
+    90,
     96,
-    1430,
+    1547,
     273
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -402,7 +402,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -412,9 +412,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -423,8 +423,8 @@
     "app": "org.umoja.FeatureTestPad",
     "demo": false,
     "rect": [
-     388,
-     174,
+     484,
+     221,
      760,
      420
     ],
@@ -435,8 +435,8 @@
  "ai-rewrite-replaced": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -444,7 +444,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -454,9 +454,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -465,8 +465,8 @@
     "app": "org.umoja.FeatureTestPad",
     "demo": false,
     "rect": [
-     388,
-     174,
+     484,
+     221,
      760,
      420
     ],
@@ -477,15 +477,15 @@
  "ai-rewrite-rows": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
     496
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -493,7 +493,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -503,9 +503,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -514,8 +514,8 @@
     "app": "org.umoja.FeatureTestPad",
     "demo": false,
     "rect": [
-     388,
-     174,
+     484,
+     221,
      760,
      420
     ],
@@ -526,15 +526,15 @@
  "ai-settings": {
   "regions": {
    "card": [
-    448,
+    542,
     96,
-    640,
+    644,
     277
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -542,7 +542,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -552,9 +552,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -564,15 +564,15 @@
  "ai-settings-undo": {
   "regions": {
    "card": [
-    448,
+    542,
     96,
-    640,
+    644,
     277
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -580,7 +580,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -590,9 +590,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -602,8 +602,8 @@
  "ai-setups": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -612,8 +612,8 @@
     "rect": [
      72,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "Umoja Tour"
    },
@@ -621,10 +621,10 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     804,
+     900,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
    }
@@ -633,23 +633,23 @@
  "ai-setups-row": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
-    344
+    402
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
     "app": "org.gnome.Nautilus",
     "demo": true,
     "rect": [
-     443,
-     243,
+     539,
+     308,
      890,
      550
     ],
@@ -659,9 +659,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     123,
-     372,
-     970,
+     354,
+     470,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -671,15 +671,15 @@
  "ai-setups-saved": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
     245
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -688,8 +688,8 @@
     "rect": [
      72,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "Umoja Tour"
    },
@@ -697,10 +697,10 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     804,
+     900,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
    }
@@ -709,15 +709,15 @@
  "ai-summary": {
   "regions": {
    "card": [
-    380,
+    460,
     96,
-    776,
+    808,
     337
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -725,7 +725,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -735,9 +735,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -747,8 +747,8 @@
  "ai-tiling": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -757,8 +757,8 @@
     "rect": [
      72,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "Umoja Tour"
    },
@@ -766,10 +766,10 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     804,
+     900,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
    }
@@ -778,15 +778,15 @@
  "ai-troubleshoot": {
   "regions": {
    "card": [
-    309,
+    225,
     96,
-    917,
+    1278,
     249
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -794,7 +794,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -804,9 +804,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -816,15 +816,15 @@
  "ai-updates": {
   "regions": {
    "card": [
-    193,
+    408,
     96,
-    1149,
+    912,
     245
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -832,7 +832,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -842,9 +842,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -854,15 +854,15 @@
  "ai-updates-install": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
     374
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -870,7 +870,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -880,9 +880,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -892,8 +892,8 @@
  "app-grid": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -901,7 +901,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -911,9 +911,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -923,15 +923,15 @@
  "ask-question": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
-    286
+    402
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -939,7 +939,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -949,9 +949,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -961,15 +961,15 @@
  "ask-settings": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
     499
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -977,7 +977,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -987,9 +987,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -999,15 +999,15 @@
  "ask-sum": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
     286
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1015,7 +1015,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1025,9 +1025,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -1037,15 +1037,15 @@
  "ask-switch": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
-    402
+    499
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1053,7 +1053,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1063,9 +1063,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -1075,15 +1075,15 @@
  "ask-umoja": {
   "regions": {
    "card": [
-    448,
+    544,
     96,
     640,
-    480
+    396
    ]
   },
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1091,7 +1091,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1101,9 +1101,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "Release notes.md (~/Umoja Tour) - Text Editor"
@@ -1113,8 +1113,8 @@
  "calendar": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1122,7 +1122,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1132,9 +1132,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1144,8 +1144,8 @@
  "desktop": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1153,7 +1153,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1163,9 +1163,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1175,8 +1175,8 @@
  "notifications": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1184,7 +1184,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1194,9 +1194,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1206,8 +1206,8 @@
  "overview": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1215,7 +1215,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1225,9 +1225,9 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1237,17 +1237,17 @@
  "quick-settings": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1257,7 +1257,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1268,17 +1268,17 @@
  "screensaver": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1288,7 +1288,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1299,17 +1299,17 @@
  "screenshot-ui": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1319,7 +1319,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1330,17 +1330,17 @@
  "shortcuts": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     536,
-     174,
-     970,
+     998,
+     221,
+     700,
      520
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
@@ -1350,7 +1350,7 @@
     "demo": true,
     "rect": [
      90,
-     70,
+     92,
      890,
      550
     ],
@@ -1361,8 +1361,8 @@
  "tiling-halves": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1371,8 +1371,8 @@
     "rect": [
      72,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "Umoja Tour"
    },
@@ -1380,10 +1380,10 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     804,
+     900,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
    }
@@ -1392,8 +1392,8 @@
  "tiling-quarter": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
@@ -1402,8 +1402,8 @@
     "rect": [
      72,
      32,
-     732,
-     832
+     828,
+     1048
     ],
     "title": "Umoja Tour"
    },
@@ -1411,10 +1411,10 @@
     "app": "org.gnome.TextEditor",
     "demo": true,
     "rect": [
-     804,
+     900,
      32,
-     732,
-     416
+     828,
+     524
     ],
     "title": "main.rs (~/Umoja Tour/Projects/hello-gtk/src) - Text Editor"
    }
@@ -1423,16 +1423,16 @@
  "workspace-2": {
   "regions": {},
   "screen": [
-   1536,
-   864
+   1728,
+   1080
   ],
   "windows": [
    {
     "app": "org.gnome.Calculator",
     "demo": true,
     "rect": [
-     588,
-     139,
+     684,
+     178,
      360,
      616
     ],

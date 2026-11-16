@@ -1,6 +1,6 @@
 # A tour of Umoja
 
-Captured hands-free by `tools/demo/umoja-demo` on 2026-11-14 (umoja-desktop 2026.46.8).
+Captured hands-free by `tools/demo/umoja-demo` on 2026-11-15 (umoja-desktop 2026.46.8).
 
 **[Watch the trailer](videos/trailer.mp4)** (all the clips below in one video, real time).
 
@@ -96,17 +96,17 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-14 (umoja-desktop 2026
 
 ## Assistant: change settings
 
-![Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.](images/ai-settings.png)
+![Settings in plain words: Night Light and light style in one ask, and Undo puts the style back.](images/ai-settings.png)
 
-*Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.*
+*Settings in plain words: Night Light and light style in one ask, and Undo puts the style back.*
 
 ![Every change the assistant makes has an Undo button.](images/ai-settings-undo.png)
 
 *Every change the assistant makes has an Undo button.*
 
-[![Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.](videos/ai-settings.gif)](videos/ai-settings.mp4)
+[![Settings in plain words: Night Light and light style in one ask, and Undo puts the style back.](videos/ai-settings.gif)](videos/ai-settings.mp4)
 
-*Settings in plain words: Night Light and dark style in one ask, and Undo puts the style back.* ([video](videos/ai-settings.mp4))
+*Settings in plain words: Night Light and light style in one ask, and Undo puts the style back.* ([video](videos/ai-settings.mp4))
 
 ## Rewrite selected text
 
