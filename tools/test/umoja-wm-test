@@ -19,7 +19,7 @@ It writes, by default to ~/umoja-wm-test-<time>/:
     results.json      the same, for a machine (or Claude) to read
     videos/<test>-<output>.mp4   one clip per test and monitor (wf-recorder)
     images/*.png      screenshots of every monitor at the moments that matter
-    journal.txt       the session's journal for the run (umoja units)
+    journal.txt       the session's journal for the run, window trace on
     log.txt           what the script did, step by step
     setup.json        monitors, workspaces and versions it ran on
 
@@ -609,10 +609,17 @@ class Run:
 
     def flag(self, on):
         f = Path(GLib.get_user_runtime_dir()) / "umoja-demo"
+        # umoja-mir's window trace too, for journal.txt (left on if it
+        # already was).
+        trace = Path(GLib.get_user_runtime_dir()) / "umoja-debug-windows"
         if on:
             f.touch()
+            self.trace_was_on = trace.exists()
+            trace.touch()
         else:
             f.unlink(missing_ok=True)
+            if not getattr(self, "trace_was_on", True):
+                trace.unlink(missing_ok=True)
 
     def install_pad_apps(self):
         apps = Path.home() / ".local/share/applications"
@@ -701,8 +708,9 @@ class Run:
             self.bus.call(SCREENSAVER, "UnInhibit", GLib.Variant("(u)", (self.inhibit_cookie,)), quiet=True)
         since = self.started.strftime("%Y-%m-%d %H:%M:%S")
         with open(self.out / "journal.txt", "w") as f:
-            subprocess.run(["journalctl", "--user", "--since", since, "--no-pager", "-o", "short-precise",
-                            "-u", "umoja-*"], stdout=f, stderr=subprocess.DEVNULL)
+            # Everything: umoja-mir logs under its own tag, not a unit name.
+            subprocess.run(["journalctl", "--user", "--since", since, "--no-pager", "-o", "short-precise"],
+                           stdout=f, stderr=subprocess.DEVNULL)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # ---- common steps ------------------------------------------------------
