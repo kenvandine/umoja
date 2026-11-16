@@ -147,7 +147,10 @@ pub fn tools() -> Vec<Tool> {
         Tool::new(
             "run_command",
             "Run a shell command as the user and get its output. Only when no other tool fits. The user is always asked first; commands using sudo or package managers open in a terminal.",
-            json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}),
+            json!({"type": "object", "properties": {
+                "command": {"type": "string"},
+                "description": {"type": "string", "description": "What the command does, in a few plain words for someone who doesn't know commands, e.g. \"Read your current display setup\" or \"Check free disk space\". No program names or options; the user sees this when asked to allow it."}
+            }, "required": ["command", "description"]}),
             |a| Box::pin(async move { let t = run_command(a).await; let hide = t.starts_with("Opened a terminal"); let o = Outcome::text(t); if hide { o.hide() } else { o } }),
         )
         .with_risk(|a| {
@@ -157,7 +160,7 @@ pub fn tools() -> Vec<Tool> {
                 Risk::Medium
             }
         })
-        .with_summary(|a| format!("Run “{}”", arg_str(a, "command").unwrap_or(""))),
+        .with_summary(umoja_common::explain::summary),
     ]
 }
 

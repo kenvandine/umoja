@@ -235,12 +235,15 @@ pub fn tools() -> Vec<Tool> {
         Tool::new(
             "open_in_terminal",
             "Run a command-line program or command in a new window of the user's default terminal, where they can see and use it (btop, htop, a script). The user is asked first. If the program isn't installed this says so: install it with install_app, then call open_in_terminal again. Never start a terminal app such as gnome-terminal yourself; to open a program by name, launch_app is enough.",
-            obj(json!({"command": {"type": "string", "description": "The command line, e.g. \"btop\""}}), &["command"]),
+            obj(json!({
+                "command": {"type": "string", "description": "The command line, e.g. \"btop\""},
+                "description": {"type": "string", "description": "What it does, in a few plain words, e.g. \"Show what's using your computer's resources\". No program names or options."}
+            }), &["command", "description"]),
             |a| Box::pin(open_in_terminal(a)),
         )
         .confirm()
         .with_preflight(open_in_terminal_preflight)
-        .with_summary(|a| format!("Run \"{}\" in a terminal", arg_str(a, "command").unwrap_or(""))),
+        .with_summary(|a| format!("{} (in a terminal)", umoja_common::explain::summary(a))),
         Tool::new(
             "install_app",
             "Install an app by name (from the Snap Store, or the Ubuntu archive when there is no snap). Just pass the app's name; it finds the package and asks the user itself. Never tell the user to run apt or snap.",

@@ -339,6 +339,18 @@ window.umoja-overlay.ask-umoja {
 .ask-confirm-what {
   color: alpha(#ffffff, 0.75);
 }
+.ask-confirm-expander > title {
+  color: alpha(#ffffff, 0.6);
+  font-size: 0.9em;
+}
+.ask-confirm-command {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background-color: alpha(#000000, 0.25);
+  color: alpha(#ffffff, 0.8);
+  font-size: 0.9em;
+}
 .umoja-overlay button.pill.destructive-action {
   min-height: 36px;
   padding: 0 18px;

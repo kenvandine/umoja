@@ -64,7 +64,8 @@ pub trait Ui {
     /// Add or update progress line `id` for a tool call.
     fn step(&self, id: usize, label: &str, state: StepState);
     /// Ask the user whether to go ahead; resolves to their answer.
-    fn confirm(&self, label: &str, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>>;
+    /// `command` is the exact command line, shown collapsed under `label`.
+    fn confirm(&self, label: &str, command: Option<&str>, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>>;
     /// True once the question was replaced or the window closed.
     fn cancelled(&self) -> bool;
     /// Step `id` changed something that can be put back: offer Undo for
@@ -326,7 +327,7 @@ async fn run_local(tool: &ToolSpec, args: Value, id: usize, ui: &dyn Ui) -> Stri
     let risk = (tool.risk)(&args);
     if risk != Risk::Low {
         ui.step(id, &label, StepState::Running);
-        if !ui.confirm(&label, risk).await {
+        if !ui.confirm(&label, None, risk).await {
             ui.step(id, &label, StepState::Declined);
             return "The user declined; do not try again.".into();
         }
@@ -354,7 +355,7 @@ async fn run_mcp(mcp: &McpClient, name: &str, args: Value, id: usize, ui: &Rc<dy
     ui.step(id, &label, StepState::Running);
     tracing::info!(tool = name, args = %args, "assistant tool call (umoja-mcp)");
     let asker = ui.clone();
-    let confirm: Confirm = Rc::new(move |text, risk| asker.confirm(&text, risk));
+    let confirm: Confirm = Rc::new(move |text, command, risk| asker.confirm(&text, command.as_deref(), risk));
     let r = mcp.call(name, args, confirm).await;
     if r.declined {
         ui.step(id, &label, StepState::Declined);
@@ -560,7 +561,7 @@ mod tests {
                     self.0.borrow_mut().push(format!("{label} [{state:?}]"));
                 }
             }
-            fn confirm(&self, label: &str, _: Risk) -> Pin<Box<dyn Future<Output = bool>>> {
+            fn confirm(&self, label: &str, _: Option<&str>, _: Risk) -> Pin<Box<dyn Future<Output = bool>>> {
                 self.0.borrow_mut().push(format!("ASKED: {label}"));
                 Box::pin(async { false })
             }

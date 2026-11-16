@@ -15,6 +15,7 @@ pub mod blur;
 pub mod clock;
 pub mod crashes;
 pub mod dbus;
+pub mod explain;
 pub mod diagnostics;
 pub mod fprint;
 pub mod gsettings;

@@ -403,6 +403,13 @@ unless you pick **Allow**. Closing the card declines.
 
 Commands are handled carefully:
 
+- The **Allow** card says in plain words what the command will do, for
+  example *Read your current display setup*, not the command line itself.
+  The assistant writes that description when it asks to run a command; if
+  it doesn't, Umoja makes a best guess from the programs in it (*Check disk
+  space*, *Install or update software (needs your password)*). The exact
+  command is under **Show command**, collapsed by default, and can be
+  selected and copied.
 - An ordinary command runs as you, in a sandboxed scope that can't gain
   extra privileges, and its output goes back to the assistant.
 - A command that uses `sudo`, `pkexec`, `apt`, `dpkg`, `snap` or `flatpak`

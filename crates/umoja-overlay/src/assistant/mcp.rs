@@ -21,7 +21,8 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 /// Asks the user; resolves to their answer.
-pub type Confirm = Rc<dyn Fn(String, Risk) -> Pin<Box<dyn Future<Output = bool>>>>;
+/// Ask the user: (what will happen, the exact command if any, risk).
+pub type Confirm = Rc<dyn Fn(String, Option<String>, Risk) -> Pin<Box<dyn Future<Output = bool>>>>;
 
 /// What a tool call produced.
 #[derive(Debug, Clone, Default)]
@@ -208,12 +209,17 @@ impl McpClient {
                     (Some(l), _) => l.to_string(),
                     _ => p["message"].as_str().unwrap_or("").to_string(),
                 };
+                let command = meta["umoja/command"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .map(String::from);
                 let risk = risk_from(meta["umoja/risk"].as_str().unwrap_or("medium"));
                 let confirm = self.confirm.borrow().clone();
                 let this = self.clone();
                 glib::spawn_future_local(async move {
                     let ok = match confirm {
-                        Some(f) => f(text, risk).await,
+                        Some(f) => f(text, command, risk).await,
                         None => false,
                     };
                     let action = if ok { "accept" } else { "decline" };

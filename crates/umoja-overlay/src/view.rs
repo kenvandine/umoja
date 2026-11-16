@@ -1180,7 +1180,7 @@ impl Overlay {
             let Some(client) = mcp::shared().await else {
                 return;
             };
-            let never: mcp::Confirm = Rc::new(|_, _| Box::pin(async { false }));
+            let never: mcp::Confirm = Rc::new(|_, _, _| Box::pin(async { false }));
             let r = client
                 .call("desktop_status", serde_json::json!({}), never)
                 .await;
@@ -1996,7 +1996,7 @@ impl Overlay {
             }
             let confirm: mcp::Confirm = {
                 let ui = ui.clone();
-                Rc::new(move |label, risk| ui.confirm(&label, risk))
+                Rc::new(move |label, command, risk| ui.confirm(&label, command.as_deref(), risk))
             };
             let r = client.call(tool, args, confirm).await;
             let Some(o) = weak.upgrade() else { return };
@@ -2038,6 +2038,7 @@ impl Overlay {
     fn confirm_inline(
         self: &Rc<Self>,
         label: &str,
+        command: Option<&str>,
         risk: Risk,
         title: &str,
         allow: &str,
@@ -2064,6 +2065,32 @@ impl Overlay {
                 .css_classes(["ask-confirm-what"])
                 .build(),
         );
+        // The exact command, for anyone who wants to check it; collapsed so
+        // the plain-language line is what people read.
+        if let Some(cmd) = command.map(str::trim).filter(|c| !c.is_empty()) {
+            let code = gtk::Label::builder()
+                .label(cmd)
+                .xalign(0.0)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .selectable(true)
+                .css_classes(["ask-confirm-command", "monospace"])
+                .build();
+            let expander = gtk::Expander::builder()
+                .label(i18n::umoja("Show command"))
+                .expanded(false)
+                .child(&code)
+                .css_classes(["ask-confirm-expander"])
+                .build();
+            expander.connect_expanded_notify(|e| {
+                e.set_label(Some(&if e.is_expanded() {
+                    i18n::umoja("Hide command")
+                } else {
+                    i18n::umoja("Show command")
+                }));
+            });
+            self.confirm_box.append(&expander);
+        }
         let cancel = gtk::Button::builder()
             .label(i18n::gtk("_Cancel"))
             .use_underline(true)
@@ -3200,8 +3227,10 @@ impl Overlay {
             let AssistantAction::RunCommand { cmd, .. } = action else {
                 return;
             };
+            let what = umoja_common::explain::command(cmd);
             let asked = self.confirm_inline(
-                cmd,
+                &what,
+                Some(cmd),
                 Risk::High,
                 &i18n::umoja("Run this command?"),
                 &i18n::umoja("Run"),
@@ -3370,13 +3399,14 @@ impl agent::Ui for OverlayUi {
         });
     }
 
-    fn confirm(&self, label: &str, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>> {
+    fn confirm(&self, label: &str, command: Option<&str>, risk: Risk) -> Pin<Box<dyn Future<Output = bool>>> {
         let Some(o) = self.live() else {
             return Box::pin(async { false });
         };
         o.emit("ConfirmShown", (label,).to_variant());
         let asked = o.confirm_inline(
             label,
+            command,
             risk,
             &i18n::umoja("Allow Umoja to do this?"),
             &i18n::umoja("Allow"),

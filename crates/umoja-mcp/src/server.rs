@@ -176,6 +176,14 @@ impl Server {
             Some(crate::actions::Redirect::Call(name, a)) => match self.tools.iter().find(|t| t.name == name) {
                 Some(t) => {
                     tracing::info!(command = cmd, tool = name, "run_command redirected");
+                    let mut a = a;
+                    // Keep the model's plain description when the target takes one.
+                    if let (Some(obj), Some(d)) = (a.as_object_mut(), args.get("description"))
+                        && t.parameters["properties"].get("description").is_some()
+                        && !obj.contains_key("description")
+                    {
+                        obj.insert("description".into(), d.clone());
+                    }
                     Ok((t, a))
                 }
                 None => Ok((tool, args)),
@@ -201,7 +209,11 @@ impl Server {
                 None => None,
             };
             let label = tool.describe(&args);
-            match self.confirm(tool.name, &label, detail.as_deref(), risk).await {
+            // The exact command line, for a "Show command" expander under the plain label.
+            let command = tool.parameters["properties"]
+                .get("command")
+                .and_then(|_| crate::tool::arg_str(&args, "command"));
+            match self.confirm(tool.name, &label, detail.as_deref(), command, risk).await {
                 Ok(true) => {}
                 Ok(false) => return CallResult { outcome: Outcome::ok(DECLINED), declined: true, undo: None },
                 Err(e) => return CallResult::from(Outcome::err(e)),
@@ -226,11 +238,21 @@ impl Server {
         CallResult { outcome, declined: false, undo }
     }
 
-    async fn confirm(&self, tool: &str, label: &str, detail: Option<&str>, risk: Risk) -> Result<bool, String> {
-        let message = match detail {
+    async fn confirm(
+        &self,
+        tool: &str,
+        label: &str,
+        detail: Option<&str>,
+        command: Option<&str>,
+        risk: Risk,
+    ) -> Result<bool, String> {
+        let mut message = match detail {
             Some(d) if !d.trim().is_empty() => format!("{label}\n\n{}", d.trim()),
             _ => label.to_string(),
         };
+        if let Some(c) = command {
+            message.push_str(&format!("\n\nCommand: {c}"));
+        }
         if self.client_caps.borrow().get("elicitation").is_some() {
             let r = self
                 .request(
@@ -238,7 +260,7 @@ impl Server {
                     json!({
                         "message": format!("Allow the assistant to do this?\n\n{message}"),
                         "requestedSchema": {"type": "object", "properties": {}},
-                        "_meta": {"umoja/tool": tool, "umoja/label": label, "umoja/detail": detail, "umoja/risk": risk_name(risk)},
+                        "_meta": {"umoja/tool": tool, "umoja/label": label, "umoja/detail": detail, "umoja/command": command, "umoja/risk": risk_name(risk)},
                     }),
                 )
                 .await?;
