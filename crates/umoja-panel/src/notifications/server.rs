@@ -180,8 +180,16 @@ fn parse_notify(params: &glib::Variant) -> Option<(Note, u32)> {
         .or_else(|| {
             let app = gio::DesktopAppInfo::new(&format!("{}.desktop", app_id.as_deref()?))?;
             let gicon = app.icon()?;
+            // A snap's icon is a file.
+            if let Some(file) = gicon.downcast_ref::<gio::FileIcon>() {
+                return loaded(Icon::File(file.file().path()?.to_string_lossy().into_owned()));
+            }
             let names = gicon.downcast_ref::<gio::ThemedIcon>()?.names();
-            names.first().map(|n| Icon::Name(n.to_string()))
+            names
+                .iter()
+                .find(|n| in_theme(n))
+                .or(names.first())
+                .map(|n| Icon::Name(n.to_string()))
         });
 
     let actions = actions
@@ -246,12 +254,25 @@ fn icon_from_string(s: String) -> Icon {
 /// icon source is tried instead of showing a broken image.
 fn loaded(icon: Icon) -> Option<Icon> {
     let Icon::File(path) = &icon else {
+        // A name no icon theme has (an app id sent as app_icon) would show
+        // a broken image: try the app's own icon instead.
+        if let Icon::Name(name) = &icon
+            && !in_theme(name)
+        {
+            return None;
+        }
         return Some(icon);
     };
     let pixbuf =
         gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, MAX_IMAGE, MAX_IMAGE, true).ok()?;
     #[allow(deprecated)]
     Some(Icon::Texture(gdk::Texture::for_pixbuf(&pixbuf)))
+}
+
+/// Whether the current icon theme (or its fallbacks) has `name`. Without a
+/// display, assume it does.
+fn in_theme(name: &str) -> bool {
+    gdk::Display::default().is_none_or(|d| gtk::IconTheme::for_display(&d).has_icon(name))
 }
 
 /// `(iiibiiay)`: width, height, rowstride, has_alpha, bits, channels, data.
