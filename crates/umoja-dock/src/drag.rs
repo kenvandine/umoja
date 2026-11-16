@@ -3,17 +3,19 @@
 //! - Drag a pinned app along the dock to move it among the pins.
 //! - Drag a running app that isn't pinned in among the pins to pin it there.
 //! - Drop a pinned app on Show Apps to unpin it.
-//! - Let go off the dock and nothing changes.
+//! - Let go off the dock and it goes back where it was.
 //!
-//! The icon moves slot to slot inside the dock while the button is held
-//! (a pointer grab, not Wayland drag and drop), and the new order is
-//! written to `org.umoja.shell favorite-apps` on release, which rebuilds
-//! every dock. Ask Umoja and Show Apps are fixed and can't be dragged.
+//! While the button is held (a pointer grab, not Wayland drag and drop) a
+//! copy of the icon follows the pointer along the dock, drawn on top by
+//! dock_layout's float, and the icon's own place stays empty as a gap that
+//! moves to wherever the copy would land; the other icons glide aside. On
+//! release the new order is written to `org.umoja.shell favorite-apps`,
+//! which rebuilds every dock. Ask Umoja and Show Apps stay fixed.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gtk::{graphene, prelude::*};
+use gtk::{gio, graphene, prelude::*};
 use gtk4 as gtk;
 
 use crate::Dock;
@@ -21,6 +23,8 @@ use crate::Dock;
 /// How far the pointer moves before a press becomes a drag (GTK's default
 /// gtk-dnd-drag-threshold).
 const THRESHOLD: f64 = 8.0;
+/// How far off the dock the pointer may stray before a drop cancels.
+const SLOP: f64 = 24.0;
 
 /// An app icon in the dock, in the order shown.
 pub struct Item {
@@ -28,6 +32,7 @@ pub struct Item {
     /// Desktop id with its `.desktop` suffix, as favorite-apps stores it.
     pub id: String,
     pub pinned: bool,
+    pub icon: Option<gio::Icon>,
 }
 
 /// The dock's drag targets other than the app icons.
@@ -40,16 +45,29 @@ pub struct Targets {
 struct Drag {
     /// Pointer at the press, in the list's coordinates.
     start: (f64, f64),
+    /// Pointer at the press, from the icon's start edge along the dock.
+    grab: f64,
     /// Past the threshold: the icon is being dragged.
     started: bool,
     /// Where the icon started, among `items`.
     home: usize,
+    /// Start edge of each icon's place along the dock at the press, and
+    /// an icon's length. Places stay put while icons trade them, so the
+    /// landing spot comes from these rather than from icons mid-glide.
+    slots: Vec<f64>,
+    len: f64,
+    /// The copy that follows the pointer.
+    float: Option<gtk::Widget>,
     /// An unpinned app has been dragged in among the pins.
     as_pin: bool,
-    /// The pointer is on Show Apps with a pinned app (drop unpins).
+    /// The copy is on Show Apps with a pinned app (drop unpins).
     on_show_apps: bool,
     /// The pointer is off the dock (drop puts everything back).
     outside: bool,
+}
+
+fn along(vertical: bool, x: f64, y: f64) -> f64 {
+    if vertical { y } else { x }
 }
 
 /// Let `widget`, an app icon already listed in `dock.drag`, be dragged.
@@ -66,16 +84,36 @@ pub fn attach(dock: &Rc<Dock>, widget: &gtk::Widget) {
         let (Some(d), Some(w)) = (weak.upgrade(), g.widget()) else {
             return;
         };
+        let vertical = d.config.borrow().position.is_vertical();
         let Some(p) = w.compute_point(&d.list, &graphene::Point::new(x as f32, y as f32)) else {
             return;
         };
-        let Some(home) = d.drag.borrow().items.iter().position(|i| i.widget == w) else {
+        let targets = d.drag.borrow();
+        let Some(home) = targets.items.iter().position(|i| i.widget == w) else {
             return;
         };
+        let bounds: Vec<_> = targets
+            .items
+            .iter()
+            .filter_map(|i| i.widget.compute_bounds(&d.list))
+            .collect();
+        if bounds.len() != targets.items.len() {
+            return;
+        }
+        let slots: Vec<f64> = bounds
+            .iter()
+            .map(|b| along(vertical, b.x() as f64, b.y() as f64))
+            .collect();
+        let len = along(vertical, bounds[home].width() as f64, bounds[home].height() as f64);
+        let (px, py) = (p.x() as f64, p.y() as f64);
         *s.borrow_mut() = Some(Drag {
-            start: (p.x() as f64, p.y() as f64),
+            start: (px, py),
+            grab: along(vertical, px, py) - slots[home],
             started: false,
             home,
+            slots,
+            len,
+            float: None,
             as_pin: false,
             on_show_apps: false,
             outside: false,
@@ -95,42 +133,82 @@ pub fn attach(dock: &Rc<Dock>, widget: &gtk::Widget) {
             }
             drag.started = true;
             g.set_state(gtk::EventSequenceState::Claimed);
-            d.dragging.set(true);
-            w.add_css_class("dock-drag");
-            d.window.set_cursor_from_name(Some("grabbing"));
+            d.start_drag(&w, drag);
         }
         let (x, y) = (drag.start.0 + dx, drag.start.1 + dy);
         d.drag_to(&w, drag, x, y);
     });
 
     let (weak, s) = (Rc::downgrade(dock), state);
-    gesture.connect_drag_end(move |g, _, _| {
+    let end = move |g: &gtk::GestureDrag| {
         let (Some(d), Some(w)) = (weak.upgrade(), g.widget()) else {
             return;
         };
-        let Some(drag) = s.borrow_mut().take() else {
-            return;
-        };
+        let Some(drag) = s.borrow_mut().take() else { return };
         if drag.started {
             d.drop_drag(&w, &drag);
+        }
+    };
+    let end2 = end.clone();
+    gesture.connect_drag_end(move |g, _, _| end(g));
+    // A grab lost to the compositor ends the drag too.
+    gesture.connect_cancel(move |g, _| {
+        if let Some(g) = g.downcast_ref::<gtk::GestureDrag>() {
+            end2(g);
         }
     });
     widget.add_controller(gesture);
 }
 
 impl Dock {
+    /// The press became a drag: float a copy of the icon, leave a gap.
+    fn start_drag(&self, widget: &gtk::Widget, drag: &mut Drag) {
+        self.dragging.set(true);
+        self.window.set_cursor_from_name(Some("grabbing"));
+        let size = self.config.borrow().icon_size;
+        let icon = self
+            .drag
+            .borrow()
+            .items
+            .iter()
+            .find(|i| &i.widget == widget)
+            .and_then(|i| i.icon.clone());
+        let image = match icon {
+            Some(icon) => gtk::Image::from_gicon(&icon),
+            None => gtk::Image::from_icon_name("application-x-executable"),
+        };
+        image.set_pixel_size(size);
+        let float = gtk::Box::builder()
+            .css_classes(["dock-item", "dock-float"])
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .can_target(false)
+            .build();
+        image.set_hexpand(true);
+        image.set_vexpand(true);
+        float.append(&image);
+        let (w, h) = (widget.width(), widget.height());
+        float.set_size_request(w, h);
+        // Last child, so it draws over the others.
+        self.list.append(&float);
+        widget.set_opacity(0.0);
+        drag.float = Some(float.upcast());
+    }
+
     /// Follow the pointer at (`x`, `y`) in list coordinates.
     fn drag_to(&self, widget: &gtk::Widget, drag: &mut Drag, x: f64, y: f64) {
         let vertical = self.config.borrow().position.is_vertical();
-        let along = if vertical { y } else { x };
-        let inside = |w: &gtk::Widget| {
-            w.compute_bounds(&self.list).is_some_and(|b| {
-                let (bx, by) = (b.x() as f64, b.y() as f64);
-                let (bw, bh) = (b.width() as f64, b.height() as f64);
-                x >= bx && x < bx + bw && y >= by && y < by + bh
-            })
-        };
-        drag.outside = !inside(self.list.upcast_ref());
+        let along_ptr = along(vertical, x, y);
+        let (lw, lh) = (self.list.width() as f64, self.list.height() as f64);
+        drag.outside = x < -SLOP || y < -SLOP || x > lw + SLOP || y > lh + SLOP;
+
+        // The copy follows the pointer along the dock.
+        let at = along_ptr - drag.grab;
+        if let Some(f) = &drag.float {
+            f.set_opacity(if drag.outside { 0.5 } else { 1.0 });
+            self.layout.set_float(Some((f, at)));
+        }
+        let center = at + drag.len / 2.0;
 
         let mut targets = self.drag.borrow_mut();
         let Some(cur) = targets.items.iter().position(|i| &i.widget == widget) else {
@@ -138,8 +216,18 @@ impl Dock {
         };
         let pinned = targets.items[cur].pinned;
 
-        let on_show_apps =
-            pinned && !drag.outside && targets.show_apps.as_ref().is_some_and(|(b, _)| inside(b));
+        let on_show_apps = pinned
+            && !drag.outside
+            && targets.show_apps.as_ref().is_some_and(|(b, _)| {
+                b.compute_bounds(&self.list).is_some_and(|r| {
+                    let (s, l) = if vertical {
+                        (r.y() as f64, r.height() as f64)
+                    } else {
+                        (r.x() as f64, r.width() as f64)
+                    };
+                    center >= s && center < s + l
+                })
+            });
         if on_show_apps != drag.on_show_apps {
             drag.on_show_apps = on_show_apps;
             if let Some((b, image)) = &targets.show_apps {
@@ -152,96 +240,126 @@ impl Dock {
                 }
             }
         }
-        if drag.outside || on_show_apps {
-            return;
-        }
 
-        // The icon under the pointer along the dock, if any.
-        let over = targets.items.iter().position(|i| {
-            i.widget != *widget
-                && i.widget.compute_bounds(&self.list).is_some_and(|b| {
-                    let (start, len) = if vertical {
-                        (b.y() as f64, b.height() as f64)
-                    } else {
-                        (b.x() as f64, b.width() as f64)
-                    };
-                    along >= start && along < start + len
-                })
-        });
-        let Some(over) = over else { return };
-        let others_pinned = targets
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(n, i)| *n != cur && i.pinned)
-            .count();
-        let over_pinned = targets.items[over].pinned;
-        let (to, as_pin) = slot(over, over_pinned, drag.home, pinned, others_pinned);
-        drag.as_pin = as_pin;
-        if to == cur {
-            return;
-        }
-        let item = targets.items.remove(cur);
-        targets.items.insert(to, item);
-        // Put the widget before whichever icon now follows it, or after
-        // the one before it when it is last.
-        let prev = match targets.items.get(to + 1) {
-            Some(next) => next.widget.prev_sibling(),
-            None => Some(targets.items[to - 1].widget.clone()),
+        // Off the dock the gap goes home; on Show Apps it stays put.
+        let to = if drag.outside {
+            drag.as_pin = false;
+            drag.home
+        } else if on_show_apps {
+            cur
+        } else {
+            let Some(over) = nearest_slot(&drag.slots, drag.len, center) else {
+                return;
+            };
+            if over == cur {
+                return;
+            }
+            let others_pinned = targets
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(n, i)| *n != cur && i.pinned)
+                .count();
+            let over_pinned = targets.items[over].pinned;
+            let (to, as_pin) = slot(over, over_pinned, drag.home, pinned, others_pinned);
+            drag.as_pin = as_pin;
+            to
         };
-        if prev.as_ref() != Some(widget) {
-            self.list.reorder_child_after(widget, prev.as_ref());
+        if to != cur {
+            move_item(&self.list, &mut targets.items, cur, to);
         }
     }
 
     /// The button came up: save the new order, unpin, or put things back.
     fn drop_drag(self: &Rc<Self>, widget: &gtk::Widget, drag: &Drag) {
         self.dragging.set(false);
-        widget.remove_css_class("dock-drag");
         self.window.set_cursor(None::<&gtk::gdk::Cursor>);
-        let (show_apps, new) = {
-            let targets = self.drag.borrow();
-            let new = targets
-                .items
-                .iter()
-                .position(|i| &i.widget == widget)
-                .map(|cur| {
-                    let order: Vec<(String, bool)> = targets
-                        .items
-                        .iter()
-                        .map(|i| (i.id.clone(), i.pinned))
-                        .collect();
-                    pins_after_drop(&order, cur, drag.as_pin)
-                });
-            (targets.show_apps.clone(), new)
-        };
+        self.layout.set_float(None);
+        if let Some(f) = &drag.float {
+            self.list.remove(f);
+        }
+        widget.set_opacity(1.0);
+        let show_apps = self.drag.borrow().show_apps.clone();
         if let Some((b, image)) = show_apps {
             b.remove_css_class("drop-unpin");
             image.set_icon_name(Some("view-app-grid-symbolic"));
         }
-        let id = self
-            .drag
-            .borrow()
-            .items
-            .iter()
-            .find(|i| &i.widget == widget)
-            .map(|i| i.id.clone());
 
         let old = umoja_common::apps::favorites();
-        let wanted = if drag.outside {
-            None
-        } else if drag.on_show_apps {
-            id.map(|id| old.iter().filter(|f| **f != id).cloned().collect())
-        } else {
-            new.map(|n| keep_missing(&old, n))
+        let wanted = {
+            let mut targets = self.drag.borrow_mut();
+            let Some(cur) = targets.items.iter().position(|i| &i.widget == widget) else {
+                return;
+            };
+            if drag.outside {
+                // Glide back home.
+                move_item(&self.list, &mut targets.items, cur, drag.home);
+                None
+            } else if drag.on_show_apps {
+                let id = &targets.items[cur].id;
+                Some(old.iter().filter(|f| *f != id).cloned().collect())
+            } else {
+                let order: Vec<(String, bool)> = targets
+                    .items
+                    .iter()
+                    .map(|i| (i.id.clone(), i.pinned))
+                    .collect();
+                Some(keep_missing(&old, pins_after_drop(&order, cur, drag.as_pin)))
+            }
         };
         match wanted {
             // favorite-apps changing rebuilds every dock.
             Some(w) if w != old => umoja_common::apps::set_favorites(&w),
-            // Nothing changed: put the icons back as they were.
-            _ => self.rebuild(),
+            _ => {
+                // An unpinned app taken back out of the pins goes home.
+                let mut targets = self.drag.borrow_mut();
+                if let Some(cur) = targets.items.iter().position(|i| &i.widget == widget)
+                    && cur != drag.home
+                {
+                    move_item(&self.list, &mut targets.items, cur, drag.home);
+                }
+                drop(targets);
+                if self.rebuild_pending.get() {
+                    self.rebuild();
+                }
+            }
         }
     }
+}
+
+/// Move the item at `from` to `to`, in `items` and in the list.
+fn move_item(list: &gtk::Box, items: &mut Vec<Item>, from: usize, to: usize) {
+    let item = items.remove(from);
+    let widget = item.widget.clone();
+    items.insert(to, item);
+    // Put the widget before whichever icon now follows it, or after the
+    // one before it when it is last.
+    let prev = match items.get(to + 1) {
+        Some(next) => next.widget.prev_sibling(),
+        None => Some(items[to - 1].widget.clone()),
+    };
+    if prev.as_ref() != Some(&widget) {
+        list.reorder_child_after(&widget, prev.as_ref());
+    }
+}
+
+/// The place whose middle is nearest `center` along the dock, when
+/// `center` is over the run of places (or within half a place of it).
+fn nearest_slot(slots: &[f64], len: f64, center: f64) -> Option<usize> {
+    let first = *slots.first()?;
+    let last = *slots.last()? + len;
+    if center < first - len / 2.0 || center > last + len / 2.0 {
+        return None;
+    }
+    slots
+        .iter()
+        .enumerate()
+        .min_by(|a, b| {
+            let da = (a.1 + len / 2.0 - center).abs();
+            let db = (b.1 + len / 2.0 - center).abs();
+            da.total_cmp(&db)
+        })
+        .map(|(i, _)| i)
 }
 
 /// Where the dragged icon goes with the pointer over the icon at `over`
@@ -320,6 +438,17 @@ mod tests {
         let o = order(&[("a", true), ("x", false), ("b", true)]);
         assert_eq!(pins_after_drop(&o, 1, true), ["a", "x", "b"]);
         assert_eq!(pins_after_drop(&o, 1, false), ["a", "b"]);
+    }
+
+    #[test]
+    fn nearest_place() {
+        let slots = [0.0, 60.0, 120.0];
+        assert_eq!(nearest_slot(&slots, 56.0, 10.0), Some(0));
+        assert_eq!(nearest_slot(&slots, 56.0, 95.0), Some(1));
+        assert_eq!(nearest_slot(&slots, 56.0, 150.0), Some(2));
+        // Past the last place by more than half an icon: Ask Umoja, the
+        // spacer or Show Apps, so no move.
+        assert_eq!(nearest_slot(&slots, 56.0, 210.0), None);
     }
 
     #[test]

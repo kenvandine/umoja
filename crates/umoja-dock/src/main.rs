@@ -5,6 +5,7 @@
 //! windows (with dots) from the compositor's foreign-toplevel protocol.
 
 mod autohide;
+mod dock_layout;
 mod drag;
 mod keynav;
 mod launcher;
@@ -79,6 +80,8 @@ impl Config {
 struct Dock {
     window: gtk::ApplicationWindow,
     list: gtk::Box,
+    /// The list's layout (glides icons, floats the dragged one).
+    layout: dock_layout::DockLayout,
     /// Holds `list`; slides it off the edge while auto-hiding.
     slide: slide::Slide,
     config: RefCell<Config>,
@@ -157,12 +160,15 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
     list.add_css_class("dock-list");
+    let layout = dock_layout::DockLayout::new(4);
+    list.set_layout_manager(Some(layout.clone()));
     let slide = slide::Slide::new(&list);
     window.set_child(Some(&slide));
 
     let dock = Rc::new(Dock {
         window: window.clone(),
         list,
+        layout,
         slide,
         config: RefCell::new(Config::load()),
         windows: shared.windows.clone(),
@@ -219,11 +225,7 @@ impl Dock {
             self.window
                 .set_anchor(edge, edge == main || (cfg.extend && ends.contains(&edge)));
         }
-        self.list.set_orientation(if cfg.position.is_vertical() {
-            gtk::Orientation::Vertical
-        } else {
-            gtk::Orientation::Horizontal
-        });
+        self.layout.set_vertical(cfg.position.is_vertical());
         // Float the rounded dock slightly off the screen edge; in panel
         // mode it sits flush against the edge and both its ends.
         let gap = |edge: DockPosition| {
@@ -360,6 +362,7 @@ impl Dock {
                     widget,
                     id: id.to_string(),
                     pinned,
+                    icon: app.icon(),
                 });
             }
         }
