@@ -580,7 +580,7 @@ async fn show_osd(icon: &str, level: Option<f64>) {
             dbus::MEDIA_KEYS_OBJECT_PATH,
             dbus::MEDIA_KEYS_INTERFACE,
             "ShowOSD",
-            Some(&(d.end(),).to_variant()),
+            Some(&glib::Variant::tuple_from_iter([d.end()])),
             None,
             gio::DBusCallFlags::NONE,
             1000,

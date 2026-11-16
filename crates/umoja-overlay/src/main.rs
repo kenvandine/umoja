@@ -574,7 +574,8 @@ fn export(
                         state.insert("app_grid", grid.is_visible());
                         state.insert("switcher", chrome.switcher_visible());
                         state.insert("window_menu", menu.is_visible());
-                        invocation.return_value(Some(&(state.end(),).to_variant()));
+                        // (a{sv}): a VariantDict's end() in a tuple went out as (v).
+                        invocation.return_value(Some(&glib::Variant::tuple_from_iter([state.end()])));
                         return;
                     }
                     "ShowWindowMenu" => {
