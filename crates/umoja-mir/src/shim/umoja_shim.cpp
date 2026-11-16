@@ -1701,7 +1701,7 @@ public:
         } else if (is_tiled) {
             bool const known = has_zone_on(to);
             UmojaRect out{};
-            if (umoja_tile_geometry(action->second, to_rect(area_on(to)), &out)) {
+            if (tile_rect(w, action->second, area_on(to), &out)) {
                 spec.top_left() = geom::Point{out.x, out.y};
                 spec.size() = geom::Size{out.w, out.h};
             }
@@ -1753,7 +1753,7 @@ public:
             if (!has_zone_on(output)) continue;
             retile_pending.erase(w);
             UmojaRect out{};
-            if (!umoja_tile_geometry(action->second, to_rect(area_on(output)), &out)) continue;
+            if (!tile_rect(w, action->second, area_on(output), &out)) continue;
             WindowSpecification spec;
             spec.top_left() = geom::Point{out.x, out.y};
             spec.size() = geom::Size{out.w, out.h};
@@ -3490,7 +3490,7 @@ private:
         for (auto const& [id, r] : zones)
             if (r.contains(centre_of(target))) area = r;
         UmojaRect out{};
-        if (!umoja_tile_geometry(action, to_rect(area), &out)) return false;
+        if (!tile_rect(target, action, area, &out)) return false;
 
         if (!is_tiled && !untiled.count(target)) {
             if (info.state() == mir_window_state_restored)
@@ -3514,6 +3514,32 @@ private:
         // xdg-shell's tiled states (P1): GTK and libadwaita square their
         // corners and drop the shadow, as on GNOME.
         umoja_fx::set_tiled_edges(target, 15);
+        return true;
+    }
+
+    // A tile's rectangle, grown to the window's minimum size when the tile
+    // is smaller (quarter tiles on a short screen). Grown away from the work
+    // area's edges the tile touches, so a top tile keeps its title bar under
+    // the top bar. Left as it was, Mir grew it from the bottom edge up (miral
+    // WindowInfo::constrain_resize moves the top left on a "top resize"),
+    // which put a top quarter's title bar off screen (App Center on a
+    // 1920x1200 laptop at 2x).
+    bool tile_rect(Window const& w, uint32_t action, geom::Rectangle const& area, UmojaRect* out) {
+        if (!umoja_tile_geometry(action, to_rect(area), out)) return false;
+        if (!all_windows.count(w)) return true;
+        auto const& info = tools.info_for(w);
+        int const ax = area.top_left.x.as_int(), ay = area.top_left.y.as_int();
+        int const aw = area.size.width.as_int(), ah = area.size.height.as_int();
+        int const min_w = std::min(aw, info.min_width().as_int());
+        int const min_h = std::min(ah, info.min_height().as_int());
+        if (out->w < min_w) {
+            if (out->x > ax) out->x = std::max(ax, out->x + out->w - min_w);
+            out->w = min_w;
+        }
+        if (out->h < min_h) {
+            if (out->y > ay) out->y = std::max(ay, out->y + out->h - min_h);
+            out->h = min_h;
+        }
         return true;
     }
 
@@ -3852,7 +3878,7 @@ private:
         uint32_t const action = it->second;
         tile_before_max.erase(it);
         UmojaRect out{};
-        if (!umoja_tile_geometry(action, to_rect(area_on(output_at(centre_of(w)))), &out)) return false;
+        if (!tile_rect(w, action, area_on(output_at(centre_of(w))), &out)) return false;
         spec.top_left() = geom::Point{out.x, out.y};
         spec.size() = geom::Size{out.w, out.h};
         tiled[id] = w;
