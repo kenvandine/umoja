@@ -1310,6 +1310,11 @@ public:
         bool retiled = false;
         if (spec.state().is_set() && all_windows.count(info.window()))
             guarded("client state", [&] { retiled = client_state_change(info, spec); });
+        // Unminimized by a request (the dock's foreign-toplevel click): it
+        // grows back out of its dock icon, as from activate().
+        bool const unminimized = all_windows.count(info.window()) && info.state() == mir_window_state_minimized &&
+                                 spec.state().is_set() && spec.state().value() != mir_window_state_minimized &&
+                                 spec.state().value() != mir_window_state_hidden;
         if (trace)
             std::fprintf(stderr, "umoja-mir: wm: request for %s:%s -> applying%s\n", describe(info).c_str(),
                          describe(modifications).c_str(), describe(spec).c_str());
@@ -1317,6 +1322,8 @@ public:
         if (retiled) applying = true; // a move back into the tile isn't a drag out of it
         MinimalWindowManager::handle_modify_window(info, spec);
         applying = was_applying;
+        if (unminimized && info.state() != mir_window_state_minimized)
+            guarded("restore animation", [&] { animate(info.window(), Anim::restore); });
     }
 
     // Activation requests from windows on another workspace don't pull them
