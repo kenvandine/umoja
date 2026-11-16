@@ -124,6 +124,9 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_touchpad_gesture_hook");
     // Same for the scene filter behind window thumbnails (shim/capture.cpp).
     println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_scene_filter_hook");
+    // And Num Lock (numlock.rs, Mir patch 3023).
+    println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_num_lock_initial_hook");
+    println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_num_lock_changed_hook");
 
     for path in miral
         .link_paths

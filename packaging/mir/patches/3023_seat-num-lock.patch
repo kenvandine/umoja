@@ -1,0 +1,205 @@
+Description: One Num Lock for the seat, set and remembered by the server
+ Mir keeps lock state per keyboard, starts every keyboard with Num Lock
+ off and gives the shell no way to change it, so Umoja could not restore
+ GNOME's remembered Num Lock (org.gnome.desktop.peripherals.keyboard
+ remember-numlock-state / numlock-state). If the server executable exports
+ a C function named mir_num_lock_initial_hook, the key mapper asks it once
+ whether Num Lock starts on, and from then on keeps one Num Lock for the
+ whole seat like mutter: every keyboard, including ones plugged in later,
+ follows it, toggling it on one keyboard toggles it (and the LED) on all
+ of them, and mir_num_lock_changed_hook, if exported, hears each change so
+ the server can save it. Without the hooks nothing changes; no ABI change
+ (private members of an internal class only).
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/include/server/mir/input/xkb_mapper_registrar.h
++++ b/src/include/server/mir/input/xkb_mapper_registrar.h
+@@ -65,6 +65,7 @@ private:
+     void set_keymap(MirInputDeviceId id, std::shared_ptr<Keymap> new_keymap);
+     void set_keymap(std::shared_ptr<Keymap> new_keymap);
+     void update_modifier();
++    void apply_num_lock(MirInputDeviceId except);
+ 
+     std::mutex mutable guard;
+ 
+@@ -98,6 +99,9 @@ private:
+         auto xkb_modifiers() const -> MirXkbModifiers;
+         void notify_leds_changed();
+         XkbMappingStateLedRegistrar& get_registrar();
++        auto num_lock() const -> bool;
++        /// True if this changed the state
++        auto set_num_lock(bool on) -> bool;
+     private:
+         /// Returns a pair containing the keysym for the given scancode and if any XKB modifiers have been changed
+         auto update_state(
+@@ -128,6 +132,8 @@ private:
+     XKBComposeTablePtr compose_table;
+     MirXkbModifiers xkb_modifiers_;
+     std::optional<MirInputDeviceId> last_device_id;
++    /// Seat-wide Num Lock, when the server asks for it (mir_num_lock_initial_hook)
++    std::optional<bool> seat_num_lock;
+ 
+     mir::optional_value<MirInputEventModifiers> modifier_state;
+     std::unordered_map<MirInputDeviceId, std::unique_ptr<XkbMappingState>> device_mapping;
+--- a/src/server/input/xkb_mapper_registrar.cpp
++++ b/src/server/input/xkb_mapper_registrar.cpp
+@@ -22,6 +22,7 @@
+ #include <mir/events/event_builders.h>
+ 
+ #include <linux/input-event-codes.h>
++#include <dlfcn.h>
+ 
+ #include <unordered_set>
+ 
+@@ -94,6 +95,31 @@ mi::XKBStatePtr make_unique_state(xkb_keymap* keymap)
+ {
+     return {xkb_state_new(keymap), xkb_state_unref};
+ }
++
++// Num Lock for the shell. A server that exports mir_num_lock_initial_hook
++// gets one Num Lock for the whole seat, like mutter's: the hook answers
++// whether it starts on (1) or off (0), every keyboard (including ones
++// plugged in later) follows it, and toggling it on any keyboard toggles it
++// on all of them, LEDs included. mir_num_lock_changed_hook, if exported,
++// hears each change, so the server can remember it for the next session.
++// Without the hooks each keyboard keeps its own lock state, as before.
++using NumLockInitialHook = int (*)();
++using NumLockChangedHook = void (*)(int on);
++
++auto num_lock_changed_hook() -> NumLockChangedHook
++{
++    static NumLockChangedHook const hook =
++        reinterpret_cast<NumLockChangedHook>(dlsym(RTLD_DEFAULT, "mir_num_lock_changed_hook"));
++    return hook;
++}
++
++auto initial_num_lock() -> std::optional<bool>
++{
++    auto const hook = reinterpret_cast<NumLockInitialHook>(dlsym(RTLD_DEFAULT, "mir_num_lock_initial_hook"));
++    if (!hook)
++        return std::nullopt;
++    return hook() > 0;
++}
+ }
+ 
+ mi::XKBContextPtr mi::make_unique_context()
+@@ -119,7 +145,8 @@ void mircv::XKBMapperRegistrar::XkbMappingState::XkbMappingStateLedRegistrar::le
+ mircv::XKBMapperRegistrar::XKBMapperRegistrar(Executor& executor) :
+     executor(executor),
+     context{make_unique_context()},
+-    compose_table{make_unique_compose_table_from_locale(context, get_locale_from_environment())}
++    compose_table{make_unique_compose_table_from_locale(context, get_locale_from_environment())},
++    seat_num_lock{initial_num_lock()}
+ {
+ }
+ 
+@@ -177,6 +204,13 @@ void mircv::XKBMapperRegistrar::map_event(MirEvent& ev)
+                 auto compose_state = get_compose_state(device_id);
+                 if (mapping_state->update_and_map(ev, compose_state))
+                 {
++                    if (seat_num_lock && mapping_state->num_lock() != seat_num_lock.value())
++                    {
++                        seat_num_lock = mapping_state->num_lock();
++                        apply_num_lock(device_id);
++                        if (auto const hook = num_lock_changed_hook())
++                            hook(seat_num_lock.value());
++                    }
+                     update_modifier();
+                     mapping_state->notify_leds_changed();
+                 }
+@@ -207,12 +241,16 @@ mircv::XKBMapperRegistrar::XkbMappingState* mircv::XKBMapperRegistrar::get_keyma
+     {
+         auto mapping_state = std::make_unique<XkbMappingState>(
+             default_keymap, default_compiled_keymap, executor);
++        if (seat_num_lock)
++            mapping_state->set_num_lock(seat_num_lock.value());
+         decltype(device_mapping.begin()) insertion_pos;
+         std::tie(insertion_pos, std::ignore) =
+             device_mapping.emplace(
+                 std::piecewise_construct,
+                 std::forward_as_tuple(id),
+                 std::forward_as_tuple(std::move(mapping_state)));
++        if (seat_num_lock)
++            update_modifier();
+ 
+         return insertion_pos->second.get();
+     }
+@@ -243,12 +281,25 @@ void mircv::XKBMapperRegistrar::set_keymap(MirInputDeviceId id, std::shared_ptr<
+ 
+     auto compiled_keymap = new_keymap->make_unique_xkb_keymap(context.get());
+     auto mapping_state = std::make_unique<XkbMappingState>(std::move(new_keymap), std::move(compiled_keymap), executor);
++    if (seat_num_lock)
++        mapping_state->set_num_lock(seat_num_lock.value());
+ 
+     device_mapping.erase(id);
+     device_mapping.emplace(
+         std::piecewise_construct,
+         std::forward_as_tuple(id),
+         std::forward_as_tuple(std::move(mapping_state)));
++    if (seat_num_lock)
++        update_modifier();
++}
++
++void mircv::XKBMapperRegistrar::apply_num_lock(MirInputDeviceId except)
++{
++    for (auto const& [id, mapping_state] : device_mapping)
++    {
++        if (id != except && mapping_state->set_num_lock(seat_num_lock.value()))
++            mapping_state->notify_leds_changed();
++    }
+ }
+ 
+ void mircv::XKBMapperRegistrar::clear_all_keymaps()
+@@ -298,6 +349,9 @@ void mircv::XKBMapperRegistrar::register_interest(std::weak_ptr<LedObserver> con
+ 
+     auto& registrar = it->second->get_registrar();
+     registrar.register_interest(observer);
++    // A keyboard plugged in while Num Lock is on shows it straight away.
++    if (seat_num_lock)
++        it->second->notify_leds_changed();
+ }
+ 
+ void mircv::XKBMapperRegistrar::unregister_interest(LedObserver const& observer, MirInputDeviceId id)
+@@ -392,6 +446,41 @@ void mircv::XKBMapperRegistrar::XkbMappingState::notify_leds_changed()
+     registrar.leds_set(leds);
+ }
+ 
++auto mircv::XKBMapperRegistrar::XkbMappingState::num_lock() const -> bool
++{
++    auto const num_mod = xkb_keymap_mod_get_index(compiled_keymap.get(), XKB_MOD_NAME_NUM);
++    if (num_mod == XKB_MOD_INVALID)
++        return (modifier_state & mir_input_event_modifier_num_lock) != 0;
++    return xkb_state_mod_index_is_active(state.get(), num_mod, XKB_STATE_MODS_LOCKED) > 0;
++}
++
++auto mircv::XKBMapperRegistrar::XkbMappingState::set_num_lock(bool on) -> bool
++{
++    if (on)
++        modifier_state |= mir_input_event_modifier_num_lock;
++    else
++        modifier_state &= ~mir_input_event_modifier_num_lock;
++
++    auto const num_mod = xkb_keymap_mod_get_index(compiled_keymap.get(), XKB_MOD_NAME_NUM);
++    if (num_mod == XKB_MOD_INVALID || num_lock() == on)
++        return false;
++
++    xkb_mod_mask_t locked = xkb_state_serialize_mods(state.get(), XKB_STATE_MODS_LOCKED);
++    if (on)
++        locked |= 1u << num_mod;
++    else
++        locked &= ~(1u << num_mod);
++    xkb_state_update_mask(
++        state.get(),
++        xkb_state_serialize_mods(state.get(), XKB_STATE_MODS_DEPRESSED),
++        xkb_state_serialize_mods(state.get(), XKB_STATE_MODS_LATCHED),
++        locked,
++        xkb_state_serialize_layout(state.get(), XKB_STATE_LAYOUT_DEPRESSED),
++        xkb_state_serialize_layout(state.get(), XKB_STATE_LAYOUT_LATCHED),
++        xkb_state_serialize_layout(state.get(), XKB_STATE_LAYOUT_LOCKED));
++    return true;
++}
++
+ mircv::XKBMapperRegistrar::XkbMappingState::XkbMappingStateLedRegistrar& mircv::XKBMapperRegistrar::XkbMappingState::get_registrar()
+ {
+     return registrar;

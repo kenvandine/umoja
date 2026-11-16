@@ -69,6 +69,16 @@ Umoja PPA:
   0.5–1 s after their commit are now answered anyway, so a covered client
   redraws at about 1 Hz instead of stalling; a visible one never waits that
   long.
+- `patches/3023_seat-num-lock.patch` (umoja28): Mir keeps lock state per
+  keyboard, starts each with Num Lock off and has no way for the shell to
+  set it, so GNOME's remembered Num Lock (`remember-numlock-state`,
+  `numlock-state`) could not be restored. If the server exports
+  `mir_num_lock_initial_hook` (umoja-mir's `src/numlock.rs`, found with
+  `dlsym`), the key mapper asks it once whether Num Lock starts on and then
+  keeps one Num Lock for the seat like mutter: every keyboard, including
+  ones plugged in later, follows it, toggling it on one toggles it and the
+  LED on all, and `mir_num_lock_changed_hook` hears each change so
+  umoja-mir can save it. No hooks, no change; no ABI change.
 - `patches/3020_cross-gpu-map-linear.patch`: the 3009 copy cost 5.5 ms of
   `glReadPixels` per 6 MB buffer on the compositing thread (measured on
   p16g3: 450 MB/s, 4 s of every 10 s, with two windows redrawing on the

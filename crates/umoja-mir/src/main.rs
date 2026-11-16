@@ -18,6 +18,7 @@ mod input;
 mod input_capture;
 mod introspect;
 mod media_keys;
+mod numlock;
 mod outputs;
 mod peripherals;
 mod protocols;
