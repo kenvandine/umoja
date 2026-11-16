@@ -81,7 +81,7 @@ pub fn tools() -> Vec<Tool> {
         .with_summary(|a| format!("Switch to {}", window_name(a))),
         Tool::new(
             "arrange_window",
-            "Put a window somewhere: the left or right half of the screen, a quarter, maximized, restored, minimized, fullscreen, or another monitor. Use this directly for requests like \"put the terminal on the left\" (pass the app name as window); no need to focus it first.",
+            "Put a window somewhere: the left or right half of the screen, a quarter, maximized, restored, minimized, fullscreen, or another monitor. Use this directly for requests like \"put the terminal on the left\" (pass the app name as window); no need to focus it first. Monitors are chosen by direction (monitor_left, monitor_right, monitor_up, monitor_down). If the user names a monitor instead (the laptop or built-in screen, the external monitor, HDMI...), don't try to find out where it is: ask them in one short question whether it is to the left or right (or above or below), then call this with their answer.",
             window_schema(json!({"position": {"type": "string", "enum": POSITIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>()}})),
             |a| Box::pin(async move { Outcome::text(arrange_window(a).await).hide_if_ok() }),
         )

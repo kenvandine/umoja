@@ -1748,6 +1748,12 @@ pub enum Redirect {
     Hint(&'static str),
 }
 
+/// For commands that read the monitor layout, usually to find "the laptop display".
+const DISPLAY_HINT: &str = "Don't look up the display setup with a command. To move a window to \
+another monitor, ask the user in one short question whether that display is to the left or \
+right (or above or below), then call arrange_window with monitor_left, monitor_right, monitor_up \
+or monitor_down. To change display settings, call open_settings with panel display.";
+
 /// Words that start a shell command without naming a program to look for.
 const SHELL_WORDS: &[&str] = &[
     "cd", "echo", "export", "source", ".", "exec", "time", "nohup", "env", "for", "while", "if",
@@ -1969,6 +1975,8 @@ pub fn redirect(command: &str) -> Option<Redirect> {
             "Use list_settings and change_setting (or set_gsetting for other org.gnome keys) instead of a command."
         }
         "gnome-control-center" => "Use open_settings with the panel name instead of a command.",
+        "xrandr" | "wlr-randr" | "gnome-randr" => DISPLAY_HINT,
+        "gdbus" | "dbus-send" | "busctl" | "qdbus" if c.contains("displayconfig") => DISPLAY_HINT,
         "gnome-extensions" => "GNOME Shell extensions don't run on Umoja.",
         _ => return None,
     };
@@ -2088,6 +2096,8 @@ mod tests {
         assert_eq!(call("loginctl lock-session"), r#"session {"action":"lock"}"#);
         assert_eq!(call("/usr/bin/poweroff"), r#"session {"action":"power_off"}"#);
         assert_eq!(call("date"), "date_time {}");
+        assert!(call("gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState | head -c 3000").contains("ask the user"));
+        assert!(call("wlr-randr").contains("arrange_window"));
         assert_eq!(call("lsb_release -a"), "system_info {}");
         assert_eq!(call("gio trash --empty"), "empty_trash {}");
         assert!(call("grim ~/shot.png").contains("take_screenshot"));

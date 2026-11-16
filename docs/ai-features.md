@@ -321,7 +321,7 @@ Ask in plain words and the assistant does it, instead of telling you how.
 | --- | --- |
 | Open apps and Settings pages | "open Firefox", "open the display settings" |
 | Dark Style, Power Mode, Wi-Fi, Bluetooth | "turn on dark mode", "switch to power saver", "turn off bluetooth" |
-| Arrange windows | "put the terminal on the left", "maximize Firefox", "move this to the other monitor" |
+| Arrange windows | "put the terminal on the left", "maximize Firefox", "move this to the other monitor", "move Files to the monitor on the right" |
 | Workspaces | "go to workspace 2", "move Files to workspace 3" |
 | Desktop settings | "make text bigger", "stop the screen dimming so fast", "show battery percentage", "turn on night light", "put the dock at the bottom" |
 | Reset a setting | "put the touchpad speed back to default" |
@@ -344,6 +344,10 @@ Ask in plain words and the assistant does it, instead of telling you how.
 | Find or remove apps | "how is Firefox installed?", "remove Discord" |
 | Explain a setting | "what does the hot corner setting do?" |
 | Run a command | "list the files in my Projects folder with their sizes" |
+
+Windows move between monitors by direction. If you name a monitor
+instead ("move Firefox to the laptop display"), the assistant asks whether
+it's to the left or right, then moves the window there.
 
 Each of these is a single step with its own tool, so the assistant never
 asks you to run or approve a shell command for them. When one needs your
