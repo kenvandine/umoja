@@ -1279,6 +1279,11 @@ def t_modal(run):
     run.wait_for(lambda: a.active()[1], 5, "the dialog")
     run.wait(0.5)
     other = Pad(run, "b")
+    # Side by side: the second pad opens right on top of the first, and the
+    # click on the parent would land on it instead.
+    run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (a.id, 1)))
+    run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (other.id, 2)))
+    run.wait(0.8)
     other.focus()
     run.check(a.active()[1] is False, "another window took the keyboard from the dialog", a.active())
     x, y, w, h = a.rect()
