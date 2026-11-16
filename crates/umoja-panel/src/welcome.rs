@@ -2,7 +2,8 @@
 //!
 //! After login the compositor comes up empty and the wallpaper, top bar and
 //! dock then appear one by one as their processes start. This covers that
-//! with the login screen's wallpaper, "Welcome, <name>" and a spinner, and
+//! with the login screen's wallpaper, "Welcome back, <name>" (just
+//! "Welcome, <name>" on an account's first login) and a spinner, and
 //! crossfades to the finished desktop once the panel and the dock are both
 //! up. It is a process of its own (umoja-welcome.service) so its animation
 //! never waits on the panel's start-up, and so nothing here can hold the
@@ -28,6 +29,9 @@ use umoja_common::{dbus, i18n};
 const WALLPAPER: &str = "/usr/share/backgrounds/warty-final-ubuntu.png";
 /// Left in $XDG_RUNTIME_DIR by bin/umoja-session at login.
 const MARKER: &str = "umoja-welcome";
+/// Left in $XDG_STATE_HOME/umoja after the first welcome, so later logins
+/// say "Welcome back".
+const WELCOMED: &str = "welcomed";
 
 /// Fade of the picture and text up from black.
 const IN_MS: u32 = 350;
@@ -107,17 +111,34 @@ fn is_live_session() -> bool {
         .is_ok_and(|cmdline| cmdline.split_whitespace().any(|arg| arg == "boot=casper"))
 }
 
+/// True the first time this account sees the welcome; leaves a stamp so
+/// every later login greets with "Welcome back".
+fn first_welcome() -> bool {
+    let dir = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| glib::home_dir().join(".local/state"))
+        .join("umoja");
+    let stamp = dir.join(WELCOMED);
+    if stamp.exists() {
+        return false;
+    }
+    let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&stamp, b""));
+    true
+}
+
 fn greeting() -> String {
     if is_live_session() {
         return i18n::umoja("Welcome");
     }
+    let first_time = first_welcome();
     let name = glib::real_name().to_string_lossy().trim().to_string();
-    // The first name, as other desktops greet: "Welcome, Ken".
+    // The first name, as other desktops greet: "Welcome back, Ken".
     let first = name.split_whitespace().next().unwrap_or_default();
-    if first.is_empty() || name == "Unknown" {
-        i18n::umoja("Welcome")
-    } else {
-        i18n::umoja("Welcome, %s").replacen("%s", first, 1)
+    match (first.is_empty() || name == "Unknown", first_time) {
+        (true, true) => i18n::umoja("Welcome"),
+        (true, false) => i18n::umoja("Welcome back"),
+        (false, true) => i18n::umoja("Welcome, %s").replacen("%s", first, 1),
+        (false, false) => i18n::umoja("Welcome back, %s").replacen("%s", first, 1),
     }
 }
 
