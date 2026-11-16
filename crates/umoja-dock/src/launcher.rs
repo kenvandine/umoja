@@ -61,6 +61,16 @@ pub fn launch(info: &gio::DesktopAppInfo) {
     }
 }
 
+/// A new window: the app's own "new-window" action when it has one (as
+/// gnome-shell's app.open_new_window), else another launch.
+pub fn new_window(info: &gio::DesktopAppInfo) {
+    if info.list_actions().iter().any(|a| a == "new-window") {
+        launch_action(info, "new-window");
+    } else {
+        launch(info);
+    }
+}
+
 /// Run one of the app's desktop actions ("New Private Window"...).
 pub fn launch_action(info: &gio::DesktopAppInfo, action: &str) {
     info.launch_action(action, Some(&context()));

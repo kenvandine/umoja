@@ -594,6 +594,11 @@ impl Center {
 
     /// The clock menu opened (true) or closed. Everything a banner shows is
     /// in the menu's list too, so the banners just go.
+    /// Super+N: focus the newest banner. False when none is showing.
+    pub fn focus_banner(&self) -> bool {
+        self.bubbles.focus_newest()
+    }
+
     pub fn block_banners(&self, blocked: bool) {
         self.banners_blocked.set(blocked);
         if blocked {

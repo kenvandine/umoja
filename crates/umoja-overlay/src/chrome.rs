@@ -991,7 +991,10 @@ impl Switcher {
             glib::timeout_add_local_once(Duration::from_millis(SWITCHER_DELAY_MS), move || {
                 let Some(s) = weak.upgrade() else { return };
                 s.pending.borrow_mut().take();
-                // No monitor set: the compositor puts it on the active output.
+                // On the primary monitor, as gnome-shell's switcherPopup.
+                if let Some(m) = umoja_common::monitors::primary() {
+                    s.window.set_monitor(&m);
+                }
                 s.window.present();
             });
         *self.pending.borrow_mut() = Some(id);
@@ -1075,6 +1078,11 @@ impl WorkspacePopup {
             }
             self.row.append(&pill);
         }
+        if !self.window.is_visible()
+            && let Some(m) = umoja_common::monitors::primary()
+        {
+            self.window.set_monitor(&m);
+        }
         self.window.present();
         if let Some(id) = self.hide_id.borrow_mut().take() {
             id.remove();
@@ -1102,6 +1110,7 @@ pub struct Chrome {
 
 impl Chrome {
     pub fn new(app: &adw::Application) -> Rc<Self> {
+        umoja_common::monitors::start();
         Rc::new(Self {
             preview: Preview::new(app),
             picker: Picker::new(app),
@@ -1145,6 +1154,10 @@ impl Chrome {
 
     pub fn hide_switcher(&self) {
         self.switcher.hide();
+    }
+
+    pub fn switcher_visible(&self) -> bool {
+        self.switcher.window.is_visible()
     }
 
     pub fn workspace_switched(&self, active: u32, count: u32) {

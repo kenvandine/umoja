@@ -157,7 +157,8 @@ progressbar.dock-progress > trough > progress {
   from { background-color: alpha(@accent_bg_color, 0.10); }
   to   { background-color: alpha(@accent_bg_color, 0.55); }
 }
-.dock-item.urgent {
+.dock-item.urgent,
+.dock-item.attention {
   background-color: alpha(@accent_bg_color, 0.30);
   animation: dock-urgent 0.8s ease-in-out 6 alternate;
 }

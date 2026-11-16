@@ -307,6 +307,10 @@ impl WindowMenu {
         });
     }
 
+    pub fn is_visible(&self) -> bool {
+        self.window.is_visible()
+    }
+
     pub fn hide(&self) {
         self.popover.popdown();
         self.window.set_visible(false);

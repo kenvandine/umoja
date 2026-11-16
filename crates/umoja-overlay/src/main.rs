@@ -34,6 +34,7 @@ mod typer;
 mod view;
 mod voice_picker;
 mod window_menu;
+mod wm_dialogs;
 
 use gio::prelude::*;
 use gtk::glib;
@@ -208,6 +209,24 @@ const IFACE_XML: &str = r#"
       <arg name="n_workspaces" type="u" direction="in"/>
       <arg name="neighbours" type="u" direction="in"/>
     </method>
+    <method name="ExternalActivation"/>
+    <method name="ShowRunDialog"/>
+    <method name="ShowDisplaySwitcher"/>
+    <method name="InputSourceSwitched">
+      <arg name="labels" type="as" direction="in"/>
+      <arg name="index" type="u" direction="in"/>
+    </method>
+    <method name="AppNotResponding">
+      <arg name="id" type="t" direction="in"/>
+      <arg name="app_id" type="s" direction="in"/>
+      <arg name="title" type="s" direction="in"/>
+    </method>
+    <method name="AppResponding">
+      <arg name="id" type="t" direction="in"/>
+    </method>
+    <method name="OverviewState">
+      <arg name="state" type="a{sv}" direction="out"/>
+    </method>
     <property name="Visible" type="b" access="read"/>
   </interface>
 </node>"#;
@@ -236,7 +255,8 @@ fn main() -> glib::ExitCode {
         let chrome = chrome::Chrome::new(app);
         let menu = window_menu::WindowMenu::new(app);
         let guide = shortcuts::ShortcutsGuide::new(app);
-        export(overlay, grid, shots, spread, chrome, menu, guide);
+        let dialogs = wm_dialogs::WmDialogs::new(app);
+        export(overlay, grid, shots, spread, chrome, menu, guide, dialogs);
         // Keep the process alive while the overlay window is hidden.
         std::mem::forget(app.hold());
     });
@@ -251,6 +271,7 @@ fn export(
     chrome: Rc<chrome::Chrome>,
     menu: Rc<window_menu::WindowMenu>,
     guide: Rc<shortcuts::ShortcutsGuide>,
+    dialogs: Rc<wm_dialogs::WmDialogs>,
 ) {
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(IFACE_XML).expect("valid XML");
@@ -265,6 +286,7 @@ fn export(
         let chrome = chrome.clone();
         let menu = menu.clone();
         let guide = guide.clone();
+        let dialogs = dialogs.clone();
         // umoja-panel's recording indicator follows this.
         let events_conn = conn.clone();
         overlay.set_event_sink(move |signal, params| {
@@ -492,6 +514,59 @@ fn export(
                         }
                     }
                     "HideSwitcher" => chrome.hide_switcher(),
+                    // An app window was activated from outside the overview
+                    // (a notification, the dock, xdg-activation): leave it,
+                    // as gnome-shell does, so the window isn't behind it.
+                    "ExternalActivation" => {
+                        spread.hide();
+                        grid.hide();
+                    }
+                    "ShowRunDialog" => {
+                        spread.hide();
+                        grid.hide();
+                        methods.hide();
+                        chrome.hide_switcher();
+                        menu.hide();
+                        dialogs.show_run_dialog();
+                    }
+                    "ShowDisplaySwitcher" => {
+                        chrome.hide_switcher();
+                        menu.hide();
+                        dialogs.show_display_switcher();
+                    }
+                    "InputSourceSwitched" => {
+                        if let Some((labels, index)) = params.get::<(Vec<String>, u32)>() {
+                            dialogs.input_source_switched(labels, index);
+                        }
+                    }
+                    "AppNotResponding" => {
+                        if let Some((id, app_id, title)) = params.get::<(u64, String, String)>() {
+                            dialogs.app_not_responding(id, &app_id, &title);
+                        }
+                    }
+                    "AppResponding" => {
+                        if let Some((id,)) = params.get::<(u64,)>() {
+                            dialogs.app_responding(id);
+                        }
+                    }
+                    // tools/test/umoja-wm-test reads what is on screen.
+                    "OverviewState" => {
+                        if !gtk::glib::user_runtime_dir().join("umoja-demo").exists() {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.AccessDenied",
+                                "only while $XDG_RUNTIME_DIR/umoja-demo exists",
+                            );
+                            return;
+                        }
+                        let state = glib::VariantDict::new(None);
+                        spread.test_state(&state);
+                        state.insert("dialogs", dialogs.visible());
+                        state.insert("app_grid", grid.is_visible());
+                        state.insert("switcher", chrome.switcher_visible());
+                        state.insert("window_menu", menu.is_visible());
+                        invocation.return_value(Some(&(state.end(),).to_variant()));
+                        return;
+                    }
                     "ShowWindowMenu" => {
                         if let Some((id, x, y, flags, workspace, n_workspaces, neighbours)) =
                             params.get::<(u64, i32, i32, u32, u32, u32, u32)>()

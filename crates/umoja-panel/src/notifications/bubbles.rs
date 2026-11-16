@@ -5,7 +5,7 @@
 //! raises the app), action buttons are shown, hovering keeps it up, and a
 //! close button appears on hover. Critical bubbles stay until dismissed.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Weak;
 
@@ -37,6 +37,8 @@ pub struct Bubbles {
     /// Ids top to bottom, newest first.
     order: RefCell<Vec<u32>>,
     center: Weak<Center>,
+    /// The bubble Super+N gave the keyboard to.
+    focused: std::rc::Rc<Cell<Option<u32>>>,
 }
 
 impl Bubbles {
@@ -74,6 +76,39 @@ impl Bubbles {
         column.set_valign(gtk::Align::Start);
         column.set_halign(gtk::Align::Center);
         window.set_child(Some(&column));
+
+        // Super+N (focus-active-notification) gives the newest bubble the
+        // keyboard: Enter runs it, Escape hands the keyboard back.
+        let focused = std::rc::Rc::new(Cell::new(None::<u32>));
+        {
+            let keys = gtk::EventControllerKey::new();
+            let (f, c, w) = (focused.clone(), center.clone(), window.clone());
+            keys.connect_key_pressed(move |_, key, _, _| {
+                let Some(id) = f.get() else {
+                    return glib::Propagation::Proceed;
+                };
+                match key {
+                    gtk::gdk::Key::Escape => {
+                        f.set(None);
+                        w.set_keyboard_mode(KeyboardMode::None);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter
+                        if !gtk::prelude::GtkWindowExt::focus(&w)
+                            .is_some_and(|x| x.is::<gtk::Button>()) =>
+                    {
+                        f.set(None);
+                        w.set_keyboard_mode(KeyboardMode::None);
+                        if let Some(c) = c.upgrade() {
+                            c.activate(id);
+                        }
+                        glib::Propagation::Stop
+                    }
+                    _ => glib::Propagation::Proceed,
+                }
+            });
+            window.add_controller(keys);
+        }
 
         // Keep the input region to the bubbles themselves, so the rest of
         // the transparent strip doesn't swallow clicks meant for windows.
@@ -126,7 +161,33 @@ impl Bubbles {
             items: RefCell::default(),
             order: RefCell::default(),
             center,
+            focused,
         }
+    }
+
+    /// Super+N: the keyboard to the newest bubble, which stays up until
+    /// Escape or Enter. False when there is none.
+    pub fn focus_newest(&self) -> bool {
+        let Some(id) = self.order.borrow().first().copied() else {
+            return false;
+        };
+        let revealer = {
+            let mut items = self.items.borrow_mut();
+            let Some(b) = items.get_mut(&id) else {
+                return false;
+            };
+            if let Some(t) = b.timer.take() {
+                t.remove();
+            }
+            b.revealer.clone()
+        };
+        self.focused.set(Some(id));
+        self.window.set_keyboard_mode(KeyboardMode::Exclusive);
+        self.window.set_focus_visible(true);
+        if !revealer.child_focus(gtk::DirectionType::TabForward) {
+            gtk::prelude::GtkWindowExt::set_focus(&self.window, None::<&gtk::Widget>);
+        }
+        true
     }
 
     pub fn contains(&self, id: u32) -> bool {
@@ -221,6 +282,10 @@ impl Bubbles {
         self.order.borrow_mut().retain(|i| *i != id);
         if let Some(t) = b.timer.take() {
             t.remove();
+        }
+        if self.focused.get() == Some(id) {
+            self.focused.set(None);
+            self.window.set_keyboard_mode(KeyboardMode::None);
         }
         let revealer = b.revealer;
         revealer.set_reveal_child(false);

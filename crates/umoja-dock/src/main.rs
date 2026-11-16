@@ -52,6 +52,45 @@ struct Config {
     hide: autohide::HideConfig,
     /// isolate-monitors: each dock shows only its own monitor's windows.
     isolate_monitors: bool,
+    /// isolate-workspaces: only windows on the current workspace.
+    isolate_workspaces: bool,
+    /// What middle, Shift and Shift+middle clicks and scrolling do.
+    middle_click: ClickAction,
+    shift_click: ClickAction,
+    shift_middle_click: ClickAction,
+    scroll: ScrollAction,
+}
+
+/// dash-to-dock's click-action values Umoja does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ClickAction {
+    /// focus-or-previews and the other "normal click" choices.
+    Focus,
+    Launch,
+    Minimize,
+    Quit,
+    Previews,
+    Nothing,
+}
+
+impl ClickAction {
+    fn parse(s: &str) -> Self {
+        match s {
+            "launch" => Self::Launch,
+            "minimize" => Self::Minimize,
+            "quit" => Self::Quit,
+            "previews" => Self::Previews,
+            "skip" | "none" => Self::Nothing,
+            _ => Self::Focus,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ScrollAction {
+    Nothing,
+    CycleWindows,
+    SwitchWorkspace,
 }
 
 impl Config {
@@ -73,6 +112,19 @@ impl Config {
             ),
             hide: autohide::HideConfig::load(),
             isolate_monitors: gs::get_bool(d, "isolate-monitors", false),
+            isolate_workspaces: gs::get_bool(d, "isolate-workspaces", false),
+            middle_click: ClickAction::parse(&gs::get_string(d, "middle-click-action", "launch")),
+            shift_click: ClickAction::parse(&gs::get_string(d, "shift-click-action", "minimize")),
+            shift_middle_click: ClickAction::parse(&gs::get_string(
+                d,
+                "shift-middle-click-action",
+                "launch",
+            )),
+            scroll: match gs::get_string(d, "scroll-action", "do-nothing").as_str() {
+                "cycle-windows" => ScrollAction::CycleWindows,
+                "switch-workspace" => ScrollAction::SwitchWorkspace,
+                _ => ScrollAction::Nothing,
+            },
         }
     }
 }
@@ -106,6 +158,11 @@ struct Dock {
     /// update (a download's progress ticks often) needs no rebuild.
     badges: RefCell<HashMap<String, Badge>>,
     hide: autohide::Hide,
+    /// When each window last had focus (a counter), most recent highest.
+    mru: Rc<RefCell<HashMap<WindowId, u64>>>,
+    /// The app icons in order, for Super+1..9.
+    apps: RefCell<Vec<(gio::DesktopAppInfo, gtk::Button, Vec<WindowInfo>)>>,
+    last_scroll: Cell<i64>,
 }
 
 struct Badge {
@@ -143,6 +200,7 @@ struct Shared {
     homes: Rc<placement::Homes>,
     commands: Option<tracker::Commands>,
     entries: Rc<launcher_entry::Entries>,
+    mru: Rc<RefCell<HashMap<WindowId, u64>>>,
 }
 
 /// A dock window on `monitor`.
@@ -182,6 +240,9 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
         entries: OnceCell::new(),
         badges: RefCell::default(),
         hide: autohide::Hide::new(),
+        mru: shared.mru.clone(),
+        apps: RefCell::default(),
+        last_scroll: Cell::new(0),
     });
     let _ = dock.entries.set(shared.entries.clone());
 
@@ -312,6 +373,7 @@ impl Dock {
         }
         self.rebuild_pending.set(false);
         self.badges.borrow_mut().clear();
+        self.apps.borrow_mut().clear();
         *self.drag.borrow_mut() = drag::Targets::default();
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
@@ -332,10 +394,11 @@ impl Dock {
             .map(|a| (a, true, Vec::new()))
             .collect();
         let isolate = cfg.isolate_monitors;
-        for w in windows
-            .values()
-            .filter(|w| !isolate || self.homes.shows_on(w.id, &self.monitor))
-        {
+        let isolate_ws = cfg.isolate_workspaces;
+        for w in windows.values().filter(|w| {
+            (!isolate || self.homes.shows_on(w.id, &self.monitor))
+                && (!isolate_ws || self.homes.on_current_workspace(w.id))
+        }) {
             let key = launcher::app_for_window(&w.app_id).map(|a| launcher::key_for(&a));
             match entries
                 .iter_mut()
@@ -398,7 +461,14 @@ impl Dock {
         if wins.iter().any(|w| w.activated) {
             button.add_css_class("focused");
         }
+        // A window of the app asked for attention (umoja-mir's "is ready").
+        if wins.iter().any(|w| !w.activated && self.homes.wants_attention(w.id)) {
+            button.add_css_class("attention");
+        }
         overlay.set_child(Some(&button));
+        self.apps
+            .borrow_mut()
+            .push((app.clone(), button.clone(), wins.clone()));
 
         if !wins.is_empty() {
             // Pips sit on the screen-edge side of the icon, as in Ubuntu Dock.
@@ -437,33 +507,77 @@ impl Dock {
         }
         self.add_badges(&launcher::key_for(app), &overlay, &button);
 
-        let commands = self.commands.clone();
+        // The modifiers held when the button was pressed (clicked has none).
+        let mods = Rc::new(Cell::new(gtk::gdk::ModifierType::empty()));
+        let press = gtk::GestureClick::builder().button(1).build();
+        press.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let mods = mods.clone();
+            press.connect_pressed(move |g, _, _, _| mods.set(g.current_event_state()));
+        }
+        button.add_controller(press);
         let app_c = app.clone();
         let wins_c = wins.clone();
         let weak = Rc::downgrade(self);
         button.connect_clicked(move |b| {
-            // Titles change without a rebuild: use the windows as they are now.
-            let wins = match weak.upgrade() {
-                Some(d) => d.fresh(&wins_c),
-                None => wins_c.clone(),
+            let Some(d) = weak.upgrade() else { return };
+            let m = mods.replace(gtk::gdk::ModifierType::empty());
+            let shift = m.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            let ctrl = m.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            // Ctrl+click opens a new window, as in GNOME's dash.
+            let action = if ctrl {
+                ClickAction::Launch
+            } else if shift {
+                d.config.borrow().shift_click
+            } else {
+                ClickAction::Focus
             };
-            match (wins.as_slice(), &commands) {
-                ([], _) | (_, None) => launcher::launch(&app_c),
-                // Ubuntu Dock "focus-or-previews": click a focused single window to minimize it.
-                ([w], Some(tx)) => {
-                    let _ = tx.try_send(if w.activated {
-                        Command::Minimize(w.id)
-                    } else {
-                        Command::Activate(w.id)
-                    });
-                }
-                (many, Some(tx)) => {
-                    if let Some(d) = weak.upgrade() {
-                        d.show_popover(&previews::popover(many, tx.clone()), b);
-                    }
-                }
-            }
+            d.click(&app_c, &wins_c, b, action);
         });
+
+        // Middle-click (and Shift+middle-click): a new window by default.
+        let middle = gtk::GestureClick::builder().button(2).build();
+        let weak = Rc::downgrade(self);
+        let (app_m2, wins_m2, button_m2) = (app.clone(), wins.clone(), button.clone());
+        middle.connect_released(move |g, _, _, _| {
+            let Some(d) = weak.upgrade() else { return };
+            let shift = g
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            let action = if shift {
+                d.config.borrow().shift_middle_click
+            } else {
+                d.config.borrow().middle_click
+            };
+            d.click(&app_m2, &wins_m2, &button_m2, action);
+        });
+        button.add_controller(middle);
+
+        // Scrolling over a running app cycles its windows (scroll-action).
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        let weak = Rc::downgrade(self);
+        let wins_s = wins.clone();
+        scroll.connect_scroll(move |_, _, dy| {
+            let Some(d) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let action = d.config.borrow().scroll;
+            if action == ScrollAction::Nothing || dy == 0.0 {
+                return glib::Propagation::Proceed;
+            }
+            let now = glib::monotonic_time();
+            if now - d.last_scroll.get() < 250_000 {
+                return glib::Propagation::Stop;
+            }
+            d.last_scroll.set(now);
+            match action {
+                ScrollAction::CycleWindows => d.cycle(&wins_s, dy > 0.0),
+                ScrollAction::SwitchWorkspace => step_workspace(if dy > 0.0 { 1 } else { -1 }),
+                ScrollAction::Nothing => {}
+            }
+            glib::Propagation::Stop
+        });
+        button.add_controller(scroll);
 
         let menu_click = gtk::GestureClick::builder().button(3).build();
         let weak = Rc::downgrade(self);
@@ -476,6 +590,142 @@ impl Dock {
         });
         button.add_controller(menu_click);
         overlay.upcast()
+    }
+
+    /// What a click on an app's icon does.
+    fn click(
+        self: &Rc<Self>,
+        app: &gio::DesktopAppInfo,
+        wins: &[WindowInfo],
+        anchor: &gtk::Button,
+        action: ClickAction,
+    ) {
+        // Titles change without a rebuild: use the windows as they are now.
+        let wins = self.fresh(wins);
+        let Some(tx) = self.commands.clone() else {
+            launcher::launch(app);
+            return;
+        };
+        match action {
+            ClickAction::Nothing => {}
+            ClickAction::Launch => {
+                if wins.is_empty() {
+                    launcher::launch(app);
+                } else {
+                    launcher::new_window(app);
+                }
+            }
+            ClickAction::Minimize => {
+                for w in &wins {
+                    tx.try_send(Command::Minimize(w.id));
+                }
+            }
+            ClickAction::Quit => {
+                for w in &wins {
+                    tx.try_send(Command::Close(w.id));
+                }
+            }
+            ClickAction::Previews if !wins.is_empty() => {
+                self.show_popover(&previews::popover(&wins, tx), anchor);
+            }
+            ClickAction::Previews | ClickAction::Focus => match wins.as_slice() {
+                [] => launcher::launch(app),
+                // Ubuntu Dock "focus-or-previews": click a focused single
+                // window to minimize it.
+                [w] => tx.try_send(if w.activated {
+                    Command::Minimize(w.id)
+                } else {
+                    Command::Activate(w.id)
+                }),
+                // Several: focus the app first (its most recent window);
+                // only a click on the app that already has focus opens the
+                // previews.
+                many if !many.iter().any(|w| w.activated) => {
+                    if let Some(w) = self.most_recent(many) {
+                        tx.try_send(Command::Activate(w));
+                    }
+                }
+                many => self.show_popover(&previews::popover(many, tx), anchor),
+            },
+        }
+    }
+
+    /// The window of `wins` that had focus last.
+    fn most_recent(&self, wins: &[WindowInfo]) -> Option<WindowId> {
+        let mru = self.mru.borrow();
+        wins.iter()
+            .max_by_key(|w| mru.get(&w.id).copied().unwrap_or(0))
+            .map(|w| w.id)
+    }
+
+    /// Scroll: the next (or previous) of the app's windows, in the order
+    /// they last had focus.
+    fn cycle(&self, wins: &[WindowInfo], forward: bool) {
+        let wins = self.fresh(wins);
+        let Some(tx) = &self.commands else { return };
+        if wins.is_empty() {
+            return;
+        }
+        let mut order: Vec<&WindowInfo> = wins.iter().collect();
+        {
+            let mru = self.mru.borrow();
+            order.sort_by_key(|w| std::cmp::Reverse(mru.get(&w.id).copied().unwrap_or(0)));
+        }
+        let at = order.iter().position(|w| w.activated);
+        let next = match (at, forward) {
+            (None, _) => 0,
+            (Some(i), true) => (i + 1) % order.len(),
+            (Some(i), false) => (i + order.len() - 1) % order.len(),
+        };
+        tx.try_send(Command::Activate(order[next].id));
+    }
+
+    /// Super+1..9 (switch-to-application-N): the app at `index` as a click
+    /// would, or a new window of it (Super+Shift, Ubuntu Dock's hot-keys).
+    pub fn activate_app(self: &Rc<Self>, index: u32, new_window: bool) {
+        let entry = self.apps.borrow().get(index as usize).cloned();
+        let Some((app, button, wins)) = entry else {
+            return;
+        };
+        if new_window {
+            self.click(&app, &wins, &button, ClickAction::Launch);
+            return;
+        }
+        // The keyboard never minimizes: a focused app stays focused.
+        let wins_now = self.fresh(&wins);
+        if wins_now.iter().any(|w| w.activated) && wins_now.len() == 1 {
+            return;
+        }
+        self.click(&app, &wins, &button, ClickAction::Focus);
+    }
+
+    /// For tools/test/umoja-wm-test: the dock's edge, its surface size, and
+    /// each app icon (desktop id, windows, focused, attention, rectangle in
+    /// the surface).
+    #[allow(clippy::type_complexity)]
+    pub fn test_icons(&self) -> (String, (i32, i32), Vec<(String, u32, bool, bool, i32, i32, i32, i32)>) {
+        let position = format!("{:?}", self.config.borrow().position).to_lowercase();
+        let size = (self.window.width(), self.window.height());
+        let icons = self
+            .apps
+            .borrow()
+            .iter()
+            .filter_map(|(app, button, wins)| {
+                let b = button.compute_bounds(&self.window)?;
+                let wins = self.fresh(wins);
+                Some((
+                    app.id().map(|s| s.to_string()).unwrap_or_default(),
+                    wins.len() as u32,
+                    button.has_css_class("focused"),
+                    button.has_css_class("attention"),
+                    b.x() as i32,
+                    b.y() as i32,
+                    b.width() as i32,
+                    b.height() as i32,
+                ))
+            })
+            .collect();
+        (position, size, icons)
     }
 
     /// `wins` as the tracker knows them now (titles and focus may have
@@ -798,6 +1048,38 @@ impl Dock {
         b.connect_clicked(|_| call_overlay("ToggleAsk"));
         b.upcast()
     }
+}
+
+/// The next or previous workspace (scroll-action switch-workspace).
+fn step_workspace(delta: i32) {
+    glib::spawn_future_local(async move {
+        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+            return;
+        };
+        let call = |method: &'static str, args: Option<glib::Variant>| {
+            conn.call_future(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                dbus::COMPOSITOR_OBJECT_PATH,
+                dbus::COMPOSITOR_INTERFACE,
+                method,
+                args.as_ref(),
+                None,
+                gio::DBusCallFlags::NONE,
+                1000,
+            )
+        };
+        let Some((current, count)) = call("GetWorkspaces", None)
+            .await
+            .ok()
+            .and_then(|v| v.get::<(u32, u32)>())
+        else {
+            return;
+        };
+        let to = (current as i32 + delta).clamp(0, count.max(1) as i32 - 1) as u32;
+        if to != current {
+            let _ = call("SwitchWorkspace", Some((to,).to_variant())).await;
+        }
+    });
 }
 
 /// Call a no-argument method on the overlay ("Toggle" for the app grid,
