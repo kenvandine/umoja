@@ -30,6 +30,7 @@ first size (umoja-wm-test).
 """
 
 import os
+import stat
 import sys
 import time
 
@@ -77,8 +78,13 @@ class Pad(Gtk.Application):
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.win.present()
         self.view.grab_focus()
-        GLib.io_add_watch(GLib.IOChannel.unix_new(sys.stdin.fileno()), GLib.PRIORITY_DEFAULT,
-                          GLib.IOCondition.IN | GLib.IOCondition.HUP, self.command)
+        # Commands come down a pipe from the test. A pad the dock or the
+        # overview launched has /dev/null there, which reads as the end
+        # straight away: that pad just stays open.
+        mode = os.fstat(sys.stdin.fileno()).st_mode
+        if stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode):
+            GLib.io_add_watch(GLib.IOChannel.unix_new(sys.stdin.fileno()), GLib.PRIORITY_DEFAULT,
+                              GLib.IOCondition.IN | GLib.IOCondition.HUP, self.command)
         self.save()
         print("ready", flush=True)
 
