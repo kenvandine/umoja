@@ -605,7 +605,7 @@ public:
                 takes_focus = false;
             // An app opening while the overview holds the keyboard (launched
             // from the dock, a notification, Ask Umoja) closes the overview.
-            if (takes_focus && info.can_be_active()) guarded("overview grab", [&] { release_overlay_grab(); });
+            if (takes_focus && info.can_be_active()) guarded("overview grab", [&] { release_overlay_grab(w); });
             guarded("open animation", [&] { animate(w, Anim::open); });
         }
         if (takes_focus) MinimalWindowManager::handle_window_ready(info);
@@ -624,8 +624,11 @@ public:
     // window activated from the dock or a notification stayed unfocused
     // behind the overview. GNOME leaves the overview on any outside
     // activation; drop the grab and tell the overlay (O6).
-    void release_overlay_grab() {
+    void release_overlay_grab(Window const& by) {
         if (!lock_surfaces.empty()) return;
+        // The overview's own surfaces: on two monitors it maps one per
+        // monitor, and raising the second one closed it again at once.
+        if (by && process_name(miral::pid_of(by.application())) == "umoja-overlay") return;
         Window const active = tools.active_window();
         if (!active) return;
         Window root = active;
@@ -939,6 +942,12 @@ public:
             if (action == mir_keyboard_action_down) overlay_key_armed = true;
             if (action == mir_keyboard_action_up && overlay_key_armed) {
                 overlay_key_armed = false;
+                if (debug_windows()) {
+                    Window const f = tools.active_window();
+                    std::fprintf(stderr, "umoja-mir: wm: overlay key toggles the overview (focus %s, shortcuts %s)\n",
+                                 f ? describe(tools.info_for(f)).c_str() : "none",
+                                 f && umoja_wmp::inhibits_shortcuts(f) ? "inhibited" : "not inhibited");
+                }
                 umoja_handle_action(UMOJA_ACTION_TOGGLE_OVERVIEW);
                 return true;
             }
@@ -1345,7 +1354,7 @@ public:
     void handle_raise_window(WindowInfo& info) override {
         Window const w = info.window();
         bool const user = take_user_activation(w);
-        if (user) guarded("overview grab", [&] { release_overlay_grab(); });
+        if (user) guarded("overview grab", [&] { release_overlay_grab(w); });
         if (is_app_window(info) && on_other_workspace(w)) {
             if (user) {
                 activate(w);
@@ -2121,7 +2130,7 @@ public:
         if (!w) return;
         // Leaving Show Desktop, and the overview if it holds the keyboard.
         desktop_hidden.clear();
-        guarded("overview grab", [&] { release_overlay_grab(); });
+        guarded("overview grab", [&] { release_overlay_grab(w); });
         cancel_animation(w);
         guarded("activate", [&] {
             // Windows on another workspace take you there, as in GNOME.
