@@ -115,7 +115,7 @@ pub enum Action {
     MoveToSideE = 79,
     MoveToSideW = 80,
     // 100+n / 200+n: switch-to / move-to workspace n (see workspaces.rs).
-    // 300+n / 400+n: switch-to-application-n / open-new-window-application-n
+    // 500+n / 600+n: switch-to-application-n / open-new-window-application-n
     // (the dock's n-th app, see input.rs APP_BASE).
 }
 
