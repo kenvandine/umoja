@@ -419,7 +419,14 @@ fn send_chrome(old: Option<&Chrome>, new: &Chrome, window: Rect) {
 
 /// A window move started (picker peeks out under the top bar).
 pub fn drag_begin(px: i32, py: i32, window: Rect, area: Rect, _monitor: Rect) {
-    let use_picker = input::read().layout_picker && input::edge_tiling_enabled();
+    // One read of the config: a second read() while this one is held
+    // deadlocks once a reload is waiting to write (std's RwLock lets no new
+    // reader in ahead of a waiting writer), and this runs on Mir's main
+    // thread under the window manager lock, so the whole compositor froze.
+    let use_picker = {
+        let cfg = input::read();
+        cfg.layout_picker && cfg.edge_tiling
+    };
     // Nothing snaps before the pointer moves: only the peek.
     let chrome = Chrome {
         picker: if use_picker {
