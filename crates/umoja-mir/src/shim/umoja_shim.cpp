@@ -1338,6 +1338,15 @@ public:
         applying = was_applying;
         if (unminimized && info.state() != mir_window_state_minimized)
             guarded("restore animation", [&] { animate(info.window(), Anim::restore); });
+        // A new window placed by its first size (above) moves without an
+        // advise_move_to while it is still 0x0. One that started out on a
+        // secondary monitor, and so on every workspace, stayed there after
+        // landing on the primary: it could not be sent to a workspace and
+        // no spare workspace was added after it (p16g3, two monitors).
+        if (spec.top_left().is_set() && all_windows.count(info.window()))
+            guarded("workspace membership", [&] {
+                if (update_workspace_membership(info.window())) relayout_workspaces();
+            });
     }
 
     // Activation requests from windows on another workspace don't pull them
