@@ -642,7 +642,9 @@ public:
     std::set<Window> attention;
 
     void mark_attention(Window const& w) {
-        if (!all_windows.count(w) || w == tools.active_window() || attention.count(w)) return;
+        if (!all_windows.count(w) || attention.count(w)) return;
+        // Not while the app itself has focus (one of its windows).
+        if (Window const active = tools.active_window(); active && active.application() == w.application()) return;
         attention.insert(w);
         auto const& info = tools.info_for(w);
         std::string const app = shell_app_id(info);
@@ -663,6 +665,9 @@ public:
     void activation_refused(Window w) {
         if (!w || !all_windows.count(w)) return;
         if (w == tools.active_window()) return;
+        // A window that hasn't shown yet (Electron asks before its first
+        // frame): handle_window_ready decides whether it takes focus.
+        if (w.size().width.as_int() <= 0 || w.size().height.as_int() <= 0) return;
         mark_attention(w);
     }
 
@@ -3522,7 +3527,10 @@ private:
             desktop_hidden.clear();
             Window top;
             applying = true;
-            for (auto const& w : stacking) {
+            // A copy: restoring a window raises it, which reorders stacking
+            // (advise_raise), and only the first window came back.
+            std::vector<Window> const order{stacking.begin(), stacking.end()};
+            for (auto const& w : order) {
                 auto const it = hidden.find(w);
                 if (it == hidden.end() || !all_windows.count(w) || !on_current_workspace(w)) continue;
                 auto& info = tools.info_for(w);
@@ -3625,7 +3633,7 @@ private:
         geom::Rectangle rect;
     };
     static constexpr double OPEN_MS = 150.0;
-    static constexpr double MINIMIZE_MS = 250.0;
+    static constexpr double MINIMIZE_MS = 300.0;
 
     // umoja-dock's windows (one per monitor), for the minimize target.
     std::vector<Window> dock_windows;

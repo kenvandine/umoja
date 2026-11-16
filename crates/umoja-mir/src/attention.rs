@@ -142,6 +142,17 @@ pub fn window_closed(window: u64) {
 
 /// notification id -> window, for the notifications we posted.
 static NOTIFIED: LazyLock<Mutex<HashMap<u32, u64>>> = LazyLock::new(Default::default);
+/// Windows that want attention now; a window leaves when it is focused or
+/// closes, even before its notification is out.
+static WANTING: LazyLock<Mutex<std::collections::HashSet<u64>>> = LazyLock::new(Default::default);
+/// A window that asks for attention while it opens is usually focused a
+/// moment later (an app that maps, then activates itself without a token):
+/// wait this long before the notification, and send none if it was.
+const NOTIFY_DELAY: Duration = Duration::from_millis(600);
+
+fn wanting(window: u64) -> bool {
+    WANTING.lock().unwrap_or_else(|e| e.into_inner()).contains(&window)
+}
 
 const NOTIFICATIONS: &str = "org.freedesktop.Notifications";
 const NOTIFICATIONS_PATH: &str = "/org/freedesktop/Notifications";
@@ -151,7 +162,12 @@ pub fn wants_attention(window: u64, app_id: String, title: String) {
     if crate::greeter::enabled() {
         return;
     }
+    WANTING.lock().unwrap_or_else(|e| e.into_inner()).insert(window);
     crate::session::RUNTIME.spawn(async move {
+        tokio::time::sleep(NOTIFY_DELAY).await;
+        if !wanting(window) {
+            return;
+        }
         // Resolved before any await: gio objects aren't Send.
         let (name, icon, desktop) = {
             use gio::prelude::{AppInfoExt, IconExt};
@@ -206,6 +222,10 @@ pub fn wants_attention(window: u64, app_id: String, title: String) {
         match reply.and_then(|r| r.body().deserialize::<u32>()) {
             Ok(id) => {
                 NOTIFIED.lock().unwrap_or_else(|e| e.into_inner()).insert(id, window);
+                // Focused while the notification went out: take it back.
+                if !wanting(window) {
+                    attention_cleared(window);
+                }
             }
             Err(e) => tracing::debug!(error = %e, "attention notification not sent"),
         }
@@ -214,6 +234,7 @@ pub fn wants_attention(window: u64, app_id: String, title: String) {
 
 /// The window got focus or closed: its "is ready" notification goes.
 pub fn attention_cleared(window: u64) {
+    WANTING.lock().unwrap_or_else(|e| e.into_inner()).remove(&window);
     let ids: Vec<u32> = {
         let mut n = NOTIFIED.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<u32> = n.iter().filter(|(_, w)| **w == window).map(|(id, _)| *id).collect();
