@@ -18,7 +18,6 @@
 #include <miral/cursor_scale.h>
 #include <miral/cursor_theme.h>
 #include <miral/display_configuration.h>
-#include <miral/keymap.h>
 #include <miral/minimal_window_manager.h>
 #include <miral/output.h>
 #include <miral/prepend_event_filter.h>
@@ -4215,28 +4214,6 @@ extern "C" void mir_show_window_menu_hook(void const* surface, int32_t x, int32_
     }).detach();
 }
 
-// ---- keyboard layouts (keymap.rs) ----------------------------------------------
-
-namespace {
-std::mutex g_keymap_mutex;
-std::optional<miral::Keymap> g_keymap; // a copy sharing the server's state
-std::string g_keymap_pending;
-}
-
-extern "C" void umoja_set_keymap(char const* keymap) {
-    if (!keymap || !*keymap) return;
-    std::lock_guard lock{g_keymap_mutex};
-    if (!g_keymap) {
-        g_keymap_pending = keymap;
-        return;
-    }
-    try {
-        g_keymap->set_keymap(keymap);
-    } catch (std::exception const& e) {
-        std::fprintf(stderr, "umoja-mir: keymap '%s' failed: %s\n", keymap, e.what());
-    }
-}
-
 namespace {
 // ext_data_control lets a client read every copy and selection in the
 // background, so only Umoja's own shell binaries (umoja-overlay's clipboard
@@ -4345,20 +4322,6 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     extensions.add_extension(umoja_wmp::xwayland_grab_extension());
     extensions.conditionally_enable("zwp_xwayland_keyboard_grab_manager_v1", is_xwayland_client);
 
-    // GNOME's input sources (org.gnome.desktop.input-sources, keymap.rs),
-    // switched with Super+Space.
-    Keymap keymap;
-    {
-        std::lock_guard lock{g_keymap_mutex};
-        g_keymap.emplace(keymap);
-    }
-    struct ClearKeymap {
-        ~ClearKeymap() {
-            std::lock_guard lock{g_keymap_mutex};
-            g_keymap.reset();
-        }
-    } clear_keymap;
-
     // Persisted monitor layout (~/.config/umoja-mir.display), seeded from
     // GNOME's monitors.xml by the Rust side; Mir reloads it when it changes.
     DisplayConfiguration display_config{runner};
@@ -4397,13 +4360,6 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         }
         auto display = runner.wayland_display();
         umoja_session_started(display.is_set() ? display.value().c_str() : "");
-        // A layout asked for before the server was up.
-        std::string pending;
-        {
-            std::lock_guard lock{g_keymap_mutex};
-            pending.swap(g_keymap_pending);
-        }
-        if (!pending.empty()) umoja_set_keymap(pending.c_str());
     });
 
     runner.set_exception_handler([] {
@@ -4437,7 +4393,6 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
             input_capture,
             cursor_theme,
             cursor_size,
-            keymap,
             extensions,
             // On its own X11Support only adds an --enable-x11 option, off by
             // default: without this no Xwayland ran, and every X11 app
@@ -4457,7 +4412,6 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         input_capture,
         cursor_theme,
         cursor_size,
-        keymap,
         extensions,
         set_window_management_policy<UmojaWindowManager>(),
     }));
