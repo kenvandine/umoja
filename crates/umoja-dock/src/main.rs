@@ -1176,14 +1176,19 @@ fn step_workspace(delta: i32) {
 /// Call a no-argument method on the overlay ("Toggle" for the app grid,
 /// "ToggleAsk" for Ask Umoja).
 fn call_overlay(method: &'static str) {
-    gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
+    call_overlay_with(method, None);
+}
+
+/// Call an overlay method with arguments (drag.rs: AppDrag).
+pub fn call_overlay_with(method: &'static str, args: Option<glib::Variant>) {
+    gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, move |conn| {
         let Ok(conn) = conn else { return };
         conn.call(
             Some(dbus::OVERLAY_BUS_NAME),
             dbus::OVERLAY_OBJECT_PATH,
             dbus::OVERLAY_INTERFACE,
             method,
-            None,
+            args.as_ref(),
             None,
             gio::DBusCallFlags::NONE,
             1000,

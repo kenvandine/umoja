@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gtk::{gio, graphene, prelude::*};
+use gtk::{gio, glib, graphene, prelude::*};
 use gtk4 as gtk;
 
 use crate::Dock;
@@ -62,6 +62,10 @@ struct Drag {
     on_show_apps: bool,
     /// The pointer is off the dock (drop puts everything back).
     outside: bool,
+    /// The overview has been told the icon is off the dock (AppDrag), and
+    /// when last, to send at most one motion per frame or so.
+    told_overview: bool,
+    last_told: i64,
 }
 
 fn along(vertical: bool, x: f64, y: f64) -> f64 {
@@ -114,6 +118,8 @@ pub fn attach(dock: &Rc<Dock>, widget: &gtk::Widget) {
             as_pin: false,
             on_show_apps: false,
             outside: false,
+            told_overview: false,
+            last_told: 0,
         });
     });
 
@@ -230,6 +236,20 @@ impl Dock {
         };
         let pinned = targets.items[cur].pinned;
 
+        // Off the dock, the overview (if open) shows where the app would
+        // open: a workspace thumbnail, or between two for a new one.
+        if drag.outside {
+            let now = glib::monotonic_time();
+            if now - drag.last_told >= APP_DRAG_INTERVAL_US {
+                drag.last_told = now;
+                drag.told_overview = true;
+                tell_overview(&targets.items[cur].id, 0);
+            }
+        } else if drag.told_overview {
+            drag.told_overview = false;
+            tell_overview(&targets.items[cur].id, 2);
+        }
+
         let on_show_apps = pinned
             && !drag.outside
             && targets.show_apps.as_ref().is_some_and(|(b, _)| {
@@ -306,7 +326,9 @@ impl Dock {
                 return;
             };
             if drag.outside {
-                // Glide back home.
+                // Dropped off the dock: on an overview workspace, a new
+                // window of the app opens there. The icon glides back home.
+                tell_overview(&targets.items[cur].id, 1);
                 move_item(&self.list, &mut targets.items, cur, drag.home);
                 None
             } else if drag.on_show_apps {
@@ -339,6 +361,14 @@ impl Dock {
             }
         }
     }
+}
+
+/// Microseconds between AppDrag motions sent to the overview.
+const APP_DRAG_INTERVAL_US: i64 = 30_000;
+
+/// org.umoja.Overlay.AppDrag: phase 0 moved, 1 dropped, 2 back on the dock.
+fn tell_overview(desktop_id: &str, phase: u32) {
+    crate::call_overlay_with("AppDrag", Some((desktop_id, phase).to_variant()));
 }
 
 /// Move the item at `from` to `to`, in `items` and in the list.

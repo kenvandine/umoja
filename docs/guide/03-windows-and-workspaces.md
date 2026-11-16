@@ -81,6 +81,8 @@ on), your workspaces are along the top:
   inside the workspaces can be dragged too, and dropping a window inside a
   workspace puts it at that spot on the screen.
 - **Drop a window between two workspaces** to make a new workspace there.
+- **Drag an app from the dock** onto a workspace to open a new window of
+  it there, or between two workspaces to open it on a new one.
 - Use the **arrow keys** to pick a window and **Enter** to go to it.
 
 ![The overview on the second workspace, which has a calculator open](images/workspace-2.jpg)

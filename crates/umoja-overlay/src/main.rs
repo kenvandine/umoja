@@ -224,6 +224,10 @@ const IFACE_XML: &str = r#"
     <method name="AppResponding">
       <arg name="id" type="t" direction="in"/>
     </method>
+    <method name="AppDrag">
+      <arg name="desktop_id" type="s" direction="in"/>
+      <arg name="phase" type="u" direction="in"/>
+    </method>
     <method name="OverviewState">
       <arg name="state" type="a{sv}" direction="out"/>
     </method>
@@ -517,6 +521,12 @@ fn export(
                     // An app window was activated from outside the overview
                     // (a notification, the dock, xdg-activation): leave it,
                     // as gnome-shell does, so the window isn't behind it.
+                    // An app icon dragged out of the dock, over the overview.
+                    "AppDrag" => {
+                        if let Some((id, phase)) = params.get::<(String, u32)>() {
+                            spread.app_drag(id, phase);
+                        }
+                    }
                     "ExternalActivation" => {
                         spread.hide();
                         grid.hide();
