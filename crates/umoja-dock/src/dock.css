@@ -158,3 +158,15 @@ tooltip.background {
   color: #ffffff;
   border: 1px solid @shell_hairline;
 }
+
+/* Dragging an icon to reorder the dock (drag.rs): the icon being moved,
+   and Show Apps while a pinned app over it would be unpinned. */
+.dock-drag .dock-item {
+  background-color: @shell_fill_active;
+}
+.dock-item.show-apps.drop-unpin {
+  background-color: alpha(@destructive_bg_color, 0.35);
+}
+.dock-item.show-apps.drop-unpin image {
+  color: #ffffff;
+}

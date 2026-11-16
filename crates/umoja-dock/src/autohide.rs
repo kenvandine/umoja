@@ -144,7 +144,7 @@ impl Hide {
 impl Dock {
     fn wants_shown(&self) -> bool {
         let cfg = *self.config.borrow();
-        if cfg.fixed || self.menu_open.get() || crate::keynav::focused() {
+        if cfg.fixed || self.menu_open.get() || self.dragging.get() || crate::keynav::focused() {
             return true;
         }
         let h = &cfg.hide;

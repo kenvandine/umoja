@@ -5,6 +5,7 @@
 //! windows (with dots) from the compositor's foreign-toplevel protocol.
 
 mod autohide;
+mod drag;
 mod keynav;
 mod launcher;
 mod launcher_entry;
@@ -91,7 +92,11 @@ struct Dock {
     /// A menu or window list is open. Rebuilding would destroy the button it
     /// hangs off (and close it), so rebuilds wait until it closes.
     menu_open: Cell<bool>,
+    /// An icon is being dragged (see drag.rs); rebuilds wait for the drop.
+    dragging: Cell<bool>,
     rebuild_pending: Cell<bool>,
+    /// The app icons in dock order, and Show Apps, for dragging.
+    drag: RefCell<drag::Targets>,
     /// Unity LauncherEntry counts, progress and urgency, by dock key.
     entries: OnceCell<Rc<launcher_entry::Entries>>,
     /// The badge widgets of the icons now in the dock, by dock key, so an
@@ -165,7 +170,9 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
         homes: shared.homes.clone(),
         commands: shared.commands.clone(),
         menu_open: Cell::new(false),
+        dragging: Cell::new(false),
         rebuild_pending: Cell::new(false),
+        drag: RefCell::default(),
         entries: OnceCell::new(),
         badges: RefCell::default(),
         hide: autohide::Hide::new(),
@@ -295,12 +302,13 @@ impl Dock {
     }
 
     fn rebuild(self: &Rc<Self>) {
-        if self.menu_open.get() {
+        if self.menu_open.get() || self.dragging.get() {
             self.rebuild_pending.set(true);
             return;
         }
         self.rebuild_pending.set(false);
         self.badges.borrow_mut().clear();
+        *self.drag.borrow_mut() = drag::Targets::default();
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -338,9 +346,20 @@ impl Dock {
         }
         drop(windows);
 
+        // Pins can be dragged to reorder them, and running apps dragged in
+        // among them, unless favorite-apps is locked down.
+        let draggable = umoja_common::apps::favorites_writable();
         for (app, pinned, wins) in entries {
-            self.list
-                .append(&self.app_button(&app, pinned, wins, cfg.icon_size));
+            let widget = self.app_button(&app, pinned, wins, cfg.icon_size);
+            self.list.append(&widget);
+            if let (true, Some(id)) = (draggable, app.id()) {
+                drag::attach(self, &widget);
+                self.drag.borrow_mut().items.push(drag::Item {
+                    widget,
+                    id: id.to_string(),
+                    pinned,
+                });
+            }
         }
         if !cfg.show_apps_at_top {
             let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -753,6 +772,8 @@ impl Dock {
             .build();
         b.set_tooltip_text(Some(&i18n::shell("Show Apps")));
         b.connect_clicked(|_| call_overlay("Toggle"));
+        // Dropping a pinned app here unpins it, as in GNOME's dash.
+        self.drag.borrow_mut().show_apps = Some((b.clone().upcast(), image));
         b.upcast()
     }
 

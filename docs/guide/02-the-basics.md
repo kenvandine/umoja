@@ -35,12 +35,20 @@ Right-click an app on the dock (or in the app grid) for its menu:
 - **App Details**, which opens the app in App Center
 - **Quit**, which closes all of its windows
 
-The dock starts with Firefox, Files, App Center and the Terminal pinned.
-Pinned apps stay in the order you pinned them, and new pins go at the end.
-Umoja keeps its own list of pins, so pinning here doesn't change the dock
-in a GNOME session on the same account, and the other way round. The
-Ask Umoja button above Show Apps is always there; it isn't a pin, so it
-has no menu.
+The dock starts with Firefox, Files, App Center and the Terminal pinned,
+and new pins go at the end. To rearrange the dock, drag its icons:
+
+- **Drag a pinned app** up or down the dock (along it, when the dock is at
+  the bottom) to move it.
+- **Drag a running app that isn't pinned** in among the pinned ones to pin
+  it right there.
+- **Drop a pinned app on Show Apps** to unpin it.
+- Let go anywhere off the dock and nothing changes.
+
+Umoja keeps its own list of pins, so pinning or rearranging here doesn't
+change the dock in a GNOME session on the same account, and the other way
+round. The Ask Umoja and Show Apps buttons are always there; they
+aren't pins, so they can't be moved and have no menu.
 
 The dock uses Ubuntu Dock's settings, so **Settings › Ubuntu Desktop** changes its size, its
 position (left, bottom or right) and whether it hides when a window

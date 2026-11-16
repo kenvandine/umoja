@@ -150,6 +150,17 @@ pub fn set_favorite(desktop_id: &str, pinned: bool) {
     }
 }
 
+/// Replace the pinned apps with `ids`, in order: the dock's drag and drop.
+pub fn set_favorites(ids: &[String]) {
+    let Some(s) = crate::gsettings::settings(crate::gsettings::UMOJA_SHELL) else {
+        return;
+    };
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    if let Err(e) = s.set_strv(FAVORITES_KEY, refs) {
+        tracing::warn!(error = %e, "could not update favorite-apps");
+    }
+}
+
 fn with_favorite(mut favs: Vec<String>, desktop_id: &str, pinned: bool) -> Vec<String> {
     if pinned {
         if !favs.iter().any(|f| f == desktop_id) {
