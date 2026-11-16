@@ -152,10 +152,31 @@ pub fn wants_attention(window: u64, app_id: String, title: String) {
         return;
     }
     crate::session::RUNTIME.spawn(async move {
+        // Resolved before any await: gio objects aren't Send.
+        let (name, icon, desktop) = {
+            use gio::prelude::{AppInfoExt, IconExt};
+            let app = umoja_common::apps::app_for_window(&app_id);
+            let name = app
+                .as_ref()
+                .map(|i| i.display_name().to_string())
+                .unwrap_or_else(|| app_id.clone());
+            // The app's own icon (a snap's is a file path) and desktop id; the
+            // window's app id is often neither (Fluxer's showed a broken image).
+            let icon = app
+                .as_ref()
+                .and_then(|i| i.icon())
+                .and_then(|i| i.to_string())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let desktop = app
+                .as_ref()
+                .and_then(|i| i.id())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| app_id.clone());
+            let desktop = desktop.trim_end_matches(".desktop").to_string();
+            (name, icon, desktop)
+        };
         let Some(conn) = connection().await else { return };
-        let name = umoja_common::apps::app_for_window(&app_id)
-            .map(|i| gio::prelude::AppInfoExt::display_name(&i).to_string())
-            .unwrap_or_else(|| app_id.clone());
         // windowAttentionHandler.js: "“%s” is ready", the app as source.
         let summary = if title.is_empty() {
             format!("{name} is ready")
@@ -163,7 +184,6 @@ pub fn wants_attention(window: u64, app_id: String, title: String) {
             format!("“{title}” is ready")
         };
         let mut hints: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
-        let desktop = app_id.trim_end_matches(".desktop").to_string();
         hints.insert("desktop-entry", zbus::zvariant::Value::from(desktop));
         let reply = conn
             .call_method(
@@ -174,7 +194,7 @@ pub fn wants_attention(window: u64, app_id: String, title: String) {
                 &(
                     name.as_str(),
                     0u32,
-                    app_id.as_str(),
+                    icon.as_str(),
                     summary.as_str(),
                     "",
                     vec!["default", "Show"],
