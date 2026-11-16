@@ -13,7 +13,8 @@ There are four ways to open an app. Use whichever you like.
   windows comes forward with the one you used last, and clicking it again
   shows all of them to pick from. **Middle-click** (or **Ctrl+click**)
   opens a new window, **Shift+click** hides the app's windows, and
-  **Super+1** to **Super+9** do a click on the first nine apps.
+  **Super+1** to **Super+9** do a click on the first nine apps. Hold
+  **Super** for a moment and each of those apps shows its number.
 - **From the app grid.** Click **Show Apps** (the grid of dots at the
   bottom of the dock), or press **Super+A**. Every app is there. Start
   typing to search: apps come first and matching files are listed under

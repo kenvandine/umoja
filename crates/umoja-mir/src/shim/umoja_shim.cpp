@@ -852,6 +852,20 @@ public:
         // Super+` and Alt+` work on non-US keyboards too.
         uint32_t const bind_sym = mir_keyboard_event_scan_code(event) == KEY_ABOVE_TAB ? XK_GRAVE : keysym;
 
+        // Holding Super shows the dock's Super+1..9 numbers (Ubuntu Dock's
+        // hotkeys-overlay). Only the change is sent; not while the focused
+        // window has the shortcuts (below), but a release always is.
+        if (action != mir_keyboard_action_repeat && umoja_overlay_key_matches(keysym)) {
+            bool const down = action == mir_keyboard_action_down;
+            if (down != super_held_sent) {
+                Window const f = tools.active_window();
+                if (!down || !(f && umoja_wmp::inhibits_shortcuts(f))) {
+                    super_held_sent = down;
+                    umoja_super_held(down);
+                }
+            }
+        }
+
         // Alt+F7 / Alt+F8: the arrow keys move or resize the window.
         if (key_grab && handle_key_grab(action, keysym, mods)) return true;
 
@@ -2197,6 +2211,7 @@ private:
     }
 
     bool overlay_key_armed = false;
+    bool super_held_sent = false;
     bool ask_alt_armed = false;
     bool applying = false;
     // Window menu: Always on Top, Always on Visible Workspace.

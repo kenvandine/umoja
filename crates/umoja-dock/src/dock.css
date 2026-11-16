@@ -183,3 +183,15 @@ tooltip.background {
 .dock-item.show-apps.drop-unpin image {
   color: #ffffff;
 }
+/* Super+1..9 numbers while Super is held (Ubuntu Dock's hotkeys-overlay). */
+.dock-number {
+  background-color: alpha(#161618, 0.85);
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 1.1em;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid alpha(#ffffff, 0.25);
+}
