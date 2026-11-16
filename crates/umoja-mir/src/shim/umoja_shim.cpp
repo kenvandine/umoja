@@ -857,6 +857,16 @@ public:
         // mutter's "Above_Tab" is the key above Tab on any layout, so
         // Super+` and Alt+` work on non-US keyboards too.
         uint32_t const bind_sym = mir_keyboard_event_scan_code(event) == KEY_ABOVE_TAB ? XK_GRAVE : keysym;
+        // The headless test (UMOJA_TRACK_MODIFIERS) traces every key.
+        if (track_modifiers) {
+            Window const f = tools.active_window();
+            std::fprintf(stderr,
+                         "umoja-mir: key %s sym 0x%x mods 0x%x held 0x%x bound %u focus '%s' inhibited %d grab %d\n",
+                         action == mir_keyboard_action_down ? "down" : action == mir_keyboard_action_up ? "up" : "repeat",
+                         keysym, mods, held_modifiers, umoja_lookup_binding(bind_sym, mods),
+                         f ? tools.info_for(f).application_id().c_str() : "", f && umoja_wmp::inhibits_shortcuts(f) ? 1 : 0,
+                         key_grab ? 1 : 0);
+        }
 
         // Holding Super shows the dock's Super+1..9 numbers (Ubuntu Dock's
         // hotkeys-overlay). Only the change is sent; not while the focused
