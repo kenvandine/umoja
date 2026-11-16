@@ -18,7 +18,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Super+S** | Quick Settings |
 | **Super+N** | Focus the newest notification (**Enter** opens it, **Escape** leaves it) |
 | **Super+D** (or **Ctrl+Alt+D**) | Show the desktop; press again to bring the windows back |
-| **Super+1** … **Super+9** | Open or switch to the app at that place in the dock (add **Shift** for a new window) |
+| **Super+1** … **Super+9** | Open or switch to the app at that place in the dock (add **Ctrl** for a new window) |
 | **Super+P** | Choose how to use several displays: mirror, join, external or built-in only |
 | **Super+Space** | Next keyboard layout (add **Shift** to go back) |
 | **Alt+F2** | Run a command |

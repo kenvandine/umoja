@@ -695,6 +695,9 @@ pub fn reload() {
         shortcuts.push((id, binding));
         custom_commands.push(command);
     }
+    // mutter's restore-shortcuts, fixed in the shim: Super+Escape takes the
+    // keys back from a window holding them (a VM or remote desktop).
+    shortcuts.push(("restore-shortcuts".to_string(), "<Super>Escape".to_string()));
     let overlay = gs::get_string(gs::MUTTER, "overlay-key", "Super_L");
     if keysym_from_name(&overlay).is_some() {
         shortcuts.insert(0, ("overlay-key".to_string(), overlay.clone()));

@@ -1571,9 +1571,9 @@ def t_dock_number(run):
     run.shot("activated", f"after Super+{index + 1}")
     run.check(run.focused() == a.id, f"Super+{index + 1} focused the test pad", run.focused())
     before = [w[0] for w in run.windows() if w[1] == PAD_APP]
-    run.input.press("Super", "Shift", str(index + 1))
+    run.input.press("Super", "Ctrl", str(index + 1))
     new = run.wait(6, lambda: [w[0] for w in run.windows() if w[1] == PAD_APP and w[0] not in before])
-    run.check(new, f"Super+Shift+{index + 1} opened a new window", new)
+    run.check(new, f"Super+Ctrl+{index + 1} opened a new window", new)
     for wid in new or []:
         run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
 

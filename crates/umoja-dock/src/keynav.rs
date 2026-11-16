@@ -153,7 +153,7 @@ pub fn serve(target: impl Fn() -> Option<Rc<Dock>> + 'static) {
                             d.super_key(held);
                         }
                     }
-                    // Super+1..9 and Super+Shift+1..9 from umoja-mir.
+                    // Super+1..9 and Super+Ctrl+1..9 from umoja-mir.
                     "ActivateApp" => {
                         if let Some((index, new_window)) = params.get::<(u32, bool)>() {
                             d.activate_app(index, new_window);
