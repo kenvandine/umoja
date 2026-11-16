@@ -19,6 +19,8 @@ stdin, one command per line:
     inhibit           take the system shortcuts (keyboard-shortcuts-inhibit)
     uninhibit
     state             reply with the window's toplevel state flags
+    active            reply whether the window and its dialog have the
+                      keyboard: "ok active <window 0/1> <dialog 0/1/->"
     quit
 
 Every change to the text is written to the file given as the first
@@ -154,6 +156,12 @@ class Pad(Gtk.Application):
         elif cmd == "state":
             state = int(self.win.get_surface().get_state())
             print(f"ok state {state}", flush=True)
+            return True
+        elif cmd == "active":
+            # GetWindows lists toplevels only, so a dialog's focus is
+            # asked of GTK itself.
+            dialog = "-" if self.dialog is None else str(int(self.dialog.is_active()))
+            print(f"ok active {int(self.win.is_active())} {dialog}", flush=True)
             return True
         elif cmd == "quit":
             self.quit()
