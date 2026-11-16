@@ -43,8 +43,6 @@ pub struct Targets {
 }
 
 struct Drag {
-    /// Pointer at the press, in the list's coordinates.
-    start: (f64, f64),
     /// Pointer at the press, from the icon's start edge along the dock.
     grab: f64,
     /// Past the threshold: the icon is being dragged.
@@ -107,7 +105,6 @@ pub fn attach(dock: &Rc<Dock>, widget: &gtk::Widget) {
         let len = along(vertical, bounds[home].width() as f64, bounds[home].height() as f64);
         let (px, py) = (p.x() as f64, p.y() as f64);
         *s.borrow_mut() = Some(Drag {
-            start: (px, py),
             grab: along(vertical, px, py) - slots[home],
             started: false,
             home,
@@ -135,8 +132,18 @@ pub fn attach(dock: &Rc<Dock>, widget: &gtk::Widget) {
             g.set_state(gtk::EventSequenceState::Claimed);
             d.start_drag(&w, drag);
         }
-        let (x, y) = (drag.start.0 + dx, drag.start.1 + dy);
-        d.drag_to(&w, drag, x, y);
+        // GestureDrag's offsets are in the icon's own coordinates, and the
+        // icon (now the gap) moves while dragging, so offsets from the
+        // press drift away from the pointer. Map the pointer as it is now
+        // into the list instead.
+        let Some((sx, sy)) = g.start_point() else { return };
+        let Some(p) = w.compute_point(
+            &d.list,
+            &graphene::Point::new((sx + dx) as f32, (sy + dy) as f32),
+        ) else {
+            return;
+        };
+        d.drag_to(&w, drag, p.x() as f64, p.y() as f64);
     });
 
     let (weak, s) = (Rc::downgrade(dock), state);
@@ -199,11 +206,18 @@ impl Dock {
     fn drag_to(&self, widget: &gtk::Widget, drag: &mut Drag, x: f64, y: f64) {
         let vertical = self.config.borrow().position.is_vertical();
         let along_ptr = along(vertical, x, y);
+        // Only straying off the dock sideways cancels; past either end the
+        // copy just stops at that end.
         let (lw, lh) = (self.list.width() as f64, self.list.height() as f64);
-        drag.outside = x < -SLOP || y < -SLOP || x > lw + SLOP || y > lh + SLOP;
+        drag.outside = if vertical {
+            x < -SLOP || x > lw + SLOP
+        } else {
+            y < -SLOP || y > lh + SLOP
+        };
 
         // The copy follows the pointer along the dock.
-        let at = along_ptr - drag.grab;
+        let length = if vertical { lh } else { lw };
+        let at = (along_ptr - drag.grab).clamp(0.0, (length - drag.len).max(0.0));
         if let Some(f) = &drag.float {
             f.set_opacity(if drag.outside { 0.5 } else { 1.0 });
             self.layout.set_float(Some((f, at)));
