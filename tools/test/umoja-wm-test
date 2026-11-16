@@ -554,7 +554,7 @@ class Run:
     def gset(self, schema, key, value):
         """Set a GSettings key for the run; it is put back at the end."""
         s = settings(schema)
-        if not s or not s.settings_schema.has_key(key):
+        if not s or not s.props.settings_schema.has_key(key):
             raise Skip(f"{schema} {key} isn't installed")
         old = s.get_value(key)
         user_set = s.get_user_value(key) is not None
