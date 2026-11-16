@@ -98,6 +98,13 @@ Umoja PPA:
   token `mir_activation_refused_hook(surface)`. umoja-mir uses them to tell
   the user's activations (which may switch workspace) from an app raising
   itself (which only asks for attention, GNOME's "is ready").
+- `patches/3027_surface-linger-hook.patch` (umoja29): a closing window's
+  surface left the scene as soon as the client destroyed it, so it couldn't
+  fade out. When removing a surface the stack now asks
+  `mir_surface_linger_hook(surface)`; while it answers non-zero the surface
+  is still drawn on top of its old layer (no input), and fading or scaling
+  it redraws the scene. umoja-mir answers for the 150 ms of its close
+  animation (`crates/umoja-mir/src/shim/surface_effects.cpp`).
 - `patches/3020_cross-gpu-map-linear.patch`: the 3009 copy cost 5.5 ms of
   `glReadPixels` per 6 MB buffer on the compositing thread (measured on
   p16g3: 450 MB/s, 4 s of every 10 s, with two windows redrawing on the

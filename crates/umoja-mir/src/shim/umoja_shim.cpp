@@ -506,6 +506,9 @@ public:
         tile_before_max.erase(w);
         desktop_hidden.erase(w);
         animations.erase(w);
+        // GNOME's close effect: the window fades and shrinks out while Mir
+        // (patch 3027) keeps drawing its surface.
+        guarded("close animation", [&] { animate_close(info); });
         if (attention.erase(w)) umoja_windows_changed();
         if (all_windows.count(w)) umoja_window_gone(window_id(w));
         untile(w);
@@ -3607,6 +3610,20 @@ private:
         }
         animations[w] = Animation{kind, std::chrono::steady_clock::now(), 150.0};
         if (kind == Anim::open) umoja_fx::set_look(w, 0.0f, 0.94f);
+        run_animations();
+    }
+
+    // A normal window or dialog that is on screen as it closes.
+    void animate_close(WindowInfo const& info) {
+        if (!umoja_animations_enabled()) return;
+        auto const type = info.type();
+        if (type != mir_window_type_normal && type != mir_window_type_dialog) return;
+        if (info.state() == mir_window_state_minimized || info.state() == mir_window_state_hidden) return;
+        if (umoja_fx::begin_close(info.window(), 150.0)) run_animations();
+    }
+
+    // Start the frame thread unless it is running.
+    void run_animations() {
         if (animations_running) return;
         animations_running = true;
         std::thread([] {
@@ -3661,7 +3678,8 @@ public:
             guarded("minimize", [&] { finish_minimize(w); });
             umoja_fx::set_look(w, 1.0f, 1.0f);
         }
-        if (animations.empty()) animations_running = false;
+        bool const closing = umoja_fx::step_closing();
+        if (animations.empty() && !closing) animations_running = false;
         return animations_running;
     }
 
