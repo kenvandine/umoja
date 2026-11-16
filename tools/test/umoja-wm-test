@@ -1444,8 +1444,9 @@ def t_animations(run):
     run.check(gone, "closed", gone)
     run.wait(1.0)
     run.shot("closed", "a second after closing: nothing of the window may be left on screen")
-    run.note("watch the video: the window should fade and shrink in about 150 ms when it opens, "
-             "minimizes, comes back and closes; after closing nothing of it may stay on screen")
+    run.note("watch the video: opening and closing fade and scale in about 150 ms; minimizing "
+             "shrinks the window into its dock icon and restoring grows it back out (about 220 ms); "
+             "after closing nothing of it may stay on screen")
 
 
 @test("fullscreen-per-monitor", "A fullscreen window stays on top of its monitor (M2)", monitors=2)

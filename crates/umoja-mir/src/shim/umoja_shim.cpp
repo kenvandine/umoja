@@ -462,6 +462,8 @@ public:
         unsized_placement.reset();
         if (unsized && is_app_window(info)) awaiting_size[info.window()] = *unsized;
         if (!is_app_window(info)) {
+            if (process_name(miral::pid_of(info.window().application())) == "umoja-dock")
+                dock_windows.push_back(info.window());
             // Chrome mapped during a drag (tile preview) goes under the window.
             if (moving && elevated) guarded("raise dragged", [&] { tools.raise_tree(moving); });
             return;
@@ -490,6 +492,7 @@ public:
         }
         if (key_grab && key_grab->window == w) key_grab.reset();
         erase(lock_surfaces, w);
+        erase(dock_windows, w);
         if (lock_focus == w) lock_focus = Window{};
         // Mir refocuses from its MRU list after this returns, which never
         // holds a lock surface that a grab kept from being focused.
@@ -2113,7 +2116,7 @@ public:
                 tools.place_and_size_for_state(spec, info);
                 use_session_restore(info, spec);
                 tools.modify_window(info, spec);
-                animate(w, Anim::open);
+                animate(w, Anim::restore);
             }
             tools.raise_tree(w);
             tools.select_active_window(w);
@@ -3588,17 +3591,72 @@ private:
 
     // ---- window animations (P7) ------------------------------------------------
     //
-    // GNOME's open and minimize effects, small: a new or unminimized window
-    // fades and grows in, a minimized one fades and shrinks out (150 ms,
-    // org.gnome.desktop.interface enable-animations). Frames come from a
-    // helper thread under the WM lock, as the workspace slide's do.
+    // GNOME's effects, kept quick: a new window fades and grows in (150 ms);
+    // a minimized one shrinks into its app's dock icon and a restored one
+    // grows back out of it (220 ms; in place, fading, when its app has no
+    // icon). org.gnome.desktop.interface enable-animations turns them off.
+    // Frames come from a helper thread under the WM lock, as the workspace
+    // slide's do.
 
-    enum class Anim { open, minimize };
+    enum class Anim { open, minimize, restore };
     struct Animation {
         Anim kind;
         std::chrono::steady_clock::time_point start;
         double ms;
+        // The dock icon it flies into or out of, and the window's own
+        // rectangle, for minimize and restore.
+        std::optional<geom::Rectangle> icon;
+        geom::Rectangle rect;
     };
+    static constexpr double OPEN_MS = 150.0;
+    static constexpr double MINIMIZE_MS = 220.0;
+
+    // umoja-dock's windows (one per monitor), for the minimize target.
+    std::vector<Window> dock_windows;
+
+    // The window's app icon on the dock of its monitor (or on any dock), in
+    // layout pixels.
+    std::optional<geom::Rectangle> dock_icon_for(WindowInfo const& info) {
+        std::string const app = info.application_id();
+        if (app.empty()) return {};
+        Window const& w = info.window();
+        geom::Point const centre{w.top_left().x.as_int() + w.size().width.as_int() / 2,
+                                 w.top_left().y.as_int() + w.size().height.as_int() / 2};
+        std::optional<geom::Rectangle> any;
+        for (auto const& d : dock_windows) {
+            geom::Rectangle const dock{d.top_left(), d.size()};
+            for (auto const& [id, r] : outputs) {
+                if (!r.contains(dock.top_left)) continue;
+                UmojaRect const mon{r.top_left.x.as_int(), r.top_left.y.as_int(), r.size.width.as_int(),
+                                    r.size.height.as_int()};
+                UmojaRect local{};
+                if (!umoja_dock_icon(app.c_str(), mon, &local) || local.w <= 0 || local.h <= 0) break;
+                geom::Rectangle const icon{{dock.top_left.x.as_int() + local.x, dock.top_left.y.as_int() + local.y},
+                                           {local.w, local.h}};
+                if (r.contains(centre)) return icon;
+                if (!any) any = icon;
+                break;
+            }
+        }
+        return any;
+    }
+
+    // Window `w` at progress `e` (0 = as it is, 1 = at the icon).
+    void fly(Window const& w, Animation const& a, double e) {
+        auto const& icon = *a.icon;
+        double const wx = a.rect.top_left.x.as_int() + a.rect.size.width.as_int() / 2.0;
+        double const wy = a.rect.top_left.y.as_int() + a.rect.size.height.as_int() / 2.0;
+        double const ix = icon.top_left.x.as_int() + icon.size.width.as_int() / 2.0;
+        double const iy = icon.top_left.y.as_int() + icon.size.height.as_int() / 2.0;
+        double const sx = icon.size.width.as_int() / std::max(1.0, double(a.rect.size.width.as_int()));
+        double const sy = icon.size.height.as_int() / std::max(1.0, double(a.rect.size.height.as_int()));
+        // Keep the window's shape: shrink to the icon's larger side.
+        double const s = std::max(sx, sy);
+        float const scale = float(1.0 + (s - 1.0) * e);
+        // Mostly opaque on the way, gone as it lands.
+        float const alpha = float(1.0 - e * e * 0.9);
+        umoja_fx::set_look_at(w, alpha, scale, float((ix - wx) * e), float((iy - wy) * e));
+    }
     std::map<Window, Animation> animations;
     bool animations_running = false;
 
@@ -3608,8 +3666,14 @@ private:
             if (kind == Anim::minimize) finish_minimize(w);
             return;
         }
-        animations[w] = Animation{kind, std::chrono::steady_clock::now(), 150.0};
-        if (kind == Anim::open) umoja_fx::set_look(w, 0.0f, 0.94f);
+        Animation a{kind, std::chrono::steady_clock::now(), OPEN_MS, std::nullopt, {w.top_left(), w.size()}};
+        if (kind != Anim::open) {
+            a.ms = MINIMIZE_MS;
+            guarded("dock icon", [&] { a.icon = dock_icon_for(tools.info_for(w)); });
+        }
+        animations[w] = a;
+        if (kind == Anim::open || (kind == Anim::restore && !a.icon)) umoja_fx::set_look(w, 0.0f, 0.94f);
+        if (kind == Anim::restore && a.icon) fly(w, a, 1.0);
         run_animations();
     }
 
@@ -3669,9 +3733,13 @@ public:
                 else umoja_fx::set_look(w, 1.0f, 1.0f);
                 continue;
             }
-            double const e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
-            if (it->second.kind == Anim::open) umoja_fx::set_look(w, float(e), float(0.94 + 0.06 * e));
-            else umoja_fx::set_look(w, float(1.0 - e), float(1.0 - 0.15 * e));
+            double const out = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
+            double const in = t * t * t;                                // ease-in cubic
+            auto const& a = it->second;
+            if (a.kind == Anim::minimize && a.icon) fly(w, a, in);       // speeds up into the icon
+            else if (a.kind == Anim::restore && a.icon) fly(w, a, 1.0 - out);
+            else if (a.kind == Anim::minimize) umoja_fx::set_look(w, float(1.0 - out), float(1.0 - 0.15 * out));
+            else umoja_fx::set_look(w, float(out), float(0.94 + 0.06 * out));
             ++it;
         }
         for (auto const& w : minimized) {

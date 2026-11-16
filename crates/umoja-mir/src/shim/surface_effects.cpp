@@ -51,6 +51,15 @@ std::string app_id_of(miral::Window const& window) {
     return surface ? surface->application_id() : std::string{};
 }
 
+void set_look_at(miral::Window const& window, float alpha, float scale, float dx, float dy) {
+    std::shared_ptr<mir::scene::Surface> const surface = window;
+    if (!surface) return;
+    surface->set_alpha(alpha);
+    // Scaled about its centre, then moved.
+    surface->set_transformation(glm::scale(glm::translate(glm::mat4{1.0f}, glm::vec3{dx, dy, 0.0f}),
+                                           glm::vec3{scale, scale, 1.0f}));
+}
+
 bool begin_close(miral::Window const& window, double ms) {
     std::shared_ptr<mir::scene::Surface> const surface = window;
     if (!surface || !surface->visible()) return false;
