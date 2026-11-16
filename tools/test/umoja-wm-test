@@ -1722,7 +1722,10 @@ def main():
             except AssertionError as e:
                 run.check(False, str(e))
             except Exception:  # noqa: BLE001
-                run.check(False, "the test crashed", traceback.format_exc())
+                tb = traceback.format_exc()
+                # The log line keeps 200 characters: put the error first.
+                run.check(False, "the test crashed", tb.strip().splitlines()[-1] + "\n" + tb)
+                run.log(tb)
             finally:
                 run.recorder.stop()
                 try:
