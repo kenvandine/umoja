@@ -23,6 +23,17 @@ window.umoja-dock.top .dock-list,
 window.umoja-dock.bottom .dock-list {
   padding: 6px 8px;
 }
+/* Panel mode (extend-height), like Ubuntu Dock's: a square bar flush with
+   its screen edge and both ends, with a hairline only on the side facing
+   the windows. */
+window.umoja-dock.panel-mode .dock-list {
+  border-radius: 0;
+  border-width: 0;
+}
+window.umoja-dock.panel-mode.left .dock-list { border-right-width: 1px; }
+window.umoja-dock.panel-mode.right .dock-list { border-left-width: 1px; }
+window.umoja-dock.panel-mode.top .dock-list { border-bottom-width: 1px; }
+window.umoja-dock.panel-mode.bottom .dock-list { border-top-width: 1px; }
 .dock-item {
   padding: 4px;
   border-radius: 16px;

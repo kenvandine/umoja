@@ -30,10 +30,10 @@ use umoja_common::types::DockPosition;
 use umoja_common::{dbus, i18n};
 
 const APP_ID: &str = "org.umoja.Dock";
-/// Gap between the dock and the screen edge it sits against.
+/// Gap between the floating dock and the screen edge it sits against.
+/// Panel mode (extend-height) has none: like Ubuntu Dock's, it is a flat
+/// bar touching its edge and both ends of it.
 const EDGE_GAP: i32 = 2;
-/// Gap off both ends of the screen edge when the dock spans it (panel mode).
-const END_GAP: i32 = 8;
 /// Pixels between the dock card and its menus, as umoja-panel's menu_gap.
 const MENU_GAP: i32 = 6;
 
@@ -224,22 +224,24 @@ impl Dock {
         } else {
             gtk::Orientation::Horizontal
         });
-        // Float the rounded dock slightly off the screen edge, and off both
-        // ends too when it spans the edge (panel mode).
-        let (vertical, along) = (cfg.position.is_vertical(), cfg.extend);
-        let gap = |edge: DockPosition, end: bool| {
-            if cfg.position == edge {
+        // Float the rounded dock slightly off the screen edge; in panel
+        // mode it sits flush against the edge and both its ends.
+        let gap = |edge: DockPosition| {
+            if cfg.position == edge && !cfg.extend {
                 EDGE_GAP
-            } else if end && along {
-                END_GAP
             } else {
                 0
             }
         };
-        self.list.set_margin_start(gap(DockPosition::Left, !vertical));
-        self.list.set_margin_end(gap(DockPosition::Right, !vertical));
-        self.list.set_margin_top(gap(DockPosition::Top, vertical));
-        self.list.set_margin_bottom(gap(DockPosition::Bottom, vertical));
+        self.list.set_margin_start(gap(DockPosition::Left));
+        self.list.set_margin_end(gap(DockPosition::Right));
+        self.list.set_margin_top(gap(DockPosition::Top));
+        self.list.set_margin_bottom(gap(DockPosition::Bottom));
+        if cfg.extend {
+            self.window.add_css_class("panel-mode");
+        } else {
+            self.window.remove_css_class("panel-mode");
+        }
         for (pos, class) in [
             (DockPosition::Left, "left"),
             (DockPosition::Right, "right"),
@@ -263,7 +265,7 @@ impl Dock {
     /// icon size so CSS changes can't let maximized windows slide under it.
     fn thickness(&self) -> i32 {
         let cfg = *self.config.borrow();
-        let fallback = cfg.icon_size + 16 + EDGE_GAP;
+        let fallback = cfg.icon_size + 16 + if cfg.extend { 0 } else { EDGE_GAP };
         if !self.list.is_visible() || self.list.first_child().is_none() {
             return fallback;
         }
