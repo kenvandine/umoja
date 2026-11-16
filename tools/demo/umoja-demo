@@ -1799,12 +1799,10 @@ class Demo:
                     self.recorder.discard()
                     return
                 self.wait(1.0)
-                spoke = time.monotonic()
+                # Nothing here is fast-forwarded: the captions trail the
+                # voice by a few seconds, so a fast-forward up to the first
+                # caption cut (silenced) the start of the reading.
                 self.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (CAPTIONED,)))
-                # Should the voice or the captions still be loading despite
-                # the warm-up, fast-forward the wait for the first words.
-                if not self.dry and self.wait_for(lambda: self.test_action("captions-text")[1].strip(), 40):
-                    self.recorder.waited(spoke, time.monotonic())
                 # The reading takes ~10 s.
                 heard = None if self.dry else self.wait_for(caught, 40)
                 if self.dry:
