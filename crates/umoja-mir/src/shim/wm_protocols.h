@@ -11,6 +11,10 @@ namespace umoja_wmp {
 
 auto dialog_extension() -> miral::WaylandExtensions::Builder;
 auto shortcuts_inhibit_extension() -> miral::WaylandExtensions::Builder;
+// xwayland-keyboard-grab-unstable-v1, for Xwayland only: an X11 app's
+// keyboard grab works like a shortcuts inhibitor, for the apps GNOME's
+// xwayland-grab-access-rules allow.
+auto xwayland_grab_extension() -> miral::WaylandExtensions::Builder;
 
 // A window was created: match it to dialogs and inhibitors that were set
 // up before it mapped (GTK marks a dialog modal before its first commit).

@@ -1,4 +1,5 @@
-// xdg-dialog-v1 and keyboard-shortcuts-inhibit-unstable-v1 (wm_protocols.h).
+// xdg-dialog-v1, keyboard-shortcuts-inhibit-unstable-v1 and
+// xwayland-keyboard-grab-unstable-v1 (wm_protocols.h).
 //
 // Requests arrive on Mir's Wayland thread; the window manager asks from
 // its own threads under the WM lock. Everything shared sits behind one
@@ -7,6 +8,9 @@
 #include "wm_protocols.h"
 
 #include "keyboard-shortcuts-inhibit-unstable-v1-server-protocol.h"
+#include "surface_effects.h"
+#include "umoja_shim.h"
+#include "xwayland-keyboard-grab-unstable-v1-server-protocol.h"
 #include "xdg-dialog-v1-server-protocol.h"
 
 #include <wayland-server-core.h>
@@ -127,6 +131,9 @@ struct Inhibitor {
     miral::Window window;
     bool active = false;
     bool revoked = false; // Super+Escape took it back
+    // An X11 app's keyboard grab passed on by Xwayland: no active/inactive
+    // events, and only apps the grab rules allow (umoja_xwayland_grab_allowed).
+    bool xwayland = false;
     wl_listener surface_destroyed{};
 };
 std::vector<Inhibitor*> inhibitors;
@@ -161,6 +168,15 @@ void activate(Inhibitor* i) {
     if (i->active || i->revoked || !i->surface) return;
     if (!i->window) i->window = miral::window_for(i->surface);
     if (!i->window) return;
+    if (i->xwayland) {
+        std::string const app = umoja_fx::app_id_of(i->window);
+        if (!umoja_xwayland_grab_allowed(app.c_str())) {
+            i->revoked = true; // not asked again for this grab
+            return;
+        }
+        i->active = true;
+        return;
+    }
     i->active = true;
     zwp_keyboard_shortcuts_inhibitor_v1_send_active(i->resource);
 }
@@ -202,6 +218,54 @@ struct zwp_keyboard_shortcuts_inhibit_manager_v1_interface const manager_impl = 
     manager_inhibit,
 };
 
+// ---- xwayland-keyboard-grab --------------------------------------------------
+// Xwayland asks for this when an X11 app grabs the keyboard (a VM viewer,
+// a remote desktop): mutter then lets that window have every key, for the
+// apps its xwayland-grab-access-rules allow. Umoja does the same through
+// the shortcuts inhibitors above.
+
+void grab_destroy(wl_client*, wl_resource* resource) { wl_resource_destroy(resource); }
+
+struct zwp_xwayland_keyboard_grab_v1_interface const grab_impl = {
+    grab_destroy,
+};
+
+void grab_manager_destroy(wl_client*, wl_resource* resource) { wl_resource_destroy(resource); }
+
+void grab_keyboard(wl_client* client, wl_resource* manager, uint32_t id, wl_resource* surface, wl_resource*) {
+    auto* res =
+        wl_resource_create(client, &zwp_xwayland_keyboard_grab_v1_interface, wl_resource_get_version(manager), id);
+    if (!res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    std::lock_guard lock{mutex};
+    auto* i = new Inhibitor;
+    i->resource = res;
+    i->surface = surface;
+    i->xwayland = true;
+    i->surface_destroyed.notify = on_inhibited_surface_destroyed;
+    wl_resource_add_destroy_listener(surface, &i->surface_destroyed);
+    inhibitors.push_back(i);
+    wl_resource_set_implementation(res, &grab_impl, i, inhibitor_resource_destroyed);
+    activate(i);
+}
+
+struct zwp_xwayland_keyboard_grab_manager_v1_interface const grab_manager_impl = {
+    grab_manager_destroy,
+    grab_keyboard,
+};
+
+void bind_grab_manager(wl_client* client, void*, uint32_t version, uint32_t id) {
+    auto* res = wl_resource_create(client, &zwp_xwayland_keyboard_grab_manager_v1_interface,
+                                   static_cast<int>(version), id);
+    if (!res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(res, &grab_manager_impl, nullptr, nullptr);
+}
+
 void bind_manager(wl_client* client, void*, uint32_t version, uint32_t id) {
     auto* res =
         wl_resource_create(client, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, static_cast<int>(version), id);
@@ -241,6 +305,19 @@ auto shortcuts_inhibit_extension() -> miral::WaylandExtensions::Builder {
             }
             return global(wl_global_create(ctx->display(), &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1,
                                            nullptr, bind_manager));
+        }};
+}
+
+auto xwayland_grab_extension() -> miral::WaylandExtensions::Builder {
+    return miral::WaylandExtensions::Builder{
+        zwp_xwayland_keyboard_grab_manager_v1_interface.name,
+        [](miral::WaylandExtensions::Context const* ctx) -> std::shared_ptr<void> {
+            {
+                std::lock_guard lock{mutex};
+                context = ctx;
+            }
+            return global(wl_global_create(ctx->display(), &zwp_xwayland_keyboard_grab_manager_v1_interface, 1,
+                                           nullptr, bind_grab_manager));
         }};
 }
 
@@ -293,7 +370,7 @@ void restore_shortcuts(miral::Window const& window) {
     ctx->run_on_wayland_mainloop([target] {
         std::lock_guard lock{mutex};
         for (auto* i : inhibitors)
-            if (i->revoked && i->window == target && i->resource)
+            if (i->revoked && !i->xwayland && i->window == target && i->resource)
                 zwp_keyboard_shortcuts_inhibitor_v1_send_inactive(i->resource);
     });
 }

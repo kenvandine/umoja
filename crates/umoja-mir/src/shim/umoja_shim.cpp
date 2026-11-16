@@ -4177,6 +4177,19 @@ bool is_umoja_shell_client(WaylandExtensions::EnableInfo const& info) {
     return name.rfind("umoja-", 0) == 0;
 }
 
+bool is_xwayland_client(WaylandExtensions::EnableInfo const& info) {
+    pid_t const pid = miral::pid_of(info.app());
+    if (pid <= 0) return false;
+    char exe[PATH_MAX];
+    auto const proc = "/proc/" + std::to_string(pid) + "/exe";
+    ssize_t const n = readlink(proc.c_str(), exe, sizeof exe - 1);
+    if (n <= 0) return false;
+    exe[n] = '\0';
+    std::string const path{exe};
+    auto const slash = path.rfind('/');
+    return (slash == std::string::npos ? path : path.substr(slash + 1)) == "Xwayland";
+}
+
 bool is_privileged_extension(std::string const& name) {
     return name == "ext_data_control_manager_v1" || name == "zwlr_data_control_manager_v1";
 }
@@ -4250,6 +4263,9 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     // (wm_protocols.cpp).
     extensions.add_extension(umoja_wmp::dialog_extension());
     extensions.add_extension(umoja_wmp::shortcuts_inhibit_extension());
+    // An X11 VM or remote desktop viewer's keyboard grab, from Xwayland only.
+    extensions.add_extension(umoja_wmp::xwayland_grab_extension());
+    extensions.conditionally_enable("zwp_xwayland_keyboard_grab_manager_v1", is_xwayland_client);
 
     // GNOME's input sources (org.gnome.desktop.input-sources, keymap.rs),
     // switched with Super+Space.
