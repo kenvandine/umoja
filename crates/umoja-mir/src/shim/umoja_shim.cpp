@@ -3551,7 +3551,17 @@ private:
         geom::Rectangle const p{parent.top_left(), parent.size()};
         for (auto const& c : tools.info_for(parent).children()) {
             auto& ci = tools.info_for(c);
-            if (ci.type() != mir_window_type_dialog && ci.type() != mir_window_type_normal) continue;
+            // Toplevel children only (xdg toplevels are "freestyle"), not
+            // menus and tooltips, which Mir places against the parent.
+            switch (ci.type()) {
+            case mir_window_type_normal:
+            case mir_window_type_freestyle:
+            case mir_window_type_dialog:
+            case mir_window_type_utility:
+                break;
+            default:
+                continue;
+            }
             int const cw = c.size().width.as_int(), ch = c.size().height.as_int();
             if (cw <= 0 || ch <= 0) continue;
             geom::Point const want{p.top_left.x.as_int() + (p.size.width.as_int() - cw) / 2,
