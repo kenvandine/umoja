@@ -92,6 +92,14 @@ pub extern "C" fn umoja_copilot_key() {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn umoja_super_held(held: bool) {
+    if crate::greeter::enabled() {
+        return;
+    }
+    guard("super_held", (), || session::dock_call("SuperKey", (held,)))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn umoja_tile_geometry(action: u32, area: Rect, out: *mut Rect) -> bool {
     guard("tile_geometry", false, || {
         match tiling::geometry(Action::from_u32(action), area) {

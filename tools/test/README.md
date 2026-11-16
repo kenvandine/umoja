@@ -189,6 +189,7 @@ machine whose windows you don't mind in the clips.
 | `dock-middle-click` | Middle-click on a dock icon opens a new window (D2) |
 | `dock-scroll` | scroll-action cycle-windows: scrolling on an icon cycles its windows (D2) |
 | `dock-super-number` | Super+number activates the dock's apps (D3) |
+| `dock-numbers` | Holding Super shows the dock's Super+N numbers; a tap doesn't |
 | `dock-isolate-workspaces` | isolate-workspaces: the dock shows only this workspace's windows (D4) |
 
 Some results need a look at the clips or screenshots, and the report says

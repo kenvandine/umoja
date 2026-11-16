@@ -190,6 +190,9 @@ bool umoja_overlay_key_matches(uint32_t keysym);
 // no Copilot key; the Copilot key (evdev KEY_F23 under Super+Shift) always does.
 bool umoja_ask_alt_tap_enabled(void);
 void umoja_copilot_key(void);
+// The overlay key (Super) went down or up: the dock shows its Super+1..9
+// numbers while it is held.
+void umoja_super_held(bool held);
 bool umoja_tile_geometry(uint32_t action, UmojaRect area, UmojaRect* out);
 void umoja_tiling_register(uint64_t id, uint32_t action, UmojaRect rect);
 void umoja_tiling_unregister(uint64_t id);

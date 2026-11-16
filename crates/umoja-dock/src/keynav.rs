@@ -4,6 +4,7 @@
 //! ```text
 //! Focus()     take the keyboard, focus the first icon; Escape leaves
 //! Unfocus()   hand the keyboard back (a click elsewhere, the top bar)
+//! SuperKey(b) Super held or released: show the Super+1..9 numbers
 //! ```
 
 use std::cell::Cell;
@@ -24,6 +25,12 @@ const XML: &str = r#"<node>
       <arg name="position" type="s" direction="out"/>
       <arg name="size" type="(ii)" direction="out"/>
       <arg name="icons" type="a(subbiiii)" direction="out"/>
+    </method>
+    <method name="TestNumbers">
+      <arg name="shown" type="b" direction="out"/>
+    </method>
+    <method name="SuperKey">
+      <arg name="held" type="b" direction="in"/>
     </method>
     <method name="ActivateApp">
       <arg name="index" type="u" direction="in"/>
@@ -127,6 +134,24 @@ pub fn serve(target: impl Fn() -> Option<Rc<Dock>> + 'static) {
                         let (position, size, icons) = d.test_icons();
                         invocation.return_value(Some(&(position, size, icons).to_variant()));
                         return;
+                    }
+                    "TestNumbers" => {
+                        if !glib::user_runtime_dir().join("umoja-demo").exists() {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.AccessDenied",
+                                "only while $XDG_RUNTIME_DIR/umoja-demo exists",
+                            );
+                            return;
+                        }
+                        let shown = d.numbers.borrow().iter().any(|l| l.is_visible());
+                        invocation.return_value(Some(&(shown,).to_variant()));
+                        return;
+                    }
+                    // Super down/up from umoja-mir: the Super+N numbers.
+                    "SuperKey" => {
+                        if let Some((held,)) = params.get::<(bool,)>() {
+                            d.super_key(held);
+                        }
                     }
                     // Super+1..9 and Super+Shift+1..9 from umoja-mir.
                     "ActivateApp" => {

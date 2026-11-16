@@ -25,6 +25,7 @@ use libadwaita::prelude::AnimationExt;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
+use std::time::Duration;
 use tracker::{Command, WindowId, WindowInfo};
 use umoja_common::gsettings as gs;
 use umoja_common::types::DockPosition;
@@ -37,6 +38,11 @@ const APP_ID: &str = "org.umoja.Dock";
 const EDGE_GAP: i32 = 2;
 /// Pixels between the dock card and its menus, as umoja-panel's menu_gap.
 const MENU_GAP: i32 = 6;
+/// How long Super is held before the dock shows its Super+N numbers, so a
+/// tap for the overview doesn't flash them.
+const SUPER_HOLD_MS: u64 = 400;
+/// switch-to-application-1..9.
+const MAX_APP_KEYS: usize = 9;
 
 #[derive(Clone, Copy, Debug)]
 struct Config {
@@ -59,6 +65,10 @@ struct Config {
     shift_click: ClickAction,
     shift_middle_click: ClickAction,
     scroll: ScrollAction,
+    /// hot-keys + hotkeys-overlay: holding Super shows each icon's number.
+    hotkeys_overlay: bool,
+    /// hotkeys-show-dock: a hidden dock comes out while the numbers show.
+    hotkeys_show_dock: bool,
 }
 
 /// dash-to-dock's click-action values Umoja does.
@@ -125,6 +135,9 @@ impl Config {
                 "switch-workspace" => ScrollAction::SwitchWorkspace,
                 _ => ScrollAction::Nothing,
             },
+            hotkeys_overlay: gs::get_bool(d, "hot-keys", true)
+                && gs::get_bool(d, "hotkeys-overlay", true),
+            hotkeys_show_dock: gs::get_bool(d, "hotkeys-show-dock", true),
         }
     }
 }
@@ -163,6 +176,12 @@ struct Dock {
     /// The app icons in order, for Super+1..9.
     apps: RefCell<Vec<(gio::DesktopAppInfo, gtk::Button, Vec<WindowInfo>)>>,
     last_scroll: Cell<i64>,
+    /// The Super+1..9 number labels of the first nine icons.
+    numbers: RefCell<Vec<gtk::Label>>,
+    /// Super is down (umoja-mir's SuperKey), and the numbers are showing.
+    super_held: Cell<bool>,
+    numbers_shown: Cell<bool>,
+    numbers_timer: RefCell<Option<glib::SourceId>>,
 }
 
 struct Badge {
@@ -243,6 +262,10 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
         mru: shared.mru.clone(),
         apps: RefCell::default(),
         last_scroll: Cell::new(0),
+        numbers: RefCell::default(),
+        super_held: Cell::new(false),
+        numbers_shown: Cell::new(false),
+        numbers_timer: RefCell::default(),
     });
     let _ = dock.entries.set(shared.entries.clone());
 
@@ -374,6 +397,7 @@ impl Dock {
         self.rebuild_pending.set(false);
         self.badges.borrow_mut().clear();
         self.apps.borrow_mut().clear();
+        self.numbers.borrow_mut().clear();
         *self.drag.borrow_mut() = drag::Targets::default();
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
@@ -506,6 +530,7 @@ impl Dock {
             overlay.add_overlay(&dots);
         }
         self.add_badges(&launcher::key_for(app), &overlay, &button);
+        self.add_number(&overlay);
 
         // The modifiers held when the button was pressed (clicked has none).
         let mods = Rc::new(Cell::new(gtk::gdk::ModifierType::empty()));
@@ -691,12 +716,78 @@ impl Dock {
             self.click(&app, &wins, &button, ClickAction::Launch);
             return;
         }
+        // Super+N while Super is held: show the numbers now, not after the wait.
+        if self.super_held.get() {
+            if let Some(id) = self.numbers_timer.borrow_mut().take() {
+                id.remove();
+            }
+            self.show_numbers(true);
+        }
         // The keyboard never minimizes: a focused app stays focused.
         let wins_now = self.fresh(&wins);
         if wins_now.iter().any(|w| w.activated) && wins_now.len() == 1 {
             return;
         }
         self.click(&app, &wins, &button, ClickAction::Focus);
+    }
+
+    /// Super went down or up (umoja-mir). Ubuntu Dock's hotkeys-overlay:
+    /// held a moment, each of the first nine icons shows its Super+N
+    /// number until Super goes up. A tap (the overview) shows nothing.
+    pub fn super_key(self: &Rc<Self>, held: bool) {
+        self.super_held.set(held);
+        if let Some(id) = self.numbers_timer.borrow_mut().take() {
+            id.remove();
+        }
+        if !held {
+            self.show_numbers(false);
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_millis(SUPER_HOLD_MS), move || {
+            if let Some(d) = weak.upgrade() {
+                d.numbers_timer.borrow_mut().take();
+                if d.super_held.get() {
+                    d.show_numbers(true);
+                }
+            }
+        });
+        *self.numbers_timer.borrow_mut() = Some(id);
+    }
+
+    fn show_numbers(self: &Rc<Self>, show: bool) {
+        let show = show && self.config.borrow().hotkeys_overlay;
+        if show == self.numbers_shown.get() {
+            return;
+        }
+        self.numbers_shown.set(show);
+        for label in self.numbers.borrow().iter() {
+            label.set_visible(show);
+        }
+        self.update_visibility();
+    }
+
+    /// Whether the numbers bring out a hidden dock (hotkeys-show-dock).
+    pub fn numbers_reveal(&self) -> bool {
+        self.numbers_shown.get() && self.config.borrow().hotkeys_show_dock
+    }
+
+    /// The Super+N number on the icon (the first nine icons).
+    fn add_number(&self, overlay: &gtk::Overlay) {
+        let n = self.apps.borrow().len();
+        if n == 0 || n > MAX_APP_KEYS {
+            return;
+        }
+        let label = gtk::Label::builder()
+            .label(n.to_string())
+            .css_classes(["dock-number"])
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .can_target(false)
+            .visible(self.numbers_shown.get())
+            .build();
+        overlay.add_overlay(&label);
+        self.numbers.borrow_mut().push(label);
     }
 
     /// For tools/test/umoja-wm-test: the dock's edge, its surface size, and

@@ -1542,6 +1542,34 @@ def t_dock_number(run):
         run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
 
 
+@test("dock-numbers", "Holding Super shows the dock's Super+N numbers; a tap doesn't")
+def t_dock_numbers(run):
+    def shown():
+        r = run.bus.call(DOCK, "TestNumbers", None, "(b)", quiet=True)
+        return bool(r and r[0])
+
+    if not run.bus.has_method(DOCK, "TestNumbers"):
+        raise Skip("this umoja-dock has no TestNumbers (older build)")
+    run.input.key("Super", True)
+    run.wait(1.0)
+    run.shot("held", "Super held: numbers on the first nine icons")
+    held = shown()
+    run.input.key("Super", False)
+    run.wait(0.6)
+    run.check(held, "holding Super shows the numbers", held)
+    run.check(not shown(), "letting go hides them", shown())
+    # That release was a lone Super tap: the overview opened. Close it.
+    run.input.press("Escape")
+    run.wait(0.5)
+    run.input.key("Super", True)
+    time.sleep(0.15)
+    quick = shown()
+    run.input.key("Super", False)
+    run.wait(0.6)
+    run.check(not quick, "a quick tap shows no numbers", quick)
+    run.input.press("Escape")
+
+
 @test("dock-isolate-workspaces", "isolate-workspaces: the dock shows only this workspace's windows (D4)")
 def t_dock_isolate(run):
     need_workspaces(run)
