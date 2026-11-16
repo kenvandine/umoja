@@ -1,0 +1,143 @@
+Description: Window menu requests and ping/pong for the server
+ xdg_toplevel.show_window_menu and xdg_wm_base.pong were empty TODO stubs.
+ The server can now show its window menu when a client asks (right-click on
+ a client-side title bar): Mir looks up mir_show_window_menu_hook in the
+ executable and calls it on the Wayland thread with the window's
+ scene::Surface and the surface-local position. For "App is not
+ responding", Mir hands the function mir_xdg_ping_setup_hook a function that
+ pings every xdg_wm_base of a process (on the Wayland thread), and passes
+ each pong to mir_xdg_pong_hook with the client's pid. A server without the
+ hooks behaves as before. No ABI change.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-16
+---
+--- a/src/server/frontend_wayland/xdg_shell_stable.cpp
++++ b/src/server/frontend_wayland/xdg_shell_stable.cpp
+@@ -25,10 +25,16 @@
+ #include <mir/shell/surface_specification.h>
+ #include <mir/shell/shell.h>
+ #include <mir/scene/surface.h>
++#include <mir/scene/session.h>
++#include <mir/executor.h>
+ #include <mir/log.h>
+ 
+ #include <boost/throw_exception.hpp>
+ 
++#include <dlfcn.h>
++#include <functional>
++#include <map>
++
+ namespace mf = mir::frontend;
+ namespace ms = mir::scene;
+ namespace msh = mir::shell;
+@@ -107,7 +113,32 @@
+     void pong(uint32_t serial) override;
+ 
+     mf::XdgShellStable* const shell;
++
++public:
++    ~Instance() override;
++    pid_t const pid;
++};
++
++// Umoja: ping and pong for "App is not responding". The server looks up
++// mir_xdg_ping_setup_hook and hands it a function that pings every
++// xdg_wm_base of a process; each pong goes to mir_xdg_pong_hook. Instances
++// are only touched on the Wayland thread.
++namespace
++{
++struct PingTarget
++{
++    pid_t pid;
++    std::function<void(uint32_t)> ping;
+ };
++std::map<void const*, PingTarget> ping_instances;
++mir::Executor* ping_executor{nullptr};
++
++using PongHook = void (*)(pid_t pid, uint32_t serial);
++using PingFn = void (*)(pid_t pid, uint32_t serial);
++using PingSetupHook = void (*)(PingFn ping);
++
++void ping_pid(pid_t pid, uint32_t serial);
++}
+ 
+ // XdgShellStable
+ 
+@@ -125,6 +156,9 @@
+       output_manager{output_manager},
+       surface_registry{surface_registry}
+ {
++    ping_executor = &wayland_executor;
++    static auto const setup = reinterpret_cast<PingSetupHook>(dlsym(RTLD_DEFAULT, "mir_xdg_ping_setup_hook"));
++    if (setup) setup(&ping_pid);
+ }
+ 
+ void mf::XdgShellStable::bind(wl_resource* new_resource)
+@@ -134,8 +168,34 @@
+ 
+ mf::XdgShellStable::Instance::Instance(wl_resource* new_resource, mf::XdgShellStable* shell)
+     : XdgWmBase{new_resource, Version<5>()},
+-      shell{shell}
++      shell{shell},
++      pid{[this]
++          {
++              auto const session = client->client_session();
++              return session ? session->process_id() : pid_t{0};
++          }()}
++{
++    ping_instances[this] = PingTarget{pid, [this](uint32_t serial) { send_ping_event(serial); }};
++}
++
++mf::XdgShellStable::Instance::~Instance()
+ {
++    ping_instances.erase(this);
++}
++
++namespace
++{
++void ping_pid(pid_t pid, uint32_t serial)
++{
++    if (!ping_executor || pid <= 0) return;
++    ping_executor->spawn([pid, serial]
++        {
++            for (auto const& [instance, target] : ping_instances)
++            {
++                if (target.pid == pid) target.ping(serial);
++            }
++        });
++}
+ }
+ 
+ void mf::XdgShellStable::Instance::create_positioner(wl_resource* new_positioner)
+@@ -150,8 +210,8 @@
+ 
+ void mf::XdgShellStable::Instance::pong(uint32_t serial)
+ {
+-    (void)serial;
+-    // TODO
++    static auto const hook = reinterpret_cast<PongHook>(dlsym(RTLD_DEFAULT, "mir_xdg_pong_hook"));
++    if (hook) hook(pid, serial);
+ }
+ 
+ // XdgSurfaceStable
+@@ -497,8 +557,17 @@
+ 
+ void mf::XdgToplevelStable::show_window_menu(struct wl_resource* seat, uint32_t serial, int32_t x, int32_t y)
+ {
+-    (void)seat, (void)serial, (void)x, (void)y;
+-    // TODO
++    (void)seat, (void)serial;
++    // Umoja: the server shows its window menu (right-click on a client-side
++    // title bar). (x, y) are surface-local; the hook is called on the
++    // Wayland thread with the window's scene::Surface.
++    using Hook = void (*)(void const* surface, int32_t x, int32_t y);
++    static auto const hook = reinterpret_cast<Hook>(dlsym(RTLD_DEFAULT, "mir_show_window_menu_hook"));
++    if (!hook) return;
++    if (auto const surface = scene_surface())
++    {
++        hook(surface.value().get(), x, y);
++    }
+ }
+ 
+ void mf::XdgToplevelStable::move(struct wl_resource* /*seat*/, uint32_t serial)

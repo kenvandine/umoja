@@ -85,11 +85,22 @@ fn changed() {
         .clone();
     let stored = |names: &[String]| outputs::stored_primary(names);
     let id = primary_id(&map, chosen.as_ref(), stored).unwrap_or(-1);
-    if PRIMARY_ID.swap(id, Ordering::SeqCst) != id {
+    let old = PRIMARY_ID.swap(id, Ordering::SeqCst);
+    if old != id {
         tracing::info!(
             primary = map.get(&id).map(|o| o.name.as_str()).unwrap_or("none"),
             "primary monitor"
         );
+        // With workspaces only on the primary, windows on the new primary
+        // join workspaces and those on the old one go on all of them, as
+        // in mutter. Off this thread: output changes come from Mir's window
+        // manager callbacks, under the lock the re-check takes.
+        if old != -1 {
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                crate::shell::workspace_settings_changed();
+            });
+        }
     }
     SERIAL.fetch_add(1, Ordering::SeqCst);
     CHANGED.notify_one();
@@ -588,8 +599,152 @@ impl DisplayConfig {
     }
 }
 
+/// The monitor layout file umoja-mir runs with (main.rs).
+static DISPLAY_FILE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// mutter's switch-monitor modes (Super+P), as gnome-shell's
+/// SwitchMonitorPopup offers them.
+pub const SWITCH_MIRROR: u32 = 0;
+pub const SWITCH_JOIN: u32 = 1;
+pub const SWITCH_EXTERNAL: u32 = 2;
+pub const SWITCH_BUILTIN: u32 = 3;
+
+/// A laptop's own panel.
+fn is_builtin(connector: &str) -> bool {
+    ["eDP", "LVDS", "DSI"].iter().any(|p| connector.starts_with(p))
+}
+
+/// Connectors the kernel reports as connected (on or off).
+fn connected_connectors() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter(|e| {
+            std::fs::read_to_string(e.path().join("status")).is_ok_and(|s| s.trim() == "connected")
+        })
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.split_once('-').map(|(_, c)| c.to_string())
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    // The built-in panel first, as mutter lays them out.
+    out.sort_by_key(|c| !is_builtin(c));
+    out
+}
+
+/// Configs for one of the switch-monitor modes, or None when it can't apply
+/// (one monitor, no built-in panel...). `current` holds what the enabled
+/// outputs show now, by connector: (width, height, rate, scale).
+fn switch_configs(
+    mode: u32,
+    connectors: &[String],
+    current: &HashMap<String, (u32, u32, f64, f64)>,
+    modes: &dyn Fn(&str) -> Vec<(u32, u32)>,
+) -> Option<Vec<MonitorConfig>> {
+    if connectors.len() < 2 {
+        return None;
+    }
+    let builtin: Vec<&String> = connectors.iter().filter(|c| is_builtin(c)).collect();
+    let external: Vec<&String> = connectors.iter().filter(|c| !is_builtin(c)).collect();
+    let on: Vec<&String> = match mode {
+        SWITCH_BUILTIN if !builtin.is_empty() => builtin.clone(),
+        SWITCH_EXTERNAL if !external.is_empty() => external.clone(),
+        SWITCH_MIRROR | SWITCH_JOIN => connectors.iter().collect(),
+        _ => return None,
+    };
+    // A monitor's mode: what it shows now, else the kernel's preferred one.
+    let mode_of = |c: &str| -> Option<(u32, u32, f64, f64)> {
+        if let Some(m) = current.get(c) {
+            return Some(*m);
+        }
+        modes(c).first().map(|(w, h)| (*w, *h, 60.0, 1.0))
+    };
+    let mut out = Vec::new();
+    if mode == SWITCH_MIRROR {
+        // The largest size every monitor can show.
+        let lists: Vec<Vec<(u32, u32)>> = on.iter().map(|c| modes(c)).collect();
+        let common = lists.first()?.iter().copied().filter(|m| lists.iter().all(|l| l.contains(m))).max_by_key(|(w, h)| w * h)?;
+        for (i, c) in on.iter().enumerate() {
+            let rate = current.get(c.as_str()).map(|m| m.2).unwrap_or(60.0);
+            out.push(MonitorConfig {
+                connector: c.to_string(),
+                x: 0,
+                y: 0,
+                scale: 1.0,
+                width: common.0,
+                height: common.1,
+                rate,
+                rotation: "normal",
+                primary: i == 0,
+                enabled: true,
+            });
+        }
+    } else {
+        let mut x = 0;
+        for (i, c) in on.iter().enumerate() {
+            let (w, h, rate, scale) = mode_of(c)?;
+            out.push(MonitorConfig {
+                connector: c.to_string(),
+                x,
+                y: 0,
+                scale,
+                width: w,
+                height: h,
+                rate,
+                rotation: "normal",
+                primary: i == 0,
+                enabled: true,
+            });
+            x += (w as f64 / scale).round() as i32;
+        }
+    }
+    for c in connectors {
+        if !on.contains(&c) {
+            out.push(MonitorConfig {
+                connector: c.clone(),
+                enabled: false,
+                ..Default::default()
+            });
+        }
+    }
+    Some(out)
+}
+
+/// Super+P: apply one of the display modes and keep it (monitors.xml too,
+/// as gnome-shell's switcher does). False when it doesn't apply.
+pub fn switch_config(mode: u32) -> bool {
+    let Some(file) = DISPLAY_FILE.get() else { return false };
+    let connectors = connected_connectors();
+    let current: HashMap<String, (u32, u32, f64, f64)> = OUTPUTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .map(|o| {
+            let (w, h) = o.pixel_size();
+            (o.name.clone(), (w, h, o.refresh, o.scale))
+        })
+        .collect();
+    let Some(configs) = switch_configs(mode, &connectors, &current, &kernel_modes) else {
+        return false;
+    };
+    let dir = outputs::config_dir();
+    let yaml = outputs::render_display_yaml(std::slice::from_ref(&configs));
+    if let Err(e) = std::fs::write(dir.join(file), yaml) {
+        tracing::warn!(error = %e, "switch monitors: could not write the layout");
+        return false;
+    }
+    let _ = std::fs::write(dir.join("monitors.xml"), outputs::render_monitors_xml(&configs));
+    tracing::info!(mode, "switched display mode");
+    true
+}
+
 /// Serve DisplayConfig on the session bus and emit MonitorsChanged.
 pub fn start(display_file: &'static str) {
+    let _ = DISPLAY_FILE.set(display_file);
     crate::session::RUNTIME.spawn(async move {
         let conn = match zbus::connection::Builder::session()
             .and_then(|b| b.name(BUS_NAME))
@@ -747,6 +902,26 @@ mod tests {
         assert!(cfg.iter().any(|c| c.connector == "DP-5" && !c.enabled));
         let hdmi = cfg.iter().find(|c| c.connector == "HDMI-A-1").unwrap();
         assert_eq!(hdmi.x, 1920);
+    }
+
+    #[test]
+    fn switch_modes() {
+        let connectors = vec!["eDP-1".to_string(), "DP-1".to_string()];
+        let mut current = HashMap::new();
+        current.insert("eDP-1".to_string(), (2880u32, 1800u32, 60.0, 2.0));
+        current.insert("DP-1".to_string(), (1920u32, 1080u32, 60.0, 1.0));
+        let modes = |c: &str| -> Vec<(u32, u32)> {
+            if c == "eDP-1" { vec![(2880, 1800), (1920, 1080), (1280, 720)] } else { vec![(1920, 1080), (1280, 720)] }
+        };
+        let join = switch_configs(SWITCH_JOIN, &connectors, &current, &modes).unwrap();
+        assert_eq!(join[1].x, 1440);
+        assert!(join.iter().all(|c| c.enabled));
+        let mirror = switch_configs(SWITCH_MIRROR, &connectors, &current, &modes).unwrap();
+        assert!(mirror.iter().all(|c| c.x == 0 && c.width == 1920));
+        let ext = switch_configs(SWITCH_EXTERNAL, &connectors, &current, &modes).unwrap();
+        assert!(ext.iter().any(|c| c.connector == "eDP-1" && !c.enabled));
+        assert!(ext.iter().any(|c| c.connector == "DP-1" && c.enabled && c.primary));
+        assert!(switch_configs(SWITCH_JOIN, &connectors[..1], &current, &modes).is_none());
     }
 
     #[test]

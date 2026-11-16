@@ -1,0 +1,30 @@
+Description: Don't fall back to focusing minimized windows
+ MRUWindowList::visible() only skipped hidden windows, so when the active
+ window was minimized or closed, Mir's fallback (refocus(), the minimize
+ path of set_state) could pick a minimized window, and
+ select_active_window() restored it. Minimizing two windows in a row
+ brought the first one back; closing the last open window brought back a
+ minimized one, even from another workspace. mutter never does that: a
+ minimized window only comes back when the user asks for it. Explicit
+ activation does not go through this list and still restores it.
+Author: Umoja developers
+Forwarded: not yet
+Last-Update: 2026-11-16
+---
+--- a/src/miral/mru_window_list.cpp
++++ b/src/miral/mru_window_list.cpp
+@@ -26,7 +26,13 @@
+ bool visible(miral::Window const& window)
+ {
+     std::shared_ptr<mir::scene::Surface> const& surface{window};
+-    return surface->state() != mir_window_state_hidden;
++    // Umoja: a minimized window is not a candidate for focus either. Mir's
++    // fallback (refocus(), minimizing the active window) used to pick one and
++    // select_active_window() restored it, so minimizing or closing a window
++    // brought a minimized one back, as mutter never does. Explicit
++    // activation does not go through this list and still restores it.
++    auto const state = surface->state();
++    return state != mir_window_state_hidden && state != mir_window_state_minimized;
+ }
+ }
+ 

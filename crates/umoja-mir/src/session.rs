@@ -143,6 +143,23 @@ pub fn dispatch(action: Action) {
         Action::ShowShortcuts => "ToggleShortcuts",
         Action::LaunchAgent => "LaunchAgent",
         Action::AskUmoja => "ToggleAsk",
+        Action::RunDialog => "ShowRunDialog",
+        Action::SwitchMonitor => "ShowDisplaySwitcher",
+        Action::ToggleQuickSettings => {
+            panel_call("ToggleMenu", ("quick-settings",));
+            return;
+        }
+        Action::FocusActiveNotification => {
+            panel_call("FocusNotification", ());
+            return;
+        }
+        Action::SwitchInputSource | Action::SwitchInputSourceBackward => {
+            let backward = action == Action::SwitchInputSourceBackward;
+            // Off Mir's input thread: applying a keymap reconfigures the
+            // keyboards.
+            std::thread::spawn(move || crate::keymap::switch(backward));
+            return;
+        }
         _ => return,
     };
     overlay_call(method, ());

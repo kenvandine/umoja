@@ -54,11 +54,48 @@ pub struct Config {
     /// Commands of GNOME custom shortcuts; binding action
     /// `CUSTOM_BASE + i` runs `custom_commands[i]`.
     pub custom_commands: Vec<String>,
+    /// `org.gnome.desktop.interface enable-hot-corners`: pushing into the
+    /// top-left corner opens the overview (hot_corner.rs).
+    pub hot_corners: bool,
+    /// `org.gnome.desktop.interface enable-animations` (window animations).
+    pub animations: bool,
+    /// `org.gnome.desktop.wm.preferences`: focus-mode, auto-raise,
+    /// auto-raise-delay, raise-on-click and focus-new-windows.
+    pub focus: FocusSettings,
+    /// `org.gnome.mutter auto-maximize`: a new window that asks for almost
+    /// the whole work area opens maximized.
+    pub auto_maximize: bool,
+    /// `org.gnome.shell.app-switcher current-workspace-only` (Alt+Tab) and
+    /// `org.gnome.shell.window-switcher current-workspace-only` (Alt+`'s
+    /// popup list and the window switcher).
+    pub app_switcher_current_workspace: bool,
+    pub window_switcher_current_workspace: bool,
+    /// The session's language is written right to left: workspaces are
+    /// laid out right to left, as in GNOME.
+    pub rtl: bool,
     /// (id, accelerator) of every binding above, for the shortcuts guide:
     /// the GSettings key it came from (`custom:<name>` for a custom
     /// shortcut, `overlay-key` for the lone Super tap).
     pub shortcuts: Vec<(String, String)>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusSettings {
+    /// 0 click, 1 sloppy, 2 mouse (mutter's GDesktopFocusMode).
+    pub mode: u32,
+    pub auto_raise: bool,
+    pub auto_raise_delay_ms: u32,
+    pub raise_on_click: bool,
+    /// focus-new-windows 'strict': new windows don't take focus.
+    pub new_windows_strict: bool,
+}
+
+pub const FOCUS_CLICK: u32 = 0;
+pub const FOCUS_SLOPPY: u32 = 1;
+pub const FOCUS_MOUSE: u32 = 2;
+
+const APP_SWITCHER: &str = "org.gnome.shell.app-switcher";
+const WINDOW_SWITCHER: &str = "org.gnome.shell.window-switcher";
 
 /// Action codes from here up run a GNOME custom shortcut's command.
 /// Mirrors `UMOJA_ACTION_CUSTOM_BASE` in the shim.
@@ -84,8 +121,54 @@ pub static CONFIG: RwLock<Config> = RwLock::new(Config {
         only_on_primary: true,
     },
     custom_commands: Vec::new(),
+    hot_corners: false,
+    animations: true,
+    focus: FocusSettings {
+        mode: FOCUS_CLICK,
+        auto_raise: false,
+        auto_raise_delay_ms: 500,
+        raise_on_click: true,
+        new_windows_strict: false,
+    },
+    auto_maximize: true,
+    app_switcher_current_workspace: false,
+    window_switcher_current_workspace: true,
+    rtl: false,
     shortcuts: Vec::new(),
 });
+
+/// Languages written right to left (the session's LC_MESSAGES/LANG).
+fn locale_is_rtl() -> bool {
+    let lang = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
+        .unwrap_or_default();
+    let code = lang
+        .split([':', '_', '.', '@', '-'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        code.as_str(),
+        "ar" | "he" | "iw" | "fa" | "ur" | "yi" | "ps" | "sd" | "ug" | "dv" | "ckb" | "syr"
+    )
+}
+
+/// In a right-to-left session the workspace row runs right to left, so
+/// "left" is the next workspace (mutter's meta_workspace_get_neighbor).
+fn mirrored(action: Action, rtl: bool) -> Action {
+    if !rtl {
+        return action;
+    }
+    match action {
+        Action::WorkspacePrev => Action::WorkspaceNext,
+        Action::WorkspaceNext => Action::WorkspacePrev,
+        Action::MoveToWorkspacePrev => Action::MoveToWorkspaceNext,
+        Action::MoveToWorkspaceNext => Action::MoveToWorkspacePrev,
+        a => a,
+    }
+}
 
 const XK_SUPER_L: u32 = 0xffeb;
 const XK_SUPER_R: u32 = 0xffec;
@@ -131,16 +214,6 @@ const SOURCES: &[(&str, &str, Action)] = &[
     ),
     (
         gs::WM_KEYBINDINGS,
-        "switch-to-workspace-up",
-        Action::WorkspacePrev,
-    ),
-    (
-        gs::WM_KEYBINDINGS,
-        "switch-to-workspace-down",
-        Action::WorkspaceNext,
-    ),
-    (
-        gs::WM_KEYBINDINGS,
         "switch-to-workspace-last",
         Action::WorkspaceLast,
     ),
@@ -152,16 +225,6 @@ const SOURCES: &[(&str, &str, Action)] = &[
     (
         gs::WM_KEYBINDINGS,
         "move-to-workspace-right",
-        Action::MoveToWorkspaceNext,
-    ),
-    (
-        gs::WM_KEYBINDINGS,
-        "move-to-workspace-up",
-        Action::MoveToWorkspacePrev,
-    ),
-    (
-        gs::WM_KEYBINDINGS,
-        "move-to-workspace-down",
         Action::MoveToWorkspaceNext,
     ),
     (
@@ -343,7 +406,61 @@ const SOURCES: &[(&str, &str, Action)] = &[
         Action::ShowShortcuts,
     ),
     (gs::UMOJA_SHELL, "ai-agent-hotkey", Action::LaunchAgent),
+    (gs::WM_KEYBINDINGS, "show-desktop", Action::ShowDesktop),
+    (gs::WM_KEYBINDINGS, "panel-run-dialog", Action::RunDialog),
+    (
+        gs::SHELL_KEYBINDINGS,
+        "toggle-quick-settings",
+        Action::ToggleQuickSettings,
+    ),
+    (
+        gs::SHELL_KEYBINDINGS,
+        "focus-active-notification",
+        Action::FocusActiveNotification,
+    ),
+    (gs::WM_KEYBINDINGS, "raise", Action::Raise),
+    (gs::WM_KEYBINDINGS, "lower", Action::Lower),
+    (gs::WM_KEYBINDINGS, "raise-or-lower", Action::RaiseOrLower),
+    (gs::WM_KEYBINDINGS, "move-to-center", Action::MoveToCenter),
+    (
+        gs::WM_KEYBINDINGS,
+        "maximize-vertically",
+        Action::MaximizeVertically,
+    ),
+    (
+        gs::WM_KEYBINDINGS,
+        "maximize-horizontally",
+        Action::MaximizeHorizontally,
+    ),
+    (gs::WM_KEYBINDINGS, "move-to-corner-nw", Action::MoveToCornerNw),
+    (gs::WM_KEYBINDINGS, "move-to-corner-ne", Action::MoveToCornerNe),
+    (gs::WM_KEYBINDINGS, "move-to-corner-sw", Action::MoveToCornerSw),
+    (gs::WM_KEYBINDINGS, "move-to-corner-se", Action::MoveToCornerSe),
+    (gs::WM_KEYBINDINGS, "move-to-side-n", Action::MoveToSideN),
+    (gs::WM_KEYBINDINGS, "move-to-side-s", Action::MoveToSideS),
+    (gs::WM_KEYBINDINGS, "move-to-side-e", Action::MoveToSideE),
+    (gs::WM_KEYBINDINGS, "move-to-side-w", Action::MoveToSideW),
+    (gs::MUTTER_KEYBINDINGS, "switch-monitor", Action::SwitchMonitor),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-input-source",
+        Action::SwitchInputSource,
+    ),
+    (
+        gs::WM_KEYBINDINGS,
+        "switch-input-source-backward",
+        Action::SwitchInputSourceBackward,
+    ),
 ];
+
+/// Action codes `APP_SWITCH_BASE + n` and `APP_NEW_WINDOW_BASE + n`:
+/// gnome-shell's switch-to-application-n (Super+n) and
+/// open-new-window-application-n (Super+Ctrl+n), the dock's n-th app.
+/// Mirrors `UMOJA_ACTION_SWITCH_TO_APP_BASE` in the shim.
+pub const APP_SWITCH_BASE: u32 = 300;
+pub const APP_NEW_WINDOW_BASE: u32 = 400;
+/// gnome-shell has keys for apps 1 to 9.
+pub const MAX_APP_KEYS: u32 = 9;
 
 /// Fallbacks used when a schema is missing (e.g. running nested for development).
 const DEFAULTS: &[(&str, u32)] = &[
@@ -354,7 +471,16 @@ const DEFAULTS: &[(&str, u32)] = &[
     ("<Super>h", Action::Minimize as u32),
     ("<Alt>F4", Action::Close as u32),
     ("<Super>a", Action::ToggleOverlay as u32),
-    ("<Super>s", Action::ToggleOverview as u32),
+    // GNOME 44 and later: Super+S is Quick Settings, no longer the overview.
+    ("<Super>s", Action::ToggleQuickSettings as u32),
+    ("<Super>n", Action::FocusActiveNotification as u32),
+    ("<Super>d", Action::ShowDesktop as u32),
+    ("<Control><Alt>d", Action::ShowDesktop as u32),
+    ("<Alt>F2", Action::RunDialog as u32),
+    ("<Super>p", Action::SwitchMonitor as u32),
+    ("XF86Display", Action::SwitchMonitor as u32),
+    ("<Super>space", Action::SwitchInputSource as u32),
+    ("<Shift><Super>space", Action::SwitchInputSourceBackward as u32),
     ("<Alt>Tab", Action::SwitchApplications as u32),
     ("<Super>Tab", Action::SwitchApplications as u32),
     ("<Shift><Alt>Tab", Action::SwitchApplicationsBackward as u32),
@@ -471,13 +597,14 @@ pub fn reload() {
     } else {
         Vec::new()
     };
+    let rtl = locale_is_rtl();
     for (schema, key, action) in SOURCES {
         seen_schema |= gs::settings(schema).is_some();
         let mut accels = gs::get_strv(schema, key);
         if ta && accels.is_empty() && TA_EMPTIED.contains(&(*schema, *key)) {
             accels = ta_restored(schema, key, &ta_accels);
         }
-        push(key, accels, *action as u32);
+        push(key, accels, mirrored(*action, rtl) as u32);
     }
     // switch-to-workspace-N / move-to-workspace-N
     for n in 1..=workspaces::MAX_NUMBERED {
@@ -494,6 +621,21 @@ pub fn reload() {
             workspaces::move_code(n),
         );
     }
+    // switch-to-application-N / open-new-window-application-N
+    for n in 1..=MAX_APP_KEYS {
+        let key = format!("switch-to-application-{n}");
+        push(
+            &key,
+            gs::get_strv(gs::SHELL_KEYBINDINGS, &key),
+            APP_SWITCH_BASE + n,
+        );
+        let key = format!("open-new-window-application-{n}");
+        push(
+            &key,
+            gs::get_strv(gs::SHELL_KEYBINDINGS, &key),
+            APP_NEW_WINDOW_BASE + n,
+        );
+    }
     if !seen_schema {
         bindings.clear();
         shortcuts.clear();
@@ -505,6 +647,21 @@ pub fn reload() {
                     action: *action,
                 });
                 shortcuts.push((default_id(*action), a.to_string()));
+            }
+        }
+        for n in 1..=MAX_APP_KEYS {
+            for (accel, code) in [
+                (format!("<Super>{n}"), APP_SWITCH_BASE + n),
+                (format!("<Super><Control>{n}"), APP_NEW_WINDOW_BASE + n),
+            ] {
+                if let Some((keysym, mods)) = parse_accelerator(&accel) {
+                    bindings.push(Binding {
+                        keysym,
+                        mods,
+                        action: code,
+                    });
+                    shortcuts.push((default_id(code), accel));
+                }
             }
         }
     }
@@ -576,6 +733,24 @@ pub fn reload() {
             only_on_primary: gs::get_bool(gs::MUTTER, "workspaces-only-on-primary", true),
         },
         custom_commands,
+        hot_corners: gs::get_bool(gs::DESKTOP_INTERFACE, "enable-hot-corners", false),
+        animations: gs::get_bool(gs::DESKTOP_INTERFACE, "enable-animations", true),
+        focus: FocusSettings {
+            mode: match gs::get_string(gs::WM_PREFERENCES, "focus-mode", "click").as_str() {
+                "sloppy" => FOCUS_SLOPPY,
+                "mouse" => FOCUS_MOUSE,
+                _ => FOCUS_CLICK,
+            },
+            auto_raise: gs::get_bool(gs::WM_PREFERENCES, "auto-raise", false),
+            auto_raise_delay_ms: gs::get_int(gs::WM_PREFERENCES, "auto-raise-delay", 500).clamp(0, 10_000)
+                as u32,
+            raise_on_click: gs::get_bool(gs::WM_PREFERENCES, "raise-on-click", true),
+            new_windows_strict: gs::get_string(gs::WM_PREFERENCES, "focus-new-windows", "smart") == "strict",
+        },
+        auto_maximize: gs::get_bool(gs::MUTTER, "auto-maximize", true),
+        app_switcher_current_workspace: gs::get_bool(APP_SWITCHER, "current-workspace-only", false),
+        window_switcher_current_workspace: gs::get_bool(WINDOW_SWITCHER, "current-workspace-only", true),
+        rtl,
         shortcuts,
     };
     tracing::info!(
@@ -585,6 +760,8 @@ pub fn reload() {
         "keybindings loaded"
     );
     let new_workspaces = cfg.workspaces;
+    // Keyboard layouts follow GNOME's input sources (keymap.rs).
+    crate::keymap::apply();
     let old_workspaces =
         std::mem::replace(&mut *CONFIG.write().unwrap_or_else(|e| e.into_inner()), cfg).workspaces;
     // Switching dynamic workspaces off, changing the count or the
@@ -621,6 +798,15 @@ fn default_id(action: u32) -> String {
     }
     if action == workspaces::move_code(1) {
         return "move-to-workspace-1".into();
+    }
+    if (APP_SWITCH_BASE + 1..=APP_SWITCH_BASE + MAX_APP_KEYS).contains(&action) {
+        return format!("switch-to-application-{}", action - APP_SWITCH_BASE);
+    }
+    if (APP_NEW_WINDOW_BASE + 1..=APP_NEW_WINDOW_BASE + MAX_APP_KEYS).contains(&action) {
+        return format!(
+            "open-new-window-application-{}",
+            action - APP_NEW_WINDOW_BASE
+        );
     }
     String::new()
 }
@@ -724,6 +910,10 @@ pub fn start_watching() {
                 schemas.push(gs::WM_PREFERENCES);
                 schemas.push(gs::SHELL);
                 schemas.push(gs::MEDIA_KEYS);
+                schemas.push(gs::DESKTOP_INTERFACE);
+                schemas.push(APP_SWITCHER);
+                schemas.push(WINDOW_SWITCHER);
+                schemas.push(crate::keymap::INPUT_SOURCES);
                 schemas.sort_unstable();
                 schemas.dedup();
                 for schema in schemas {
@@ -921,6 +1111,7 @@ pub fn keysym_from_name(name: &str) -> Option<u32> {
         "apostrophe" => 0x27,
         "bracketleft" => 0x5b,
         "bracketright" => 0x5d,
+        "XF86Display" => 0x1008_ff59,
         _ => 0,
     };
     if named != 0 {

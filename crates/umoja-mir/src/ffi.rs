@@ -148,6 +148,15 @@ pub extern "C" fn umoja_handle_action(action: u32) {
     guard("handle_action", (), || {
         if action >= input::CUSTOM_BASE {
             input::run_custom(action)
+        } else if (input::APP_SWITCH_BASE + 1..=input::APP_SWITCH_BASE + input::MAX_APP_KEYS)
+            .contains(&action)
+        {
+            // Super+n: the dock's n-th app, focused or launched.
+            session::dock_call("ActivateApp", (action - input::APP_SWITCH_BASE - 1, false))
+        } else if (input::APP_NEW_WINDOW_BASE + 1..=input::APP_NEW_WINDOW_BASE + input::MAX_APP_KEYS)
+            .contains(&action)
+        {
+            session::dock_call("ActivateApp", (action - input::APP_NEW_WINDOW_BASE - 1, true))
         } else {
             session::dispatch(Action::from_u32(action))
         }
@@ -249,6 +258,124 @@ pub extern "C" fn umoja_workspace_layout(
 pub extern "C" fn umoja_workspaces_only_on_primary() -> bool {
     guard("workspaces_only_on_primary", true, || {
         input::read().workspaces.only_on_primary
+    })
+}
+
+/// org.gnome.mutter dynamic-workspaces.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_workspaces_dynamic() -> bool {
+    guard("workspaces_dynamic", true, || input::read().workspaces.dynamic)
+}
+
+/// The workspace row runs right to left (an RTL language).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_workspaces_rtl() -> bool {
+    guard("workspaces_rtl", false, || input::read().rtl)
+}
+
+/// org.gnome.desktop.interface enable-animations.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_animations_enabled() -> bool {
+    guard("animations_enabled", true, || input::read().animations)
+}
+
+/// org.gnome.mutter auto-maximize.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_auto_maximize() -> bool {
+    guard("auto_maximize", true, || input::read().auto_maximize)
+}
+
+/// org.gnome.desktop.wm.preferences focus settings (`UmojaFocusSettings`).
+#[repr(C)]
+pub struct UmojaFocusSettings {
+    pub mode: u32,
+    pub auto_raise: bool,
+    pub auto_raise_delay_ms: u32,
+    pub raise_on_click: bool,
+    pub new_windows_strict: bool,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_focus_settings(out: *mut UmojaFocusSettings) {
+    guard("focus_settings", (), || {
+        if out.is_null() {
+            return;
+        }
+        let f = input::read().focus;
+        unsafe {
+            *out = UmojaFocusSettings {
+                mode: f.mode,
+                auto_raise: f.auto_raise,
+                auto_raise_delay_ms: f.auto_raise_delay_ms,
+                raise_on_click: f.raise_on_click,
+                new_windows_strict: f.new_windows_strict,
+            }
+        };
+    })
+}
+
+/// Whether a switcher action lists the current workspace's windows only:
+/// org.gnome.shell.app-switcher current-workspace-only for Alt+Tab,
+/// org.gnome.shell.window-switcher's for the window switcher.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_switcher_current_workspace_only(action: u32) -> bool {
+    guard("switcher_current_workspace_only", false, || {
+        let cfg = input::read();
+        match Action::from_u32(action) {
+            Action::SwitchApplications | Action::SwitchApplicationsBackward => {
+                cfg.app_switcher_current_workspace
+            }
+            // GNOME's group cycler (Alt+`) goes through the app's windows on
+            // every workspace unless the app switcher is limited.
+            Action::SwitchGroup | Action::SwitchGroupBackward => cfg.app_switcher_current_workspace,
+            // mutter's direct cyclers (Alt+F6, Alt+Esc) stay on the workspace.
+            Action::CycleGroup
+            | Action::CycleGroupBackward
+            | Action::CycleWindows
+            | Action::CycleWindowsBackward => true,
+            _ => cfg.window_switcher_current_workspace,
+        }
+    })
+}
+
+/// A pointer motion on a hot corner's barriers (hot_corner.rs).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_hot_corner_motion(dx: f32, dy: f32, on_left: bool, on_top: bool) {
+    guard("hot_corner", (), || {
+        crate::hot_corner::motion(dx as f64, dy as f64, on_left, on_top)
+    })
+}
+
+/// A window asked for attention (attention.rs).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_window_attention(id: u64, app_id: *const c_char, title: *const c_char) {
+    guard("window_attention", (), || {
+        crate::attention::wants_attention(id, lossy(app_id), lossy(title))
+    })
+}
+
+/// A window that wanted attention got focus or closed.
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_window_attention_cleared(id: u64) {
+    guard("window_attention_cleared", (), || {
+        crate::attention::attention_cleared(id)
+    })
+}
+
+/// The user clicked or closed a window: ping its client (attention.rs).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_check_alive(id: u64, pid: i32, app_id: *const c_char, title: *const c_char) {
+    guard("check_alive", (), || {
+        crate::attention::check_alive(id, pid, lossy(app_id), lossy(title))
+    })
+}
+
+/// A window closed (pings and notifications about it go).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_window_gone(id: u64) {
+    guard("window_gone", (), || {
+        crate::attention::window_closed(id);
+        crate::attention::attention_cleared(id);
     })
 }
 
