@@ -16,6 +16,10 @@
 #include <wayland-server-core.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <unistd.h>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -166,12 +170,25 @@ void inhibitor_resource_destroyed(wl_resource* resource) {
 // desktop viewers get the keys (umoja_keyboard_grab_allowed), any other
 // app never does (GTK asks on its own for keyboard grabs), and
 // Super+Escape takes them back (restore_shortcuts).
+// The window trace switch of umoja_shim.cpp ($XDG_RUNTIME_DIR/umoja-debug-windows).
+bool tracing() {
+    char const* dir = std::getenv("XDG_RUNTIME_DIR");
+    return dir && access((std::string{dir} + "/umoja-debug-windows").c_str(), F_OK) == 0;
+}
+
 void activate(Inhibitor* i) {
     if (i->active || i->revoked || !i->surface) return;
     if (!i->window) i->window = miral::window_for(i->surface);
-    if (!i->window) return;
+    if (!i->window) {
+        if (tracing()) std::fprintf(stderr, "umoja-mir: wm: shortcuts inhibitor waits for its window\n");
+        return;
+    }
     std::string const app = umoja_fx::app_id_of(i->window);
-    if (!umoja_keyboard_grab_allowed(app.c_str(), i->xwayland)) {
+    bool const allowed = umoja_keyboard_grab_allowed(app.c_str(), i->xwayland);
+    if (tracing())
+        std::fprintf(stderr, "umoja-mir: wm: %s for '%s' %s\n", i->xwayland ? "keyboard grab" : "shortcuts inhibitor",
+                     app.c_str(), allowed ? "granted" : "denied");
+    if (!allowed) {
         i->revoked = true; // not asked again for this inhibitor
         return;
     }

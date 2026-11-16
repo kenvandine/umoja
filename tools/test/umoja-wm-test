@@ -344,6 +344,13 @@ class Pad:
     def flags(self):
         return self.run.flags(self.id)
 
+    def active(self):
+        """(window has the keyboard, its dialog has it or None)."""
+        words = self.cmd("active").split()
+        if len(words) != 4:
+            return False, None
+        return words[2] == "1", None if words[3] == "-" else words[3] == "1"
+
     def titlebar(self):
         x, y, w, _h = self.rect()
         return x + w / 2, y + 14
@@ -1205,7 +1212,8 @@ def t_attention(run):
     marked = run.wait(3, lambda: a.flags() & ATTENTION)
     run.check(marked, "the asking window is marked for attention", a.flags())
     ready = run.bus.call(NOTIFICATIONS, "GetNotifications", None, "(a(ussssx))", quiet=True)
-    titles = [n[2] for n in (ready[0] if ready else [])]
+    # (id, app name, app id, summary, body, time)
+    titles = [n[3] for n in (ready[0] if ready else [])]
     run.check(any("ready" in t.lower() or a.title in t for t in titles),
               "an “is ready” notification was posted", titles[-3:])
     _pos, _size, icons = run.dock_icons()
@@ -1258,16 +1266,18 @@ def t_modal(run):
     run.go_to_new_workspace()
     a = Pad(run, "a")
     a.cmd("dialog")
-    dialog_title = f"{a.title} dialog"
-    did = run.wait_for(lambda: run.window_id(title=dialog_title), 5, "the dialog")
+    # A dialog isn't in GetWindows (toplevels only): the pad says when it
+    # has the keyboard.
+    run.wait_for(lambda: a.active()[1], 5, "the dialog")
     run.wait(0.5)
     other = Pad(run, "b")
     other.focus()
+    run.check(a.active()[1] is False, "another window took the keyboard from the dialog", a.active())
     x, y, w, h = a.rect()
     run.input.click(x + 30, y + h - 30)
-    run.wait(0.8)
+    got = run.wait(2, lambda: a.active()[1])
     run.shot("clicked", "clicked the parent of a modal dialog")
-    run.check(run.focused() == did, "the dialog has focus", run.focused())
+    run.check(got, "the dialog has focus", (a.active(), run.focused()))
     a.cmd("close-dialog")
 
 

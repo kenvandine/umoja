@@ -171,7 +171,7 @@ impl Bubbles {
         let Some(id) = self.order.borrow().first().copied() else {
             return false;
         };
-        let revealer = {
+        {
             let mut items = self.items.borrow_mut();
             let Some(b) = items.get_mut(&id) else {
                 return false;
@@ -179,14 +179,14 @@ impl Bubbles {
             if let Some(t) = b.timer.take() {
                 t.remove();
             }
-            b.revealer.clone()
-        };
+        }
         self.focused.set(Some(id));
         self.window.set_keyboard_mode(KeyboardMode::Exclusive);
+        // The banner itself has the keyboard, not its first button: that
+        // was the close button, so Enter dismissed the banner instead of
+        // running it as GNOME does. Tab still moves on to the buttons.
+        gtk::prelude::GtkWindowExt::set_focus(&self.window, None::<&gtk::Widget>);
         self.window.set_focus_visible(true);
-        if !revealer.child_focus(gtk::DirectionType::TabForward) {
-            gtk::prelude::GtkWindowExt::set_focus(&self.window, None::<&gtk::Widget>);
-        }
         true
     }
 

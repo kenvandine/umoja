@@ -2104,6 +2104,7 @@ public:
             if (info.state() == mir_window_state_fullscreen) flags |= UMOJA_WINDOW_FULLSCREEN;
             if (on_current_workspace(w)) flags |= UMOJA_WINDOW_CURRENT_WORKSPACE;
             if (tiled.count(window_id(w))) flags |= UMOJA_WINDOW_TILED;
+            if (attention.count(w)) flags |= UMOJA_WINDOW_ATTENTION;
             UmojaWindowDesc const d{window_id(w), app.c_str(), title.c_str(), to_rect({w.top_left(), w.size()}),
                                     flags, workspace_of(w)};
             cb(ctx, &d);
