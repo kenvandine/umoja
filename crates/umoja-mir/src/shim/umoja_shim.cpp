@@ -9,6 +9,8 @@
 
 #include "umoja_shim.h"
 #include "session_management.h"
+#include "surface_effects.h"
+#include "wm_protocols.h"
 
 #include <miral/application.h>
 #include <miral/application_info.h>
@@ -16,6 +18,7 @@
 #include <miral/cursor_scale.h>
 #include <miral/cursor_theme.h>
 #include <miral/display_configuration.h>
+#include <miral/keymap.h>
 #include <miral/minimal_window_manager.h>
 #include <miral/output.h>
 #include <miral/prepend_event_filter.h>
@@ -243,6 +246,57 @@ UmojaWindowManager* g_wm = nullptr;
 // of the fastest monitor (set as outputs come and go).
 std::atomic<int> g_slide_frame_us{16000};
 
+int64_t steady_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// Mir patch 3026 reports activations the user asked for (a dock's
+// foreign-toplevel activate, a valid xdg-activation token) just before Mir
+// raises the window, so handle_raise_window can tell them from an app
+// raising itself. Set on Mir's Wayland thread.
+std::atomic<void const*> g_user_activation{nullptr};
+std::atomic<int64_t> g_user_activation_ms{0};
+// Mir has those hooks at all (an older Mir: the old one-second rule).
+std::atomic<bool> g_activation_hooks{false};
+
+// A process's executable name ("umoja-overlay", "Xwayland"), cached.
+std::string process_name(pid_t pid) {
+    static std::mutex m;
+    static std::map<pid_t, std::string> cache;
+    if (pid <= 0) return {};
+    std::lock_guard lock{m};
+    if (auto const it = cache.find(pid); it != cache.end()) return it->second;
+    if (cache.size() > 256) cache.clear();
+    char exe[PATH_MAX];
+    auto const proc = "/proc/" + std::to_string(pid) + "/exe";
+    ssize_t const n = readlink(proc.c_str(), exe, sizeof exe - 1);
+    std::string name;
+    if (n > 0) {
+        exe[n] = '\0';
+        std::string const path{exe};
+        auto const slash = path.rfind('/');
+        name = slash == std::string::npos ? path : path.substr(slash + 1);
+        // A replaced binary (package upgrade) reads "name (deleted)".
+        if (auto const sp = name.find(" (deleted)"); sp != std::string::npos) name.erase(sp);
+    }
+    cache[pid] = name;
+    return name;
+}
+
+// org.gnome.desktop.wm.preferences focus settings, read at most once a
+// second (pointer motion asks on every event in sloppy mode).
+UmojaFocusSettings focus_settings() {
+    static auto last = std::chrono::steady_clock::time_point{};
+    static UmojaFocusSettings cached{UMOJA_FOCUS_CLICK, false, 0, true, false};
+    auto const now = std::chrono::steady_clock::now();
+    if (now - last > std::chrono::seconds(1)) {
+        last = now;
+        umoja_focus_settings(&cached);
+    }
+    return cached;
+}
+
 class UmojaWindowManager : public MinimalWindowManager {
 public:
     explicit UmojaWindowManager(WindowManagerTools const& tools)
@@ -319,21 +373,87 @@ public:
                 area.top_left.x.as_int() + (area.size.width.as_int() - sz.width.as_int()) / 2,
                 area.top_left.y.as_int() + (area.size.height.as_int() - sz.height.as_int()) / 2};
         }
+        // mutter's first fit (place.c) when new windows aren't centred: the
+        // first spot on the monitor that covers no other window.
+        bool const app_type = !spec.type().is_set() || spec.type().value() == mir_window_type_normal ||
+                              spec.type().value() == mir_window_type_freestyle;
+        if (toplevel && app_type && !placed_by_state && !umoja_center_new_windows() && spec.size().is_set() &&
+            spec.top_left().is_set()) {
+            geom::Rectangle const r{spec.top_left().value(), spec.size().value()};
+            if (auto const p = first_fit(area_at(centre_of(r)), r.size)) spec.top_left() = *p;
+        }
         // Keep it all inside the work area, shrunk if it's bigger.
         if (toplevel && !placed_by_state && spec.size().is_set() && spec.top_left().is_set() &&
             !(spec.state().is_set() && spec.state().value() == mir_window_state_attached)) {
             geom::Rectangle const r{spec.top_left().value(), spec.size().value()};
             geom::Size const min{spec.min_width().is_set() ? spec.min_width().value() : geom::Width{1},
                                  spec.min_height().is_set() ? spec.min_height().value() : geom::Height{1}};
-            auto const fitted = fit_inside(r, area_at(centre_of(r)), min);
+            auto const area = area_at(centre_of(r));
+            auto const fitted = fit_inside(r, area, min);
             spec.top_left() = fitted.top_left;
             if (fitted.size != r.size) spec.size() = fitted.size;
+            // org.gnome.mutter auto-maximize: a window that asks for nearly
+            // the whole work area opens maximized.
+            bool const fixed_size = spec.max_width().is_set() && spec.min_width().is_set() &&
+                                    spec.max_width().value() == spec.min_width().value();
+            if (app_type && !fixed_size && auto_maximizes(r.size, area)) {
+                pending_auto_max = fitted;
+                spec.state() = mir_window_state_maximized;
+                spec.top_left() = area.top_left;
+                spec.size() = area.size;
+            }
         }
         return spec;
     }
 
+    // org.gnome.mutter auto-maximize: mutter maximizes a new window that
+    // covers at least 80% of the work area both ways (MAX_UNMAXIMIZED...).
+    static bool auto_maximizes(geom::Size const& size, geom::Rectangle const& area) {
+        if (!umoja_auto_maximize()) return false;
+        int const aw = area.size.width.as_int(), ah = area.size.height.as_int();
+        if (aw <= 0 || ah <= 0) return false;
+        return size.width.as_int() * 10 >= aw * 8 && size.height.as_int() * 10 >= ah * 8;
+    }
+
+    // Set by place_new_window for a window it maximized: the floating
+    // rectangle it gets back when unmaximized.
+    std::optional<geom::Rectangle> pending_auto_max;
+
+    // mutter's find_first_fit: the work area's centre if free, then next
+    // to (right of, below) each window on the monitor, then its top left.
+    std::optional<geom::Point> first_fit(geom::Rectangle const& area, geom::Size const& size) {
+        std::vector<geom::Rectangle> others;
+        for (auto const& w : stacking)
+            if (all_windows.count(w) && visible_here(w)) {
+                geom::Rectangle const r{w.top_left(), w.size()};
+                if (area.overlaps(r)) others.push_back(r);
+            }
+        auto const fits = [&](geom::Point p) {
+            geom::Rectangle const r{p, size};
+            if (!area.contains(r)) return false;
+            return std::none_of(others.begin(), others.end(), [&](auto const& o) { return o.overlaps(r); });
+        };
+        std::vector<geom::Point> candidates;
+        candidates.push_back(optical_centre(area, size));
+        std::sort(others.begin(), others.end(), [](auto const& a, auto const& b) {
+            return std::pair{a.top_left.y.as_int(), a.top_left.x.as_int()} <
+                   std::pair{b.top_left.y.as_int(), b.top_left.x.as_int()};
+        });
+        for (auto const& o : others) {
+            candidates.push_back({o.top_left.x.as_int() + o.size.width.as_int(), o.top_left.y.as_int()});
+            candidates.push_back({o.top_left.x.as_int(), o.top_left.y.as_int() + o.size.height.as_int()});
+        }
+        candidates.push_back(area.top_left);
+        for (auto const& p : candidates)
+            if (fits(p)) return p;
+        return std::nullopt;
+    }
+
     void advise_new_window(WindowInfo const& info) override {
         MinimalWindowManager::advise_new_window(info);
+        umoja_wmp::window_created();
+        auto const auto_max = pending_auto_max;
+        pending_auto_max.reset();
         if (info.visible_on_lock_screen()) {
             lock_surfaces.push_back(info.window());
             if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: lock surface added (%zu)\n", lock_surfaces.size());
@@ -347,6 +467,9 @@ public:
             return;
         }
         all_windows.insert(info.window());
+        if (auto_max) session_restore[info.window()] = *auto_max;
+        // A new window ends Show Desktop, as in mutter.
+        desktop_hidden.clear();
         remember_monitor(info.window());
         stacking.push_back(info.window());
         mru.insert(mru.begin(), info.window());
@@ -380,6 +503,11 @@ public:
         fullscreen_lifted.erase(w);
         pinned.erase(w);
         hidden_at.erase(w);
+        tile_before_max.erase(w);
+        desktop_hidden.erase(w);
+        animations.erase(w);
+        if (attention.erase(w)) umoja_windows_changed();
+        if (all_windows.count(w)) umoja_window_gone(window_id(w));
         untile(w);
         untiled.erase(w);
         tile_action.erase(w);
@@ -395,11 +523,19 @@ public:
         bool const app = all_windows.erase(w);
         if (app) relayout_workspaces(w);
         MinimalWindowManager::advise_delete_window(info);
-        if (app) umoja_windows_changed();
+        if (app) {
+            umoja_windows_changed();
+            schedule_fullscreen_refresh();
+        }
     }
 
+    // Focus without raising: sloppy and mouse focus, and raise-on-click
+    // off (org.gnome.desktop.wm.preferences).
+    bool suppress_raise = false;
+
     void advise_focus_gained(WindowInfo const& info) override {
-        MinimalWindowManager::advise_focus_gained(info);
+        if (suppress_raise) application_selector_advise_focus_gained(info);
+        else MinimalWindowManager::advise_focus_gained(info);
         Window const w = info.window();
         if (!lock_surfaces.empty()) {
             if (is_lock_surface(w)) lock_focus = w;
@@ -409,10 +545,12 @@ public:
         umoja_windows_changed();
         erase(mru, w);
         mru.insert(mru.begin(), w);
+        clear_attention(w);
         update_fullscreen_layer(w, info.state(), true);
         // Tiling Assistant's enable-raise-tile-group: a tiled window comes
         // up together with the windows tiled next to it.
-        if (raising_group || applying || !tiled.count(window_id(w)) || !umoja_raise_tile_group()) return;
+        if (suppress_raise || raising_group || applying || !tiled.count(window_id(w)) || !umoja_raise_tile_group())
+            return;
         raising_group = true;
         guarded("raise tile group", [&] {
             for (auto const& [id, other] : tiled)
@@ -450,10 +588,89 @@ public:
     Window lock_focus;                  // the lock surface that last had focus
 
     void handle_window_ready(WindowInfo& info) override {
-        MinimalWindowManager::handle_window_ready(info);
-        if (is_lock_surface(info.window())) guarded("lock focus", [&] { ensure_lock_focus(); });
+        Window const w = info.window();
+        bool const app = all_windows.count(w) && !is_shell_process(w);
+        bool takes_focus = true;
+        if (app) {
+            // focus-new-windows "strict": a new window from another app
+            // than the focused one doesn't take focus; it asks for attention.
+            Window const active = tools.active_window();
+            if (focus_settings().new_windows_strict && active && all_windows.count(active) &&
+                active.application() != w.application())
+                takes_focus = false;
+            // An app opening while the overview holds the keyboard (launched
+            // from the dock, a notification, Ask Umoja) closes the overview.
+            if (takes_focus && info.can_be_active()) guarded("overview grab", [&] { release_overlay_grab(); });
+            guarded("open animation", [&] { animate(w, Anim::open); });
+        }
+        if (takes_focus) MinimalWindowManager::handle_window_ready(info);
+        else guarded("attention", [&] { mark_attention(w); });
+        if (is_lock_surface(w)) guarded("lock focus", [&] { ensure_lock_focus(); });
         else guarded("modal focus", [&] { take_focus_from_grab(info); });
     }
+
+    // A window of Umoja's own shell (overlay, panel, dock), not an app.
+    static bool is_shell_process(Window const& w) {
+        return process_name(miral::pid_of(w.application())).rfind("umoja-", 0) == 0;
+    }
+
+    // The overview and Ask Umoja are keyboard-exclusive layer surfaces of
+    // umoja-overlay, and Mir never moves focus off a grabbing window: so a
+    // window activated from the dock or a notification stayed unfocused
+    // behind the overview. GNOME leaves the overview on any outside
+    // activation; drop the grab and tell the overlay (O6).
+    void release_overlay_grab() {
+        if (!lock_surfaces.empty()) return;
+        Window const active = tools.active_window();
+        if (!active) return;
+        Window root = active;
+        while (auto const parent = tools.info_for(root).parent()) root = parent;
+        if (tools.info_for(root).focus_mode() != mir_focus_mode_grabbing) return;
+        if (process_name(miral::pid_of(root.application())) != "umoja-overlay") return;
+        if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: outside activation releases the overview's keyboard\n");
+        tools.select_active_window(Window{});
+        umoja_overview_dismiss();
+    }
+
+    // ---- attention (GNOME's "is ready", windowAttentionHandler.js) ----------
+
+    std::set<Window> attention;
+
+    void mark_attention(Window const& w) {
+        if (!all_windows.count(w) || w == tools.active_window() || attention.count(w)) return;
+        attention.insert(w);
+        auto const& info = tools.info_for(w);
+        std::string const app = shell_app_id(info);
+        std::string const title = info.name();
+        if (debug_windows()) std::fprintf(stderr, "umoja-mir: wm: %s wants attention\n", describe(info).c_str());
+        umoja_window_attention(window_id(w), app.c_str(), title.c_str());
+        umoja_windows_changed();
+    }
+
+    void clear_attention(Window const& w) {
+        if (!attention.erase(w)) return;
+        umoja_window_attention_cleared(window_id(w));
+        umoja_windows_changed();
+    }
+
+public:
+    // Mir patch 3026: an xdg-activation request with no valid token.
+    void activation_refused(Window w) {
+        if (!w || !all_windows.count(w)) return;
+        if (w == tools.active_window()) return;
+        mark_attention(w);
+    }
+
+    // Mir patch 3025: a right-click on a client-drawn title bar. (x, y)
+    // are surface-local; the click itself is a better spot when known.
+    void client_window_menu(Window w, int32_t x, int32_t y) {
+        if (!w || !all_windows.count(w)) return;
+        geom::Rectangle const r{w.top_left(), w.size()};
+        geom::Point at = r.top_left + geom::Displacement{x, y};
+        if (have_pointer && r.contains(last_pointer)) at = last_pointer;
+        show_window_menu(w, at);
+    }
+
 
     // A keyboard-exclusive surface that maps while another one holds the
     // keyboard gets it: the newest grab wins, as in wlroots compositors.
@@ -535,21 +752,60 @@ public:
     // workspace slide does.
     std::set<Window> fullscreen_lifted;
 
-    void update_fullscreen_layer(Window const& w, MirWindowState state, bool focused) {
-        if (!all_windows.count(w)) return;
-        bool const want = focused && state == mir_window_state_fullscreen;
-        if (want == bool(fullscreen_lifted.count(w))) return;
-        if (want) fullscreen_lifted.insert(w);
-        else fullscreen_lifted.erase(w);
-        Window const target = w;
-        std::thread([target] {
-            guarded("fullscreen layer", [&] {
+    //
+    // As mutter decides it (check_fullscreen_func): per monitor, from the
+    // stacking order, not from focus. A monitor is "in fullscreen" while the
+    // topmost window of the current workspace on it is fullscreen, focused
+    // or not, so clicking a window on the other monitor no longer brings
+    // the panel and dock back over a video (M2).
+    void update_fullscreen_layer(Window const& w, MirWindowState, bool) {
+        if (all_windows.count(w)) schedule_fullscreen_refresh();
+    }
+
+    static std::atomic<bool>& fullscreen_refresh_pending() {
+        static std::atomic<bool> pending{false};
+        return pending;
+    }
+
+    void schedule_fullscreen_refresh() {
+        if (fullscreen_refresh_pending().exchange(true)) return;
+        std::thread([] {
+            guarded("fullscreen layer", [] {
                 if (!g_wm) return;
-                g_wm->invoke([&] {
-                    if (g_wm) g_wm->apply_layer(target);
+                g_wm->invoke([] {
+                    fullscreen_refresh_pending() = false;
+                    if (g_wm) guarded("fullscreen layer", [] { g_wm->refresh_fullscreen(); });
                 });
             });
         }).detach();
+    }
+
+    void refresh_fullscreen() {
+        // Mid slide windows are off their spots; finish_slide() comes back.
+        if (slide || swipe) return;
+        std::set<Window> want;
+        for (auto const& [id, out] : outputs) {
+            for (auto it = stacking.rbegin(); it != stacking.rend(); ++it) {
+                Window const& w = *it;
+                if (!all_windows.count(w) || !visible_here(w) || !out.contains(centre_of(w))) continue;
+                if (tools.info_for(w).state() == mir_window_state_fullscreen) want.insert(w);
+                break;
+            }
+        }
+        if (want == fullscreen_lifted) return;
+        std::vector<Window> changed;
+        for (auto const& w : fullscreen_lifted)
+            if (!want.count(w)) changed.push_back(w);
+        for (auto const& w : want)
+            if (!fullscreen_lifted.count(w)) changed.push_back(w);
+        fullscreen_lifted = want;
+        for (auto const& w : changed) apply_layer(w);
+    }
+
+    // A fullscreen window covers this monitor (no hot corner there).
+    bool monitor_in_fullscreen(geom::Rectangle const& output) const {
+        return std::any_of(fullscreen_lifted.begin(), fullscreen_lifted.end(),
+                           [&](Window const& w) { return output.contains(centre_of(w)); });
     }
 
     void apply_layer(Window const& w) {
@@ -579,7 +835,10 @@ public:
             stacking.push_back(w);
             app = true;
         }
-        if (app) umoja_windows_changed();
+        if (app) {
+            umoja_windows_changed();
+            schedule_fullscreen_refresh();
+        }
     }
 
     // ---- input ------------------------------------------------------------
@@ -595,6 +854,27 @@ public:
 
         // Alt+F7 / Alt+F8: the arrow keys move or resize the window.
         if (key_grab && handle_key_grab(action, keysym, mods)) return true;
+
+        // keyboard-shortcuts-inhibit (virtual machines, remote desktops):
+        // the focused window gets every key, Super and Alt+Tab included,
+        // except mutter's restore-shortcuts (Super+Escape), which takes the
+        // keys back. Volume and brightness keys keep working.
+        if (Window const focused = tools.active_window(); focused && umoja_wmp::inhibits_shortcuts(focused)) {
+            overlay_key_armed = false;
+            ask_alt_armed = false;
+            if (keysym == XK_ESCAPE && (mods & UMOJA_MOD_SUPER)) {
+                if (action == mir_keyboard_action_down) umoja_wmp::restore_shortcuts(focused);
+                return true;
+            }
+            uint32_t const bound = umoja_lookup_binding(bind_sym, mods);
+            if (uint32_t const media = umoja_media_action(bound); media != UMOJA_MEDIA_NONE) {
+                if (action == mir_keyboard_action_down ||
+                    (action == mir_keyboard_action_repeat && media == UMOJA_MEDIA_REPEATS))
+                    umoja_media_key(bound);
+                return true;
+            }
+            return false;
+        }
 
         // The Copilot key sends Super+Shift+F23. It opens Ask Umoja, and
         // the F23 press and release never reach the app. Matched by scan
@@ -640,7 +920,7 @@ public:
         if (keysym == XK_ALT_L && action != mir_keyboard_action_repeat) {
             if (action == mir_keyboard_action_down) {
                 ask_alt_armed = (mods & ~UMOJA_MOD_ALT) == 0 && umoja_ask_alt_tap_enabled();
-                return MinimalWindowManager::handle_keyboard_event(event);
+                return false;
             }
             if (ask_alt_armed) {
                 ask_alt_armed = false;
@@ -662,15 +942,16 @@ public:
             return true;
         }
 
-        if (action == mir_keyboard_action_up) return MinimalWindowManager::handle_keyboard_event(event);
+        if (action == mir_keyboard_action_up) return false;
         if (bound != UMOJA_ACTION_NONE && umoja_is_switcher_action(bound)) {
             if (action == mir_keyboard_action_down) open_switcher(bound, mods);
             return true;
         }
-        if (action != mir_keyboard_action_down) return MinimalWindowManager::handle_keyboard_event(event);
+        if (action != mir_keyboard_action_down) return false;
         if (bound != UMOJA_ACTION_NONE && apply(bound)) return true;
-        // Alt+F4 etc. that we do not bind fall through to MinimalWindowManager.
-        return MinimalWindowManager::handle_keyboard_event(event);
+        // Not MinimalWindowManager's built-in Alt+F4/Alt+Tab/Alt+`: a key
+        // the user unbound in Settings goes to the app, as in GNOME (F5).
+        return false;
     }
 
     bool handle_pointer_event(MirPointerEvent const* event) override {
@@ -731,7 +1012,23 @@ public:
             begin_mod_grab(event, pressed, px, py))
             return true;
 
+        // Super+scroll switches workspace (handleWorkspaceScroll).
+        if (action == mir_pointer_action_motion && !moving && workspace_scroll(event)) return true;
+
+        auto const focus = focus_settings();
+        if (action == mir_pointer_action_button_down && pressed && !moving) {
+            bool swallow = false;
+            guarded("press on window", [&] { swallow = press_on_window(geom::Point{px, py}); });
+            if (swallow) {
+                menu_click_swallowed = buttons != 0;
+                return true;
+            }
+        }
+
+        // raise-on-click off: a click focuses without raising.
+        suppress_raise = action == mir_pointer_action_button_down && !focus.raise_on_click;
         bool const consumed = MinimalWindowManager::handle_pointer_event(event);
+        suppress_raise = false;
 
         // A scripted drag (DragWindow) ignores the real pointer. A pointer
         // drag ends when the last button comes up; motion with no button
@@ -746,9 +1043,130 @@ public:
             end_move();
         } else if (action == mir_pointer_action_motion) {
             if (moving && !scripted) on_move(px, py);
-            else if (!moving) report_motion(event, px, py);
+            else if (!moving) {
+                report_motion(event, px, py);
+                if (buttons == 0 && focus.mode != UMOJA_FOCUS_CLICK)
+                    guarded("focus follows mouse", [&] { focus_follows_mouse(geom::Point{px, py}, focus); });
+            }
         }
         return consumed;
+    }
+
+    // ---- Super+scroll -----------------------------------------------------
+
+    std::chrono::steady_clock::time_point last_workspace_scroll;
+
+    bool workspace_scroll(MirPointerEvent const* event) {
+        float const v = mir_pointer_event_axis_value(event, mir_pointer_axis_vscroll);
+        float const h = mir_pointer_event_axis_value(event, mir_pointer_axis_hscroll);
+        if (v == 0.0f && h == 0.0f) return false;
+        uint32_t const want = umoja_mouse_button_modifier();
+        if (!want || to_umoja_mods(mir_pointer_event_modifiers(event)) != want) return false;
+        // Holding Super to scroll is not a tap of it.
+        overlay_key_armed = false;
+        // gnome-shell's SCROLL_TIMEOUT_TIME: one switch per 150 ms.
+        auto const now = std::chrono::steady_clock::now();
+        if (now - last_workspace_scroll < std::chrono::milliseconds(150)) return true;
+        last_workspace_scroll = now;
+        float const d = v != 0.0f ? v : h;
+        guarded("scroll workspace", [&] {
+            apply(d > 0 ? UMOJA_ACTION_WORKSPACE_NEXT : UMOJA_ACTION_WORKSPACE_PREV);
+        });
+        return true;
+    }
+
+    // ---- a press on a window ------------------------------------------------
+
+    // Returns true when the press must go no further: the window has a
+    // modal dialog (xdg-dialog-v1), which comes up and takes focus instead.
+    // Also checks the clicked app is still answering (F8).
+    bool press_on_window(geom::Point p) {
+        Window const under = tools.window_at(p);
+        if (!under) return false;
+        Window root = under;
+        while (auto const parent = tools.info_for(root).parent()) root = parent;
+        if (!all_windows.count(root)) return false;
+        check_alive(root);
+        if (under != root) return false;
+        if (Window const dialog = modal_child(root)) {
+            tools.select_active_window(dialog);
+            tools.raise_tree(root);
+            return true;
+        }
+        return false;
+    }
+
+    Window modal_child(Window const& w) {
+        for (auto const& c : tools.info_for(w).children()) {
+            if (auto const nested = modal_child(c)) return nested;
+            auto const& ci = tools.info_for(c);
+            if (ci.is_visible() && umoja_wmp::is_modal(c)) return c;
+        }
+        return Window{};
+    }
+
+    // xdg_wm_base ping for "App is not responding" (attention.rs). Not for
+    // X11 windows: Xwayland has no xdg_wm_base, so it would never answer.
+    void check_alive(Window const& w) {
+        if (!all_windows.count(w)) return;
+        pid_t const pid = miral::pid_of(w.application());
+        if (pid <= 0 || process_name(pid) == "Xwayland" || is_shell_process(w)) return;
+        auto const& info = tools.info_for(w);
+        std::string const app = shell_app_id(info);
+        std::string const title = info.name();
+        umoja_check_alive(window_id(w), pid, app.c_str(), title.c_str());
+    }
+
+    // ---- focus follows mouse (focus-mode sloppy / mouse) --------------------
+
+    Window hovered;
+    uint64_t auto_raise_generation = 0;
+
+    void focus_follows_mouse(geom::Point p, UmojaFocusSettings const& cfg) {
+        if (!lock_surfaces.empty() || key_grab || slide || swipe) return;
+        Window const under = tools.window_at(p);
+        Window root = under;
+        if (root)
+            while (auto const parent = tools.info_for(root).parent()) root = parent;
+        Window const active = tools.active_window();
+        // An open menu or a keyboard grab (the overview, a shell menu) keeps
+        // focus, as a GNOME grab does.
+        if (active) {
+            Window top = active;
+            while (auto const parent = tools.info_for(top).parent()) top = parent;
+            if (tools.info_for(top).focus_mode() == mir_focus_mode_grabbing) return;
+            std::vector<Window> menus;
+            collect_menus(tools, top, menus);
+            if (!menus.empty()) return;
+        }
+        if (!under) {
+            // Mouse mode: the desktop takes focus away (sloppy keeps it).
+            if (cfg.mode == UMOJA_FOCUS_MOUSE && hovered && active && all_windows.count(active))
+                tools.select_active_window(Window{});
+            hovered = Window{};
+            return;
+        }
+        if (under == hovered) return;
+        hovered = under;
+        // The panel, dock and overview are not focused by hovering.
+        if (!all_windows.count(root) || under == active) return;
+        suppress_raise = true;
+        tools.select_active_window(under);
+        suppress_raise = false;
+        if (!cfg.auto_raise) return;
+        uint64_t const gen = ++auto_raise_generation;
+        Window const target = under;
+        int const delay = std::clamp<int>(static_cast<int>(cfg.auto_raise_delay_ms), 0, 10000);
+        std::thread([gen, target, delay] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+            guarded("auto raise", [&] {
+                if (!g_wm) return;
+                g_wm->invoke([&] {
+                    if (g_wm && g_wm->auto_raise_generation == gen && g_wm->tools.active_window() == target)
+                        guarded("auto raise", [&] { g_wm->tools.raise_tree(target); });
+                });
+            });
+        }).detach();
     }
 
     // ---- shell menus: a click outside closes them ---------------------------
@@ -800,7 +1218,11 @@ public:
             pts[i].x = mir_touch_event_axis_value(event, i, mir_touch_axis_x);
             pts[i].y = mir_touch_event_axis_value(event, i, mir_touch_axis_y);
         }
-        auto const r = primary_output();
+        // Gestures are measured on the monitor the touch began on (M6).
+        if (n > 0 && pts[0].action == static_cast<uint32_t>(mir_touch_action_down) && n == 1)
+            touch_screen = output_at(geom::Point{static_cast<int>(pts[0].x), static_cast<int>(pts[0].y)});
+        bool const known = std::any_of(outputs.begin(), outputs.end(), [&](auto const& o) { return o.second == touch_screen; });
+        auto const r = known ? touch_screen : primary_output();
         UmojaRect const screen{r.top_left.x.as_int(), r.top_left.y.as_int(), r.size.width.as_int(),
                                r.size.height.as_int()};
         auto const time = mir_input_event_get_event_time(mir_touch_event_input_event(event));
@@ -810,6 +1232,8 @@ public:
         if (consume) return true;
         return MinimalWindowManager::handle_touch_event(event);
     }
+
+    geom::Rectangle touch_screen;
 
     // A window hidden because it is on another workspace must stay hidden
     // whatever its client asks. Chromium/Electron and Qt apps answer the
@@ -854,10 +1278,16 @@ public:
         }
         use_session_restore(info, spec);
         place_on_first_size(info, spec);
+        bool retiled = false;
+        if (spec.state().is_set() && all_windows.count(info.window()))
+            guarded("client state", [&] { retiled = client_state_change(info, spec); });
         if (trace)
             std::fprintf(stderr, "umoja-mir: wm: request for %s:%s -> applying%s\n", describe(info).c_str(),
                          describe(modifications).c_str(), describe(spec).c_str());
+        bool const was_applying = applying;
+        if (retiled) applying = true; // a move back into the tile isn't a drag out of it
         MinimalWindowManager::handle_modify_window(info, spec);
+        applying = was_applying;
     }
 
     // Activation requests from windows on another workspace don't pull them
@@ -867,16 +1297,38 @@ public:
     // via foreign-toplevel, an xdg-activation token from a launcher) take
     // you to its workspace and focus it, as GNOME does. Chromium/Electron
     // and Qt re-raise themselves right after being hidden; those don't.
+    //
+    // With Mir patch 3026 a raise is known to be the user's (dock,
+    // valid token) or not (an app raising itself, F3): the latter never
+    // switches workspace and asks for attention instead (F2).
     void handle_raise_window(WindowInfo& info) override {
         Window const w = info.window();
+        bool const user = take_user_activation(w);
+        if (user) guarded("overview grab", [&] { release_overlay_grab(); });
         if (is_app_window(info) && on_other_workspace(w)) {
+            if (user) {
+                activate(w);
+                return;
+            }
             auto const it = hidden_at.find(w);
             if (it != hidden_at.end() && std::chrono::steady_clock::now() - it->second < std::chrono::seconds(1))
                 return;
+            if (!g_activation_hooks) activate(w);
+            else mark_attention(w);
+            return;
+        }
+        if (user && info.state() == mir_window_state_minimized) {
             activate(w);
             return;
         }
         MinimalWindowManager::handle_raise_window(info);
+    }
+
+    static bool take_user_activation(Window const& w) {
+        std::shared_ptr<mir::scene::Surface> const s = w;
+        void const* expected = s.get();
+        if (!expected || steady_ms() - g_user_activation_ms.load() > 2000) return false;
+        return g_user_activation.compare_exchange_strong(expected, nullptr);
     }
 
     bool on_other_workspace(Window const& w) {
@@ -894,9 +1346,11 @@ public:
             std::fprintf(stderr, "umoja-mir: wm: move request from %s (input type %d, tracked %d)\n",
                          describe(info).c_str(), static_cast<int>(mir_input_event_get_type(input_event)),
                          static_cast<int>(all_windows.count(info.window())));
-        MinimalWindowManager::handle_request_move(info, input_event);
-        if (!all_windows.count(info.window()) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer)
+        // Touch moves stay Mir's.
+        if (!all_windows.count(info.window()) || mir_input_event_get_type(input_event) != mir_input_event_type_pointer) {
+            MinimalWindowManager::handle_request_move(info, input_event);
             return;
+        }
         auto const* pev = mir_input_event_get_pointer_event(input_event);
         // A request that arrives after the button is already up would start
         // a drag that no release ever ends.
@@ -905,9 +1359,20 @@ public:
                 std::fprintf(stderr, "umoja-mir: wm: move request ignored, no button held\n");
             return;
         }
+        if (mod_grab || moving) return;
         int32_t const px = static_cast<int32_t>(mir_pointer_event_axis_value(pev, mir_pointer_axis_x));
         int32_t const py = static_cast<int32_t>(mir_pointer_event_axis_value(pev, mir_pointer_axis_y));
-        guarded("begin move", [&] { begin_move(info.window(), px, py, was_tiled_or_maximized(info.window())); });
+        // Our own move, not Mir's pointer gesture: Mir's stops as soon as a
+        // modifier changes (pressing Shift mid-drag froze the window, F6),
+        // and ours keeps the title bar on screen and snaps to edges.
+        Window const w = info.window();
+        guarded("begin move", [&] { begin_move(w, px, py, was_tiled_or_maximized(w)); });
+        if (moving != w) return;
+        uint32_t const primary = mir_pointer_button_primary;
+        uint32_t const button = (held_buttons & primary) ? primary : held_buttons;
+        ModGrab g{w, ModGrabKind::moving, button, geom::Point{px, py}, geom::Point{px, py}, {}};
+        g.from_client = true;
+        mod_grab = g;
     }
 
     // ---- tiling groups ----------------------------------------------------
@@ -1405,6 +1870,7 @@ public:
             tile_action[w] = p.restore->tile_action;
             untiled[w] = p.floating;
             umoja_tiling_register(id, p.restore->tile_action, to_rect({w.top_left(), w.size()}));
+            umoja_fx::set_tiled_edges(w, 15);
         }
         if (p.hide) {
             tools.add_tree_to_workspace(w, workspaces[p.workspace]);
@@ -1451,9 +1917,19 @@ public:
             if (umoja_center_new_windows())
                 top_left = {area.top_left.x.as_int() + (area.size.width.as_int() - size.width.as_int()) / 2,
                             area.top_left.y.as_int() + (area.size.height.as_int() - size.height.as_int()) / 2};
+            else if (auto const p = first_fit(area, size))
+                top_left = *p;
             else
                 top_left = optical_centre(area, size) + cascade;
             auto const fitted = fit_inside({top_left, size}, area, {info.min_width(), info.min_height()});
+            if (resizable(info) && auto_maximizes(size, area)) {
+                // Unmaximizing goes back to the size it asked for.
+                session_restore[w] = fitted;
+                spec.top_left() = fitted.top_left;
+                spec.state() = mir_window_state_maximized;
+                tools.place_and_size_for_state(spec, info);
+                return;
+            }
             if (debug_windows())
                 std::fprintf(stderr, "umoja-mir: wm: first size %dx%d for %s -> %d,%d %dx%d\n", size.width.as_int(),
                              size.height.as_int(), describe(info).c_str(), fitted.top_left.x.as_int(),
@@ -1601,6 +2077,10 @@ public:
 
     void activate(Window w) {
         if (!w) return;
+        // Leaving Show Desktop, and the overview if it holds the keyboard.
+        desktop_hidden.clear();
+        guarded("overview grab", [&] { release_overlay_grab(); });
+        cancel_animation(w);
         guarded("activate", [&] {
             // Windows on another workspace take you there, as in GNOME.
             for (size_t i = 0; i < workspaces.size(); ++i)
@@ -1616,6 +2096,7 @@ public:
                 tools.place_and_size_for_state(spec, info);
                 use_session_restore(info, spec);
                 tools.modify_window(info, spec);
+                animate(w, Anim::open);
             }
             tools.raise_tree(w);
             tools.select_active_window(w);
@@ -1623,8 +2104,12 @@ public:
     }
 
     void close(Window w) {
-        if (w) guarded("close", [&] { tools.ask_client_to_close(w); });
+        if (!w) return;
+        guarded("check alive", [&] { check_alive(w); });
+        guarded("close", [&] { tools.ask_client_to_close(w); });
     }
+
+    int32_t window_pid(Window const& w) const { return w ? miral::pid_of(w.application()) : 0; }
 
     void switcher_pick(uint32_t index) {
         UmojaSwitchResult res{};
@@ -1662,7 +2147,7 @@ public:
         case 1: {
             if (!w || moving != w || !scripted) return false;
             geom::Point const p{x, y};
-            tools.drag_window(w, p - script_last);
+            move_dragged(w, p);
             script_last = p;
             on_move(x, y);
             return true;
@@ -1794,8 +2279,22 @@ private:
         if (px >= right && open(right + 1, py)) edges |= UMOJA_EDGE_RIGHT;
         if (py <= top && open(px, top - 1)) edges |= UMOJA_EDGE_TOP;
         if (py >= bottom && open(px, bottom + 1)) edges |= UMOJA_EDGE_BOTTOM;
-        umoja_pointer_motion(px, py, mir_pointer_event_axis_value(event, mir_pointer_axis_relative_x),
-                             mir_pointer_event_axis_value(event, mir_pointer_axis_relative_y), edges);
+        float const dx = mir_pointer_event_axis_value(event, mir_pointer_axis_relative_x);
+        float const dy = mir_pointer_event_axis_value(event, mir_pointer_axis_relative_y);
+        umoja_pointer_motion(px, py, dx, dy, edges);
+
+        // GNOME's hot corner (Layout.HotCorner): the top-left corner of
+        // every monitor that has one (no monitor beyond either edge), top
+        // right in right-to-left locales; off while a fullscreen window
+        // covers the monitor. hot_corner.rs measures the pressure.
+        bool const rtl = umoja_workspaces_rtl();
+        int32_t const cx = rtl ? right : left;
+        int32_t const outside = rtl ? right + 1 : left - 1;
+        bool const corner = open(outside, top) && open(cx, top - 1) && !monitor_in_fullscreen(o);
+        constexpr int32_t barrier = 32; // about a top bar's height, as gnome-shell's
+        bool const on_side = corner && px == cx && py < top + barrier;
+        bool const on_top = corner && py <= top && (rtl ? px > right - barrier : px < left + barrier);
+        umoja_hot_corner_motion(rtl ? -dx : dx, dy, on_side, on_top);
     }
 
     geom::Rectangle output_at(geom::Point p) const {
@@ -1831,12 +2330,13 @@ private:
     // ---- Alt+Tab ----------------------------------------------------------
 
     void open_switcher(uint32_t action, uint32_t mods) {
-        bool const all_workspaces =
-            action == UMOJA_ACTION_SWITCH_APPLICATIONS || action == UMOJA_ACTION_SWITCH_APPLICATIONS_BACKWARD;
+        // org.gnome.shell.app-switcher / window-switcher
+        // current-workspace-only; Alt+` follows the app switcher's (A1, A2).
+        bool const only_here = umoja_switcher_current_workspace_only(action);
         std::vector<std::string> strings;
         std::vector<Window> list;
         for (auto const& w : mru)
-            if (all_workspaces || on_current_workspace(w)) list.push_back(w);
+            if (!only_here || on_current_workspace(w)) list.push_back(w);
         strings.reserve(list.size() * 2);
         std::vector<UmojaSwitchWindow> entries;
         for (auto const& w : list) {
@@ -1898,6 +2398,9 @@ private:
         geom::Rectangle rect;  // window at the start of a resize
         bool resized = false;
         bool west = false, east = false, north = false, south = false;
+        // Started by the client's xdg_toplevel.move (a title-bar drag): the
+        // client saw the press, so it gets the release too.
+        bool from_client = false;
     };
     std::optional<ModGrab> mod_grab;
 
@@ -1971,9 +2474,10 @@ private:
         bool const gone = g.window && !all_windows.count(g.window);
 
         if (gone || !(buttons & g.button)) {
+            bool const from_client = g.from_client;
             if (g.kind == ModGrabKind::moving && moving) end_move();
             mod_grab.reset();
-            return true; // the client never saw the press
+            return !from_client; // else the client never saw the press
         }
         if (action != mir_pointer_action_motion || !g.window) return true;
 
@@ -1986,8 +2490,8 @@ private:
                 return true;
             g.kind = ModGrabKind::moving;
             Window const w = g.window;
-            guarded("begin modifier move", [&] { begin_move(w, px, py, stuck); });
-            if (!stuck) guarded("modifier move", [&] { tools.drag_window(w, p - g.last); });
+            guarded("begin modifier move", [&] { begin_move(w, g.start.x.as_int(), g.start.y.as_int(), stuck); });
+            if (moving == w) guarded("modifier move", [&] { move_dragged(w, p); });
             g.last = p;
             if (moving) on_move(px, py);
             return true;
@@ -1997,7 +2501,7 @@ private:
         case ModGrabKind::moving:
             if (moving == g.window) {
                 Window const w = g.window;
-                guarded("modifier move", [&] { tools.drag_window(w, p - g.last); });
+                guarded("move", [&] { move_dragged(w, p); });
                 on_move(px, py);
             }
             g.last = p;
@@ -2085,7 +2589,61 @@ private:
         elevated = true;
 
         geom::Point const p{px, py};
+        move_offset = w.top_left() - p;
         umoja_drag_begin(px, py, to_rect({w.top_left(), w.size()}), to_rect(area_at(p)), to_rect(output_at(p)));
+    }
+
+    // Where the window's top left sits relative to the pointer in a move.
+    geom::Displacement move_offset;
+
+    // Follow the pointer, keeping the title bar reachable (mutter's
+    // constrain_titlebar_visible, P5) and sticking to the edges of the
+    // work area and of other windows (edge-resistance.c, P8).
+    void move_dragged(Window w, geom::Point pointer) {
+        if (!all_windows.count(w)) return;
+        auto const want = constrain_move(w, pointer + move_offset, pointer);
+        if (want != w.top_left()) tools.drag_window(w, want - w.top_left());
+    }
+
+    geom::Point constrain_move(Window const& w, geom::Point want, geom::Point pointer) {
+        int x = want.x.as_int(), y = want.y.as_int();
+        int const ww = w.size().width.as_int(), wh = w.size().height.as_int();
+        auto const area = area_at(pointer);
+        auto const out = output_at(pointer);
+        int const ax = area.top_left.x.as_int(), ay = area.top_left.y.as_int();
+        int const ar = ax + area.size.width.as_int(), ab = ay + area.size.height.as_int();
+
+        constexpr int snap = 12;
+        std::vector<int> xs{ax, ar}, ys{ay, ab};
+        for (auto const& o : stacking) {
+            if (o == w || !all_windows.count(o) || !visible_here(o)) continue;
+            geom::Rectangle const r{o.top_left(), o.size()};
+            if (!out.overlaps(r)) continue;
+            xs.push_back(r.top_left.x.as_int());
+            xs.push_back(r.top_left.x.as_int() + r.size.width.as_int());
+            ys.push_back(r.top_left.y.as_int());
+            ys.push_back(r.top_left.y.as_int() + r.size.height.as_int());
+        }
+        auto const stick = [&](int& v, int len, std::vector<int> const& edges) {
+            int best = snap + 1, to = v;
+            for (int e : edges) {
+                if (int const d = std::abs(v - e); d < best) best = d, to = e;           // leading edge
+                if (int const d = std::abs(v + len - e); d < best) best = d, to = e - len; // trailing edge
+            }
+            if (best <= snap) v = to;
+        };
+        stick(x, ww, xs);
+        stick(y, wh, ys);
+
+        // The title bar never goes above the work area, and a strip of the
+        // window stays on the monitor.
+        constexpr int keep = 64;
+        int const ox = out.top_left.x.as_int(), oy = out.top_left.y.as_int();
+        int const orr = ox + out.size.width.as_int(), ob = oy + out.size.height.as_int();
+        y = std::max(y, ay);
+        y = std::min(y, ob - std::min(keep, wh));
+        x = std::clamp(x, ox - ww + std::min(keep, ww), std::max(ox, orr - std::min(keep, ww)));
+        return {x, y};
     }
 
     void on_move(int32_t px, int32_t py) {
@@ -2179,6 +2737,7 @@ private:
         if (index >= workspaces.size() || index == current) return;
         finish_slide();
         end_swipe_now();
+        slide_sign = umoja_workspaces_rtl() ? -1.0 : 1.0;
         applying = true;
         guarded("switch workspace", [&] {
             std::vector<Window> leaving, arriving;
@@ -2253,10 +2812,11 @@ private:
     std::optional<Slide> slide;
     uint64_t slide_generation = 0;
     bool animating = false;
-    // A little longer than gnome-shell's 250 ms WORKSPACE_SWITCH_TIME: our
-    // frames come from a timer, not the display's vsync, and 250 ms read
-    // as a jump.
-    static constexpr double SLIDE_MS = 400.0;
+    // gnome-shell's WORKSPACE_SWITCH_TIME (W5). Frames are paced to the
+    // fastest monitor's refresh (g_slide_frame_us).
+    static constexpr double SLIDE_MS = 250.0;
+    // -1 in right-to-left locales: the next workspace is to the left (W4).
+    double slide_sign = 1.0;
 
     // Focus the most recently used visible window on this workspace, or
     // nothing when it is empty (as GNOME does).
@@ -2278,7 +2838,7 @@ private:
     }
 
     void place_at(SlideItem const& it, double offset) {
-        int const px = static_cast<int>(std::lround(offset * it.monitor.size.width.as_int()));
+        int const px = static_cast<int>(std::lround(slide_sign * offset * it.monitor.size.width.as_int()));
         place(it.window, geom::Point{it.base.x.as_int() + px, it.base.y.as_int()});
     }
 
@@ -2344,6 +2904,7 @@ private:
         });
         applying = was_applying;
         animating = false;
+        schedule_fullscreen_refresh();
     }
 
     // Frames come from a helper thread that takes the WM lock for each one.
@@ -2412,6 +2973,11 @@ public:
     // `flags`: UMOJA_SWIPE_* bits, applied begin, update, end. No switcher
     // popup: as in GNOME the workspaces moving is the feedback.
     void apply_swipe(uint32_t flags, double progress, int32_t dir) {
+        // Right to left: fingers moving right go to the next workspace.
+        if (umoja_workspaces_rtl()) {
+            progress = -progress;
+            dir = -dir;
+        }
         if (flags & UMOJA_SWIPE_BEGIN) workspace_swipe_begin();
         if (flags & UMOJA_SWIPE_UPDATE) workspace_swipe_update(progress);
         if (flags & UMOJA_SWIPE_END) workspace_swipe_end(dir);
@@ -2420,6 +2986,7 @@ public:
     void workspace_swipe_begin() {
         if (swipe) return;
         finish_slide();
+        slide_sign = umoja_workspaces_rtl() ? -1.0 : 1.0;
         swipe = Swipe{};
         applying = true;
         guarded("swipe begin", [&] {
@@ -2536,6 +3103,77 @@ public:
         relayout_workspaces();
     }
 
+    // A new, empty workspace at `index` (GNOME's insertWorkspace); the
+    // ones from there on move along by one.
+    void insert_workspace(size_t index) {
+        index = std::min(index, workspaces.size());
+        workspaces.insert(workspaces.begin() + static_cast<long>(index), tools.create_workspace());
+        if (index <= current) ++current;
+        umoja_workspaces_changed(current, workspaces.size());
+    }
+
+    // The overview's drop between two thumbnails (O2): a new workspace
+    // there, with the window on it. A window on a secondary monitor (on
+    // every workspace) comes to the primary monitor, as GNOME's
+    // moveWindowToMonitorAndWorkspace does.
+    bool send_to_new_workspace(Window w, size_t index) {
+        if (!w || !all_windows.count(w) || pinned.count(w)) return false;
+        finish_slide();
+        if (!in_any_workspace(w)) {
+            auto const from = output_at(centre_of(w));
+            auto const to = primary_output();
+            if (from == to) return false;
+            guarded("to primary", [&] { place_on_monitor(w, from, to, translate({w.top_left(), w.size()}, from, to)); });
+            remember_monitor(w);
+            away.erase(w);
+            update_workspace_membership(w);
+            if (!in_any_workspace(w)) return false;
+        }
+        insert_workspace(index);
+        send_to_workspace(w, std::min(index, workspaces.size() - 1));
+        return true;
+    }
+
+    // The overview's drop inside a thumbnail or on a monitor's card (O4,
+    // M1): the window goes to (x, y), on whichever monitor that is, and to
+    // `workspace` (-1: stays on its own). Maximized, fullscreen and tiled
+    // windows keep their state and only change monitor.
+    bool place_window(Window w, int32_t workspace, int32_t x, int32_t y) {
+        if (!w || !all_windows.count(w)) return false;
+        finish_slide();
+        auto& info = tools.info_for(w);
+        geom::Rectangle const rect{w.top_left(), w.size()};
+        geom::Point const tl{x, y};
+        auto const from = output_at(centre_of(rect));
+        auto const to = output_at(centre_of(geom::Rectangle{tl, rect.size}));
+        auto state = info.state();
+        if (auto const it = hidden_states.find(w); it != hidden_states.end()) state = it->second;
+        bool const fixed = tiled.count(window_id(w)) || state == mir_window_state_maximized ||
+                           state == mir_window_state_fullscreen || state == mir_window_state_horizmaximized ||
+                           state == mir_window_state_vertmaximized;
+        guarded("place window", [&] {
+            if (fixed) {
+                if (from != to) place_on_monitor(w, from, to, translate(rect, from, to));
+                return;
+            }
+            auto const fitted = fit_inside({tl, rect.size}, area_on(to), {info.min_width(), info.min_height()});
+            WindowSpecification spec;
+            spec.top_left() = fitted.top_left;
+            for (auto const& [id, r] : outputs)
+                if (r == to && from != to) spec.output_id() = id;
+            tools.modify_window(info, spec);
+        });
+        remember_monitor(w);
+        away.erase(w);
+        bool const changed = update_workspace_membership(w);
+        if (workspace >= 0 && static_cast<size_t>(workspace) < workspaces.size() && in_any_workspace(w))
+            send_to_workspace(w, static_cast<size_t>(workspace));
+        else if (changed)
+            relayout_workspaces();
+        umoja_windows_changed();
+        return true;
+    }
+
     // org.gnome.mutter dynamic-workspaces / workspaces-only-on-primary or
     // org.gnome.desktop.wm.preferences num-workspaces changed.
     void workspace_settings_changed() {
@@ -2609,7 +3247,11 @@ private:
 
     void untile(Window w) {
         auto const id = window_id(w);
-        if (tiled.erase(id)) umoja_tiling_unregister(id);
+        if (tiled.erase(id)) {
+            umoja_tiling_unregister(id);
+            // No longer tiled for the app either (P1).
+            umoja_fx::set_tiled_edges(w, 0);
+        }
     }
 
     // Put a tiled window back where it was before it was tiled.
@@ -2632,6 +3274,22 @@ private:
 
     // Returns true when the action was handled here.
     bool apply(uint32_t action) {
+        // GNOME: moving a window left from the first workspace, with
+        // dynamic workspaces, makes a new first workspace for it (W1).
+        if (action == UMOJA_ACTION_MOVE_TO_WORKSPACE_PREV && current == 0 && umoja_workspaces_dynamic()) {
+            Window const active = tools.active_window();
+            if (active && all_windows.count(active) && in_any_workspace(active)) {
+                bool others = false;
+                tools.for_each_window_in_workspace(workspaces[0], [&](Window const& w) { others |= w != active; });
+                if (others) {
+                    insert_workspace(0);
+                    move_window_to(active, 0);
+                    umoja_workspace_switched(current, workspaces.size());
+                    return true;
+                }
+            }
+        }
+
         uint32_t kind = 0;
         size_t index = 0;
         if (umoja_workspace_resolve(action, current, workspaces.size(), &kind, &index)) {
@@ -2662,10 +3320,24 @@ private:
         case UMOJA_ACTION_SHIFT_OVERVIEW_UP:
         case UMOJA_ACTION_SHIFT_OVERVIEW_DOWN:
         case UMOJA_ACTION_TOGGLE_MESSAGE_TRAY:
+        case UMOJA_ACTION_RUN_DIALOG:
+        case UMOJA_ACTION_TOGGLE_QUICK_SETTINGS:
+        case UMOJA_ACTION_FOCUS_ACTIVE_NOTIFICATION:
+        case UMOJA_ACTION_SWITCH_MONITOR:
+        case UMOJA_ACTION_SWITCH_INPUT_SOURCE:
+        case UMOJA_ACTION_SWITCH_INPUT_SOURCE_BACKWARD:
             umoja_handle_action(action);
+            return true;
+        case UMOJA_ACTION_SHOW_DESKTOP:
+            toggle_show_desktop();
             return true;
         default:
             break;
+        }
+        // Super+1..9 and Super+Ctrl+1..9 (the dock's apps).
+        if (action >= UMOJA_ACTION_SWITCH_TO_APP_BASE && action < UMOJA_ACTION_NEW_WINDOW_APP_BASE + 100) {
+            umoja_handle_action(action);
+            return true;
         }
 
         Window active = tools.active_window();
@@ -2682,6 +3354,7 @@ private:
             umoja_screenshot_window(to_rect({target.top_left(), target.size()}));
             return true;
         case UMOJA_ACTION_CLOSE:
+            check_alive(target);
             tools.ask_client_to_close(target);
             return true;
         case UMOJA_ACTION_MINIMIZE:
@@ -2721,6 +3394,33 @@ private:
             if (!all_windows.count(target)) return false;
             toggle_pinned(target);
             return true;
+        case UMOJA_ACTION_RAISE:
+            tools.raise_tree(target);
+            return true;
+        case UMOJA_ACTION_LOWER:
+            lower(target);
+            return true;
+        case UMOJA_ACTION_RAISE_OR_LOWER:
+            if (all_windows.count(target) && topmost_here(target)) lower(target);
+            else tools.raise_tree(target);
+            return true;
+        case UMOJA_ACTION_MAXIMIZE_VERTICALLY:
+            return set_state(info, info.state() == mir_window_state_vertmaximized ? mir_window_state_restored
+                                                                                    : mir_window_state_vertmaximized);
+        case UMOJA_ACTION_MAXIMIZE_HORIZONTALLY:
+            return set_state(info, info.state() == mir_window_state_horizmaximized ? mir_window_state_restored
+                                                                                     : mir_window_state_horizmaximized);
+        case UMOJA_ACTION_MOVE_TO_CENTER:
+        case UMOJA_ACTION_MOVE_TO_CORNER_NW:
+        case UMOJA_ACTION_MOVE_TO_CORNER_NE:
+        case UMOJA_ACTION_MOVE_TO_CORNER_SW:
+        case UMOJA_ACTION_MOVE_TO_CORNER_SE:
+        case UMOJA_ACTION_MOVE_TO_SIDE_N:
+        case UMOJA_ACTION_MOVE_TO_SIDE_S:
+        case UMOJA_ACTION_MOVE_TO_SIDE_E:
+        case UMOJA_ACTION_MOVE_TO_SIDE_W:
+            if (!all_windows.count(target)) return false;
+            return move_within_area(target, action);
         default:
             break;
         }
@@ -2760,8 +3460,249 @@ private:
         tiled[id] = target;
         tile_action[target] = action;
         umoja_tiling_register(id, action, out);
+        // xdg-shell's tiled states (P1): GTK and libadwaita square their
+        // corners and drop the shadow, as on GNOME.
+        umoja_fx::set_tiled_edges(target, 15);
         return true;
     }
+
+    // ---- Show Desktop (S1) ----------------------------------------------------
+
+    // The windows Show Desktop minimized, and the state each had.
+    std::map<Window, MirWindowState> desktop_hidden;
+
+    void toggle_show_desktop() {
+        if (!desktop_hidden.empty()) {
+            auto const hidden = std::move(desktop_hidden);
+            desktop_hidden.clear();
+            Window top;
+            applying = true;
+            for (auto const& w : stacking) {
+                auto const it = hidden.find(w);
+                if (it == hidden.end() || !all_windows.count(w) || !on_current_workspace(w)) continue;
+                auto& info = tools.info_for(w);
+                if (info.state() != mir_window_state_minimized) continue;
+                WindowSpecification spec;
+                spec.state() = it->second;
+                tools.place_and_size_for_state(spec, info);
+                guarded("show desktop", [&] { tools.modify_window(info, spec); });
+                top = w;
+            }
+            applying = false;
+            for (auto const& w : mru)
+                if (hidden.count(w) && visible_here(w)) {
+                    tools.select_active_window(w);
+                    break;
+                }
+            (void)top;
+            return;
+        }
+        // Nothing takes focus while the desktop shows (F1).
+        tools.select_active_window(Window{});
+        std::vector<Window> const here{stacking.begin(), stacking.end()};
+        applying = true;
+        for (auto const& w : here) {
+            if (!all_windows.count(w) || !visible_here(w)) continue;
+            auto& info = tools.info_for(w);
+            desktop_hidden[w] = info.state();
+            WindowSpecification spec;
+            spec.state() = mir_window_state_minimized;
+            guarded("show desktop", [&] { tools.modify_window(info, spec); });
+        }
+        applying = false;
+    }
+
+    // ---- raise, lower, move to a corner (S4) ----------------------------------
+
+    bool topmost_here(Window const& w) {
+        for (auto it = stacking.rbegin(); it != stacking.rend(); ++it)
+            if (visible_here(*it)) return *it == w;
+        return false;
+    }
+
+    void lower(Window const& w) {
+        guarded("lower", [&] { tools.send_tree_to_back(w); });
+        if (!all_windows.count(w)) return;
+        erase(stacking, w);
+        stacking.insert(stacking.begin(), w);
+        umoja_windows_changed();
+        schedule_fullscreen_refresh();
+    }
+
+    // mutter's move-to-center, move-to-corner-* and move-to-side-*.
+    bool move_within_area(Window w, uint32_t action) {
+        auto& info = tools.info_for(w);
+        if (info.state() != mir_window_state_restored) return true;
+        auto const area = area_on(output_at(centre_of(w)));
+        int const ax = area.top_left.x.as_int(), ay = area.top_left.y.as_int();
+        int const aw = area.size.width.as_int(), ah = area.size.height.as_int();
+        int const ww = w.size().width.as_int(), wh = w.size().height.as_int();
+        int const left = ax, right = ax + aw - ww, cx = ax + (aw - ww) / 2;
+        int const top = ay, bottom = ay + ah - wh, cy = ay + (ah - wh) / 2;
+        int x = w.top_left().x.as_int(), y = w.top_left().y.as_int();
+        switch (action) {
+        case UMOJA_ACTION_MOVE_TO_CENTER: x = cx; y = cy; break;
+        case UMOJA_ACTION_MOVE_TO_CORNER_NW: x = left; y = top; break;
+        case UMOJA_ACTION_MOVE_TO_CORNER_NE: x = right; y = top; break;
+        case UMOJA_ACTION_MOVE_TO_CORNER_SW: x = left; y = bottom; break;
+        case UMOJA_ACTION_MOVE_TO_CORNER_SE: x = right; y = bottom; break;
+        case UMOJA_ACTION_MOVE_TO_SIDE_N: x = cx; y = top; break;
+        case UMOJA_ACTION_MOVE_TO_SIDE_S: x = cx; y = bottom; break;
+        case UMOJA_ACTION_MOVE_TO_SIDE_E: x = right; y = cy; break;
+        case UMOJA_ACTION_MOVE_TO_SIDE_W: x = left; y = cy; break;
+        default: return false;
+        }
+        untile(w);
+        tile_action.erase(w);
+        WindowSpecification spec;
+        spec.top_left() = geom::Point{x, y};
+        tools.modify_window(info, spec);
+        return true;
+    }
+
+    // ---- window animations (P7) ------------------------------------------------
+    //
+    // GNOME's open and minimize effects, small: a new or unminimized window
+    // fades and grows in, a minimized one fades and shrinks out (150 ms,
+    // org.gnome.desktop.interface enable-animations). Frames come from a
+    // helper thread under the WM lock, as the workspace slide's do.
+
+    enum class Anim { open, minimize };
+    struct Animation {
+        Anim kind;
+        std::chrono::steady_clock::time_point start;
+        double ms;
+    };
+    std::map<Window, Animation> animations;
+    bool animations_running = false;
+
+    void animate(Window const& w, Anim kind) {
+        if (!all_windows.count(w)) return;
+        if (!umoja_animations_enabled()) {
+            if (kind == Anim::minimize) finish_minimize(w);
+            return;
+        }
+        animations[w] = Animation{kind, std::chrono::steady_clock::now(), 150.0};
+        if (kind == Anim::open) umoja_fx::set_look(w, 0.0f, 0.94f);
+        if (animations_running) return;
+        animations_running = true;
+        std::thread([] {
+            auto next = std::chrono::steady_clock::now();
+            for (;;) {
+                next += std::chrono::microseconds(g_slide_frame_us.load(std::memory_order_relaxed));
+                auto const now = std::chrono::steady_clock::now();
+                if (next < now) next = now;
+                std::this_thread::sleep_until(next);
+                bool more = false;
+                guarded("animation frame", [&] {
+                    if (!g_wm) return;
+                    g_wm->invoke([&] {
+                        if (g_wm) more = g_wm->step_animations();
+                    });
+                });
+                if (!more) return;
+            }
+        }).detach();
+    }
+
+    // Stop a window's animation and show it as it is.
+    void cancel_animation(Window const& w) {
+        if (!animations.erase(w)) return;
+        umoja_fx::set_look(w, 1.0f, 1.0f);
+    }
+
+public:
+    bool step_animations() {
+        auto const now = std::chrono::steady_clock::now();
+        std::vector<Window> minimized;
+        for (auto it = animations.begin(); it != animations.end();) {
+            Window const w = it->first;
+            if (!all_windows.count(w)) {
+                it = animations.erase(it);
+                continue;
+            }
+            double const t = std::chrono::duration<double, std::milli>(now - it->second.start).count() / it->second.ms;
+            if (t >= 1.0) {
+                bool const was_minimize = it->second.kind == Anim::minimize;
+                it = animations.erase(it);
+                if (was_minimize) minimized.push_back(w);
+                else umoja_fx::set_look(w, 1.0f, 1.0f);
+                continue;
+            }
+            double const e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // ease-out cubic
+            if (it->second.kind == Anim::open) umoja_fx::set_look(w, float(e), float(0.94 + 0.06 * e));
+            else umoja_fx::set_look(w, float(1.0 - e), float(1.0 - 0.15 * e));
+            ++it;
+        }
+        for (auto const& w : minimized) {
+            guarded("minimize", [&] { finish_minimize(w); });
+            umoja_fx::set_look(w, 1.0f, 1.0f);
+        }
+        if (animations.empty()) animations_running = false;
+        return animations_running;
+    }
+
+private:
+    void finish_minimize(Window const& w) {
+        if (!all_windows.count(w)) return;
+        auto& info = tools.info_for(w);
+        if (info.state() == mir_window_state_minimized || info.state() == mir_window_state_hidden) return;
+        if (w == tools.active_window()) focus_away_from(w);
+        WindowSpecification spec;
+        spec.state() = mir_window_state_minimized;
+        tools.place_and_size_for_state(spec, info);
+        tools.modify_window(info, spec);
+    }
+
+    // mutter: the active window going away (minimized) passes focus to the
+    // most recent window still shown on this workspace, or to nothing. Mir
+    // would pick any window, minimized ones included (F1).
+    void focus_away_from(Window const& w) {
+        for (auto const& o : mru) {
+            if (o == w || !on_current_workspace(o) || !showing(o)) continue;
+            tools.select_active_window(o);
+            return;
+        }
+        tools.select_active_window(Window{});
+    }
+
+    // A client changed its own state (title-bar double-click, its
+    // minimize button). Returns true when it went back into its tile.
+    bool client_state_change(WindowInfo& info, WindowSpecification& spec) {
+        Window const w = info.window();
+        auto const to = spec.state().value();
+        auto const id = window_id(w);
+        if (to == mir_window_state_minimized && w == tools.active_window()) {
+            cancel_animation(w);
+            focus_away_from(w);
+            return false;
+        }
+        if ((to == mir_window_state_maximized || to == mir_window_state_fullscreen) && tiled.count(id)) {
+            // Maximizing a tile remembers it (P2).
+            if (auto const a = tile_action.find(w); a != tile_action.end()) tile_before_max[w] = a->second;
+            untile(w);
+            tile_action.erase(w);
+            return false;
+        }
+        if (to != mir_window_state_restored) return false;
+        if (info.state() != mir_window_state_maximized && info.state() != mir_window_state_fullscreen) return false;
+        auto const it = tile_before_max.find(w);
+        if (it == tile_before_max.end()) return false;
+        uint32_t const action = it->second;
+        tile_before_max.erase(it);
+        UmojaRect out{};
+        if (!umoja_tile_geometry(action, to_rect(area_on(output_at(centre_of(w)))), &out)) return false;
+        spec.top_left() = geom::Point{out.x, out.y};
+        spec.size() = geom::Size{out.w, out.h};
+        tiled[id] = w;
+        tile_action[w] = action;
+        umoja_tiling_register(id, action, out);
+        umoja_fx::set_tiled_edges(w, 15);
+        return true;
+    }
+
+    // Tiles that were maximized, to go back to on unmaximize (P2).
+    std::map<Window, uint32_t> tile_before_max;
 
     // ---- keyboard move / resize -----------------------------------------------
 
@@ -2769,6 +3710,7 @@ private:
     static constexpr int KEY_COPILOT_F23 = 193; // evdev KEY_F23
     static constexpr uint32_t XK_ALT_L = 0xffe9;
     static constexpr uint32_t XK_GRAVE = 0x60;
+    static constexpr uint32_t XK_ESCAPE = 0xff1b;
 
     static bool resizable(WindowInfo const& info) {
         return info.min_width() != info.max_width() || info.min_height() != info.max_height();
@@ -2837,6 +3779,7 @@ private:
         if (!g.resize) {
             x += dx * step;
             y += dy * step;
+            y = std::max(y, area_at(centre_of(g.window)).top_left.y.as_int());
         } else {
             auto const& info = tools.info_for(g.window);
             int const min_w = std::max(1, info.min_width().as_int()), max_w = info.max_width().as_int();
@@ -2965,6 +3908,24 @@ private:
 
     bool set_state(WindowInfo& info, MirWindowState state, bool forget_untiled = true) {
         Window const w = info.window();
+        auto const id = window_id(w);
+        // Maximizing a tile remembers the tile, unmaximizing goes back into
+        // it (P2), as mutter does.
+        if (state == mir_window_state_maximized && tiled.count(id))
+            if (auto const a = tile_action.find(w); a != tile_action.end()) tile_before_max[w] = a->second;
+        if (state == mir_window_state_restored && info.state() == mir_window_state_maximized) {
+            if (auto const it = tile_before_max.find(w); it != tile_before_max.end()) {
+                uint32_t const action = it->second;
+                tile_before_max.erase(it);
+                WindowSpecification spec;
+                spec.state() = mir_window_state_restored;
+                applying = true;
+                guarded("unmaximize to tile", [&] { tools.modify_window(info, spec); });
+                applying = false;
+                return apply_to(w, action, false);
+            }
+        }
+        if (state != mir_window_state_maximized) tile_before_max.erase(w);
         untile(w);
         tile_action.erase(w);
         if (forget_untiled) untiled.erase(w);
@@ -2974,6 +3935,12 @@ private:
         if (state == mir_window_state_minimized) {
             if (auto const it = hidden_states.find(w); it != hidden_states.end()) {
                 it->second = state;
+                return true;
+            }
+            // Focus moves on now, then the window shrinks away (P7, F1).
+            if (all_windows.count(w) && showing(w)) {
+                if (w == tools.active_window()) focus_away_from(w);
+                animate(w, Anim::minimize);
                 return true;
             }
         }
@@ -3075,6 +4042,74 @@ extern "C" void umoja_wm_workspace_settings_changed(void) {
     with_wm("workspace settings changed", [&] { g_wm->workspace_settings_changed(); });
 }
 
+extern "C" bool umoja_wm_send_to_new_workspace(uint64_t id, uint32_t index) {
+    bool ok = false;
+    with_wm("send to new workspace", [&] { ok = g_wm->send_to_new_workspace(g_wm->find(id), index); });
+    return ok;
+}
+
+extern "C" bool umoja_wm_place_window(uint64_t id, int32_t workspace, int32_t x, int32_t y) {
+    bool ok = false;
+    with_wm("place window", [&] { ok = g_wm->place_window(g_wm->find(id), workspace, x, y); });
+    return ok;
+}
+
+extern "C" int32_t umoja_wm_window_pid(uint64_t id) {
+    int32_t pid = 0;
+    with_wm("window pid", [&] { pid = g_wm->window_pid(g_wm->find(id)); });
+    return pid;
+}
+
+// ---- hooks Umoja's Mir patches look up with dlsym(RTLD_DEFAULT) ------------
+// Called on Mir's Wayland thread; anything that needs the window manager
+// goes through a helper thread that takes the WM lock (never take it here:
+// the Wayland thread may be inside a call that already holds it).
+
+// Patch 3026: the user activated `surface` (dock, valid activation token);
+// Mir raises it right after this returns.
+extern "C" void mir_user_activation_hook(void const* surface) {
+    g_activation_hooks = true;
+    g_user_activation_ms = steady_ms();
+    g_user_activation = surface;
+}
+
+// Patch 3026: `surface` asked to be activated without a valid token.
+extern "C" void mir_activation_refused_hook(void const* surface) {
+    g_activation_hooks = true;
+    auto const id = reinterpret_cast<uint64_t>(surface);
+    std::thread([id] { with_wm("activation refused", [&] { g_wm->activation_refused(g_wm->find(id)); }); }).detach();
+}
+
+// Patch 3025: xdg_toplevel.show_window_menu (right-click on a header bar).
+extern "C" void mir_show_window_menu_hook(void const* surface, int32_t x, int32_t y) {
+    auto const id = reinterpret_cast<uint64_t>(surface);
+    std::thread([id, x, y] {
+        with_wm("window menu request", [&] { g_wm->client_window_menu(g_wm->find(id), x, y); });
+    }).detach();
+}
+
+// ---- keyboard layouts (keymap.rs) ----------------------------------------------
+
+namespace {
+std::mutex g_keymap_mutex;
+std::optional<miral::Keymap> g_keymap; // a copy sharing the server's state
+std::string g_keymap_pending;
+}
+
+extern "C" void umoja_set_keymap(char const* keymap) {
+    if (!keymap || !*keymap) return;
+    std::lock_guard lock{g_keymap_mutex};
+    if (!g_keymap) {
+        g_keymap_pending = keymap;
+        return;
+    }
+    try {
+        g_keymap->set_keymap(keymap);
+    } catch (std::exception const& e) {
+        std::fprintf(stderr, "umoja-mir: keymap '%s' failed: %s\n", keymap, e.what());
+    }
+}
+
 namespace {
 // ext_data_control lets a client read every copy and selection in the
 // background, so only Umoja's own shell binaries (umoja-overlay's clipboard
@@ -3162,6 +4197,24 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
     // Like mutter: apps that save their session get their windows back
     // (xdg-session-management-v1, session_management.cpp).
     extensions.add_extension(umoja_sm::extension());
+    // Modal dialogs, and VM / remote desktop viewers taking every key
+    // (wm_protocols.cpp).
+    extensions.add_extension(umoja_wmp::dialog_extension());
+    extensions.add_extension(umoja_wmp::shortcuts_inhibit_extension());
+
+    // GNOME's input sources (org.gnome.desktop.input-sources, keymap.rs),
+    // switched with Super+Space.
+    Keymap keymap;
+    {
+        std::lock_guard lock{g_keymap_mutex};
+        g_keymap.emplace(keymap);
+    }
+    struct ClearKeymap {
+        ~ClearKeymap() {
+            std::lock_guard lock{g_keymap_mutex};
+            g_keymap.reset();
+        }
+    } clear_keymap;
 
     // Persisted monitor layout (~/.config/umoja-mir.display), seeded from
     // GNOME's monitors.xml by the Rust side; Mir reloads it when it changes.
@@ -3201,6 +4254,13 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         }
         auto display = runner.wayland_display();
         umoja_session_started(display.is_set() ? display.value().c_str() : "");
+        // A layout asked for before the server was up.
+        std::string pending;
+        {
+            std::lock_guard lock{g_keymap_mutex};
+            pending.swap(g_keymap_pending);
+        }
+        if (!pending.empty()) umoja_set_keymap(pending.c_str());
     });
 
     runner.set_exception_handler([] {
@@ -3234,6 +4294,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
             input_capture,
             cursor_theme,
             cursor_size,
+            keymap,
             extensions,
             // On its own X11Support only adds an --enable-x11 option, off by
             // default: without this no Xwayland ran, and every X11 app
@@ -3253,6 +4314,7 @@ extern "C" int umoja_mir_run(int argc, char const** argv, UmojaConfig const* con
         input_capture,
         cursor_theme,
         cursor_size,
+        keymap,
         extensions,
         set_window_management_policy<UmojaWindowManager>(),
     }));

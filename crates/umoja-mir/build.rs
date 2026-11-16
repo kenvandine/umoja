@@ -17,7 +17,13 @@ fn main() {
     println!("cargo:rerun-if-changed=src/shim/umoja_shim.h");
     println!("cargo:rerun-if-changed=src/shim/session_management.cpp");
     println!("cargo:rerun-if-changed=src/shim/session_management.h");
+    println!("cargo:rerun-if-changed=src/shim/wm_protocols.cpp");
+    println!("cargo:rerun-if-changed=src/shim/wm_protocols.h");
+    println!("cargo:rerun-if-changed=src/shim/surface_effects.cpp");
+    println!("cargo:rerun-if-changed=src/shim/surface_effects.h");
     println!("cargo:rerun-if-changed=protocols/xdg-session-management-v1.xml");
+    println!("cargo:rerun-if-changed=protocols/xdg-dialog-v1.xml");
+    println!("cargo:rerun-if-changed=protocols/keyboard-shortcuts-inhibit-unstable-v1.xml");
 
     // Probe without emitting link flags yet: the static shim must come
     // before libmiral on the linker line, or `--as-needed` drops miral.
@@ -66,7 +72,11 @@ fn main() {
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let scanner = std::env::var("WAYLAND_SCANNER").unwrap_or_else(|_| "wayland-scanner".into());
     let mut protocol_code = Vec::new();
-    for name in ["xdg-session-management-v1"] {
+    for name in [
+        "xdg-session-management-v1",
+        "xdg-dialog-v1",
+        "keyboard-shortcuts-inhibit-unstable-v1",
+    ] {
         let xml = format!("protocols/{name}.xml");
         let header = out.join(format!("{name}-server-protocol.h"));
         let code = out.join(format!("{name}-protocol.c"));
@@ -100,6 +110,8 @@ fn main() {
         .file("src/shim/eis.cpp")
         .file("src/shim/input_config.cpp")
         .file("src/shim/session_management.cpp")
+        .file("src/shim/wm_protocols.cpp")
+        .file("src/shim/surface_effects.cpp")
         .include(&out)
         .warnings(true)
         .flag_if_supported("-Wno-deprecated-declarations");
@@ -127,6 +139,18 @@ fn main() {
     // And Num Lock (numlock.rs, Mir patch 3023).
     println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_num_lock_initial_hook");
     println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mir_num_lock_changed_hook");
+    // Window menu on a client-drawn title bar, "not responding" pings and
+    // user-driven vs refused activations (attention.rs, Mir patches
+    // 3025 and 3026).
+    for hook in [
+        "mir_show_window_menu_hook",
+        "mir_xdg_ping_setup_hook",
+        "mir_xdg_pong_hook",
+        "mir_user_activation_hook",
+        "mir_activation_refused_hook",
+    ] {
+        println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol={hook}");
+    }
 
     for path in miral
         .link_paths
