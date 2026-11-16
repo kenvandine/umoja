@@ -66,6 +66,7 @@ impl Docks {
                 homes: Rc::default(),
                 commands: tracker.as_ref().map(|t| t.commands.clone()),
                 entries,
+                mru: Rc::default(),
             },
             docks: RefCell::default(),
             _settings: settings,
@@ -100,6 +101,8 @@ impl Docks {
 
         if let Some(t) = tracker {
             let windows = docks.shared.windows.clone();
+            let mru = docks.shared.mru.clone();
+            let mut stamp = 0u64;
             glib::spawn_future_local(async move {
                 while let Ok(ev) = t.events.recv().await {
                     // Only what the buttons show needs a rebuild: which apps
@@ -107,6 +110,10 @@ impl Docks {
                     // terminal running a command, a browser tab) doesn't.
                     let rebuild = match ev {
                         Event::Changed(info) => {
+                            if info.activated {
+                                stamp += 1;
+                                mru.borrow_mut().insert(info.id, stamp);
+                            }
                             let old = windows.borrow_mut().insert(info.id, info.clone());
                             old.is_none_or(|o| {
                                 o.app_id != info.app_id
@@ -114,7 +121,10 @@ impl Docks {
                                     || o.minimized != info.minimized
                             })
                         }
-                        Event::Closed(id) => windows.borrow_mut().remove(&id).is_some(),
+                        Event::Closed(id) => {
+                            mru.borrow_mut().remove(&id);
+                            windows.borrow_mut().remove(&id).is_some()
+                        }
                     };
                     if rebuild {
                         queue_rebuild();
@@ -289,15 +299,33 @@ pub fn on_windows_changed(f: impl Fn() + 'static) {
     });
 }
 
-/// Which monitors (connectors) each window is on, for isolate-monitors.
-/// A window with no entry yet shows on every dock.
+/// Which monitors (connectors) each window is on, for isolate-monitors,
+/// whether it is on the current workspace (isolate-workspaces) and whether
+/// it wants attention. A window with no entry yet shows on every dock.
 #[derive(Default)]
 pub struct Homes {
     map: RefCell<HashMap<WindowId, Vec<String>>>,
+    flags: RefCell<HashMap<WindowId, u32>>,
     in_flight: Cell<bool>,
 }
 
+/// umoja_shim.h UMOJA_WINDOW_* flags.
+const CURRENT_WORKSPACE: u32 = 1 << 2;
+const ATTENTION: u32 = 1 << 9;
+
 impl Homes {
+    /// On the current workspace (or not known yet).
+    pub fn on_current_workspace(&self, id: WindowId) -> bool {
+        self.flags
+            .borrow()
+            .get(&id)
+            .is_none_or(|f| f & CURRENT_WORKSPACE != 0)
+    }
+
+    pub fn wants_attention(&self, id: WindowId) -> bool {
+        self.flags.borrow().get(&id).is_some_and(|f| f & ATTENTION != 0)
+    }
+
     pub fn shows_on(&self, id: WindowId, monitor: &gdk::Monitor) -> bool {
         let Some(here) = monitor.connector() else {
             return true;
@@ -309,11 +337,12 @@ impl Homes {
     }
 }
 
-/// A window as GetWindows reports it: app id, title, centre point.
+/// A window as GetWindows reports it: app id, title, centre point, flags.
 struct Placed {
     app_id: String,
     title: String,
     centre: (i32, i32),
+    flags: u32,
 }
 
 /// Re-read where windows are and rebuild the docks if any moved monitor.
@@ -321,14 +350,7 @@ fn refresh_homes() {
     let Some(docks) = DOCKS.with(|d| d.borrow().clone()) else {
         return;
     };
-    if !docks
-        .docks
-        .borrow()
-        .iter()
-        .any(|(_, d)| d.config.borrow().isolate_monitors)
-    {
-        return;
-    }
+    // Always: attention marks need the compositor's flags too.
     let homes = docks.shared.homes.clone();
     if homes.in_flight.replace(true) {
         return;
@@ -341,11 +363,18 @@ fn refresh_homes() {
             .iter()
             .filter_map(|m| Some((m.connector()?.to_string(), m.geometry())))
             .collect();
-        let new = {
+        let (new, flags) = {
             let windows = docks.shared.windows.borrow();
-            match_homes(windows.values(), &placed, &geometry)
+            (
+                match_homes(windows.values(), &placed, &geometry),
+                match_flags(windows.values(), &placed),
+            )
         };
-        if *homes.map.borrow() != new {
+        let flags_changed = *homes.flags.borrow() != flags;
+        if flags_changed {
+            *homes.flags.borrow_mut() = flags;
+        }
+        if *homes.map.borrow() != new || flags_changed {
             *homes.map.borrow_mut() = new;
             for d in all() {
                 d.rebuild();
@@ -390,6 +419,37 @@ fn match_homes<'a>(
     out
 }
 
+/// Each window's compositor flags, matched like `match_homes`: the
+/// workspace bit is set when any matching window is on the current
+/// workspace, attention only from a window with the same title.
+fn match_flags<'a>(
+    windows: impl Iterator<Item = &'a WindowInfo>,
+    placed: &[Placed],
+) -> HashMap<WindowId, u32> {
+    let mut out = HashMap::new();
+    for w in windows {
+        let same_app = || placed.iter().filter(|p| p.app_id == w.app_id);
+        let titled: Vec<&Placed> = same_app().filter(|p| p.title == w.title).collect();
+        let candidates: Vec<&Placed> = if titled.is_empty() {
+            same_app().collect()
+        } else {
+            titled.clone()
+        };
+        if candidates.is_empty() {
+            continue;
+        }
+        let mut f = 0;
+        if candidates.iter().any(|p| p.flags & CURRENT_WORKSPACE != 0) {
+            f |= CURRENT_WORKSPACE;
+        }
+        if titled.iter().any(|p| p.flags & ATTENTION != 0) {
+            f |= ATTENTION;
+        }
+        out.insert(w.id, f);
+    }
+    out
+}
+
 async fn fetch_placed() -> Option<Vec<Placed>> {
     let conn = gio::bus_get_future(gio::BusType::Session).await.ok()?;
     let v = conn
@@ -409,10 +469,11 @@ async fn fetch_placed() -> Option<Vec<Placed>> {
     let (rows,) = v.get::<(Vec<(u64, String, String, i32, i32, i32, i32, u32)>,)>()?;
     Some(
         rows.into_iter()
-            .map(|(_, app_id, title, x, y, w, h, _)| Placed {
+            .map(|(_, app_id, title, x, y, w, h, flags)| Placed {
                 app_id,
                 title,
                 centre: (x + w / 2, y + h / 2),
+                flags,
             })
             .collect(),
     )
@@ -469,6 +530,7 @@ mod tests {
             app_id: app.into(),
             title: title.into(),
             centre: (x, 500),
+            flags: 0,
         };
         let windows = [
             win(1, "firefox", "News"),
@@ -491,5 +553,31 @@ mod tests {
         assert_eq!(homes[&3], homes[&4]);
         // Not reported yet: no entry, so every dock shows it.
         assert!(!homes.contains_key(&5));
+    }
+
+    #[test]
+    fn workspace_and_attention_flags_follow_the_matching_window() {
+        use super::{ATTENTION, CURRENT_WORKSPACE, Placed, match_flags};
+        use crate::tracker::WindowInfo;
+        let win = |id, title: &str| WindowInfo {
+            id,
+            app_id: "app".into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let at = |title: &str, flags| Placed {
+            app_id: "app".into(),
+            title: title.into(),
+            centre: (0, 0),
+            flags,
+        };
+        let windows = [win(1, "Here"), win(2, "There"), win(3, "Renamed")];
+        let placed = [at("Here", CURRENT_WORKSPACE | ATTENTION), at("There", 0)];
+        let f = match_flags(windows.iter(), &placed);
+        assert_eq!(f[&1], CURRENT_WORKSPACE | ATTENTION);
+        assert_eq!(f[&2], 0);
+        // No title match: the app's windows decide the workspace, never
+        // attention.
+        assert_eq!(f[&3], CURRENT_WORKSPACE);
     }
 }

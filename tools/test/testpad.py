@@ -11,34 +11,59 @@ stdin, one command per line:
     font <points>     type of that size (umoja-demo: readable in a video)
     fullscreen / unfullscreen
     present           ask to be focused
+    present-in <s>    ask to be focused after that many seconds (with no
+                      activation token: umoja-wm-test's attention test)
+    hang <s>          block the main loop that long (not responding)
+    dialog            open a modal dialog over the window
+    close-dialog
+    inhibit           take the system shortcuts (keyboard-shortcuts-inhibit)
+    uninhibit
+    state             reply with the window's toplevel state flags
     quit
 
-Every change to the text is written to the file given as the only argument,
-so the test can read exactly what Umoja typed into a real app.
+Every change to the text is written to the file given as the first
+argument, so the test can read exactly what Umoja typed into a real app.
+`--app-id ID` and `--size WxH` set the application id and the window's
+first size (umoja-wm-test).
 """
 
 import sys
+import time
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else "/dev/null"
+ARGS = sys.argv[1:]
+
+
+def option(name, default):
+    if name in ARGS:
+        i = ARGS.index(name)
+        value = ARGS[i + 1] if i + 1 < len(ARGS) else default
+        del ARGS[i:i + 2]
+        return value
+    return default
+
+
+APP_ID = option("--app-id", "org.umoja.FeatureTestPad")
+SIZE = tuple(int(v) for v in option("--size", "760x420").split("x"))
+OUT = ARGS[0] if ARGS else "/dev/null"
 
 
 class Pad(Gtk.Application):
     def __init__(self):
         # NON_UNIQUE: a test may open two pads, and a second one must not
         # just hand over to the first and exit.
-        super().__init__(application_id="org.umoja.FeatureTestPad",
-                         flags=Gio.ApplicationFlags.NON_UNIQUE)
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.win = None
         self.view = None
+        self.dialog = None
 
     def do_activate(self):
         self.win = Gtk.ApplicationWindow(application=self, title="Umoja feature test pad")
-        self.win.set_default_size(760, 420)
+        self.win.set_default_size(*SIZE)
         self.view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=16, right_margin=16,
                                  top_margin=16, bottom_margin=16)
         self.view.get_buffer().connect("changed", self.save)
@@ -86,6 +111,30 @@ class Pad(Gtk.Application):
         elif cmd == "present":
             self.win.present()
             self.view.grab_focus()
+        elif cmd == "present-in":
+            GLib.timeout_add(int(float(arg or 1) * 1000), lambda: (self.win.present(), False)[1])
+        elif cmd == "hang":
+            # Answer first, then stop answering anything (pings included).
+            print(f"ok {cmd}", flush=True)
+            GLib.idle_add(lambda: (time.sleep(float(arg or 10)), False)[1])
+            return True
+        elif cmd == "dialog":
+            self.dialog = Gtk.Window(title=f"{self.win.get_title()} dialog", transient_for=self.win,
+                                     modal=True, default_width=320, default_height=160)
+            self.dialog.set_child(Gtk.Label(label="A modal dialog"))
+            self.dialog.present()
+        elif cmd == "close-dialog":
+            if self.dialog:
+                self.dialog.destroy()
+                self.dialog = None
+        elif cmd == "inhibit":
+            self.win.get_surface().inhibit_system_shortcuts(None)
+        elif cmd == "uninhibit":
+            self.win.get_surface().restore_system_shortcuts()
+        elif cmd == "state":
+            state = int(self.win.get_surface().get_state())
+            print(f"ok state {state}", flush=True)
+            return True
         elif cmd == "quit":
             self.quit()
             return False

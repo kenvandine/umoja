@@ -613,10 +613,21 @@ window.umoja-spread {
   outline-offset: -3px;
 }
 .workspace-thumbnail.drop-target,
-.workspace-peek.drop-target {
+.workspace-peek.drop-target,
+.workspace-card.drop-target {
   opacity: 1;
   outline: 3px solid @accent_bg_color;
   outline-offset: -3px;
+}
+/* Where a window dropped between two thumbnails makes a new workspace
+   (gnome-shell's placeholder in the thumbnail strip). */
+.workspace-gap {
+  min-width: 6px;
+  margin: 0 3px;
+  border-radius: 3px;
+}
+.workspace-gap.drop-target {
+  background-color: @accent_bg_color;
 }
 .thumb-window {
   border-radius: 2px;
@@ -644,6 +655,7 @@ window.umoja-spread entry {
   outline-offset: 4px;
 }
 .spread-window:hover .spread-thumb,
+.spread-window.selected .spread-thumb,
 .spread-window:focus-visible .spread-thumb {
   box-shadow: 0 0 0 4px alpha(#ffffff, 0.35);
 }
@@ -810,4 +822,28 @@ window.captions {
   min-height: 24px;
   padding: 2px 8px;
   color: #ffffff;
+}
+
+/* Window manager dialogs (wm_dialogs.rs): Run a Command, Super+P, the
+   not-responding dialog. The see-through card of the switcher. */
+.wm-dialog {
+  padding: 24px;
+  min-width: 420px;
+}
+.wm-dialog entry {
+  min-height: 40px;
+  border-radius: 14px;
+  background-color: alpha(#ffffff, 0.12);
+  color: #ffffff;
+}
+.wm-dialog-error {
+  color: @error_color;
+}
+.input-source-item {
+  min-width: 64px;
+  min-height: 48px;
+  padding: 12px 20px;
+}
+.input-source-item label {
+  font-size: 1.6em;
 }

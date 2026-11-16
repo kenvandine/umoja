@@ -15,6 +15,14 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Super+A** | Show all apps |
 | **Super+Alt+Up** / **Super+Alt+Down** | Step up to the overview and then the apps, or back down to the desktop |
 | **Super+V** (or **Super+M**) | Notifications and calendar |
+| **Super+S** | Quick Settings |
+| **Super+N** | Focus the newest notification (**Enter** opens it, **Escape** leaves it) |
+| **Super+D** (or **Ctrl+Alt+D**) | Show the desktop; press again to bring the windows back |
+| **Super+1** … **Super+9** | Open or switch to the app at that place in the dock (add **Shift** for a new window) |
+| **Super+P** | Choose how to use several displays: mirror, join, external or built-in only |
+| **Super+Space** | Next keyboard layout (add **Shift** to go back) |
+| **Alt+F2** | Run a command |
+| **Super+Escape** | Take the shortcuts back from an app that holds them (a virtual machine or remote desktop viewer) |
 | **Ctrl+Alt+Tab** | Move the keyboard focus to the top bar or the dock |
 | **Super+L** | Lock the screen |
 | **Super+/** | Keyboard shortcuts guide |
@@ -75,8 +83,9 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 
 | Keys | What it does |
 | --- | --- |
-| **Super+Page Up**, **Super+Alt+Left**, **Ctrl+Alt+Left** or **Ctrl+Alt+Up** | Previous workspace |
-| **Super+Page Down**, **Super+Alt+Right**, **Ctrl+Alt+Right** or **Ctrl+Alt+Down** | Next workspace |
+| **Super+Page Up**, **Super+Alt+Left** or **Ctrl+Alt+Left** | Previous workspace |
+| **Super+Page Down**, **Super+Alt+Right** or **Ctrl+Alt+Right** | Next workspace |
+| **Super+scroll** | Previous or next workspace |
 | **Super+Home** | First workspace |
 | **Super+End** | Last workspace |
 | **Super+Shift+Page Up** (or add **Shift** to the keys above) | Take the window to the previous workspace |

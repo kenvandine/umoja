@@ -1,0 +1,1674 @@
+#!/usr/bin/python3
+"""Test Umoja's window management on a live session, on camera.
+
+Run it from a terminal inside an Umoja session on a test machine, then keep
+your hands off the keyboard and mouse until it says it's done. It works with
+one monitor or several; tests that need a second monitor are skipped on a
+single display. Each test drives the desktop the way a person would, with
+real key presses, pointer moves, clicks, drags and scrolls, and then checks
+what the compositor, the overview, the dock and the apps report.
+
+    tools/test/umoja-wm-test                    # everything
+    tools/test/umoja-wm-test --only hot-corner thumbnail-drag
+    tools/test/umoja-wm-test --skip not-responding
+    tools/test/umoja-wm-test --list
+
+It writes, by default to ~/umoja-wm-test-<time>/:
+
+    REPORT.md         pass / fail / skip per test, every check, with pictures
+    results.json      the same, for a machine (or Claude) to read
+    videos/<test>-<output>.mp4   one clip per test and monitor (wf-recorder)
+    images/*.png      screenshots of every monitor at the moments that matter
+    journal.txt       the session's journal for the run (umoja units)
+    log.txt           what the script did, step by step
+    setup.json        monitors, workspaces and versions it ran on
+
+Input goes through org.gnome.Mutter.RemoteDesktop (umoja-mir's own virtual
+keyboard and pointer, the path a remote desktop app uses), with absolute
+pointer positions in layout pixels. The overview and dock answer the test
+hooks it reads (OverviewState, TestIcons) only while
+$XDG_RUNTIME_DIR/umoja-demo exists; the script creates and removes it. It
+holds an idle inhibitor and stops before any input if the screen is blanked
+or locked. Its windows are tools/test/testpad.py, with two desktop files of
+its own in ~/.local/share/applications that it removes at the end, and it
+puts back every setting it changes.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+from pathlib import Path
+
+try:
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+except (ImportError, ValueError):
+    sys.exit("umoja-wm-test needs PyGObject: sudo apt install python3-gi")
+
+HERE = Path(__file__).resolve().parent
+OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
+PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
+DOCK = ("org.umoja.Dock", "/org/umoja/Dock", "org.umoja.Dock")
+COMPOSITOR = ("org.umoja.Compositor", "/org/umoja/Compositor", "org.umoja.Compositor")
+NOTIFY = ("org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications")
+NOTIFICATIONS = ("org.umoja.Notifications", "/org/umoja/Notifications", "org.umoja.Notifications")
+SCREENSAVER = ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver")
+DISPLAY = ("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig")
+REMOTE = ("org.gnome.Mutter.RemoteDesktop", "/org/gnome/Mutter/RemoteDesktop", "org.gnome.Mutter.RemoteDesktop")
+REMOTE_SESSION = "org.gnome.Mutter.RemoteDesktop.Session"
+
+# umoja_shim.h UMOJA_WINDOW_* flags.
+FOCUSED, MINIMIZED, CURRENT_WS, MAXIMIZED, FULLSCREEN, TILED = 1, 2, 4, 8, 16, 32
+ATTENTION = 512
+# tiling::Action numbers (TileWindow).
+TILE_LEFT, TOGGLE_MAXIMIZED = 1, 13
+# GdkToplevelState bits (testpad "state").
+GDK_MAXIMIZED, GDK_TILED, GDK_TOP_TILED, GDK_RIGHT_TILED, GDK_BOTTOM_TILED, GDK_LEFT_TILED = (
+    1 << 1, 1 << 6, 1 << 7, 1 << 9, 1 << 11, 1 << 13)
+
+MARK = "4711"
+PAD_APP = "org.umoja.WmTestPad"
+PAD_APP2 = "org.umoja.WmTestPadTwo"
+PANEL_HEIGHT = 32  # umoja-panel's bar, the top of the work area
+
+KEYS = {
+    "Super": 0xFFEB, "Shift": 0xFFE1, "Ctrl": 0xFFE3, "Alt": 0xFFE9,
+    "Escape": 0xFF1B, "Return": 0xFF0D, "Tab": 0xFF09, "BackSpace": 0xFF08,
+    "Left": 0xFF51, "Up": 0xFF52, "Right": 0xFF53, "Down": 0xFF54,
+    "Page_Up": 0xFF55, "Page_Down": 0xFF56, "Home": 0xFF50, "End": 0xFF57,
+    "F2": 0xFFBF, "space": 0x20, "grave": 0x60, "minus": 0x2D, "period": 0x2E,
+}
+BTN_LEFT, BTN_RIGHT, BTN_MIDDLE = 0x110, 0x111, 0x112
+
+TESTS = []
+
+
+def test(name, title, monitors=1):
+    """Register a test; `monitors` is how many it needs."""
+
+    def wrap(fn):
+        TESTS.append((name, title, monitors, fn))
+        return fn
+
+    return wrap
+
+
+class Skip(Exception):
+    pass
+
+
+class Stop(Exception):
+    pass
+
+
+def settings(schema):
+    src = Gio.SettingsSchemaSource.get_default()
+    return Gio.Settings.new(schema) if src and src.lookup(schema, True) else None
+
+
+def keysym(name):
+    if name in KEYS:
+        return KEYS[name]
+    if len(name) == 1:
+        return ord(name.lower())
+    raise ValueError(f"no keysym for {name!r}")
+
+
+def centre(rect):
+    x, y, w, h = rect[:4]
+    return x + w / 2, y + h / 2
+
+
+# ---------------------------------------------------------------------------
+
+
+class Bus:
+    def __init__(self, log):
+        self.conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.system = None
+        self.log = log
+
+    def call(self, target, method, args=None, reply=None, timeout=10_000, quiet=False, path=None, iface=None):
+        name, default_path, default_iface = target
+        try:
+            res = self.conn.call_sync(name, path or default_path, iface or default_iface, method, args,
+                                      GLib.VariantType(reply) if reply else None,
+                                      Gio.DBusCallFlags.NONE, timeout, None)
+        except GLib.Error as e:
+            if not quiet:
+                self.log(f"  ! {iface or default_iface}.{method}: {e.message}")
+            return None
+        return res.unpack() if res is not None else None
+
+    def ok(self, target, method, args=None, path=None, iface=None):
+        """Call a method with no reply; whether it worked."""
+        name, default_path, default_iface = target
+        try:
+            self.conn.call_sync(name, path or default_path, iface or default_iface, method, args, None,
+                                Gio.DBusCallFlags.NONE, 10_000, None)
+            return True
+        except GLib.Error as e:
+            self.log(f"  ! {iface or default_iface}.{method}: {e.message}")
+            return False
+
+    def has_method(self, target, method):
+        name, path, iface = target
+        try:
+            res = self.conn.call_sync(name, path, "org.freedesktop.DBus.Introspectable", "Introspect",
+                                      None, GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            return False
+        info = Gio.DBusNodeInfo.new_for_xml(res.unpack()[0])
+        i = info.lookup_interface(iface)
+        return bool(i and i.lookup_method(method))
+
+    def session_locked(self):
+        try:
+            if self.system is None:
+                self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            res = self.system.call_sync(
+                "org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                "org.freedesktop.DBus.Properties", "Get",
+                GLib.Variant("(ss)", ("org.freedesktop.login1.Session", "LockedHint")),
+                GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 5000, None)
+            return bool(res.unpack()[0])
+        except GLib.Error:
+            return False
+
+
+class Input:
+    """A RemoteDesktop session: umoja-mir's virtual keyboard and pointer."""
+
+    def __init__(self, run):
+        self.run = run
+        res = run.bus.call(REMOTE, "CreateSession", None, "(o)")
+        if not res:
+            raise Stop("could not create a RemoteDesktop session (org.gnome.Mutter.RemoteDesktop)")
+        self.path = res[0]
+        if not run.bus.ok(REMOTE, "Start", path=self.path, iface=REMOTE_SESSION):
+            raise Stop("could not start the RemoteDesktop session")
+        self.held = []
+        self.pointer = (0.0, 0.0)
+        self.checked = 0.0
+
+    def _call(self, method, sig, *args):
+        # Never type or click into a blanked or locked screen.
+        now = time.monotonic()
+        if now - self.checked > 0.5:
+            self.run.check_screen()
+            self.checked = now
+        self.run.bus.call(REMOTE, method, GLib.Variant(sig, args), path=self.path, iface=REMOTE_SESSION)
+
+    def key(self, name, down):
+        self._call("NotifyKeyboardKeysym", "(ub)", keysym(name), down)
+        if down:
+            self.held.append(name)
+        elif name in self.held:
+            self.held.remove(name)
+
+    def press(self, *names, hold=0.05):
+        """Press keys together (modifiers first), then let go in reverse."""
+        for n in names:
+            self.key(n, True)
+            time.sleep(0.03)
+        time.sleep(hold)
+        for n in reversed(names):
+            self.key(n, False)
+            time.sleep(0.03)
+        self.run.wait(0.25)
+
+    def type(self, text):
+        for ch in text:
+            name = {" ": "space", "-": "minus", ".": "period"}.get(ch, ch)
+            self.press(name, hold=0.01)
+
+    def move(self, x, y):
+        self._call("NotifyPointerMotionAbsolute", "(sdd)", "", float(x), float(y))
+        self.pointer = (float(x), float(y))
+
+    def rel(self, dx, dy):
+        self._call("NotifyPointerMotionRelative", "(dd)", float(dx), float(dy))
+        self.pointer = (self.pointer[0] + dx, self.pointer[1] + dy)
+
+    def glide(self, x, y, seconds=0.5):
+        x0, y0 = self.pointer
+        steps = max(4, int(seconds / 0.016))
+        for i in range(1, steps + 1):
+            t = i / steps
+            e = t * t * (3 - 2 * t)
+            self.move(x0 + (x - x0) * e, y0 + (y - y0) * e)
+            time.sleep(0.016)
+
+    def button(self, btn, down):
+        self._call("NotifyPointerButton", "(ib)", btn, down)
+
+    def click(self, x, y, btn=BTN_LEFT, glide=True):
+        if glide:
+            self.glide(x, y, 0.35)
+        else:
+            self.move(x, y)
+        time.sleep(0.15)
+        self.button(btn, True)
+        time.sleep(0.08)
+        self.button(btn, False)
+        self.run.wait(0.4)
+
+    def drag(self, start, end, seconds=1.0, hold=0.4):
+        self.glide(*start, seconds=0.35)
+        time.sleep(0.15)
+        self.button(BTN_LEFT, True)
+        time.sleep(0.15)
+        # Past the drag threshold first, as a hand would.
+        self.move(start[0] + 12, start[1] + 6)
+        time.sleep(0.05)
+        self.glide(*end, seconds=seconds)
+        time.sleep(hold)
+        self.button(BTN_LEFT, False)
+        self.run.wait(0.8)
+
+    def scroll(self, steps):
+        self._call("NotifyPointerAxisDiscrete", "(ui)", 0, int(steps))
+
+    def release_all(self):
+        for n in list(reversed(self.held)):
+            try:
+                self.key(n, False)
+            except Stop:
+                pass
+
+    def close(self):
+        self.release_all()
+        self.run.bus.call(REMOTE, "Stop", path=self.path, iface=REMOTE_SESSION, quiet=True)
+
+
+class Pad:
+    """tools/test/testpad.py: a real GTK window the test can steer."""
+
+    def __init__(self, run, name, app=PAD_APP, size=None):
+        self.run = run
+        self.file = Path(run.tmp) / f"{name}.txt"
+        self.title = f"WM test {name} {MARK}"
+        cmd = [sys.executable, str(HERE / "testpad.py"), str(self.file), "--app-id", app]
+        if size:
+            cmd += ["--size", f"{size[0]}x{size[1]}"]
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True)
+        line = self.proc.stdout.readline().strip()
+        if line != "ready":
+            self.proc.kill()
+            raise Skip(f"the test pad didn't start (got {line!r}; it needs gir1.2-gtk-4.0)")
+        self.cmd("title", self.title)
+        self.id = run.wait_for(lambda: run.window_id(title=self.title), 10, f"{name}'s window")
+        run.pads.append(self)
+        run.wait(0.4)
+
+    def cmd(self, *words):
+        self.proc.stdin.write(" ".join(str(w) for w in words) + "\n")
+        self.proc.stdin.flush()
+        return self.proc.stdout.readline().strip()
+
+    def state(self):
+        reply = self.cmd("state")
+        try:
+            return int(reply.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    def rect(self):
+        return self.run.rect(self.id)
+
+    def flags(self):
+        return self.run.flags(self.id)
+
+    def titlebar(self):
+        x, y, w, _h = self.rect()
+        return x + w / 2, y + 14
+
+    def focus(self):
+        self.run.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (self.id,)))
+        self.run.wait(0.5)
+
+    def close(self):
+        if self.proc.poll() is not None:
+            return
+        try:
+            self.cmd("quit")
+            self.proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired, BrokenPipeError, ValueError):
+            self.proc.kill()
+
+
+class Recorder:
+    """One wf-recorder per monitor, so every screen is on camera."""
+
+    def __init__(self, run):
+        self.run = run
+        self.procs = []
+
+    def start(self, name):
+        if not self.run.video:
+            return
+        for mon in self.run.monitors:
+            path = self.run.out / "videos" / f"{name}-{mon['output']}.mp4"
+            cmd = ["wf-recorder", "-y", "-o", mon["output"], "-c", "libx264", "-p", "preset=ultrafast",
+                   "-p", "crf=26", "-f", str(path)]
+            p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            self.procs.append((p, path))
+        time.sleep(1.0)
+        for p, path in self.procs:
+            if p.poll() is None:
+                self.run.current["videos"].append(str(path.relative_to(self.run.out)))
+            else:
+                self.run.log(f"  ! wf-recorder stopped at once for {path.name}")
+
+    def stop(self):
+        if not self.procs:
+            return
+        time.sleep(1.2)  # wf-recorder drops the tail
+        for p, _ in self.procs:
+            if p.poll() is None:
+                p.send_signal(signal.SIGINT)
+        for p, _ in self.procs:
+            try:
+                p.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        self.procs = []
+
+
+# ---------------------------------------------------------------------------
+
+
+class Run:
+    def __init__(self, opts):
+        self.opts = opts
+        self.out = opts.out
+        (self.out / "images").mkdir(parents=True, exist_ok=True)
+        (self.out / "videos").mkdir(exist_ok=True)
+        (self.out / ".nomedia").touch()
+        self.logf = open(self.out / "log.txt", "w")
+        self.bus = Bus(self.log)
+        self.video = not opts.no_video
+        self.recorder = Recorder(self)
+        self.tmp = tempfile.mkdtemp(prefix="umoja-wm-test-")
+        self.results = []
+        self.current = None
+        self.pads = []
+        self.restore = []  # (what, fn) to put back at the end
+        self.input = None
+        self.monitors = []
+        self.inhibit_cookie = None
+        self.signals = []
+        self.started = datetime.datetime.now()
+
+    # ---- plumbing ------------------------------------------------------
+
+    def log(self, msg):
+        line = f"{datetime.datetime.now():%H:%M:%S} {msg}"
+        print(line, flush=True)
+        self.logf.write(line + "\n")
+        self.logf.flush()
+
+    def check_screen(self):
+        res = self.bus.call(SCREENSAVER, "GetActive", None, "(b)", quiet=True)
+        if res and res[0]:
+            raise Stop("the screen is blanked")
+        if self.bus.session_locked():
+            raise Stop("the session is locked")
+
+    def wait(self, seconds, until=None):
+        end = time.monotonic() + seconds
+        ctx = GLib.MainContext.default()
+        last = 0.0
+        while True:
+            while ctx.iteration(False):
+                pass
+            if until:
+                v = until()
+                if v:
+                    return v
+            now = time.monotonic()
+            if now >= end:
+                return None
+            if now - last > 1.0:
+                self.check_screen()
+                last = now
+            time.sleep(0.05)
+
+    def wait_for(self, fn, timeout, what):
+        v = self.wait(timeout, fn)
+        if not v:
+            raise AssertionError(f"timed out after {timeout:g} s waiting for {what}")
+        return v
+
+    def shot(self, name, caption):
+        for mon in self.monitors:
+            path = self.out / "images" / f"{self.current['name']}-{name}-{mon['output']}.png"
+            r = subprocess.run(["grim", "-o", mon["output"], "-s", "1", str(path)],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                self.current["shots"].append({"file": str(path.relative_to(self.out)),
+                                              "caption": f"{caption} ({mon['output']})"})
+            else:
+                self.log(f"  ! grim: {r.stderr.strip()}")
+        self.log(f"  shot {name}")
+
+    def check(self, ok, what, detail=""):
+        self.current["checks"].append({"ok": bool(ok), "check": what, "detail": str(detail)[:2000]})
+        self.log(f"  {'✓' if ok else '✗'} {what}" + (f": {str(detail)[:200]}" if detail else ""))
+        return bool(ok)
+
+    def note(self, text):
+        self.current["notes"].append(text)
+        self.log(f"  · {text}")
+
+    # ---- what the desktop reports ----------------------------------------
+
+    def windows(self):
+        rows = self.bus.call(COMPOSITOR, "GetWindows", None, "(a(tssiiiiu))", quiet=True)
+        return rows[0] if rows else []
+
+    def window_id(self, title=None, app=None):
+        for w in self.windows():
+            if (title and w[2] == title) or (app and w[1] == app):
+                return w[0]
+        return None
+
+    def window(self, wid):
+        return next((w for w in self.windows() if w[0] == wid), None)
+
+    def rect(self, wid):
+        w = self.window(wid)
+        return tuple(w[3:7]) if w else (0, 0, 0, 0)
+
+    def flags(self, wid):
+        w = self.window(wid)
+        return w[7] if w else 0
+
+    def focused(self):
+        return next((w[0] for w in self.windows() if w[7] & FOCUSED), None)
+
+    def workspaces(self):
+        res = self.bus.call(COMPOSITOR, "GetWorkspaces", None, "(uu)", quiet=True)
+        return res if res else (0, 1)
+
+    def workspace_of(self, wid):
+        rows = self.bus.call(COMPOSITOR, "GetWindowWorkspaces", None, "(a(ti))", quiet=True)
+        return dict(rows[0]).get(wid) if rows else None
+
+    def tiles(self):
+        rows = self.bus.call(COMPOSITOR, "GetWindowTiles", None, "(a(tu))", quiet=True)
+        return dict(rows[0]) if rows else {}
+
+    def overview(self):
+        res = self.bus.call(OVERLAY, "OverviewState", None, "(a{sv})", quiet=True)
+        return res[0] if res else {}
+
+    def overview_visible(self):
+        return bool(self.overview().get("visible"))
+
+    def dock_icons(self):
+        res = self.bus.call(DOCK, "TestIcons", None, "(s(ii)a(subbiiii))", quiet=True)
+        return res if res else ("left", (0, 0), [])
+
+    def monitor_of(self, rect):
+        cx, cy = centre(rect)
+        for m in self.monitors:
+            if m["x"] <= cx < m["x"] + m["w"] and m["y"] <= cy < m["y"] + m["h"]:
+                return m
+        return self.monitors[0]
+
+    @property
+    def primary(self):
+        return self.monitors[0]
+
+    def area(self, mon=None, dock=True):
+        """The work area, roughly: the monitor less the top bar and, when
+        it reserves space, the dock."""
+        m = mon or self.primary
+        x, y, w, h = m["x"], m["y"] + PANEL_HEIGHT, m["w"], m["h"] - PANEL_HEIGHT
+        d = settings("org.gnome.shell.extensions.dash-to-dock")
+        if dock and (not d or d.get_boolean("dock-fixed")):
+            position, (dw, dh), _ = self.dock_icons()
+            if position == "left":
+                x, w = x + dw, w - dw
+            elif position == "right":
+                w -= dw
+            elif position == "bottom":
+                h -= dh
+            elif position == "top":
+                y, h = y + dh, h - dh
+        return (x, y, w, h)
+
+    def gset(self, schema, key, value):
+        """Set a GSettings key for the run; it is put back at the end."""
+        s = settings(schema)
+        if not s or not s.settings_schema.has_key(key):
+            raise Skip(f"{schema} {key} isn't installed")
+        old = s.get_value(key)
+        user_set = s.get_user_value(key) is not None
+        s.set_value(key, value)
+        Gio.Settings.sync()
+        self.restore.append((f"{schema} {key}",
+                             lambda: (s.set_value(key, old) if user_set else s.reset(key), Gio.Settings.sync())))
+        self.wait(0.5)
+
+    # ---- the session ----------------------------------------------------
+
+    def read_monitors(self):
+        res = self.bus.call(DISPLAY, "GetCurrentState", None, None)
+        if not res:
+            raise Stop("org.gnome.Mutter.DisplayConfig.GetCurrentState failed")
+        _serial, monitors, logical, _props = res
+        size = {}
+        for spec, modes, _mprops in monitors:
+            for mode in modes:
+                if mode[6].get("is-current"):
+                    size[spec[0]] = (mode[1], mode[2])
+        mons = []
+        for x, y, scale, _transform, primary, specs, _p in logical:
+            spec = specs[0]
+            w, h = size.get(spec[0], (1920, 1080))
+            mons.append({"connector": spec[0], "output": spec[2], "x": x, "y": y,
+                         "w": round(w / scale), "h": round(h / scale), "scale": scale, "primary": primary})
+        mons.sort(key=lambda m: (not m["primary"], m["x"], m["y"]))
+        self.monitors = mons
+        return mons
+
+    def flag(self, on):
+        f = Path(GLib.get_user_runtime_dir()) / "umoja-demo"
+        if on:
+            f.touch()
+        else:
+            f.unlink(missing_ok=True)
+
+    def install_pad_apps(self):
+        apps = Path.home() / ".local/share/applications"
+        apps.mkdir(parents=True, exist_ok=True)
+        for app, name in ((PAD_APP, "WM Test Pad"), (PAD_APP2, "WM Test Pad Two")):
+            path = apps / f"{app}.desktop"
+            path.write_text(
+                "[Desktop Entry]\nType=Application\n"
+                f"Name={name} {MARK}\n"
+                f"Exec={sys.executable} {HERE / 'testpad.py'} /dev/null --app-id {app}\n"
+                "Icon=accessories-text-editor\nTerminal=false\n"
+                "Actions=new-window;\n\n[Desktop Action new-window]\nName=New Window\n"
+                f"Exec={sys.executable} {HERE / 'testpad.py'} /dev/null --app-id {app}\n")
+            self.restore.append((f"remove {path.name}", lambda p=path: p.unlink(missing_ok=True)))
+        subprocess.run(["update-desktop-database", str(apps)], capture_output=True)
+
+    def preflight(self):
+        problems = []
+        for target, method in [(OVERLAY, "OverviewState"), (DOCK, "TestIcons"), (DOCK, "ActivateApp"),
+                               (COMPOSITOR, "PlaceWindow"), (COMPOSITOR, "SendWindowToNewWorkspace"),
+                               (PANEL, "FocusNotification"), (REMOTE, "CreateSession")]:
+            if not self.bus.has_method(target, method):
+                problems.append(f"{target[2]}.{method} is missing: install the debs with the window "
+                                "management work and log in again")
+        for tool in ("grim",):
+            if not shutil.which(tool):
+                problems.append(f"{tool} is not installed")
+        if problems:
+            for p in problems:
+                self.log(f"! {p}")
+            sys.exit(1)
+        if self.video and not shutil.which("wf-recorder"):
+            self.log("wf-recorder is missing: no videos")
+            self.video = False
+        self.check_screen()
+        self.read_monitors()
+        for m in self.monitors:
+            self.log(f"monitor {m['output']} ({m['connector']}) {m['w']}x{m['h']}+{m['x']}+{m['y']} "
+                     f"scale {m['scale']:g}{' primary' if m['primary'] else ''}")
+        res = self.bus.call(SCREENSAVER, "Inhibit",
+                            GLib.Variant("(ss)", ("umoja-wm-test", "Testing window management")), "(u)")
+        self.inhibit_cookie = res[0] if res else None
+        self.flag(True)
+        self.install_pad_apps()
+        self.input = Input(self)
+        # Banners on (Do Not Disturb would hide what some tests check).
+        n = settings("org.gnome.desktop.notifications")
+        if n and not n.get_boolean("show-banners"):
+            self.gset("org.gnome.desktop.notifications", "show-banners", GLib.Variant("b", True))
+        (self.out / "setup.json").write_text(json.dumps({
+            "monitors": self.monitors, "workspaces": list(self.workspaces()),
+            "versions": versions(), "started": self.started.isoformat()}, indent=2))
+
+    def reset(self):
+        """Between tests: nothing held, no overview or popups, test windows
+        gone, back on the last (empty) workspace."""
+        if self.input:
+            self.input.release_all()
+        if self.overview_visible():
+            self.bus.call(OVERLAY, "ToggleOverview", quiet=True)
+        self.bus.call(OVERLAY, "HideSwitcher", quiet=True)
+        for p in self.pads:
+            p.close()
+        self.pads = []
+        self.wait(0.8)
+        cur, count = self.workspaces()
+        if cur != count - 1:
+            self.bus.call(COMPOSITOR, "SwitchWorkspace", GLib.Variant("(u)", (count - 1,)), quiet=True)
+            self.wait(0.6)
+
+    def teardown(self):
+        try:
+            self.reset()
+        except Stop:
+            pass
+        if self.input:
+            self.input.close()
+        for what, fn in reversed(self.restore):
+            try:
+                fn()
+                self.log(f"put back: {what}")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"! could not put back {what}: {e}")
+        self.flag(False)
+        if self.inhibit_cookie is not None:
+            self.bus.call(SCREENSAVER, "UnInhibit", GLib.Variant("(u)", (self.inhibit_cookie,)), quiet=True)
+        since = self.started.strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.out / "journal.txt", "w") as f:
+            subprocess.run(["journalctl", "--user", "--since", since, "--no-pager", "-o", "short-precise",
+                            "-u", "umoja-*"], stdout=f, stderr=subprocess.DEVNULL)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    # ---- common steps ------------------------------------------------------
+
+    def open_overview(self):
+        if not self.overview_visible():
+            self.input.press("Super")
+        return self.wait_for(lambda: self.overview_visible() and self.overview().get("card") is not None
+                             and self.overview(), 5, "the overview")
+
+    def close_overview(self):
+        if self.overview_visible():
+            self.input.press("Escape")
+            self.wait(0.6, lambda: not self.overview_visible())
+
+    def go_to_new_workspace(self):
+        cur, count = self.workspaces()
+        if cur != count - 1:
+            self.bus.call(COMPOSITOR, "SwitchWorkspace", GLib.Variant("(u)", (count - 1,)))
+            self.wait(0.6)
+        return self.workspaces()
+
+
+def versions():
+    out = {}
+    for pkg in ("umoja-desktop", "umoja-mir", "libmiral7", "libmirserver64"):
+        r = subprocess.run(["dpkg-query", "-W", "-f", "${Version}", pkg], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout:
+            out[pkg] = r.stdout
+    return out
+
+
+def need_workspaces(run):
+    dyn = settings("org.gnome.mutter")
+    if dyn and not dyn.get_boolean("dynamic-workspaces"):
+        raise Skip("needs dynamic workspaces (org.gnome.mutter dynamic-workspaces)")
+
+
+# ---------------------------------------------------------------------------
+# The overview
+
+
+@test("hot-corner", "Hot corner opens the overview only when it is on (O11)")
+def t_hot_corner(run):
+    m = run.primary
+    corner_x = m["x"]
+    run.gset("org.gnome.desktop.interface", "enable-hot-corners", GLib.Variant("b", False))
+    run.input.move(corner_x + 60, m["y"] + 60)
+    run.wait(0.3)
+    run.input.glide(corner_x, m["y"], 0.3)
+    for _ in range(6):
+        run.input.rel(-30, -30)
+        time.sleep(0.03)
+    run.wait(1.0)
+    run.check(not run.overview_visible(), "with hot corners off, pushing into the corner does nothing")
+    run.close_overview()
+    run.gset("org.gnome.desktop.interface", "enable-hot-corners", GLib.Variant("b", True))
+    run.input.move(corner_x + 60, m["y"] + 60)
+    run.wait(0.3)
+    run.input.glide(corner_x, m["y"], 0.3)
+    for _ in range(6):
+        run.input.rel(-30, -30)
+        time.sleep(0.03)
+    opened = run.wait(2.0, run.overview_visible)
+    run.check(opened, "with hot corners on, pushing into the top-left corner opens the overview")
+    run.shot("open", "overview opened from the hot corner")
+    run.input.move(m["x"] + m["w"] / 2, m["y"] + m["h"] / 2)
+    run.close_overview()
+
+
+@test("overview-monitor", "Overview on the primary monitor, a card on every other (O12, M1)")
+def t_overview_monitor(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    if len(run.monitors) > 1:
+        other = run.monitors[1]
+        run.bus.call(COMPOSITOR, "PlaceWindow", GLib.Variant(
+            "(tiii)", (b.id, -1, other["x"] + 100, other["y"] + 100)), "(b)")
+        run.wait(0.8)
+    st = run.open_overview()
+    run.shot("open", "overview")
+    run.check(st.get("monitor") == run.primary["connector"],
+              "the main view is on the primary monitor", st.get("monitor"))
+    card = st.get("card", [])
+    run.check(a.id in card, "the primary card shows the window on the primary monitor", card)
+    if len(run.monitors) > 1:
+        sides = dict(st.get("sides", []))
+        run.check(st.get("sides_visible") == len(run.monitors) - 1,
+                  "every other monitor shows its own view", st.get("sides_visible"))
+        run.check(b.id not in card and any(b.id in ids for ids in sides.values()),
+                  "the window on the other monitor is in that monitor's card, not the primary's", sides)
+    else:
+        run.check(b.id in card, "both windows are in the card", card)
+    thumbs = st.get("thumbs", [])
+    run.check(not thumbs or any(a.id in t for t in thumbs),
+              "the workspace thumbnails show the window", thumbs)
+    run.close_overview()
+
+
+@test("overview-close-button", "Closing a window from the overview keeps it in place (O12)")
+def t_overview_close(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    if len(run.monitors) > 1:
+        # Ken's report: the focused window on the other monitor.
+        other = run.monitors[1]
+        run.bus.call(COMPOSITOR, "PlaceWindow", GLib.Variant(
+            "(tiii)", (b.id, -1, other["x"] + 100, other["y"] + 100)), "(b)")
+        b.focus()
+    st = run.open_overview()
+    before = st.get("monitor")
+    rect = next((r for r in st.get("preview_rects", []) if r[0] == a.id), None)
+    if not rect:
+        raise AssertionError(f"no preview for the window: {st.get('preview_rects')}")
+    _id, x, y, w, h = rect
+    run.input.glide(x + w / 2, y + h / 2, 0.4)
+    run.wait(0.5)
+    run.shot("hover", "close button shown on hover")
+    # The close button: 28 px, 6 px in from the top right corner.
+    run.input.click(x + w - 20, y + 20)
+    gone = run.wait(4, lambda: run.window(a.id) is None)
+    run.check(gone, "the window closed")
+    run.wait(1.0)
+    st = run.overview()
+    run.shot("after", "after closing a window")
+    run.check(st.get("visible"), "the overview is still open", st.get("visible"))
+    run.check(st.get("monitor") == before == run.primary["connector"],
+              "it stayed on the primary monitor", f"{before} -> {st.get('monitor')}")
+    if len(run.monitors) == 1:
+        thumbs = st.get("thumbs", [])
+        run.check(st.get("count", 1) < 2 or any(t for t in thumbs) or b.id in st.get("card", []),
+                  "the thumbnails and the card still show the other window", thumbs)
+    run.close_overview()
+
+
+def _thumb_rect(st, index):
+    return next((r[1:] for r in st.get("thumbnail_rects", []) if r[0] == index), None)
+
+
+@test("thumbnail-drag", "Drag a small window from one thumbnail to another (O1)")
+def t_thumbnail_drag(run):
+    need_workspaces(run)
+    cur, _count = run.go_to_new_workspace()
+    a = Pad(run, "a")
+    st = run.open_overview()
+    small = next((r for r in st.get("thumb_window_rects", []) if r[0] == a.id), None)
+    run.check(small is not None, "the window shows in its workspace thumbnail", st.get("thumb_window_rects"))
+    if not small:
+        return
+    target = cur + 1
+    tr = _thumb_rect(st, target)
+    if not tr:
+        raise AssertionError(f"no thumbnail {target}: {st.get('thumbnail_rects')}")
+    run.input.drag(centre(small[1:]), centre(tr), seconds=1.0)
+    run.wait(1.0)
+    run.shot("dropped", "after the drop")
+    ws = run.workspace_of(a.id)
+    run.check(ws == target, "the window moved to that workspace", f"workspace {ws}")
+    run.check(run.overview_visible(), "the overview stays open")
+    run.close_overview()
+
+
+@test("thumbnail-place", "Drop a window inside a thumbnail to place it there (O4)")
+def t_thumbnail_place(run):
+    need_workspaces(run)
+    cur, _ = run.go_to_new_workspace()
+    a = Pad(run, "a", size=(600, 400))
+    before = a.rect()
+    st = run.open_overview()
+    small = next((r for r in st.get("thumb_window_rects", []) if r[0] == a.id), None)
+    tr = _thumb_rect(st, cur)
+    if not small or not tr:
+        raise AssertionError("no thumbnail for the window")
+    tx, ty, tw, th = tr
+    # To the bottom right quarter of the same thumbnail.
+    sx, sy = centre(small[1:])
+    end = (tx + tw * 0.72, ty + th * 0.72)
+    run.input.drag((sx, sy), end, seconds=0.8)
+    run.wait(1.0)
+    after = a.rect()
+    m = run.primary
+    want = (m["x"] + 0.72 * m["w"], m["y"] + 0.72 * m["h"])
+    got = centre(after)
+    run.shot("placed", "after the drop inside the thumbnail")
+    run.check(after != before, "the window moved", f"{before} -> {after}")
+    run.check(abs(got[0] - want[0]) < m["w"] * 0.12 and abs(got[1] - want[1]) < m["h"] * 0.15,
+              "it sits near the drop point (or as close as the screen edge allows)",
+              f"centre {got}, dropped at {want}")
+    run.check(run.workspace_of(a.id) == cur, "it stayed on its workspace")
+    run.close_overview()
+
+
+@test("new-workspace-gap", "Drop between two thumbnails makes a workspace there (O2)")
+def t_gap(run):
+    need_workspaces(run)
+    cur, count = run.go_to_new_workspace()
+    a = Pad(run, "a")
+    st = run.open_overview()
+    gap = next((r for r in st.get("gap_rects", []) if r[0] == 0), None)
+    preview = next((r for r in st.get("preview_rects", []) if r[0] == a.id), None)
+    if not gap or not preview:
+        raise AssertionError(f"no gap or preview: {st.get('gap_rects')} {st.get('preview_rects')}")
+    run.input.drag(centre(preview[1:]), centre(gap[1:]), seconds=1.2, hold=0.6)
+    run.wait(1.2)
+    run.shot("dropped", "after dropping before the first thumbnail")
+    cur2, count2 = run.workspaces()
+    ws = run.workspace_of(a.id)
+    run.check(ws == 0, "the window is on a new first workspace", f"workspace {ws}")
+    run.check(count2 >= count, "a workspace was inserted (the empty one stays at the end)",
+              f"{count} -> {count2}")
+    run.close_overview()
+
+
+@test("current-thumbnail-click", "Clicking the current workspace's thumbnail closes the overview (O5)")
+def t_current_thumb(run):
+    need_workspaces(run)
+    Pad(run, "a")
+    cur, _ = run.workspaces()
+    st = run.open_overview()
+    tr = _thumb_rect(st, cur)
+    if not tr:
+        raise Skip("no thumbnails (only one workspace)")
+    x, y, w, h = tr
+    # A corner of the thumbnail, off the small window.
+    run.input.click(x + 6, y + h - 6)
+    closed = run.wait(2, lambda: not run.overview_visible())
+    run.check(closed, "the overview closed")
+
+
+@test("overview-keys", "Arrow keys pick a window in the overview, Enter goes to it (O9)")
+def t_overview_keys(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    a.focus()
+    run.open_overview()
+    run.input.press("Right")
+    first = run.overview().get("selected")
+    run.input.press("Right")
+    second = run.overview().get("selected")
+    run.shot("selected", "a window selected with the arrow keys")
+    run.check(first in (a.id, b.id) and second in (a.id, b.id) and first != second,
+              "Right moves the selection between the previews", f"{first} -> {second}")
+    run.input.press("Return")
+    closed = run.wait(2, lambda: not run.overview_visible())
+    run.check(closed, "Enter leaves the overview")
+    run.wait(0.5)
+    run.check(run.focused() == second, "and focuses the selected window", run.focused())
+
+
+@test("overview-follows-windows", "The overview follows windows opening and closing (O6)")
+def t_overview_live(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    run.open_overview()
+    b.close()
+    run.pads.remove(b)
+    gone = run.wait(3, lambda: b.id not in run.overview().get("card", []))
+    run.shot("closed", "a window closed by its app while the overview is open")
+    run.check(gone, "a window its app closed leaves the overview")
+    c = Pad(run, "c")
+    closed = run.wait(3, lambda: not run.overview_visible())
+    run.check(closed, "a new window closes the overview, as in GNOME")
+    run.wait(0.5)
+    run.check(run.focused() == c.id, "and has focus", run.focused())
+    _ = a
+
+
+@test("overview-cross-monitor", "Drag a window to another monitor in the overview (M1)", monitors=2)
+def t_overview_cross(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    st = run.open_overview()
+    preview = next((r for r in st.get("preview_rects", []) if r[0] == a.id), None)
+    other = run.monitors[1]
+    if not preview:
+        raise AssertionError("no preview")
+    run.input.drag(centre(preview[1:]), (other["x"] + other["w"] / 2, other["y"] + other["h"] / 2),
+                   seconds=1.4)
+    run.wait(1.2)
+    run.shot("dropped", "after the drop on the other monitor")
+    on = run.monitor_of(a.rect())
+    run.check(on["connector"] == other["connector"], "the window is on the other monitor", on["connector"])
+    sides = dict(run.overview().get("sides", []))
+    run.check(a.id in sides.get(other["connector"], []), "and in its card", sides)
+    run.close_overview()
+
+
+# ---------------------------------------------------------------------------
+# Workspaces
+
+
+@test("super-scroll", "Super+scroll switches workspace (W3)")
+def t_super_scroll(run):
+    need_workspaces(run)
+    run.go_to_new_workspace()
+    Pad(run, "a")  # so there is a workspace after this one
+    cur, count = run.workspaces()
+    m = run.primary
+    run.input.move(m["x"] + m["w"] / 2, m["y"] + m["h"] / 2)
+    run.input.key("Super", True)
+    time.sleep(0.1)
+    run.input.scroll(-1)
+    time.sleep(0.3)
+    run.input.key("Super", False)
+    run.wait(0.8)
+    run.shot("up", "after Super+scroll up")
+    cur2, _ = run.workspaces()
+    run.check(cur2 == max(cur - 1, 0) and cur2 != cur, "scrolling up went to the previous workspace",
+              f"{cur} -> {cur2}")
+    run.input.key("Super", True)
+    time.sleep(0.1)
+    run.input.scroll(1)
+    time.sleep(0.3)
+    run.input.key("Super", False)
+    run.wait(0.8)
+    run.check(run.workspaces()[0] == cur, "scrolling down came back", run.workspaces())
+    _ = count
+
+
+@test("activities-scroll", "Scrolling on the workspace dots in the top bar switches workspace (W6)")
+def t_activities_scroll(run):
+    need_workspaces(run)
+    run.go_to_new_workspace()
+    Pad(run, "a")
+    cur, _ = run.workspaces()
+    m = run.primary
+    run.input.glide(m["x"] + 30, m["y"] + PANEL_HEIGHT / 2, 0.4)
+    run.input.scroll(-1)
+    run.wait(0.8)
+    run.shot("scrolled", "after scrolling on the Activities button")
+    run.check(run.workspaces()[0] == cur - 1, "scrolling up went to the previous workspace", run.workspaces())
+    run.input.scroll(1)
+    run.wait(0.8)
+    run.check(run.workspaces()[0] == cur, "scrolling down came back", run.workspaces())
+
+
+@test("workspace-left-creates", "Moving a window left from the first workspace makes a new one (W1)")
+def t_ws_left(run):
+    need_workspaces(run)
+    run.bus.call(COMPOSITOR, "SwitchWorkspace", GLib.Variant("(u)", (0,)))
+    run.wait(0.6)
+    a = Pad(run, "a")
+    a.focus()
+    _, count = run.workspaces()
+    run.input.press("Super", "Shift", "Page_Up")
+    run.wait(1.0)
+    run.shot("moved", "after Super+Shift+Page Up on the first workspace")
+    cur2, count2 = run.workspaces()
+    run.check(run.workspace_of(a.id) == 0 and count2 == count + 1,
+              "the window is on a new first workspace", f"workspace {run.workspace_of(a.id)}, "
+              f"{count} -> {count2} workspaces, current {cur2}")
+
+
+@test("show-desktop", "Super+D hides every window and brings them back (S1)")
+def t_show_desktop(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    run.input.press("Super", "d")
+    run.wait(1.0)
+    run.shot("desktop", "after Super+D")
+    run.check(a.flags() & MINIMIZED and b.flags() & MINIMIZED, "both windows are hidden",
+              (a.flags(), b.flags()))
+    run.input.press("Super", "d")
+    run.wait(1.0)
+    run.check(not a.flags() & MINIMIZED and not b.flags() & MINIMIZED, "a second press brings them back",
+              (a.flags(), b.flags()))
+
+
+# ---------------------------------------------------------------------------
+# Keyboard shortcuts and dialogs
+
+
+@test("run-dialog", "Alt+F2 opens Run a Command (S2)")
+def t_run_dialog(run):
+    run.input.press("Alt", "F2")
+    shown = run.wait(2, lambda: "run-dialog" in run.overview().get("dialogs", []))
+    run.shot("open", "Run a Command")
+    run.check(shown, "Run a Command opened")
+    run.input.type(f"umoja-no-such-command-{MARK}")
+    run.input.press("Return")
+    run.wait(0.8)
+    run.shot("error", "a command that doesn't exist")
+    run.check("run-dialog" in run.overview().get("dialogs", []), "a bad command keeps the dialog open")
+    run.input.press("Escape")
+    run.check(run.wait(2, lambda: "run-dialog" not in run.overview().get("dialogs", [])),
+              "Escape closes it")
+
+
+@test("display-switcher", "Super+P shows the display modes (M3)")
+def t_display_switcher(run):
+    run.input.key("Super", True)
+    time.sleep(0.05)
+    run.input.press("p")
+    shown = run.wait(2, lambda: any(d.startswith("display-switcher") for d in run.overview().get("dialogs", [])))
+    run.shot("open", "display switcher")
+    run.check(shown, "the display switcher opened", run.overview().get("dialogs"))
+    # Let go of Super only after Escape: letting go would apply the mode.
+    run.input.press("Escape")
+    run.input.key("Super", False)
+    run.wait(0.5)
+    run.check(not any(d.startswith("display-switcher") for d in run.overview().get("dialogs", [])),
+              "Escape closes it without changing anything")
+
+
+@test("input-source", "Super+Space switches keyboard layout with a popup (S5)")
+def t_input_source(run):
+    s = settings("org.gnome.desktop.input-sources")
+    sources = s.get_value("sources").unpack() if s else []
+    if len(sources) < 2:
+        raise Skip("only one input source is set up (Settings > Keyboard)")
+    before = s.get_uint("current")
+    run.input.press("Super", "space")
+    shown = run.wait(1.5, lambda: "input-source" in run.overview().get("dialogs", []))
+    run.shot("popup", "input source popup")
+    run.check(shown, "the popup showed")
+    run.wait(0.5)
+    run.check(s.get_uint("current") != before, "the input source changed", s.get_uint("current"))
+    for _ in range(len(sources) - 1):
+        run.input.press("Super", "space")
+        run.wait(0.4)
+    run.check(s.get_uint("current") == before, "and cycles back", s.get_uint("current"))
+
+
+@test("quick-settings-key", "Super+S opens Quick Settings (S3)")
+def t_quick_settings(run):
+    run.input.press("Super", "s")
+    run.wait(0.8)
+    run.shot("open", "Quick Settings from Super+S")
+    run.note("check the screenshot: Quick Settings should be open")
+    run.check(not run.overview_visible(), "Super+S no longer opens the overview")
+    run.input.press("Escape")
+
+
+@test("focus-notification", "Super+N focuses the newest notification; Enter runs it (S3)")
+def t_focus_notification(run):
+    invoked = []
+    sid = run.bus.conn.signal_subscribe(
+        NOTIFY[0], NOTIFY[2], "ActionInvoked", NOTIFY[1], None, Gio.DBusSignalFlags.NONE,
+        lambda _c, _s, _p, _i, _n, params: invoked.append(params.unpack()))
+    try:
+        res = run.bus.call(NOTIFY, "Notify", GLib.Variant(
+            "(susssasa{sv}i)", ("Umoja WM test", 0, "dialog-information", f"Focus me {MARK}",
+                                "Super+N then Enter", ["default", "Open"], {}, 20000)), "(u)")
+        nid = res[0] if res else 0
+        run.wait(1.0)
+        run.input.press("Super", "n")
+        run.wait(0.6)
+        run.shot("focused", "the banner has the keyboard")
+        run.input.press("Return")
+        got = run.wait(3, lambda: any(i[0] == nid for i in invoked))
+        run.check(got, "Enter ran the notification's default action", invoked)
+    finally:
+        run.bus.conn.signal_unsubscribe(sid)
+
+
+# ---------------------------------------------------------------------------
+# Focus
+
+
+@test("attention", "A window that asks for focus while another is used gets a mark, not focus (F2, F3)")
+def t_attention(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b", app=PAD_APP2)
+    b.focus()
+    a.cmd("present-in", 3)
+    # Type in b meanwhile, as a person would.
+    run.input.click(*centre(b.rect()))
+    run.input.type("typing")
+    run.wait(4)
+    run.shot("asked", "the other window asked for focus")
+    run.check(run.focused() == b.id, "the window being used keeps focus", run.focused())
+    marked = run.wait(3, lambda: a.flags() & ATTENTION)
+    run.check(marked, "the asking window is marked for attention", a.flags())
+    ready = run.bus.call(NOTIFICATIONS, "GetNotifications", None, "(a(ussssx))", quiet=True)
+    titles = [n[2] for n in (ready[0] if ready else [])]
+    run.check(any("ready" in t.lower() or a.title in t for t in titles),
+              "an “is ready” notification was posted", titles[-3:])
+    _pos, _size, icons = run.dock_icons()
+    pad_icon = next((i for i in icons if i[0] == f"{PAD_APP}.desktop"), None)
+    run.check(pad_icon and pad_icon[3], "its dock icon shows attention", pad_icon)
+    a.focus()
+    run.wait(0.5)
+    run.check(not a.flags() & ATTENTION, "focusing it clears the mark", a.flags())
+
+
+@test("minimize-focus", "Minimizing the active window never brings back a minimized one (F1)")
+def t_minimize_focus(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    c = Pad(run, "c")
+    a.focus()
+    run.input.press("Super", "h")
+    run.wait(0.6)
+    c.focus()
+    run.input.press("Super", "h")
+    run.wait(0.8)
+    run.shot("after", "after minimizing two windows")
+    run.check(a.flags() & MINIMIZED, "the first minimized window stays minimized", a.flags())
+    run.check(run.focused() == b.id, "focus went to the window that is still shown", run.focused())
+
+
+@test("focus-follows-mouse", "focus-mode sloppy: the window under the pointer gets focus (F4)")
+def t_ffm(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (a.id, 1)))
+    run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (b.id, 2)))
+    run.wait(0.8)
+    a.focus()
+    run.gset("org.gnome.desktop.wm.preferences", "focus-mode", GLib.Variant("s", "sloppy"))
+    run.input.glide(*centre(b.rect()), 0.5)
+    got = run.wait(2, lambda: run.focused() == b.id)
+    run.shot("hover", "pointer over the right window")
+    run.check(got, "the window under the pointer has focus", run.focused())
+    run.gset("org.gnome.desktop.wm.preferences", "focus-mode", GLib.Variant("s", "click"))
+    run.input.glide(*centre(a.rect()), 0.5)
+    run.wait(1.0)
+    run.check(run.focused() == b.id, "with click focus, hovering doesn't move focus", run.focused())
+
+
+@test("modal-dialog", "A modal dialog takes focus when its parent is clicked (F7)")
+def t_modal(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    a.cmd("dialog")
+    dialog_title = f"{a.title} dialog"
+    did = run.wait_for(lambda: run.window_id(title=dialog_title), 5, "the dialog")
+    run.wait(0.5)
+    other = Pad(run, "b")
+    other.focus()
+    x, y, w, h = a.rect()
+    run.input.click(x + 30, y + h - 30)
+    run.wait(0.8)
+    run.shot("clicked", "clicked the parent of a modal dialog")
+    run.check(run.focused() == did, "the dialog has focus", run.focused())
+    a.cmd("close-dialog")
+
+
+@test("not-responding", "A window that stops answering gets the not-responding dialog (F8)")
+def t_not_responding(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    a.focus()
+    a.cmd("hang", 16)
+    run.wait(0.5)
+    # A click makes umoja-mir ping the app.
+    run.input.click(*centre(a.rect()))
+    shown = run.wait(12, lambda: any(d.startswith("not-responding") for d in run.overview().get("dialogs", [])))
+    run.shot("dialog", "the not-responding dialog")
+    run.check(shown, "“is not responding” appeared", run.overview().get("dialogs"))
+    gone = run.wait(20, lambda: not any(d.startswith("not-responding")
+                                        for d in run.overview().get("dialogs", [])))
+    run.check(gone, "it went away by itself when the app answered again")
+
+
+@test("shortcut-inhibit", "An app can take the system shortcuts; Super+Escape takes them back (F9)")
+def t_inhibit(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    a.focus()
+    a.cmd("inhibit")
+    run.wait(0.8)
+    run.input.press("Super")
+    run.wait(1.0)
+    run.shot("inhibited", "Super pressed while the app holds the shortcuts")
+    run.check(not run.overview_visible(), "Super went to the app, no overview")
+    run.close_overview()
+    run.input.press("Super", "Escape")
+    run.wait(0.6)
+    run.input.press("Super")
+    opened = run.wait(2, run.overview_visible)
+    run.check(opened, "after Super+Escape, Super opens the overview again")
+    run.close_overview()
+    a.cmd("uninhibit")
+
+
+@test("alt-tab", "Alt+Tab shows on the primary monitor and switches window (M4, A1)")
+def t_alt_tab(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b", app=PAD_APP2)
+    if len(run.monitors) > 1:
+        other = run.monitors[1]
+        run.bus.call(COMPOSITOR, "PlaceWindow", GLib.Variant(
+            "(tiii)", (b.id, -1, other["x"] + 100, other["y"] + 100)), "(b)")
+    b.focus()
+    run.input.key("Alt", True)
+    run.input.press("Tab")
+    shown = run.wait(1.5, lambda: run.overview().get("switcher"))
+    run.shot("switcher", "Alt+Tab held (it should be on the primary monitor)")
+    run.input.key("Alt", False)
+    run.wait(0.6)
+    run.check(shown, "the switcher showed")
+    run.check(run.focused() == a.id, "letting go switched to the other window", run.focused())
+
+
+# ---------------------------------------------------------------------------
+# Placement, tiling, moving
+
+
+@test("tiled-state", "Tiled windows are told they are tiled (P1)")
+def t_tiled_state(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (a.id, TILE_LEFT)))
+    run.wait(1.0)
+    state = a.state()
+    run.shot("tiled", "tiled left")
+    run.check(state & (GDK_TILED | GDK_LEFT_TILED | GDK_TOP_TILED | GDK_BOTTOM_TILED),
+              "GTK reports the window tiled", hex(state))
+    a.focus()
+    run.input.press("Super", "Down")
+    run.wait(1.0)
+    run.check(not a.state() & (GDK_TILED | GDK_LEFT_TILED), "untiling clears it", hex(a.state()))
+
+
+@test("maximize-keeps-tile", "Maximize a tiled window, restore: back to the tile (P2)")
+def t_max_tile(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    run.bus.call(COMPOSITOR, "TileWindow", GLib.Variant("(tu)", (a.id, TILE_LEFT)))
+    run.wait(0.8)
+    tiled = a.rect()
+    a.focus()
+    run.input.press("Super", "Up")
+    run.wait(0.8)
+    run.check(a.flags() & MAXIMIZED, "Super+Up maximized it", a.flags())
+    run.input.press("Super", "Down")
+    run.wait(0.8)
+    run.shot("restored", "restored from maximized")
+    run.check(a.rect() == tiled, "Super+Down brings back the left tile", f"{tiled} vs {a.rect()}")
+
+
+@test("first-fit", "New windows go where they don't cover others, when there is room (P3)")
+def t_first_fit(run):
+    s = settings("org.gnome.mutter")
+    if s and s.get_boolean("center-new-windows"):
+        raise Skip("center-new-windows is on")
+    run.go_to_new_workspace()
+    a = Pad(run, "a", size=(500, 360))
+    b = Pad(run, "b", size=(500, 360))
+    ra, rb = a.rect(), b.rect()
+    run.shot("placed", "two new windows")
+    overlap = not (ra[0] + ra[2] <= rb[0] or rb[0] + rb[2] <= ra[0] or
+                   ra[1] + ra[3] <= rb[1] or rb[1] + rb[3] <= ra[1])
+    run.check(not overlap, "the second window doesn't cover the first", f"{ra} {rb}")
+
+
+@test("auto-maximize", "A window nearly the size of the screen opens maximized (P4)")
+def t_auto_max(run):
+    s = settings("org.gnome.mutter")
+    if s and not s.get_boolean("auto-maximize"):
+        raise Skip("auto-maximize is off")
+    run.go_to_new_workspace()
+    x, y, w, h = run.area()
+    a = Pad(run, "a", size=(int(w * 0.95), int(h * 0.95)))
+    run.wait(0.8)
+    run.shot("opened", "a big new window")
+    run.check(a.flags() & MAXIMIZED, "it opened maximized", a.flags())
+
+
+@test("title-bar-on-screen", "A window can't be dragged with its title bar off screen (P5)")
+def t_titlebar(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    start = a.titlebar()
+    m = run.primary
+    run.input.drag(start, (start[0], m["y"] - 400), seconds=0.8, hold=0.2)
+    run.wait(0.6)
+    run.shot("dragged-up", "dragged far up")
+    run.check(a.rect()[1] >= run.area()[1] - 2, "the title bar stays under the top bar", a.rect())
+    start = a.titlebar()
+    run.input.drag(start, (m["x"] + m["w"] + 2000, start[1] + 50), seconds=0.8, hold=0.2)
+    run.wait(0.6)
+    x, y, w, h = a.rect()
+    on = len([mm for mm in run.monitors if mm["x"] < x + w and x < mm["x"] + mm["w"]])
+    run.check(on >= 1, "part of the window stays on a monitor", a.rect())
+
+
+@test("edge-snap", "Windows snap to the screen edge while moved (P8)")
+def t_snap(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    ax, ay, aw, ah = a.rect()
+    left = run.area()[0]
+    start = a.titlebar()
+    grab_dx = start[0] - ax
+    # Drop the left edge 7 px from the work area's left edge.
+    run.input.drag(start, (left + 7 + grab_dx, start[1] + 40), seconds=0.8, hold=0.3)
+    run.wait(0.6)
+    run.shot("snapped", "moved near the left edge")
+    x = a.rect()[0]
+    dock = run.dock_icons()
+    run.check(abs(x - left) <= 1, "the window's left edge snapped to the work area's edge",
+              f"x {x}, work area left {left} (dock {dock[0]}, {dock[1][0]}x{dock[1][1]})")
+
+
+@test("window-menu-csd", "Right-click on an app's own title bar opens the window menu (P6)")
+def t_csd_menu(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    run.input.click(*a.titlebar(), btn=BTN_RIGHT)
+    shown = run.wait(2, lambda: run.overview().get("window_menu"))
+    run.shot("menu", "window menu from the title bar")
+    run.check(shown, "the window menu opened")
+    run.input.press("Escape")
+
+
+@test("animations", "Windows animate when they open, minimize and come back (P7)")
+def t_animations(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    a.focus()
+    run.input.press("Super", "h")
+    run.wait(1.0)
+    run.check(a.flags() & MINIMIZED, "minimized", a.flags())
+    run.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (a.id,)))
+    run.wait(1.0)
+    run.check(not a.flags() & MINIMIZED, "back", a.flags())
+    run.note("watch the video: the window should fade and shrink in about 150 ms each way")
+
+
+@test("fullscreen-per-monitor", "A fullscreen window stays on top of its monitor (M2)", monitors=2)
+def t_fullscreen(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    other = run.monitors[1]
+    run.bus.call(COMPOSITOR, "PlaceWindow", GLib.Variant("(tiii)", (b.id, -1, other["x"] + 50, other["y"] + 80)),
+                 "(b)")
+    run.wait(0.6)
+    b.cmd("fullscreen")
+    run.wait(1.0)
+    a.focus()
+    run.wait(0.8)
+    run.shot("both", "fullscreen on the other monitor while this one has focus")
+    run.check(b.flags() & FULLSCREEN, "still fullscreen while the other monitor has focus", b.flags())
+    run.note("check the other monitor's shot: no top bar or dock over the fullscreen window")
+    b.cmd("unfullscreen")
+
+
+# ---------------------------------------------------------------------------
+# The dock
+
+
+def dock_point(run, icon):
+    """Where an icon is on screen, from TestIcons (the dock on the primary
+    monitor, centred on its edge as Mir places it)."""
+    position, (dw, dh), _ = run.dock_icons()
+    _id, _n, _f, _a, x, y, w, h = icon
+    m = run.primary
+    ax, ay, aw, ah = run.area(dock=False)
+    if position == "left":
+        ox, oy = m["x"], ay + (ah - dh) / 2
+    elif position == "right":
+        ox, oy = m["x"] + m["w"] - dw, ay + (ah - dh) / 2
+    elif position == "bottom":
+        ox, oy = m["x"] + (m["w"] - dw) / 2, m["y"] + m["h"] - dh
+    else:
+        ox, oy = m["x"] + (m["w"] - dw) / 2, ay
+    return ox + x + w / 2, oy + y + h / 2
+
+
+def pad_icon(run, app=PAD_APP):
+    for i, icon in enumerate(run.dock_icons()[2]):
+        if icon[0] == f"{app}.desktop":
+            return i, icon
+    return None, None
+
+
+@test("dock-focus-or-previews", "A dock click focuses an app with several windows first (D1)")
+def t_dock_focus(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    c = Pad(run, "c", app=PAD_APP2)
+    b.focus()
+    c.focus()
+    run.wait(0.8)
+    index, icon = pad_icon(run)
+    if icon is None:
+        raise AssertionError("the test pad isn't in the dock")
+    run.input.click(*dock_point(run, icon))
+    run.wait(0.8)
+    run.shot("clicked", "clicked the app with two windows")
+    run.check(run.focused() == b.id, "its most recent window got focus, no previews", run.focused())
+    run.input.click(*dock_point(run, pad_icon(run)[1]))
+    run.wait(0.8)
+    run.shot("previews", "clicked again: the window previews")
+    run.note("check the shot: the second click shows the previews")
+    run.input.press("Escape")
+    _ = (a, index)
+
+
+@test("dock-middle-click", "Middle-click on a dock icon opens a new window (D2)")
+def t_dock_middle(run):
+    run.go_to_new_workspace()
+    Pad(run, "a")
+    before = [w[0] for w in run.windows() if w[1] == PAD_APP]
+    _i, icon = pad_icon(run)
+    if icon is None:
+        raise AssertionError("the test pad isn't in the dock")
+    run.input.click(*dock_point(run, icon), btn=BTN_MIDDLE)
+    new = run.wait(6, lambda: [w[0] for w in run.windows() if w[1] == PAD_APP and w[0] not in before])
+    run.shot("new", "after the middle-click")
+    run.check(new, "a new window opened", new)
+    for wid in new or []:
+        run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
+
+
+@test("dock-scroll", "scroll-action cycle-windows: scrolling on an icon cycles its windows (D2)")
+def t_dock_scroll(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    b = Pad(run, "b")
+    run.gset("org.gnome.shell.extensions.dash-to-dock", "scroll-action", GLib.Variant("s", "cycle-windows"))
+    b.focus()
+    run.wait(1.0)
+    _i, icon = pad_icon(run)
+    if icon is None:
+        raise AssertionError("the test pad isn't in the dock")
+    run.input.glide(*dock_point(run, icon), 0.4)
+    run.input.scroll(1)
+    run.wait(0.8)
+    run.check(run.focused() == a.id, "scrolling went to the app's other window", run.focused())
+    time.sleep(0.4)
+    run.input.scroll(1)
+    run.wait(0.8)
+    run.check(run.focused() == b.id, "and on round", run.focused())
+
+
+@test("dock-super-number", "Super+number activates the dock's apps (D3)")
+def t_dock_number(run):
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    c = Pad(run, "c", app=PAD_APP2)
+    c.focus()
+    index, icon = pad_icon(run)
+    if icon is None or index >= 9:
+        raise Skip("the test pad isn't among the first nine dock icons")
+    run.input.press("Super", str(index + 1))
+    run.wait(0.8)
+    run.shot("activated", f"after Super+{index + 1}")
+    run.check(run.focused() == a.id, f"Super+{index + 1} focused the test pad", run.focused())
+    before = [w[0] for w in run.windows() if w[1] == PAD_APP]
+    run.input.press("Super", "Shift", str(index + 1))
+    new = run.wait(6, lambda: [w[0] for w in run.windows() if w[1] == PAD_APP and w[0] not in before])
+    run.check(new, f"Super+Shift+{index + 1} opened a new window", new)
+    for wid in new or []:
+        run.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)))
+
+
+@test("dock-isolate-workspaces", "isolate-workspaces: the dock shows only this workspace's windows (D4)")
+def t_dock_isolate(run):
+    need_workspaces(run)
+    run.go_to_new_workspace()
+    a = Pad(run, "a")
+    run.gset("org.gnome.shell.extensions.dash-to-dock", "isolate-workspaces", GLib.Variant("b", True))
+    cur, _ = run.workspaces()
+    run.bus.call(COMPOSITOR, "SendWindowToWorkspace", GLib.Variant("(tu)", (a.id, cur + 1)))
+    run.wait(1.5)
+    run.shot("elsewhere", "the pad on another workspace")
+    _i, icon = pad_icon(run)
+    run.check(icon is None or icon[1] == 0, "its icon shows no running window here", icon)
+    run.bus.call(COMPOSITOR, "SwitchWorkspace", GLib.Variant("(u)", (cur + 1,)))
+    run.wait(1.5)
+    _i, icon = pad_icon(run)
+    run.check(icon is not None and icon[1] == 1, "on its workspace it does", icon)
+
+
+# ---------------------------------------------------------------------------
+
+
+def write_report(run):
+    passed = sum(1 for r in run.results if r["status"] == "pass")
+    failed = sum(1 for r in run.results if r["status"] == "fail")
+    skipped = sum(1 for r in run.results if r["status"] == "skip")
+    lines = [f"# Umoja window management test, {run.started:%Y-%m-%d %H:%M}", "",
+             f"{passed} passed, {failed} failed, {skipped} skipped.", "", "Monitors:", ""]
+    for m in run.monitors:
+        lines.append(f"- {m['output']} ({m['connector']}) {m['w']}x{m['h']} at {m['x']},{m['y']}, "
+                     f"scale {m['scale']:g}{', primary' if m['primary'] else ''}")
+    lines += ["", "| Test | Result | |", "| --- | --- | --- |"]
+    for r in run.results:
+        lines.append(f"| `{r['name']}` | {r['status']} | {r['title']} |")
+    for r in run.results:
+        lines += ["", f"## {r['name']}: {r['status']}", "", r["title"], ""]
+        if r.get("reason"):
+            lines += [f"> {r['reason']}", ""]
+        for c in r["checks"]:
+            lines.append(f"- {'✓' if c['ok'] else '✗'} {c['check']}" + (f" (`{c['detail']}`)" if c["detail"] else ""))
+        for n in r["notes"]:
+            lines.append(f"- note: {n}")
+        for v in r["videos"]:
+            lines.append(f"- video: [{v}]({v})")
+        for s in r["shots"]:
+            lines += ["", f"![{s['caption']}]({s['file']})"]
+    (run.out / "REPORT.md").write_text("\n".join(lines) + "\n")
+    (run.out / "results.json").write_text(json.dumps(
+        {"monitors": run.monitors, "results": run.results}, indent=2))
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--only", nargs="*", default=[])
+    p.add_argument("--skip", nargs="*", default=[])
+    p.add_argument("--list", action="store_true")
+    p.add_argument("--out", type=Path)
+    p.add_argument("--no-video", action="store_true")
+    p.add_argument("--countdown", type=int, default=5)
+    opts = p.parse_args()
+    if opts.list:
+        for name, title, mons, _ in TESTS:
+            print(f"{name:28} {title}" + ("  [2 monitors]" if mons > 1 else ""))
+        return 0
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        sys.exit("run it inside the Umoja session (no WAYLAND_DISPLAY)")
+    opts.out = opts.out or Path.home() / f"umoja-wm-test-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    run = Run(opts)
+    names = {n for n, *_ in TESTS}
+    for n in opts.only + opts.skip:
+        if n not in names:
+            sys.exit(f"no test called {n!r} (--list shows them)")
+    chosen = [t for t in TESTS if (not opts.only or t[0] in opts.only) and t[0] not in opts.skip]
+    status = 0
+    try:
+        run.preflight()
+        run.log(f"{len(chosen)} tests, writing to {run.out}")
+        for i in range(opts.countdown, 0, -1):
+            run.log(f"starting in {i}... hands off the keyboard and mouse")
+            time.sleep(1)
+        for name, title, mons, fn in chosen:
+            run.current = {"name": name, "title": title, "status": "pass", "checks": [], "notes": [],
+                           "shots": [], "videos": [], "reason": ""}
+            run.results.append(run.current)
+            run.log(f"== {name}: {title}")
+            if len(run.monitors) < mons:
+                run.current["status"] = "skip"
+                run.current["reason"] = f"needs {mons} monitors"
+                run.log("  skipped: needs more monitors")
+                continue
+            run.recorder.start(name)
+            try:
+                run.check_screen()
+                fn(run)
+            except Skip as e:
+                run.current["status"] = "skip"
+                run.current["reason"] = str(e)
+                run.log(f"  skipped: {e}")
+            except Stop:
+                raise
+            except AssertionError as e:
+                run.check(False, str(e))
+            except Exception:  # noqa: BLE001
+                run.check(False, "the test crashed", traceback.format_exc())
+            finally:
+                run.recorder.stop()
+                try:
+                    run.reset()
+                except Stop:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    run.log(f"  ! reset: {e}")
+            if run.current["status"] != "skip" and not all(c["ok"] for c in run.current["checks"]):
+                run.current["status"] = "fail"
+                status = 1
+    except Stop as e:
+        run.log(f"stopped: {e}")
+        status = 2
+    except KeyboardInterrupt:
+        run.log("interrupted")
+        status = 130
+    finally:
+        run.recorder.stop()
+        run.teardown()
+        write_report(run)
+        run.log(f"report: {run.out / 'REPORT.md'}")
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

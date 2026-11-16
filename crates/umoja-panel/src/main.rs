@@ -252,8 +252,57 @@ fn activities_button() -> gtk::Button {
         }
         toggle_overlay()
     });
+    // Scrolling over the workspace dots switches workspace (GNOME's
+    // workspace indicator in the top bar).
+    let scroll = gtk::EventControllerScroll::new(
+        gtk::EventControllerScrollFlags::BOTH_AXES | gtk::EventControllerScrollFlags::DISCRETE,
+    );
+    let last = std::rc::Rc::new(std::cell::Cell::new(0i64));
+    scroll.connect_scroll(move |_, dx, dy| {
+        let d = if dy.abs() >= dx.abs() { dy } else { dx };
+        let now = glib::monotonic_time();
+        if d == 0.0 || now - last.get() < 150_000 {
+            return glib::Propagation::Stop;
+        }
+        last.set(now);
+        step_workspace(if d > 0.0 { 1 } else { -1 });
+        glib::Propagation::Stop
+    });
+    button.add_controller(scroll);
     watch_workspaces(&dots);
     button
+}
+
+/// The next or previous workspace, without wrapping.
+fn step_workspace(delta: i32) {
+    glib::spawn_future_local(async move {
+        let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else {
+            return;
+        };
+        let call = |method: &'static str, args: Option<glib::Variant>| {
+            conn.call_future(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                dbus::COMPOSITOR_OBJECT_PATH,
+                dbus::COMPOSITOR_INTERFACE,
+                method,
+                args.as_ref(),
+                None,
+                gio::DBusCallFlags::NONE,
+                1000,
+            )
+        };
+        let Some((current, count)) = call("GetWorkspaces", None)
+            .await
+            .ok()
+            .and_then(|v| v.get::<(u32, u32)>())
+        else {
+            return;
+        };
+        let to = (current as i32 + delta).clamp(0, count.max(1) as i32 - 1) as u32;
+        if to != current {
+            let _ = call("SwitchWorkspace", Some((to,).to_variant())).await;
+        }
+    });
 }
 
 fn set_workspace_dots(dots: &gtk::Box, current: u32, count: u32) {

@@ -29,6 +29,11 @@ A shaded area shows where the window will go before you let go.
 When two windows are tiled side by side, **drag the line between them** to
 make one wider and the other narrower at the same time.
 
+While you move a window it **snaps** to the edges of the screen and of other
+windows when it gets close, and its title bar never goes under the top bar
+or off the screen. Maximizing a tiled window and restoring it puts it back
+in its tile.
+
 ### The layout picker
 
 Drag a window to the top of the screen and pause there. A small card of
@@ -65,9 +70,18 @@ away by itself.
 | **Super+Shift+Page Down** / **Up** | Take the current window to the next or previous workspace |
 | **Super+Home** / **Super+End** | First or last workspace |
 
-The dots at the left of the top bar show which workspace you're on. In the
-**overview** (**Super**), your workspaces are along the top: click one to
-go there, or drag a window onto one to move it.
+The dots at the left of the top bar show which workspace you're on; scroll
+over them to switch. In the **overview** (**Super**, or push the pointer
+into the top-left corner when **Settings › Multitasking › Hot Corner** is
+on), your workspaces are along the top:
+
+- **Click** a workspace to go there. Clicking the one you're on closes the
+  overview.
+- **Drag a window** onto a workspace to move it there. The small windows
+  inside the workspaces can be dragged too, and dropping a window inside a
+  workspace puts it at that spot on the screen.
+- **Drop a window between two workspaces** to make a new workspace there.
+- Use the **arrow keys** to pick a window and **Enter** to go to it.
 
 ![The overview on the second workspace, which has a calculator open](images/workspace-2.jpg)
 
@@ -87,6 +101,19 @@ monitor.
   the window menu.
 - Umoja **remembers** each window's size, position, workspace and monitor,
   so apps open where you left them, even after you log out.
+- The **overview** shows on every monitor: the main one has the
+  workspaces and the search, and each other monitor shows its own windows.
+  Drag a window from one monitor's view to another's to move it there.
+- **Super+P** switches between using the displays side by side, mirrored,
+  or only the external or built-in one.
+
+## When an app asks for you
+
+When an app wants your attention while you're busy in another window (a
+download finished, a chat came in), Umoja doesn't pull you away. Its dock
+icon lights up and a notification says it's ready; click either to go to
+it. An app that stops responding gets a dialog after a few seconds where
+you can **Wait** or **Force Quit** it.
 
 ## Display scale and HiDPI
 

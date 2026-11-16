@@ -85,7 +85,15 @@ fn input_of(id: &str) -> fdo::Result<u64> {
 
 /// Stream pixel (x, y) of a screen cast stream of this session, in layout
 /// coordinates.
+///
+/// Umoja's extension: an empty stream means layout coordinates, for
+/// sessions without a screen cast (tools/test/umoja-wm-test drives the
+/// pointer this way; anyone who may create a session could already move
+/// the pointer relatively).
 fn stream_position(stream: &str, x: f64, y: f64) -> fdo::Result<(f64, f64)> {
+    if stream.is_empty() {
+        return Ok((x, y));
+    }
     let (rect, scale) = crate::screencast::stream_geometry(stream)
         .ok_or_else(|| fdo::Error::InvalidArgs(format!("Unknown stream {stream}")))?;
     let scale = if scale > 0.0 { scale } else { 1.0 };

@@ -15,6 +15,8 @@
 //!                      button does (it powers off after 60 s)
 //! ConfirmRestart()     show the Restart dialog (it restarts after 60 s);
 //!                      what org.gnome.SessionManager.Reboot asks for
+//! FocusNotification()  Super+N: the keyboard to the newest banner, or
+//!                      the notification list when none is showing
 //! ```
 
 use std::cell::Cell;
@@ -34,6 +36,7 @@ const XML: &str = r#"<node>
     <method name="ConfirmLogOut"/>
     <method name="ConfirmPowerOff"/>
     <method name="ConfirmRestart"/>
+    <method name="FocusNotification"/>
   </interface>
 </node>"#;
 
@@ -155,6 +158,14 @@ pub fn own_name(
                     "ConfirmRestart" => {
                         invocation.return_value(None);
                         gtk::glib::idle_add_local_once(crate::power_dialog::open_restart);
+                        return;
+                    }
+                    "FocusNotification" => {
+                        invocation.return_value(None);
+                        let focused = crate::notification_center().is_some_and(|c| c.focus_banner());
+                        if !focused && let Some(b) = calendar.upgrade() {
+                            b.popup();
+                        }
                         return;
                     }
                     "OpenMenu" | "ToggleMenu" => {}

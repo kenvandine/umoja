@@ -1,4 +1,10 @@
-# On-device feature test
+# On-device tests
+
+Two scripts: [`umoja-feature-test`](#feature-test) for the desktop and AI
+features, and [`umoja-wm-test`](#window-management-test) for window
+management.
+
+## Feature test
 
 `umoja-feature-test` drives each new desktop and AI feature on a real
 Umoja session the way a person would use it. It records a video and takes
@@ -6,7 +12,7 @@ screenshots while it works, then checks what actually happened. It is
 built like [`tools/demo/umoja-demo`](../demo): everything goes over D-Bus
 and `umoja-mcp`, and it never injects key presses or mouse clicks.
 
-## Running it
+### Running it
 
 1. Install the Umoja debs you want to test, log out and log back in.
 2. Open a terminal in the Umoja session and run:
@@ -26,7 +32,7 @@ Options: `--out DIR`, `--no-video` (screenshots only),
 `--answer-timeout SECONDS` (how long to wait for an assistant answer,
 150 by default), `--countdown SECONDS`.
 
-## What it writes
+### What it writes
 
 By default to `~/umoja-feature-test-<time>/`:
 
@@ -42,7 +48,7 @@ By default to `~/umoja-feature-test-<time>/`:
 
 The exit status is 1 if any check failed.
 
-## The tests
+### The tests
 
 | Test | What it does and checks |
 | --- | --- |
@@ -65,7 +71,7 @@ The exit status is 1 if any check failed.
 | `activity-recall` | Turns recall on for a moment, shows a window with a unique title and sends a notification, then asks the assistant to find both. It is skipped if recall is already on, so your history is never touched. |
 | `user-guide` | Opens the User Guide from Ask Umoja and checks that a viewer window appears. |
 
-## Safety
+### Safety
 
 - Run it on the test laptop, not on a computer you're working on. It opens
   and closes windows and changes settings.
@@ -85,7 +91,7 @@ Clips are recorded on the empty last workspace, so your own windows (and
 whatever they show) stay out of them, and notifications earlier tests sent
 are closed before each clip starts.
 
-## What it needs
+### What it needs
 
 `python3-gi`, `grim`, `wf-recorder`, `wl-clipboard`, and for the captions
 test `espeak-ng` (or `speech-dispatcher`) and `pulseaudio-utils`. The
@@ -94,3 +100,100 @@ read-aloud tests need the `piper-tts` snap and Lemonade's Whisper model
 monitor, so leave the volume up and other audio off. The
 assistant tests use whichever model is set up, so a slow local model needs a
 bigger `--answer-timeout`.
+
+## Window management test
+
+`umoja-wm-test` drives window management the way a person does, with real
+key presses, pointer moves, clicks, drags and scrolls, and checks what the
+compositor, the overview, the dock and the apps report afterwards. Every
+monitor is recorded while each test runs, so the clips show what happened
+on each screen. It works with one monitor or several: the tests that need a
+second monitor are skipped on a single display.
+
+```
+tools/test/umoja-wm-test                       # every test
+tools/test/umoja-wm-test --only hot-corner thumbnail-drag
+tools/test/umoja-wm-test --skip not-responding
+tools/test/umoja-wm-test --list
+```
+
+Keep your hands off the keyboard and mouse until it prints the report path.
+A full run takes about 10 minutes. Options: `--out DIR`, `--no-video`,
+`--countdown SECONDS`.
+
+It writes to `~/umoja-wm-test-<time>/`: `REPORT.md` and `results.json`
+(every check with its evidence), `videos/<test>-<output>.mp4` (one clip per
+test and monitor), `images/` (a screenshot of every monitor at the moments
+that matter), `setup.json` (monitors, workspaces, package versions),
+`journal.txt` and `log.txt`. Exit status 1 means a check failed, 2 that it
+stopped because the screen blanked or locked.
+
+How it drives the session:
+
+- Input goes through `org.gnome.Mutter.RemoteDesktop`, umoja-mir's own
+  virtual keyboard and pointer (what a remote desktop app uses). Pointer
+  positions are absolute layout pixels: umoja-mir takes an empty stream name
+  in `NotifyPointerMotionAbsolute` to mean that.
+- It reads what is on screen from `OverviewState` on `org.umoja.Overlay`
+  and `TestIcons` on `org.umoja.Dock`. Both answer only while
+  `$XDG_RUNTIME_DIR/umoja-demo` exists; the script creates and removes it.
+- Its windows are [`testpad.py`](testpad.py) under two app ids, with
+  desktop files in `~/.local/share/applications` so the dock shows them. It
+  removes them at the end and puts back every setting it changes (hot
+  corners, focus mode, dock scroll and isolate settings).
+- It never applies a display mode (the Super+P test closes the switcher with
+  Escape), never presses Force Quit, and stops before any input if the
+  screen is blanked or locked.
+
+The overview and workspace tests show every workspace, so run it on a test
+machine whose windows you don't mind in the clips.
+
+| Test | What it checks |
+| --- | --- |
+| `hot-corner` | Hot corner opens the overview only when it is on (O11) |
+| `overview-monitor` | Overview on the primary monitor, a card on every other (O12, M1) |
+| `overview-close-button` | Closing a window from the overview keeps it in place (O12) |
+| `thumbnail-drag` | Drag a small window from one thumbnail to another (O1) |
+| `thumbnail-place` | Drop a window inside a thumbnail to place it there (O4) |
+| `new-workspace-gap` | Drop between two thumbnails makes a workspace there (O2) |
+| `current-thumbnail-click` | Clicking the current workspace's thumbnail closes the overview (O5) |
+| `overview-keys` | Arrow keys pick a window in the overview, Enter goes to it (O9) |
+| `overview-follows-windows` | The overview follows windows opening and closing (O6) |
+| `overview-cross-monitor` | Drag a window to another monitor in the overview (M1) (two monitors) |
+| `super-scroll` | Super+scroll switches workspace (W3) |
+| `activities-scroll` | Scrolling on the workspace dots in the top bar switches workspace (W6) |
+| `workspace-left-creates` | Moving a window left from the first workspace makes a new one (W1) |
+| `show-desktop` | Super+D hides every window and brings them back (S1) |
+| `run-dialog` | Alt+F2 opens Run a Command (S2) |
+| `display-switcher` | Super+P shows the display modes (M3) |
+| `input-source` | Super+Space switches keyboard layout with a popup (S5) |
+| `quick-settings-key` | Super+S opens Quick Settings (S3) |
+| `focus-notification` | Super+N focuses the newest notification; Enter runs it (S3) |
+| `attention` | A window that asks for focus while another is used gets a mark, not focus (F2, F3) |
+| `minimize-focus` | Minimizing the active window never brings back a minimized one (F1) |
+| `focus-follows-mouse` | focus-mode sloppy: the window under the pointer gets focus (F4) |
+| `modal-dialog` | A modal dialog takes focus when its parent is clicked (F7) |
+| `not-responding` | A window that stops answering gets the not-responding dialog (F8) |
+| `shortcut-inhibit` | An app can take the system shortcuts; Super+Escape takes them back (F9) |
+| `alt-tab` | Alt+Tab shows on the primary monitor and switches window (M4, A1) |
+| `tiled-state` | Tiled windows are told they are tiled (P1) |
+| `maximize-keeps-tile` | Maximize a tiled window, restore: back to the tile (P2) |
+| `first-fit` | New windows go where they don't cover others, when there is room (P3) |
+| `auto-maximize` | A window nearly the size of the screen opens maximized (P4) |
+| `title-bar-on-screen` | A window can't be dragged with its title bar off screen (P5) |
+| `edge-snap` | Windows snap to the screen edge while moved (P8) |
+| `window-menu-csd` | Right-click on an app's own title bar opens the window menu (P6) |
+| `animations` | Windows animate when they open, minimize and come back (P7) |
+| `fullscreen-per-monitor` | A fullscreen window stays on top of its monitor (M2) (two monitors) |
+| `dock-focus-or-previews` | A dock click focuses an app with several windows first (D1) |
+| `dock-middle-click` | Middle-click on a dock icon opens a new window (D2) |
+| `dock-scroll` | scroll-action cycle-windows: scrolling on an icon cycles its windows (D2) |
+| `dock-super-number` | Super+number activates the dock's apps (D3) |
+| `dock-isolate-workspaces` | isolate-workspaces: the dock shows only this workspace's windows (D4) |
+
+Some results need a look at the clips or screenshots, and the report says
+which: Quick Settings opening on Super+S, the dock's previews on a second
+click, the window animations, and the top bar staying off a fullscreen
+window on the other monitor.
+
+It needs `python3-gi`, `gir1.2-gtk-4.0`, `grim` and `wf-recorder`.

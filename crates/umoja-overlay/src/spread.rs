@@ -11,6 +11,14 @@
 //! the app search, Escape or Super goes back. The top bar and dock stay
 //! usable, as with Ubuntu Dock in GNOME's overview.
 //!
+//! As in gnome-shell (workspacesView.js) the main view is always on the
+//! primary monitor, and every other monitor gets a card of its own with
+//! the windows on it. The small windows in the thumbnails can be dragged
+//! too: onto another thumbnail, the main card, another monitor, or a gap
+//! between two thumbnails (a new workspace there). A drop inside a
+//! thumbnail or card puts the window at that spot on the screen, which
+//! GNOME doesn't do.
+//!
 //! Windows, workspaces and actions come from umoja-mir
 //! (`org.umoja.Compositor`). Previews are cut from screen captures and kept
 //! per window: one taken just before the overview opens, and one taken
@@ -176,6 +184,92 @@ fn shown_on(w: &Win, current: u32) -> u32 {
     }
 }
 
+/// A monitor's (x, y, width, height) in layout pixels.
+type Geo = (i32, i32, i32, i32);
+
+/// What a dragged window is over.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DropKind {
+    /// A neighbouring workspace peeking in at the side.
+    Peek(u32),
+    /// A workspace thumbnail of the primary monitor.
+    Thumb { index: u32, mon: Geo },
+    /// The workspace card of a monitor.
+    Card { index: u32, mon: Geo },
+    /// Between two thumbnails: a new workspace at this index.
+    Gap(u32),
+    /// Another monitor's view, at this point in layout pixels.
+    Screen { mon: Geo, x: f64, y: f64 },
+}
+
+/// The monitor a window belongs to: the one holding its centre, else the
+/// first (primary).
+fn monitor_of((x, y, w, h): Geo, mons: &[Geo]) -> Geo {
+    let (cx, cy) = (x + w / 2, y + h / 2);
+    mons.iter()
+        .copied()
+        .find(|&(x, y, mw, mh)| cx >= x && cy >= y && cx < x + mw && cy < y + mh)
+        .or_else(|| mons.first().copied())
+        .unwrap_or((0, 0, 1280, 800))
+}
+
+/// Where a window's top left goes so the point grabbed at `grab` (a
+/// fraction of its size) lands on `(px, py)`.
+pub fn grab_place(px: f64, py: f64, grab: (f64, f64), size: (i32, i32)) -> (i32, i32) {
+    (
+        (px - grab.0 * size.0 as f64).round() as i32,
+        (py - grab.1 * size.1 as f64).round() as i32,
+    )
+}
+
+/// The layout point for `(fx, fy)`, fractions of a view of `mon`.
+pub fn map_fraction(fx: f64, fy: f64, mon: Geo) -> (f64, f64) {
+    (
+        mon.0 as f64 + fx.clamp(0.0, 1.0) * mon.2 as f64,
+        mon.1 as f64 + fy.clamp(0.0, 1.0) * mon.3 as f64,
+    )
+}
+
+/// The same place on another monitor, proportionally.
+pub fn translate(x: i32, y: i32, from: Geo, to: Geo) -> (i32, i32) {
+    let fx = (x - from.0) as f64 / from.2.max(1) as f64;
+    let fy = (y - from.1) as f64 / from.3.max(1) as f64;
+    (
+        to.0 + (fx * to.2 as f64).round() as i32,
+        to.1 + (fy * to.3 as f64).round() as i32,
+    )
+}
+
+/// The previews' order in the spread: top to bottom, then left to right
+/// (GNOME keeps a window at the bottom left at the bottom left).
+pub fn spread_order(rects: &[(i32, i32, i32, i32)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..rects.len()).collect();
+    order.sort_by_key(|&i| {
+        let (x, y, w, h) = rects[i];
+        (y + h / 2, x + w / 2)
+    });
+    order
+}
+
+/// An overview card on a monitor other than the primary.
+struct Side {
+    window: gtk::ApplicationWindow,
+    stack: gtk::Overlay,
+    main: gtk::Box,
+    drag_layer: gtk::Fixed,
+    connector: String,
+    geo: Cell<Geo>,
+}
+
+/// What the overview shows, for tools/test/umoja-wm-test.
+#[derive(Default)]
+struct Shown {
+    monitor: String,
+    card: Vec<u64>,
+    thumbs: Vec<Vec<u64>>,
+    sides: Vec<(String, Vec<u64>)>,
+}
+
 #[derive(Default)]
 struct State {
     windows: Vec<Win>,
@@ -186,11 +280,20 @@ struct State {
 struct Drag {
     id: u64,
     workspace: i32,
+    /// The window's rectangle on screen and its monitor.
+    rect: Geo,
+    mon: Geo,
+    /// Where it was picked up, as a fraction of its preview.
+    grab: (f64, f64),
+    /// The overview surface the drag started on, and its drag layer.
+    root: gtk::Widget,
+    layer: gtk::Fixed,
     cell: gtk::Widget,
     ghost: gtk::Widget,
-    /// Ghost size, to centre it under the pointer.
     size: (f64, f64),
-    target: Option<gtk::Widget>,
+    target: Option<(gtk::Widget, DropKind)>,
+    /// The pointer, in `root`'s coordinates.
+    at: (f64, f64),
 }
 
 pub struct Spread {
@@ -223,6 +326,53 @@ pub struct Spread {
     last_scroll: Cell<i64>,
     scroll_acc: Cell<f64>,
     drag: RefCell<Option<Drag>>,
+    /// The views on the other monitors.
+    sides: RefCell<Vec<Rc<Side>>>,
+    /// Drop targets of the current layout.
+    targets: RefCell<Vec<(glib::WeakRef<gtk::Widget>, DropKind)>>,
+    /// The main card's previews by row, for the arrow keys, and the one
+    /// they selected.
+    nav: RefCell<Vec<Vec<(u64, gtk::Button)>>>,
+    selected: Cell<Option<(usize, usize)>>,
+    stack: gtk::Overlay,
+    shown: RefCell<Shown>,
+}
+
+/// Fade a view in (gnome-shell animates into the overview; a fade is the
+/// cheap half of it). libadwaita skips it when animations are off.
+fn fade_in(widget: &gtk::Widget) {
+    widget.set_opacity(0.0);
+    let w = widget.clone();
+    let target = adw::CallbackAnimationTarget::new(move |v| w.set_opacity(v));
+    let anim = adw::TimedAnimation::builder()
+        .widget(widget)
+        .value_from(0.0)
+        .value_to(1.0)
+        .duration(200)
+        .easing(adw::Easing::EaseOutCubic)
+        .target(&target)
+        .build();
+    anim.play();
+}
+
+/// The monitors, the primary first.
+fn monitor_geos() -> Vec<(gdk::Monitor, Geo)> {
+    let primary = umoja_common::monitors::primary();
+    let mut all: Vec<(gdk::Monitor, Geo)> = umoja_common::monitors::all()
+        .into_iter()
+        .map(|m| {
+            let g = m.geometry();
+            let geo = (g.x(), g.y(), g.width(), g.height());
+            (m, geo)
+        })
+        .collect();
+    if let Some(p) = primary
+        && let Some(i) = all.iter().position(|(m, _)| *m == p)
+    {
+        let first = all.remove(i);
+        all.insert(0, first);
+    }
+    all
 }
 
 impl Spread {
@@ -253,7 +403,8 @@ impl Spread {
             .width_request(400)
             .halign(gtk::Align::Center)
             .build();
-        let thumbs = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        // No spacing: the gaps between thumbnails are drop targets.
+        let thumbs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         thumbs.set_halign(gtk::Align::Center);
         thumbs.set_margin_top(16);
         thumbs.add_css_class("workspace-thumbnails");
@@ -279,6 +430,7 @@ impl Spread {
         stack.add_overlay(&content);
         stack.add_overlay(&drag_layer);
         window.set_child(Some(&stack));
+        umoja_common::monitors::start();
 
         let this = Rc::new(Self {
             window,
@@ -301,6 +453,12 @@ impl Spread {
             last_scroll: Cell::new(0),
             scroll_acc: Cell::new(0.0),
             drag: RefCell::default(),
+            sides: RefCell::default(),
+            targets: RefCell::default(),
+            nav: RefCell::default(),
+            selected: Cell::new(None),
+            stack,
+            shown: RefCell::default(),
         });
         this.connect_signals(&content);
         this.watch_workspaces();
@@ -370,6 +528,24 @@ impl Spread {
                 }
                 gdk::Key::Page_Down if plain => {
                     s.step_workspace(1);
+                    glib::Propagation::Stop
+                }
+                // Arrow keys pick a window, Enter goes to it (GNOME's
+                // keyboard navigation between previews).
+                gdk::Key::Left | gdk::Key::Right | gdk::Key::Up | gdk::Key::Down
+                    if plain && s.entry.text().is_empty() =>
+                {
+                    let (dx, dy) = match key {
+                        gdk::Key::Left => (-1, 0),
+                        gdk::Key::Right => (1, 0),
+                        gdk::Key::Up => (0, -1),
+                        _ => (0, 1),
+                    };
+                    s.move_selection(dx, dy);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::Return | gdk::Key::KP_Enter if s.selected.get().is_some() => {
+                    s.activate_selected();
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -509,8 +685,12 @@ impl Spread {
                 None,
                 gio::DBusSignalFlags::NONE,
                 move |_, _, _, _, _, _| {
-                    if let Some(s) = w.upgrade() {
-                        s.queue_snapshot();
+                    // Windows opening, closing or changing while the
+                    // overview is up show at once, as in GNOME.
+                    match w.upgrade() {
+                        Some(s) if s.is_visible() => s.queue_refresh(),
+                        Some(s) => s.queue_snapshot(),
+                        None => {}
                     }
                 },
             );
@@ -596,6 +776,10 @@ impl Spread {
         self.cancel_drag();
         let was_visible = self.window.is_visible();
         self.window.set_visible(false);
+        for s in self.sides.borrow().iter() {
+            s.window.set_visible(false);
+        }
+        self.set_selected(None);
         // Window previews are up to 4 MB each and there is one for every
         // window on every workspace. Keep them for a while, so opening the
         // overview again is instant, then let them go: umoja-mir renders
@@ -670,8 +854,7 @@ impl Spread {
                     s.load_wallpaper();
                     *s.state.borrow_mut() = state;
                     s.populate();
-                    s.window.present();
-                    s.entry.grab_focus();
+                    s.present_views();
                     if s.capture_windows(&here).await > 0 {
                         s.queue_refresh();
                     }
@@ -696,8 +879,7 @@ impl Spread {
                     s.load_wallpaper();
                     *s.state.borrow_mut() = state;
                     s.populate();
-                    s.window.present();
-                    s.entry.grab_focus();
+                    s.present_views();
                     if !rest.is_empty() && s.capture_windows(&rest).await > 0 {
                         s.queue_refresh();
                     }
@@ -714,8 +896,7 @@ impl Spread {
             s.remember_previews(&state, frame.as_ref());
             *s.state.borrow_mut() = state;
             s.populate();
-            s.window.present();
-            s.entry.grab_focus();
+            s.present_views();
         });
     }
 
@@ -754,6 +935,24 @@ impl Spread {
                 }
                 *s.state.borrow_mut() = state;
                 s.populate();
+                // A window that opened while the overview is up has no
+                // preview yet.
+                if s.window_capture.get() == Some(true) {
+                    let missing: Vec<u64> = {
+                        let previews = s.previews.borrow();
+                        s.state
+                            .borrow()
+                            .windows
+                            .iter()
+                            .map(|w| w.id)
+                            .filter(|id| !previews.contains_key(id))
+                            .collect()
+                    };
+                    if !missing.is_empty() && s.capture_windows(&missing).await > 0 && s.is_visible()
+                    {
+                        s.populate();
+                    }
+                }
             });
         });
     }
@@ -780,9 +979,17 @@ impl Spread {
     }
 
     fn send_to_workspace(self: &Rc<Self>, id: u64, index: u32) {
+        self.call_then_refresh("SendWindowToWorkspace", (id, index));
+    }
+
+    fn place_window(self: &Rc<Self>, id: u64, workspace: i32, x: i32, y: i32) {
+        self.call_then_refresh("PlaceWindow", (id, workspace, x, y));
+    }
+
+    fn call_then_refresh<A: ToVariant + 'static>(self: &Rc<Self>, method: &'static str, args: A) {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            compositor_call("SendWindowToWorkspace", (id, index)).await;
+            compositor_call(method, args).await;
             if let Some(s) = weak.upgrade() {
                 s.queue_refresh();
             }
@@ -803,18 +1010,15 @@ impl Spread {
         }
     }
 
-    /// The monitor the overview is on: (x, y, width, height).
-    fn monitor(&self) -> (i32, i32, i32, i32) {
-        let display = gdk::Display::default();
-        let mon = self
-            .window
-            .surface()
-            .and_then(|s| display.as_ref().and_then(|d| d.monitor_at_surface(&s)))
-            .or_else(|| display.and_then(|d| d.monitors().item(0).and_downcast::<gdk::Monitor>()));
-        match mon.map(|m| m.geometry()) {
-            Some(g) => (g.x(), g.y(), g.width(), g.height()),
-            None => (0, 0, 1280, 800),
-        }
+    /// The primary monitor, where the main view always is (as in
+    /// gnome-shell). Mir used to choose the surface's monitor, and after
+    /// some interactions chose the other one, with thumbnails computed for
+    /// the wrong origin (empty).
+    fn monitor(&self) -> Geo {
+        monitor_geos()
+            .first()
+            .map(|(_, g)| *g)
+            .unwrap_or((0, 0, 1280, 800))
     }
 
     /// Room for the overview: its last size, or the monitor less the top bar
@@ -828,14 +1032,153 @@ impl Spread {
         ((mw - 64).max(320) as f64, (mh - 32).max(240) as f64)
     }
 
+    fn present_views(self: &Rc<Self>) {
+        if let Some(m) = umoja_common::monitors::primary() {
+            self.window.set_monitor(&m);
+        }
+        let was = self.window.is_visible();
+        self.window.present();
+        self.entry.grab_focus();
+        if !was {
+            fade_in(self.stack.upcast_ref());
+        }
+        for side in self.sides.borrow().iter() {
+            let was = side.window.is_visible();
+            side.window.present();
+            if !was {
+                fade_in(side.stack.upcast_ref());
+            }
+        }
+    }
+
+    /// One view per monitor besides the primary, made or dropped as
+    /// monitors come and go.
+    fn ensure_sides(self: &Rc<Self>, geos: &[(gdk::Monitor, Geo)]) {
+        let others = geos.get(1..).unwrap_or_default();
+        let name = |m: &gdk::Monitor| m.connector().map(|c| c.to_string()).unwrap_or_default();
+        let mut sides = self.sides.borrow_mut();
+        sides.retain(|s| {
+            let keep = others.iter().any(|(m, _)| name(m) == s.connector);
+            if !keep {
+                s.window.destroy();
+            }
+            keep
+        });
+        let Some(app) = self.window.application() else {
+            return;
+        };
+        for (m, geo) in others {
+            let connector = name(m);
+            if let Some(s) = sides.iter().find(|s| s.connector == connector) {
+                s.geo.set(*geo);
+                if !s.window.is_visible() {
+                    s.window.set_monitor(m);
+                }
+                continue;
+            }
+            sides.push(self.new_side(&app, m, connector, *geo));
+        }
+    }
+
+    fn new_side(self: &Rc<Self>, app: &gtk::Application, m: &gdk::Monitor, connector: String, geo: Geo) -> Rc<Side> {
+        let window = gtk::ApplicationWindow::builder()
+            .application(app)
+            .css_classes(["umoja-spread"])
+            .build();
+        window.init_layer_shell();
+        window.set_layer(Layer::Top);
+        window.set_namespace("umoja-overview-monitor");
+        for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            window.set_anchor(e, true);
+        }
+        // The whole monitor, so the surface's origin is the monitor's
+        // (drops across monitors need it). The keyboard stays with the
+        // main view.
+        window.set_exclusive_zone(-1);
+        window.set_keyboard_mode(KeyboardMode::None);
+        window.set_monitor(m);
+        let background = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        background.add_css_class("spread-background");
+        background.set_hexpand(true);
+        background.set_vexpand(true);
+        let main = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        main.set_halign(gtk::Align::Center);
+        main.set_valign(gtk::Align::Center);
+        main.set_vexpand(true);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.set_margin_top(GAP as i32);
+        content.set_margin_bottom(GAP as i32);
+        content.append(&main);
+        let drag_layer = gtk::Fixed::new();
+        drag_layer.set_can_target(false);
+        let stack = gtk::Overlay::new();
+        stack.set_child(Some(&background));
+        stack.add_overlay(&content);
+        stack.add_overlay(&drag_layer);
+        window.set_child(Some(&stack));
+        let click = gtk::GestureClick::new();
+        let weak = Rc::downgrade(self);
+        let main_w = main.clone();
+        click.connect_released(move |g, _, x, y| {
+            let Some(s) = weak.upgrade() else { return };
+            let Some(w) = g.widget() else { return };
+            let hit = w.pick(x, y, gtk::PickFlags::DEFAULT);
+            let on_background = hit.is_none_or(|h| {
+                h == w
+                    || h == main_w.clone().upcast::<gtk::Widget>()
+                    || h.has_css_class("card-wallpaper")
+                    || h.has_css_class("spread-rows")
+            });
+            if on_background {
+                s.hide();
+            }
+        });
+        content.add_controller(click);
+        Rc::new(Side {
+            window,
+            stack,
+            main,
+            drag_layer,
+            connector,
+            geo: Cell::new(geo),
+        })
+    }
+
+    fn register(&self, w: &impl IsA<gtk::Widget>, kind: DropKind) {
+        self.targets
+            .borrow_mut()
+            .push((w.upcast_ref::<gtk::Widget>().downgrade(), kind));
+    }
+
+    fn kind_of(&self, w: &gtk::Widget) -> Option<DropKind> {
+        self.targets
+            .borrow()
+            .iter()
+            .find(|(t, _)| t.upgrade().as_ref() == Some(w))
+            .map(|(_, k)| *k)
+    }
+
     fn populate(self: &Rc<Self>) {
         for b in [&self.thumbs, &self.main] {
             while let Some(c) = b.first_child() {
                 b.remove(&c);
             }
         }
+        self.targets.borrow_mut().clear();
+        let geos = monitor_geos();
+        self.ensure_sides(&geos);
+        let mons: Vec<Geo> = geos.iter().map(|(_, g)| *g).collect();
+        let mut shown = Shown {
+            monitor: geos
+                .first()
+                .and_then(|(m, _)| m.connector())
+                .map(|c| c.to_string())
+                .unwrap_or_default(),
+            ..Default::default()
+        };
         let st = self.state.borrow();
-        let (mx, my, mw, mh) = self.monitor();
+        let primary = mons.first().copied().unwrap_or((0, 0, 1280, 800));
+        let (mx, my, mw, mh) = primary;
         let aspect = mw.max(1) as f64 / mh.max(1) as f64;
         let (aw, ah) = self.area();
         let count = st.count.max(1);
@@ -849,18 +1192,23 @@ impl Spread {
             })
             .collect();
         tracing::info!(
-            "overview populated current={current} count={count} per_workspace={per_workspace:?}"
+            "overview populated current={current} count={count} per_workspace={per_workspace:?} monitors={}",
+            mons.len()
         );
 
-        // Thumbnails, when there is more than one workspace (as in GNOME).
+        // Thumbnails, when there is more than one workspace (as in GNOME),
+        // with a drop gap before, between and after them.
         let mut used_h = 24.0 + 40.0 + GAP;
         if count > 1 {
             let th = (mh as f64 * THUMB_SHARE).clamp(THUMB_MIN, THUMB_MAX);
             let tw = th * aspect;
             for i in 0..count {
-                let t = self.thumbnail(&st, i, i == current, (tw, th), (mx, my), (mw, mh));
+                self.thumbs.append(&self.gap(i, th));
+                let (t, ids) = self.thumbnail(&st, i, i == current, (tw, th), (mx, my), (mw, mh));
                 self.thumbs.append(&t);
+                shown.thumbs.push(ids);
             }
+            self.thumbs.append(&self.gap(count, th));
             self.thumbs.set_visible(true);
             used_h += 16.0 + th;
         } else {
@@ -873,12 +1221,45 @@ impl Spread {
             let left = (current > 0).then(|| current - 1);
             self.main.append(&self.peek(left, ch, true));
         }
-        self.main
-            .append(&self.workspace_card(&st, current, (cw, ch)));
+        let (card, nav, ids) = self.workspace_card(&st, current, (cw, ch), primary, &mons);
+        self.main.append(&card);
+        shown.card = ids;
         if peeks {
             let right = (current + 1 < count).then_some(current + 1);
             self.main.append(&self.peek(right, ch, false));
         }
+        let selected = self.selected.take();
+        *self.nav.borrow_mut() = nav;
+        // Keep the keyboard selection across a refresh when it still exists.
+        if let Some((r, c)) = selected
+            && self.nav.borrow().get(r).is_some_and(|row| c < row.len())
+        {
+            self.set_selected(Some((r, c)));
+        }
+
+        // The other monitors: their windows on the current workspace.
+        for side in self.sides.borrow().iter() {
+            while let Some(c) = side.main.first_child() {
+                side.main.remove(&c);
+            }
+            let geo = side.geo.get();
+            let aspect = geo.2.max(1) as f64 / geo.3.max(1) as f64;
+            let avail = (geo.2 as f64 - 2.0 * GAP, geo.3 as f64 - 3.0 * GAP);
+            let size = card_size(avail, aspect, false);
+            let (card, _, ids) = self.workspace_card(&st, current, size, geo, &mons);
+            side.main.append(&card);
+            shown.sides.push((side.connector.clone(), ids));
+        }
+        *self.shown.borrow_mut() = shown;
+    }
+
+    /// Between two thumbnails: dropping a window here makes a workspace.
+    fn gap(&self, index: u32, height: f64) -> gtk::Widget {
+        let g = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        g.add_css_class("workspace-gap");
+        g.set_size_request(6, height.round() as i32);
+        self.register(&g, DropKind::Gap(index));
+        g.upcast()
     }
 
     fn wallpaper(&self, w: f64, h: f64) -> TexPane {
@@ -909,6 +1290,7 @@ impl Spread {
         frame.add_css_class(if left { "left" } else { "right" });
         frame.set_widget_name(&format!("ws-{index}"));
         frame.set_cursor_from_name(Some("pointer"));
+        self.register(&frame, DropKind::Peek(index));
         let click = gtk::GestureClick::new();
         let weak = Rc::downgrade(self);
         click.connect_released(move |g, _, _, _| {
@@ -922,7 +1304,8 @@ impl Spread {
     }
 
     /// GNOME's WorkspaceThumbnail: the wallpaper with the workspace's
-    /// windows at their places, the active one outlined.
+    /// windows at their places, the active one outlined. Each small window
+    /// can be dragged (GNOME's WindowClone).
     fn thumbnail(
         self: &Rc<Self>,
         st: &State,
@@ -931,11 +1314,11 @@ impl Spread {
         (tw, th): (f64, f64),
         origin: (i32, i32),
         mon: (i32, i32),
-    ) -> gtk::Widget {
+    ) -> (gtk::Widget, Vec<u64>) {
         let scale = tw / mon.0.max(1) as f64;
         let fixed = gtk::Fixed::new();
-        fixed.set_can_target(false);
         let previews = self.previews.borrow();
+        let mut ids = Vec::new();
         for w in st.windows.iter() {
             if w.workspace < 0 || w.workspace as u32 != index || w.flags & FLAG_MINIMIZED != 0 {
                 continue;
@@ -943,19 +1326,19 @@ impl Spread {
             let Some((x, y, rw, rh)) = thumb_rect(w, origin, mon, scale) else {
                 continue;
             };
-            let child: gtk::Widget = match previews.get(&w.id) {
+            let icon = apps::app_for_window(&w.app_id)
+                .and_then(|i| i.icon())
+                .unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast());
+            let thumb = previews.get(&w.id).cloned();
+            let child: gtk::Widget = match &thumb {
                 Some(t) => TexPane::new(Some(t), false, 1, 1).upcast(),
                 None => {
                     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
                     card.add_css_class("thumb-window-card");
-                    let icon = apps::app_for_window(&w.app_id)
-                        .and_then(|i| i.icon())
-                        .unwrap_or_else(|| {
-                            gio::ThemedIcon::new("application-x-executable").upcast()
-                        });
                     let img = gtk::Image::from_gicon(&icon);
                     img.set_pixel_size(((rw.min(rh)) * 0.5).clamp(8.0, 32.0) as i32);
                     img.set_vexpand(true);
+                    img.set_can_target(false);
                     card.append(&img);
                     card.upcast()
                 }
@@ -963,7 +1346,11 @@ impl Spread {
             child.set_size_request(rw.round() as i32, rh.round() as i32);
             child.add_css_class("thumb-window");
             child.set_overflow(gtk::Overflow::Hidden);
+            child.set_tooltip_text(Some(&w.title));
+            child.set_widget_name(&format!("win-{}", w.id));
+            self.make_draggable(&child, w, thumb, &icon, (rw.round() as i32, rh.round() as i32));
             fixed.put(&child, x, y);
+            ids.push(w.id);
         }
 
         let frame = gtk::Overlay::new();
@@ -979,38 +1366,57 @@ impl Spread {
         frame.set_tooltip_text(Some(
             &i18n::shell("Workspace %d").replace("%d", &(index + 1).to_string()),
         ));
+        self.register(
+            &frame,
+            DropKind::Thumb {
+                index,
+                mon: (origin.0, origin.1, mon.0, mon.1),
+            },
+        );
         let click = gtk::GestureClick::new();
         let weak = Rc::downgrade(self);
         click.connect_released(move |g, _, _, _| {
             g.set_state(gtk::EventSequenceState::Claimed);
-            if let Some(s) = weak.upgrade() {
+            let Some(s) = weak.upgrade() else { return };
+            // "A click on the already current workspace should go back to
+            // the main view" (workspaceThumbnail.js).
+            if s.state.borrow().current == index {
+                s.hide();
+            } else {
                 s.show_workspace(index);
             }
         });
         frame.add_controller(click);
-        frame.upcast()
+        (frame.upcast(), ids)
     }
 
-    /// The current workspace: the wallpaper with its windows spread out.
+    /// A workspace on one monitor: the wallpaper with the windows that are
+    /// on that monitor spread out. The previews by row, and their ids.
+    #[allow(clippy::type_complexity)]
     fn workspace_card(
         self: &Rc<Self>,
         st: &State,
         index: u32,
         (cw, ch): (f64, f64),
-    ) -> gtk::Widget {
+        mon: Geo,
+        mons: &[Geo],
+    ) -> (gtk::Widget, Vec<Vec<(u64, gtk::Button)>>, Vec<u64>) {
         let rows = gtk::Box::new(gtk::Orientation::Vertical, GAP as i32);
         rows.set_valign(gtk::Align::Center);
         rows.set_halign(gtk::Align::Center);
         rows.add_css_class("spread-rows");
 
-        // Stacking order (bottom to top), then left to right.
         let here: Vec<&Win> = st
             .windows
             .iter()
-            .filter(|w| shown_on(w, st.current) == index)
+            .filter(|w| {
+                shown_on(w, st.current) == index && monitor_of((w.x, w.y, w.w, w.h), mons) == mon
+            })
             .collect();
-        let mut order: Vec<usize> = (0..here.len()).collect();
-        order.sort_by_key(|&i| (here[i].x + here[i].w / 2, here[i].y));
+        let rects: Vec<Geo> = here.iter().map(|w| (w.x, w.y, w.w, w.h)).collect();
+        let order = spread_order(&rects);
+        let mut nav = Vec::new();
+        let mut ids = Vec::new();
         if !here.is_empty() {
             let sizes: Vec<(f64, f64)> = order
                 .iter()
@@ -1023,20 +1429,28 @@ impl Spread {
             );
             let (scale, groups) = layout(&sizes, avail, GAP);
             let previews = self.previews.borrow();
-            for g in groups {
+            for mut g in groups {
+                // Rows go top to bottom; inside a row, left to right.
+                g.sort_by_key(|&k| {
+                    let w = here[order[k]];
+                    w.x + w.w / 2
+                });
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, GAP as i32);
                 row.set_halign(gtk::Align::Center);
                 row.add_css_class("spread-rows");
+                let mut nav_row = Vec::new();
                 for k in g {
                     let w = here[order[k]];
-                    let thumb = if w.flags & FLAG_MINIMIZED != 0 {
-                        None
-                    } else {
-                        previews.get(&w.id).cloned()
-                    };
-                    row.append(&self.preview(w, scale, thumb));
+                    // Minimized windows too: umoja-mir renders them, and
+                    // GNOME shows their last contents.
+                    let thumb = previews.get(&w.id).cloned();
+                    let (cell, button) = self.preview(w, scale, thumb);
+                    row.append(&cell);
+                    nav_row.push((w.id, button));
+                    ids.push(w.id);
                 }
                 rows.append(&row);
+                nav.push(nav_row);
             }
         }
 
@@ -1050,10 +1464,16 @@ impl Spread {
         card.set_overflow(gtk::Overflow::Hidden);
         card.add_css_class("workspace-card");
         card.set_widget_name(&format!("ws-{index}"));
-        card.upcast()
+        self.register(&card, DropKind::Card { index, mon });
+        (card.upcast(), nav, ids)
     }
 
-    fn preview(self: &Rc<Self>, w: &Win, scale: f64, thumb: Option<gdk::Texture>) -> gtk::Widget {
+    fn preview(
+        self: &Rc<Self>,
+        w: &Win,
+        scale: f64,
+        thumb: Option<gdk::Texture>,
+    ) -> (gtk::Widget, gtk::Button) {
         let width = (w.w as f64 * scale).round().max(48.0) as i32;
         let height = (w.h as f64 * scale).round().max(48.0) as i32;
         let info = apps::app_for_window(&w.app_id);
@@ -1078,6 +1498,9 @@ impl Spread {
         body.set_size_request(width, height);
         body.set_overflow(gtk::Overflow::Hidden);
         body.add_css_class("spread-thumb");
+        if w.flags & FLAG_MINIMIZED != 0 {
+            body.add_css_class("minimized");
+        }
 
         let badge = gtk::Image::from_gicon(&icon);
         badge.set_pixel_size(48);
@@ -1115,6 +1538,7 @@ impl Spread {
             .css_classes(["spread-window"])
             .tooltip_text(&w.title)
             .build();
+        button.set_widget_name(&format!("win-{id}"));
         if w.flags & FLAG_FOCUSED != 0 {
             button.add_css_class("focused");
         }
@@ -1152,16 +1576,99 @@ impl Spread {
         });
         cell.add_controller(hover);
 
-        // Drag the window onto another workspace (a thumbnail or a peek).
-        if w.workspace >= 0 {
-            self.make_draggable(&cell, w, thumb, &icon, (width, height));
+        // Drag the window onto another workspace, monitor or spot.
+        self.make_draggable(cell.upcast_ref(), w, thumb, &icon, (width, height));
+        (cell.upcast(), button)
+    }
+
+    fn set_selected(&self, sel: Option<(usize, usize)>) {
+        let nav = self.nav.borrow();
+        let at = |s: Option<(usize, usize)>| {
+            s.and_then(|(r, c)| nav.get(r).and_then(|row| row.get(c)))
+                .map(|(_, b)| b.clone())
+        };
+        if let Some(b) = at(self.selected.get()) {
+            b.remove_css_class("selected");
         }
-        cell.upcast()
+        if let Some(b) = at(sel) {
+            b.add_css_class("selected");
+        }
+        self.selected.set(sel);
+    }
+
+    fn move_selection(&self, dx: i32, dy: i32) {
+        let next = {
+            let nav = self.nav.borrow();
+            if nav.is_empty() {
+                return;
+            }
+            match self.selected.get() {
+                None => (0, 0),
+                Some((r, c)) => {
+                    let r2 = (r as i32 + dy).clamp(0, nav.len() as i32 - 1) as usize;
+                    let len = nav[r2].len().max(1);
+                    let c2 = if dy != 0 {
+                        c.min(len - 1)
+                    } else {
+                        (c as i32 + dx).clamp(0, len as i32 - 1) as usize
+                    };
+                    (r2, c2)
+                }
+            }
+        };
+        self.set_selected(Some(next));
+    }
+
+    fn activate_selected(&self) {
+        let button = self.selected.get().and_then(|(r, c)| {
+            self.nav
+                .borrow()
+                .get(r)
+                .and_then(|row| row.get(c))
+                .map(|(_, b)| b.clone())
+        });
+        if let Some(b) = button {
+            b.emit_clicked();
+        }
+    }
+
+    fn layer_for(&self, root: &gtk::Widget) -> Option<gtk::Fixed> {
+        if root == self.window.upcast_ref::<gtk::Widget>() {
+            return Some(self.drag_layer.clone());
+        }
+        self.sides
+            .borrow()
+            .iter()
+            .find(|s| s.window.upcast_ref::<gtk::Widget>() == root)
+            .map(|s| s.drag_layer.clone())
+    }
+
+    /// Where an overview surface's (0, 0) is in the layout. Layer surfaces
+    /// aren't told; the other monitors' views cover their monitor, and the
+    /// main view keeps out of the top bar's exclusive zone, so what it
+    /// lacks of the monitor is above it.
+    fn surface_origin(&self, root: &gtk::Widget) -> Option<(i32, i32)> {
+        if root == self.window.upcast_ref::<gtk::Widget>() {
+            let (x, y, w, h) = self.monitor();
+            let (ww, wh) = (self.window.width(), self.window.height());
+            if ww <= 0 || wh <= 0 {
+                return Some((x, y));
+            }
+            return Some((x + (w - ww).max(0), y + (h - wh).max(0)));
+        }
+        self.sides
+            .borrow()
+            .iter()
+            .find(|s| s.window.upcast_ref::<gtk::Widget>() == root)
+            .map(|s| {
+                let g = s.geo.get();
+                (g.0, g.1)
+            })
     }
 
     fn make_draggable(
         self: &Rc<Self>,
-        cell: &gtk::Box,
+        widget: &gtk::Widget,
         w: &Win,
         thumb: Option<gdk::Texture>,
         icon: &gio::Icon,
@@ -1170,22 +1677,30 @@ impl Spread {
         let drag = gtk::GestureDrag::new();
         drag.set_propagation_phase(gtk::PropagationPhase::Capture);
         let (id, workspace) = (w.id, w.workspace);
+        let rect = (w.x, w.y, w.w, w.h);
         let weak = Rc::downgrade(self);
         let icon = icon.clone();
-        let cell_w = cell.clone().upcast::<gtk::Widget>();
+        let cell_w = widget.clone();
         drag.connect_drag_update(move |g, dx, dy| {
             let Some(s) = weak.upgrade() else { return };
             let Some((sx, sy)) = g.start_point() else {
+                return;
+            };
+            let Some(root) = cell_w.root().map(|r| r.upcast::<gtk::Widget>()) else {
                 return;
             };
             if s.drag.borrow().is_none() {
                 if dx.hypot(dy) < DRAG_THRESHOLD {
                     return;
                 }
+                let Some(layer) = s.layer_for(&root) else {
+                    return;
+                };
                 // Now a drag: the button underneath must not see a click.
                 g.set_state(gtk::EventSequenceState::Claimed);
-                let gw = (width as f64).min(240.0);
-                let gh = gw * height as f64 / width.max(1) as f64;
+                // Small windows from a thumbnail grow to a usable size.
+                let gw = (width as f64).clamp(120.0, 240.0);
+                let gh = gw * height.max(1) as f64 / width.max(1) as f64;
                 let ghost: gtk::Widget = match &thumb {
                     Some(t) => TexPane::new(Some(t), false, 1, 1).upcast(),
                     None => {
@@ -1198,24 +1713,35 @@ impl Spread {
                 ghost.set_size_request(gw as i32, gh as i32);
                 ghost.add_css_class("spread-drag-ghost");
                 ghost.set_can_target(false);
-                s.drag_layer.put(&ghost, 0.0, 0.0);
+                layer.put(&ghost, 0.0, 0.0);
                 cell_w.set_opacity(0.3);
+                let mons: Vec<Geo> = monitor_geos().iter().map(|(_, g)| *g).collect();
+                let grab = (
+                    (sx / width.max(1) as f64).clamp(0.0, 1.0),
+                    (sy / height.max(1) as f64).clamp(0.0, 1.0),
+                );
                 *s.drag.borrow_mut() = Some(Drag {
                     id,
                     workspace,
+                    rect,
+                    mon: monitor_of(rect, &mons),
+                    grab,
+                    root: root.clone(),
+                    layer,
                     cell: cell_w.clone(),
                     ghost,
                     size: (gw, gh),
                     target: None,
+                    at: (0.0, 0.0),
                 });
             }
             let Some(p) = cell_w.compute_point(
-                &s.window,
+                &root,
                 &gtk::graphene::Point::new((sx + dx) as f32, (sy + dy) as f32),
             ) else {
                 return;
             };
-            s.drag_motion(p.x() as f64, p.y() as f64);
+            s.drag_motion(&root, p.x() as f64, p.y() as f64);
         });
         let weak = Rc::downgrade(self);
         drag.connect_drag_end(move |_, _, _| {
@@ -1223,75 +1749,237 @@ impl Spread {
                 s.drop_window();
             }
         });
-        cell.add_controller(drag);
+        widget.add_controller(drag);
     }
 
-    /// The workspace drop target under window point (x, y), if any.
-    fn target_at(&self, x: f64, y: f64) -> Option<(gtk::Widget, u32)> {
-        let mut hit = self.window.pick(x, y, gtk::PickFlags::DEFAULT);
-        while let Some(w) = hit {
-            if let Some(i) = w
-                .widget_name()
-                .strip_prefix("ws-")
-                .and_then(|n| n.parse().ok())
-            {
-                return Some((w, i));
+    /// The drop target under (x, y) of overview surface `root`; past its
+    /// edges, the monitor there.
+    fn target_at(&self, root: &gtk::Widget, x: f64, y: f64) -> Option<(gtk::Widget, DropKind)> {
+        let (rw, rh) = (root.width() as f64, root.height() as f64);
+        if x >= 0.0 && y >= 0.0 && x < rw && y < rh {
+            let mut hit = root.pick(x, y, gtk::PickFlags::DEFAULT);
+            while let Some(w) = hit {
+                if let Some(kind) = self.kind_of(&w) {
+                    return Some((w, kind));
+                }
+                if &w == root {
+                    break;
+                }
+                hit = w.parent();
             }
-            hit = w.parent();
+            return None;
         }
-        None
+        // The pointer left this surface while held: another monitor's view.
+        let origin = self.surface_origin(root)?;
+        let (gx, gy) = (origin.0 as f64 + x, origin.1 as f64 + y);
+        let mon = monitor_geos().into_iter().map(|(_, g)| g).find(|&(mx, my, mw, mh)| {
+            gx >= mx as f64 && gy >= my as f64 && gx < (mx + mw) as f64 && gy < (my + mh) as f64
+        })?;
+        let card = self.targets.borrow().iter().find_map(|(w, k)| match k {
+            DropKind::Card { mon: m, .. } if *m == mon => w.upgrade(),
+            _ => None,
+        })?;
+        Some((card, DropKind::Screen { mon, x: gx, y: gy }))
     }
 
-    fn drag_motion(&self, x: f64, y: f64) {
-        let target = self.target_at(x, y);
+    fn drag_motion(&self, root: &gtk::Widget, x: f64, y: f64) {
+        let target = self.target_at(root, x, y);
         let mut drag = self.drag.borrow_mut();
         let Some(d) = drag.as_mut() else { return };
-        let to = (x - d.size.0 / 2.0, y - d.size.1 / 2.0);
-        if let Some(p) = self.window.compute_point(
-            &self.drag_layer,
+        d.at = (x, y);
+        let to = (x - d.grab.0 * d.size.0, y - d.grab.1 * d.size.1);
+        if let Some(p) = root.compute_point(
+            &d.layer,
             &gtk::graphene::Point::new(to.0 as f32, to.1 as f32),
         ) {
-            self.drag_layer.move_(&d.ghost, p.x() as f64, p.y() as f64);
+            d.layer.move_(&d.ghost, p.x() as f64, p.y() as f64);
         }
-        let new = target
-            .filter(|(_, i)| *i as i32 != d.workspace)
-            .map(|(w, _)| w);
-        if new != d.target {
-            if let Some(old) = d.target.take() {
-                old.remove_css_class("drop-target");
+        // Dropping where the window already is does nothing.
+        let (workspace, mon) = (d.workspace, d.mon);
+        let new = target.filter(|(_, k)| match *k {
+            DropKind::Peek(i) => i as i32 != workspace,
+            DropKind::Card { index, mon: m } => {
+                !(m == mon && (workspace < 0 || index as i32 == workspace))
             }
-            if let Some(w) = &new {
-                w.add_css_class("drop-target");
+            DropKind::Screen { mon: m, .. } => m != mon,
+            _ => true,
+        });
+        let old_w = d.target.as_ref().map(|t| t.0.clone());
+        let new_w = new.as_ref().map(|t| t.0.clone());
+        if old_w != new_w {
+            if let Some(o) = old_w {
+                o.remove_css_class("drop-target");
             }
-            d.target = new;
+            if let Some(n) = &new_w {
+                n.add_css_class("drop-target");
+            }
         }
+        d.target = new;
     }
 
     fn drop_window(self: &Rc<Self>) {
         let Some(d) = self.drag.borrow_mut().take() else {
             return;
         };
-        self.drag_layer.remove(&d.ghost);
-        let target = d.target.as_ref().and_then(|t| {
-            t.remove_css_class("drop-target");
-            t.widget_name()
-                .strip_prefix("ws-")
-                .and_then(|n| n.parse::<u32>().ok())
-        });
-        match target {
-            Some(i) if i as i32 != d.workspace => self.send_to_workspace(d.id, i),
-            _ => d.cell.set_opacity(1.0),
+        d.layer.remove(&d.ghost);
+        let Some((widget, kind)) = d.target.clone() else {
+            d.cell.set_opacity(1.0);
+            return;
+        };
+        widget.remove_css_class("drop-target");
+        let size = (d.rect.2, d.rect.3);
+        let primary = self.monitor();
+        match kind {
+            DropKind::Peek(i) => {
+                if d.workspace >= 0 {
+                    self.send_to_workspace(d.id, i);
+                } else {
+                    // On every workspace (another monitor): to the same
+                    // place on the primary one, on that workspace.
+                    let (x, y) = translate(d.rect.0, d.rect.1, d.mon, primary);
+                    self.place_window(d.id, i as i32, x, y);
+                }
+            }
+            DropKind::Thumb { index, mon } | DropKind::Card { index, mon } => {
+                let p = d.root.compute_point(
+                    &widget,
+                    &gtk::graphene::Point::new(d.at.0 as f32, d.at.1 as f32),
+                );
+                let (fx, fy) = p
+                    .map(|p| {
+                        (
+                            p.x() as f64 / widget.width().max(1) as f64,
+                            p.y() as f64 / widget.height().max(1) as f64,
+                        )
+                    })
+                    .unwrap_or((0.5, 0.5));
+                let (px, py) = map_fraction(fx, fy, mon);
+                let (x, y) = grab_place(px, py, d.grab, size);
+                let ws = if index as i32 == d.workspace {
+                    -1
+                } else {
+                    index as i32
+                };
+                self.place_window(d.id, ws, x, y);
+            }
+            DropKind::Gap(i) => self.call_then_refresh("SendWindowToNewWorkspace", (d.id, i)),
+            DropKind::Screen { x, y, .. } => {
+                let (x, y) = grab_place(x, y, d.grab, size);
+                self.place_window(d.id, -1, x, y);
+            }
         }
     }
 
     fn cancel_drag(&self) {
         if let Some(d) = self.drag.borrow_mut().take() {
-            self.drag_layer.remove(&d.ghost);
+            d.layer.remove(&d.ghost);
             d.cell.set_opacity(1.0);
-            if let Some(t) = d.target {
+            if let Some((t, _)) = d.target {
                 t.remove_css_class("drop-target");
             }
         }
+    }
+
+    /// What is on screen, for tools/test/umoja-wm-test: ids per view and
+    /// where previews, thumbnails and gaps are in layout pixels.
+    pub fn test_state(&self, d: &glib::VariantDict) {
+        d.insert_value("visible", &self.is_visible().to_variant());
+        let shown = self.shown.borrow();
+        d.insert_value("monitor", &shown.monitor.to_variant());
+        {
+            let st = self.state.borrow();
+            d.insert_value("current", &st.current.to_variant());
+            d.insert_value("count", &st.count.to_variant());
+        }
+        d.insert_value("card", &shown.card.to_variant());
+        d.insert_value("thumbs", &shown.thumbs.to_variant());
+        d.insert_value("sides", &shown.sides.to_variant());
+        let sides_up = self.sides.borrow().iter().filter(|s| s.window.is_visible()).count() as u32;
+        d.insert_value("sides_visible", &sides_up.to_variant());
+        let sel = self
+            .selected
+            .get()
+            .and_then(|(r, c)| self.nav.borrow().get(r).and_then(|row| row.get(c)).map(|(id, _)| *id))
+            .unwrap_or(0);
+        d.insert_value("selected", &sel.to_variant());
+
+        let global = |w: &gtk::Widget| -> Option<Geo> {
+            let root = w.root()?.upcast::<gtk::Widget>();
+            let (ox, oy) = self.surface_origin(&root)?;
+            let b = w.compute_bounds(&root)?;
+            Some((
+                ox + b.x() as i32,
+                oy + b.y() as i32,
+                b.width() as i32,
+                b.height() as i32,
+            ))
+        };
+        let mut thumbnails: Vec<(u32, i32, i32, i32, i32)> = Vec::new();
+        let mut gaps: Vec<(u32, i32, i32, i32, i32)> = Vec::new();
+        let mut cards: Vec<(u32, i32, i32, i32, i32)> = Vec::new();
+        let mut previews: Vec<(u64, i32, i32, i32, i32)> = Vec::new();
+        let mut small: Vec<(u64, i32, i32, i32, i32)> = Vec::new();
+        for (w, k) in self.targets.borrow().iter() {
+            let Some(w) = w.upgrade() else { continue };
+            let Some((x, y, wd, ht)) = global(&w) else { continue };
+            match k {
+                DropKind::Thumb { index, .. } => {
+                    thumbnails.push((*index, x, y, wd, ht));
+                    // The small windows inside it.
+                    let mut c = w.first_child();
+                    while let Some(child) = c {
+                        let mut g = child.first_child();
+                        while let Some(win) = g {
+                            if let Some(id) = win
+                                .widget_name()
+                                .strip_prefix("win-")
+                                .and_then(|n| n.parse::<u64>().ok())
+                                && let Some((x, y, wd, ht)) = global(&win)
+                            {
+                                small.push((id, x, y, wd, ht));
+                            }
+                            g = win.next_sibling();
+                        }
+                        c = child.next_sibling();
+                    }
+                }
+                DropKind::Gap(i) => gaps.push((*i, x, y, wd, ht)),
+                DropKind::Card { index, .. } => {
+                    cards.push((*index, x, y, wd, ht));
+                    collect_previews(&w, &global, &mut previews);
+                }
+                _ => {}
+            }
+        }
+        d.insert_value("thumbnail_rects", &thumbnails.to_variant());
+        d.insert_value("gap_rects", &gaps.to_variant());
+        d.insert_value("card_rects", &cards.to_variant());
+        d.insert_value("preview_rects", &previews.to_variant());
+        d.insert_value("thumb_window_rects", &small.to_variant());
+    }
+}
+
+/// The window previews (buttons named win-<id>) under `w`.
+fn collect_previews(
+    w: &gtk::Widget,
+    global: &dyn Fn(&gtk::Widget) -> Option<Geo>,
+    out: &mut Vec<(u64, i32, i32, i32, i32)>,
+) {
+    let mut c = w.first_child();
+    while let Some(child) = c {
+        if child.is::<gtk::Button>()
+            && let Some(id) = child
+                .widget_name()
+                .strip_prefix("win-")
+                .and_then(|n| n.parse::<u64>().ok())
+        {
+            if let Some((x, y, wd, ht)) = global(&child) {
+                out.push((id, x, y, wd, ht));
+            }
+        } else {
+            collect_previews(&child, global, out);
+        }
+        c = child.next_sibling();
     }
 }
 
@@ -1625,6 +2313,31 @@ mod tests {
         assert_eq!(shown_on(&w, 3), 3);
         w.workspace = 1;
         assert_eq!(shown_on(&w, 3), 1);
+    }
+
+    #[test]
+    fn windows_belong_to_the_monitor_holding_their_centre() {
+        let mons = [(0, 0, 1920, 1080), (1920, 0, 2560, 1440)];
+        assert_eq!(monitor_of((100, 100, 800, 600), &mons), mons[0]);
+        assert_eq!(monitor_of((1800, 100, 800, 600), &mons), mons[1]);
+        // Off every monitor: the primary.
+        assert_eq!(monitor_of((-5000, 0, 10, 10), &mons), mons[0]);
+    }
+
+    #[test]
+    fn drops_keep_the_grab_point_under_the_pointer() {
+        // Grabbed at its middle, dropped at (1000, 500): centred there.
+        assert_eq!(grab_place(1000.0, 500.0, (0.5, 0.5), (400, 300)), (800, 350));
+        // A quarter into a thumbnail of a 1920x1080 monitor at x 1920.
+        assert_eq!(map_fraction(0.25, 0.5, (1920, 0, 1920, 1080)), (2400.0, 540.0));
+        assert_eq!(map_fraction(2.0, -1.0, (0, 0, 100, 100)), (100.0, 0.0));
+        assert_eq!(translate(960, 540, (0, 0, 1920, 1080), (1920, 0, 2560, 1440)), (3200, 720));
+    }
+
+    #[test]
+    fn spread_goes_top_to_bottom_then_left_to_right() {
+        let rects = [(900, 600, 400, 300), (100, 600, 400, 300), (500, 0, 400, 300)];
+        assert_eq!(spread_order(&rects), vec![2, 1, 0]);
     }
 
     #[test]

@@ -27,3 +27,8 @@ extend-height=false
 # A dock on every monitor; Settings > Ubuntu Desktop > Dock > "Show on"
 # still picks a single one.
 multi-monitor=true
+
+# Show Desktop on Super+D and Ctrl+Alt+D, as Ubuntu binds it (GNOME's own
+# default is no key).
+[org.gnome.desktop.wm.keybindings:Umoja]
+show-desktop=['<Super>d', '<Primary><Alt>d']
