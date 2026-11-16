@@ -22,7 +22,9 @@
 # (infra/downloads) serves and counts them. Secrets: CLOUDFLARE_ACCOUNT_ID,
 # R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY; variables: R2_BUCKET (default
 # umoja-releases), DOWNLOAD_URL (the Worker's address, for the release
-# notes). Without the secrets the job warns and does nothing.
+# notes; a secret of that name works too). Without the secrets the job
+# warns and does nothing. A manual run with link_release=vVERSION builds
+# nothing and only adds that release's R2 link to its notes.
 
 name: Image
 
@@ -42,6 +44,9 @@ on:
       packages_run:
         description: Packages workflow run id whose debs-amd64 to add (empty = PPA only)
         default: ""
+      link_release:
+        description: Build nothing; only link this release's R2 ISO (e.g. v2026.47.1) from its GitHub release notes
+        default: ""
 
 # Release runs come from a manual Packages run, edge runs from pushes: keep
 # them in separate groups so a push to main never cancels a release ISO.
@@ -56,7 +61,7 @@ permissions:
 jobs:
   image:
     name: Build and boot the image (amd64)
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && !inputs.link_release
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -222,7 +227,6 @@ jobs:
       TAG: ${{ needs.image.outputs.release }}
       NAME: ${{ needs.image.outputs.iso }}
       BUCKET: ${{ vars.R2_BUCKET || 'umoja-releases' }}
-      DOWNLOAD_URL: ${{ vars.DOWNLOAD_URL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -268,17 +272,52 @@ jobs:
           r2 cp latest.json "s3://$BUCKET/latest.json" --content-type application/json --no-progress
           r2 ls "$dest/"
 
+  link:
+    name: Link the ISO from the GitHub release
+    needs: [image, publish]
+    # After a release ISO is published, or on its own for a release that is
+    # already on R2 (workflow_dispatch with link_release).
+    if: always() && (needs.publish.result == 'success' || inputs.link_release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.link_release || needs.image.outputs.release }}
+      BUCKET: ${{ vars.R2_BUCKET || 'umoja-releases' }}
+      # A repository variable; also taken from a secret of the same name.
+      DOWNLOAD_URL: ${{ vars.DOWNLOAD_URL || secrets.DOWNLOAD_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
       - name: Link it from the GitHub release
-        if: steps.secrets.outputs.ok && env.DOWNLOAD_URL != ''
         run: |
-          url="${DOWNLOAD_URL%/}/releases/$TAG/$NAME.iso"
-          sha=$(cut -d' ' -f1 iso/$NAME.iso.sha256)
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "::warning::DOWNLOAD_URL is not set as a repository variable (Settings > Secrets and variables > Actions > Variables) or secret; $TAG's notes get no ISO link"
+            exit 0
+          fi
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "::warning::R2 secrets are not set; nothing to link"
+            exit 0
+          fi
+          NAME="ubuntu-umoja-desktop-${TAG}_amd64"
+          r2() { aws --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" "$@"; }
+          key="releases/$TAG/$NAME.iso"
+          sha=$(r2 s3 cp "s3://$BUCKET/$key.sha256" - | cut -d' ' -f1)
+          size=$(r2 s3api head-object --bucket "$BUCKET" --key "$key" --query ContentLength --output text)
+          url="${DOWNLOAD_URL%/}/$key"
+          echo "$url $size $sha"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "Umoja ${TAG#v}" --notes "Install from ppa:ken-vandine/umoja."
           notes=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
-          case "$notes" in *"$url"*) exit 0 ;; esac
+          case "$notes" in *"$url"*) echo "Already linked"; exit 0 ;; esac
           printf '%s\n\n**Installer ISO:** [%s](%s) (%s GiB)  \nSHA-256: `%s`\n' \
-            "$notes" "$NAME.iso" "$url" "$(numfmt --to-unit=1073741824 --format=%.1f "$(stat -c %s iso/$NAME.iso)")" "$sha" \
+            "$notes" "$NAME.iso" "$url" "$(numfmt --to-unit=1073741824 --format=%.1f "$size")" "$sha" \
             > notes.md
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
