@@ -229,15 +229,26 @@ window.umoja-overlay.ask-umoja {
 .ask-top {
   padding: 10px 12px 10px 14px;
 }
-.umoja-overlay .ask-top entry.ask-entry {
-  min-height: 40px;
-  padding: 0 4px;
+/* The prompt: a borderless text box that wraps and grows (prompt.rs). */
+.umoja-overlay .ask-top .ask-entry {
   font-size: 1.3em;
+}
+.umoja-overlay .ask-top .ask-entry scrolledwindow,
+.umoja-overlay .ask-top .ask-entry textview,
+.umoja-overlay .ask-top .ask-entry textview > text {
   background: none;
   box-shadow: none;
+  color: #ffffff;
 }
-.umoja-overlay .ask-top entry.ask-entry:focus-within {
-  box-shadow: none;
+.umoja-overlay .ask-top .ask-entry .ask-search-icon {
+  -gtk-icon-size: 16px;
+  margin-left: 2px;
+}
+.umoja-overlay .ask-top .ask-entry button.ask-clear {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  font-size: 1rem;
 }
 .ask-top .myna-pill {
   min-width: 34px;

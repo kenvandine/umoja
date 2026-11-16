@@ -22,6 +22,7 @@ mod lemonade;
 mod model;
 mod model_picker;
 mod myna;
+mod prompt;
 mod screencast;
 mod screenshot;
 mod shortcuts;

@@ -140,7 +140,7 @@ pub struct Overlay {
     // An Adwaita window, as the rest of the overlay's.
     window: adw::ApplicationWindow,
     card: gtk::Box,
-    entry: gtk::SearchEntry,
+    entry: crate::prompt::PromptInput,
     /// "Firefox": the app Ask Umoja opened over. Its launcher actions come
     /// first and questions are asked with it in mind. Backspace in the
     /// empty entry (or a click) removes it.
@@ -276,27 +276,25 @@ impl Overlay {
             .tooltip_text(i18n::umoja(
                 "Searching with this app first. Backspace searches everything.",
             ))
-            .valign(gtk::Align::Center)
             .visible(false)
             .build();
-        let entry = gtk::SearchEntry::builder()
-            .placeholder_text(placeholder())
-            .hexpand(true)
-            .css_classes(["ask-entry"])
-            .search_delay(60)
-            .build();
-        entry.update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Ask Umoja"))]);
+        // Wraps and grows with a long question instead of scrolling
+        // sideways; Shift+Enter starts a new line.
+        let entry = crate::prompt::PromptInput::new(&placeholder());
+        entry
+            .view()
+            .update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Ask Umoja"))]);
         let myna_pill = gtk::Button::builder()
             .icon_name("audio-input-microphone-symbolic")
             .tooltip_text(i18n::umoja("Dictate: talk to type"))
             .css_classes(["circular", "myna-pill"])
-            .valign(gtk::Align::Center)
             .build();
+        // The chip and microphone stay level with the first line.
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         top.add_css_class("ask-top");
-        top.append(&focus_chip);
-        top.append(&entry);
-        top.append(&myna_pill);
+        top.append(&crate::prompt::line_slot(&focus_chip));
+        top.append(entry.widget());
+        top.append(&crate::prompt::line_slot(&myna_pill));
 
         // "Add context" menu and the clipboard history toggle, in the foot.
         let pick_selection =
@@ -370,7 +368,9 @@ impl Overlay {
             .css_classes(["ask-list"])
             .build();
         results.update_property(&[gtk::accessible::Property::Label(&i18n::umoja("Results"))]);
-        entry.update_relation(&[gtk::accessible::Relation::Controls(&[results.upcast_ref()])]);
+        entry
+            .view()
+            .update_relation(&[gtk::accessible::Relation::Controls(&[results.upcast_ref()])]);
         let results_scroll = gtk::ScrolledWindow::builder()
             .child(&results)
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -522,7 +522,15 @@ impl Overlay {
         root.set_margin_start(16);
         root.set_margin_end(16);
         root.set_margin_bottom(48);
-        root.append(&card);
+        // Never wider than CARD_WIDTH: a long answer, file name, chip or
+        // confirm list wraps or ellipsizes instead of stretching the card.
+        let clamp = adw::Clamp::builder()
+            .maximum_size(CARD_WIDTH)
+            .tightening_threshold(CARD_WIDTH)
+            .valign(gtk::Align::Start)
+            .child(&card)
+            .build();
+        root.append(&clamp);
         window.set_content(Some(&root));
 
         let overlay = Rc::new_cyclic(|weak: &std::rc::Weak<Self>| Self {
@@ -762,7 +770,7 @@ impl Overlay {
 
     fn entry_has_focus(&self) -> bool {
         gtk::prelude::GtkWindowExt::focus(&self.window).is_some_and(|f| {
-            f == *self.entry.upcast_ref::<gtk::Widget>() || f.is_ancestor(&self.entry)
+            f == *self.entry.widget().upcast_ref::<gtk::Widget>() || f.is_ancestor(self.entry.widget())
         })
     }
 
