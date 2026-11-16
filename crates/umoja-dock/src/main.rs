@@ -43,6 +43,8 @@ const MENU_GAP: i32 = 6;
 const SUPER_HOLD_MS: u64 = 400;
 /// switch-to-application-1..9.
 const MAX_APP_KEYS: usize = 9;
+/// After a rebuild, when the icons have their places, for SetDockIcons.
+const ICON_REPORT_DELAY_MS: u64 = 400;
 
 #[derive(Clone, Copy, Debug)]
 struct Config {
@@ -182,6 +184,8 @@ struct Dock {
     super_held: Cell<bool>,
     numbers_shown: Cell<bool>,
     numbers_timer: RefCell<Option<glib::SourceId>>,
+    /// Pending SetDockIcons report after a rebuild.
+    icon_report: RefCell<Option<glib::SourceId>>,
 }
 
 struct Badge {
@@ -266,6 +270,7 @@ fn new_dock(app: &adw::Application, shared: &Shared, monitor: &gtk::gdk::Monitor
         super_held: Cell::new(false),
         numbers_shown: Cell::new(false),
         numbers_timer: RefCell::default(),
+        icon_report: RefCell::default(),
     });
     let _ = dock.entries.set(shared.entries.clone());
 
@@ -462,6 +467,57 @@ impl Dock {
             self.list.append(&self.show_apps_button(cfg.icon_size));
         }
         self.update_reserved_space();
+        self.queue_icon_report();
+    }
+
+    /// Tell umoja-mir where each app's icon is, once the new layout is
+    /// allocated: a minimized window flies into its icon (SetDockIcons).
+    fn queue_icon_report(self: &Rc<Self>) {
+        if let Some(id) = self.icon_report.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_millis(ICON_REPORT_DELAY_MS), move || {
+            if let Some(d) = weak.upgrade() {
+                d.icon_report.borrow_mut().take();
+                d.report_icons();
+            }
+        });
+        *self.icon_report.borrow_mut() = Some(id);
+    }
+
+    fn report_icons(&self) {
+        let g = self.monitor.geometry();
+        let mut icons: Vec<(String, i32, i32, i32, i32)> = Vec::new();
+        for (app, button, wins) in self.apps.borrow().iter() {
+            let Some(b) = button.compute_bounds(&self.window) else {
+                continue;
+            };
+            let rect = (b.x() as i32, b.y() as i32, b.width() as i32, b.height() as i32);
+            let mut ids: Vec<String> = wins.iter().map(|w| w.app_id.clone()).collect();
+            if let Some(id) = app.id() {
+                ids.push(id.trim_end_matches(".desktop").to_string());
+            }
+            ids.sort();
+            ids.dedup();
+            icons.extend(ids.into_iter().filter(|i| !i.is_empty()).map(|i| (i, rect.0, rect.1, rect.2, rect.3)));
+        }
+        let args = ((g.x(), g.y(), g.width(), g.height()), icons).to_variant();
+        gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, move |conn| {
+            let Ok(conn) = conn else { return };
+            conn.call(
+                Some(dbus::COMPOSITOR_BUS_NAME),
+                dbus::COMPOSITOR_OBJECT_PATH,
+                dbus::COMPOSITOR_INTERFACE,
+                "SetDockIcons",
+                Some(&args),
+                None,
+                gio::DBusCallFlags::NONE,
+                1000,
+                gio::Cancellable::NONE,
+                |_| {},
+            );
+        });
     }
 
     fn app_button(

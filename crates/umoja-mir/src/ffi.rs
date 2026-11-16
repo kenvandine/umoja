@@ -102,6 +102,26 @@ pub extern "C" fn umoja_xwayland_grab_allowed(app_id: *const c_char) -> bool {
     allowed
 }
 
+/// The minimize animation's target: `app_id`'s icon on the dock on
+/// `monitor`, in that dock's surface coordinates (dock_icons.rs).
+#[unsafe(no_mangle)]
+pub extern "C" fn umoja_dock_icon(app_id: *const c_char, monitor: Rect, out: *mut Rect) -> bool {
+    if app_id.is_null() || out.is_null() {
+        return false;
+    }
+    let app_id = unsafe { CStr::from_ptr(app_id) }.to_string_lossy();
+    let found = guard("dock_icon", None, || {
+        crate::dock_icons::find(&app_id, (monitor.x, monitor.y, monitor.w, monitor.h))
+    });
+    match found {
+        Some(r) => {
+            unsafe { *out = r };
+            true
+        }
+        None => false,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn umoja_super_held(held: bool) {
     if crate::greeter::enabled() {

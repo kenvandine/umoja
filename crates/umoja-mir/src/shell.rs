@@ -756,6 +756,19 @@ impl Compositor {
         .unwrap_or_default()
     }
 
+    /// The dock on the monitor at `monitor` (x, y, w, h in layout pixels)
+    /// shows these icons: (app id, x, y, w, h in the dock's surface). The
+    /// minimize animation flies a window into its app's icon.
+    async fn set_dock_icons(&self, monitor: (i32, i32, i32, i32), icons: Vec<(String, i32, i32, i32, i32)>) {
+        crate::dock_icons::set(
+            monitor,
+            icons
+                .into_iter()
+                .map(|(id, x, y, w, h)| (id, crate::tiling::Rect { x, y, w, h }))
+                .collect(),
+        );
+    }
+
     /// (current, count): the active workspace (0-based) and how many exist.
     async fn get_workspaces(&self) -> (u32, u32) {
         tokio::task::spawn_blocking(|| {

@@ -15,6 +15,8 @@ void set_tiled_edges(miral::Window const& window, unsigned edges);
 
 // Opacity (0..1) and scale about the window's centre (1 = as is).
 void set_look(miral::Window const& window, float alpha, float scale);
+// The same, and moved by (dx, dy) layout pixels (minimize into the dock).
+void set_look_at(miral::Window const& window, float alpha, float scale, float dx, float dy);
 
 // The close animation. Called as a window is deleted (advise_delete_window,
 // before Mir removes its surface): Mir patch 3027 keeps drawing the surface

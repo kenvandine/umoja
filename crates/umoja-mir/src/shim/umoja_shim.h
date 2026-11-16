@@ -197,6 +197,9 @@ void umoja_super_held(bool held);
 // keyboard grab: org.gnome.mutter.wayland xwayland-grab-access-rules plus
 // Umoja's own list (VM and remote desktop viewers).
 bool umoja_xwayland_grab_allowed(char const* app_id);
+// The minimize animation's target: the app's icon on the dock on the
+// monitor `monitor`, in that dock's surface coordinates (dock_icons.rs).
+bool umoja_dock_icon(char const* app_id, UmojaRect monitor, UmojaRect* out);
 bool umoja_tile_geometry(uint32_t action, UmojaRect area, UmojaRect* out);
 void umoja_tiling_register(uint64_t id, uint32_t action, UmojaRect rect);
 void umoja_tiling_unregister(uint64_t id);

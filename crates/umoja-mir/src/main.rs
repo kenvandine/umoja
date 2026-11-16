@@ -8,6 +8,7 @@
 
 mod attention;
 mod display_config;
+mod dock_icons;
 mod edge_pressure;
 mod eis;
 mod ffi;
