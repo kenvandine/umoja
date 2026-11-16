@@ -400,11 +400,20 @@ class Recorder:
         for p, _ in self.procs:
             if p.poll() is None:
                 p.send_signal(signal.SIGINT)
+        # One deadline for all of them: on a second monitor with nothing
+        # changing, wf-recorder has written its file but then waits for a
+        # screencopy frame that never comes, and each test sat out a 15 s
+        # timeout on p16g3.
+        deadline = time.monotonic() + 3
         for p, _ in self.procs:
             try:
-                p.wait(timeout=15)
+                p.wait(timeout=max(0.1, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
-                p.kill()
+                p.terminate()
+                try:
+                    p.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    p.kill()
         self.procs = []
 
 

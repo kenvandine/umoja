@@ -2053,7 +2053,13 @@ public:
     }
 
     void snapshot_sessions() {
-        for (auto const& w : umoja_sm::bound_windows()) snapshot_session(w);
+        // Bound windows can come from miral::window_for(): find ours.
+        for (auto const& b : umoja_sm::bound_windows())
+            for (auto const& w : all_windows)
+                if (umoja_fx::same_window(w, b)) {
+                    snapshot_session(w);
+                    break;
+                }
     }
 
     // ---- new windows on the pointer's monitor -----------------------------
@@ -3523,6 +3529,7 @@ private:
         spec.size() = geom::Size{out.w, out.h};
         applying = true;
         guarded("tile", [&] { tools.modify_window(info, spec); });
+        guarded("dialogs follow", [&] { recentre_dialogs(target, area); });
         applying = false;
 
         auto const id = window_id(target);
@@ -3533,6 +3540,28 @@ private:
         // corners and drop the shadow, as on GNOME.
         umoja_fx::set_tiled_edges(target, 15);
         return true;
+    }
+
+    // Dialogs of a window that was just tiled: Mir moved them by as much as
+    // their parent, which can put a dialog's title bar under the top bar
+    // (a pad's modal dialog went to y=10 when its parent tiled left).
+    // mutter keeps attached dialogs centred on the parent; these go back to
+    // the parent's centre, inside the work area.
+    void recentre_dialogs(Window const& parent, geom::Rectangle const& area) {
+        geom::Rectangle const p{parent.top_left(), parent.size()};
+        for (auto const& c : tools.info_for(parent).children()) {
+            auto& ci = tools.info_for(c);
+            if (ci.type() != mir_window_type_dialog && ci.type() != mir_window_type_normal) continue;
+            int const cw = c.size().width.as_int(), ch = c.size().height.as_int();
+            if (cw <= 0 || ch <= 0) continue;
+            geom::Point const want{p.top_left.x.as_int() + (p.size.width.as_int() - cw) / 2,
+                                   p.top_left.y.as_int() + (p.size.height.as_int() - ch) / 2};
+            auto const fitted = fit_inside({want, c.size()}, area, {ci.min_width(), ci.min_height()});
+            if (fitted.top_left == c.top_left()) continue;
+            WindowSpecification spec;
+            spec.top_left() = fitted.top_left;
+            tools.modify_window(ci, spec);
+        }
     }
 
     // A tile's rectangle, grown to the window's minimum size when the tile

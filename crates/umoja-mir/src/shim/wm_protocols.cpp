@@ -357,14 +357,14 @@ void window_created() {
 bool is_modal(miral::Window const& window) {
     if (!window) return false;
     std::lock_guard lock{mutex};
-    return std::any_of(dialogs.begin(), dialogs.end(), [&](Dialog* d) { return d->modal && d->window == window; });
+    return std::any_of(dialogs.begin(), dialogs.end(), [&](Dialog* d) { return d->modal && umoja_fx::same_window(d->window, window); });
 }
 
 bool inhibits_shortcuts(miral::Window const& window) {
     if (!window) return false;
     std::lock_guard lock{mutex};
     return std::any_of(inhibitors.begin(), inhibitors.end(),
-                       [&](Inhibitor* i) { return i->active && i->window == window; });
+                       [&](Inhibitor* i) { return i->active && umoja_fx::same_window(i->window, window); });
 }
 
 void restore_shortcuts(miral::Window const& window) {
@@ -372,7 +372,7 @@ void restore_shortcuts(miral::Window const& window) {
     {
         std::lock_guard lock{mutex};
         for (auto* i : inhibitors)
-            if (i->active && i->window == window) {
+            if (i->active && umoja_fx::same_window(i->window, window)) {
                 // Taken back now, so the very next key is the shell's
                 // again; the event goes out on the Wayland thread.
                 i->active = false;
@@ -385,7 +385,7 @@ void restore_shortcuts(miral::Window const& window) {
     ctx->run_on_wayland_mainloop([target] {
         std::lock_guard lock{mutex};
         for (auto* i : inhibitors)
-            if (i->revoked && !i->xwayland && i->window == target && i->resource)
+            if (i->revoked && !i->xwayland && umoja_fx::same_window(i->window, target) && i->resource)
                 zwp_keyboard_shortcuts_inhibitor_v1_send_inactive(i->resource);
     });
 }

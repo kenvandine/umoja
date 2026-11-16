@@ -6,6 +6,7 @@
 
 #include <miral/window.h>
 
+#include <memory>
 #include <string>
 
 namespace umoja_fx {
@@ -24,6 +25,15 @@ void set_look_at(miral::Window const& window, float alpha, float scale, float dx
 bool begin_close(miral::Window const& window, double ms);
 // One frame of every close animation; true while any is still running.
 bool step_closing();
+
+// Whether two Windows are the same window. miral::Window's == compares its
+// private handle, and miral::window_for() makes a new one each time, so a
+// Window from window_for() never equals the window manager's own: compare
+// the scene surfaces instead.
+inline bool same_window(miral::Window const& a, miral::Window const& b) {
+    std::shared_ptr<mir::scene::Surface> const sa = a, sb = b;
+    return sa && sa == sb;
+}
 
 // The window's application id (for X11 windows, from WM_CLASS).
 std::string app_id_of(miral::Window const& window);
