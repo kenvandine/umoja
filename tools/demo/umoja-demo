@@ -121,8 +121,10 @@ DEMO_NOTIFICATIONS = [
      "Umoja style refresh, Room 3 / video call"),
     ("Mail", "mail-unread", "Priya Shah",
      "Can you send me the screenshots for the release notes?"),
+    # Generic on purpose: ai-updates just checked for real, and a staged
+    # "umoja and 4 other packages" contradicted what it found.
     ("Software", "system-software-update", "Updates installed",
-     "umoja and 4 other packages were updated."),
+     "Your apps are up to date."),
 ]
 
 # Questions that land on a dedicated tool, so the small local model answers
@@ -184,11 +186,19 @@ AI_SCENES = [s for s in SCENES if s.startswith("ai-") or s == "ask-umoja"]
 # Waits the viewer would sit through (the model thinking, a package
 # installing) are fast-forwarded in the clips, labelled, down to about this
 # many seconds; shorter waits play in real time.
-FAST_MIN = 5.0
+FAST_MIN = 3.0
 FAST_TARGET = 2.5
 # Captions longer than this wrap (about 110 characters of 40 px Ubuntu Sans
 # fit across 1920).
 CAPTION_CHARS = 100
+# The trailer's captions sit on a band of their own under the (slightly
+# shrunk) screen, never over it: over the screen they hid Live Captions'
+# bar and the bottom of Ask Umoja's settings. This much of the height.
+CAPTION_BAND = 0.13
+BRAND_BG = "0x2c001e"
+# Desktop sound in the clips (Umoja's read-aloud voice, alert sounds),
+# taken from the default output's monitor. Fast-forwarded spans are silent.
+AUDIO_RATE = 48000
 REPO_URL = "github.com/kenvandine/umoja"
 
 # ai-install is left out: ai-btop already shows an install, all the way.
@@ -207,6 +217,23 @@ def wrap_caption(text, limit=CAPTION_CHARS):
     while len(textwrap.wrap(text, width)) > n:
         width += 1
     return textwrap.fill(text, width)
+
+
+def has_audio(path):
+    """Whether the media file at `path` has a sound track."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+                        "stream=index", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def duration(path):
+    """The length of the media file at `path` in seconds, or None."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return None
 
 
 class Stop(Exception):
@@ -315,6 +342,10 @@ class Recorder:
             "-p", "deadline=realtime", "-p", "cpu-used=8", "-p", "b=16M",
             "-f", str(self.path),
         ]
+        if self.demo.audio:
+            # What the speakers play (the default output's monitor), as
+            # Opus, which WebM can carry.
+            cmd[1:1] = [f"--audio={self.demo.audio}", "-C", "libopus", "-R", str(AUDIO_RATE)]
         if self.demo.output:
             cmd[1:1] = ["-o", self.demo.output]
         if self.demo.dry:
@@ -387,6 +418,7 @@ class Demo:
         self.raw_dir = self.out / ".raw"
         self.video = not opts.no_video
         self.output = None
+        self.audio = None  # the monitor source the clips record sound from
         self.can_park = None
         self.area = None  # (x, y, w, h) of the captured monitor, layout pixels
         self.terminal = None  # the window we were started from, minimized
@@ -515,6 +547,8 @@ class Demo:
         else:
             need.append(("grim", "grim", "takes the stills"))
             if self.video:
+                if not self.opts.no_audio:
+                    need.append(("pactl", "pulseaudio-utils", "finds the speakers to record the clips' sound from"))
                 need += [("wf-recorder", "wf-recorder", "films the clips"),
                          ("ffmpeg", "ffmpeg", "turns clips into GIFs and MP4s, and stitches the trailer")]
                 if not self.opts.no_trailer:
@@ -575,9 +609,22 @@ class Demo:
         if self.opts.output:
             self.output = self.opts.output
         log(f"capturing monitor {self.output or '(all)'}; writing to {self.out}")
+        if self.video and not self.opts.no_audio:
+            self.audio = self.monitor_source()
+            log(f"recording sound from {self.audio}" if self.audio else
+                "! no default audio output found (pactl), the clips will be silent")
         if not self.dry and not self.bus.has_method(COMPOSITOR, "DragWindow"):
             log("note: the running compositor has no DragWindow, so there's no tiling scene and "
                 "the windows can't be laid out. If you just installed newer debs, log out and back in.")
+
+    def monitor_source(self):
+        """The default output's monitor source (what the speakers play),
+        or None. Not the default source: that is the microphone."""
+        if self.dry:
+            return "@DEFAULT_MONITOR@"
+        r = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True)
+        sink = r.stdout.strip() if r.returncode == 0 else ""
+        return f"{sink}.monitor" if sink else None
 
     def monitor(self):
         """(connector, (x, y, w, h)) of the primary monitor, in layout pixels."""
@@ -919,10 +966,12 @@ class Demo:
         self.wait(1.8)
         self.shot("overview", "The Activities overview (Super): windows, workspace thumbnails and their neighbours.")
         if self.bus.has_method(OVERLAY, "ShiftOverview"):
+            # The app grid: long enough to take in (1.5 s showed it for
+            # about a second once the slide in and out was over).
             self.bus.call(OVERLAY, "ShiftOverview", GLib.Variant("(b)", (True,)))
-            self.wait(1.5)
+            self.wait(2.8)
             self.bus.call(OVERLAY, "ShiftOverview", GLib.Variant("(b)", (False,)))
-            self.wait(1.5)
+            self.wait(1.2)
         self.bus.call(OVERLAY, "ToggleOverview")
         self.wait(1.0)
         self.recorder.stop("Desktop, overview and app grid are steps on one ladder, as in GNOME.")
@@ -1031,12 +1080,14 @@ class Demo:
             return
         effect = self.opts.effect
         cmd = [exe or "umoja-screensaver"] + (["--effect", effect] if effect else [])
-        self.recorder.start("screensaver")
         log(f"  run  {' '.join(cmd)}")
         if not self.dry:
             # A preview ends on real input only; nothing here touches it.
+            # Started before the recorder, so the clip doesn't open on the
+            # plain desktop under the screensaver's caption.
             self.saver = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.wait(3.5)
+        self.recorder.start("screensaver")
+        self.wait(2.5)
         self.shot("screensaver", "The screensaver: \"umoja\" drawn in glowing dots, a new effect each cycle.")
         self.wait(2.0)
         # End the clip on the screensaver, not the desktop after it.
@@ -1738,6 +1789,7 @@ class Demo:
 
         self.demo_flag(True)
         try:
+            self.warm_up_captions()
             for attempt in range(1, (1 if self.dry else 2) + 1):
                 self.check_screen()
                 self.recorder.start("ai-captions")
@@ -1747,8 +1799,13 @@ class Demo:
                     self.recorder.discard()
                     return
                 self.wait(1.0)
+                spoke = time.monotonic()
                 self.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", (CAPTIONED,)))
-                # The voice may be loading the first time; the reading takes ~10 s.
+                # Should the voice or the captions still be loading despite
+                # the warm-up, fast-forward the wait for the first words.
+                if not self.dry and self.wait_for(lambda: self.test_action("captions-text")[1].strip(), 40):
+                    self.recorder.waited(spoke, time.monotonic())
+                # The reading takes ~10 s.
                 heard = None if self.dry else self.wait_for(caught, 40)
                 if self.dry:
                     self.wait(12)
@@ -1788,6 +1845,28 @@ class Demo:
             self.bus.call(OVERLAY, "Hide", quiet=True)
             self.wait(0.8)
             self.scrub_overlay()
+
+    def warm_up_captions(self):
+        """Off camera, load Umoja's voice and the captions' speech model:
+        the first reading of a session spent ~20 s on "Listening…" while
+        they loaded, the dullest stretch of the trailer."""
+        if self.dry:
+            return
+        log("  warming up the voice and the captions")
+        self.bus.call(OVERLAY, "ToggleCaptions")
+        if not self.wait_for(lambda: self.test_action("captions-text")[0], 5):
+            return
+        try:
+            self.wait(0.5)
+            self.bus.call(OVERLAY, "Speak", GLib.Variant("(s)", ("Getting ready for the tour.",)))
+            if not self.wait_for(lambda: self.test_action("captions-text")[1].strip(), 60):
+                log("  ! the captions heard nothing while warming up")
+            self.wait_for(lambda: not self.test_action("read-aloud-state")[0], 15)
+        finally:
+            self.bus.call(OVERLAY, "StopSpeaking", quiet=True)
+            if self.test_action("captions-text")[0]:
+                self.bus.call(OVERLAY, "ToggleCaptions", quiet=True)
+            self.wait(1.0)
 
     @staticmethod
     def opencode_installed():
@@ -2068,21 +2147,59 @@ class Demo:
                 continue
             log(f"  encode {raw.stem}" + (f" (fast-forwarding {fast})" if fast else ""))
             pre = self.fast_forward(fast)
+            sound = has_audio(raw)
+            graph = f"{pre};[v]scale='min(1920,iw)':-2,fps=30[vo]"
+            maps = ["-map", "[vo]"]
+            if sound:
+                graph += ";" + self.fast_forward_audio(fast)
+                maps += ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"]
             ok_mp4 = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw),
-                "-filter_complex", f"{pre};[v]scale='min(1920,iw)':-2,fps=30", "-c:v", "libx264", "-preset", "slow",
-                "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(mp4),
+                "-filter_complex", graph, *maps, "-c:v", "libx264", "-preset", "slow",
+                "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(mp4),
             ]).returncode == 0
             ok_gif = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-filter_complex",
                 f"{pre};[v]tpad=stop_mode=clone:stop_duration=1.5,fps=12,scale={self.opts.gif_width}:-1:flags=lanczos,split[a][b];"
                 "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
-                str(gif),
+                "-an", str(gif),
             ]).returncode == 0
             if not ok_mp4:
                 mp4 = self.vid_dir / raw.name
                 shutil.copy(raw, mp4)
             self.videos.setdefault(scene, []).append((gif if ok_gif else None, mp4, caption))
+
+    @staticmethod
+    def speed_parts(spans):
+        """(start, end or None, speed) pieces of a clip, for fast_forward."""
+        parts, t = [], 0.0
+        for a, b in sorted(spans):
+            if a > t:
+                parts.append((t, a, 1))
+            parts.append((a, b, max(2, round((b - a) / FAST_TARGET))))
+            t = b
+        parts.append((t, None, 1))
+        return parts
+
+    def fast_forward_audio(self, spans):
+        """fast_forward's sound: a filter graph from [0:a] to [a] that keeps
+        the real-time pieces and puts silence of the sped-up length in
+        place of each fast one (sped-up sound is only noise)."""
+        fmt = f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo"
+        if not spans:
+            return f"[0:a]{fmt}[a]"
+        parts = self.speed_parts(spans)
+        live = [i for i, (_a, _b, k) in enumerate(parts) if k == 1]
+        chains = [f"[0:a]asplit={len(live)}" + "".join(f"[s{i}]" for i in live)] if len(live) > 1 else []
+        for i, (a, b, k) in enumerate(parts):
+            if k == 1:
+                src = f"[s{i}]" if len(live) > 1 else "[0:a]"
+                trim = f"atrim=start={a}" + (f":end={b}" if b is not None else "")
+                chains.append(f"{src}{trim},asetpts=PTS-STARTPTS,{fmt}[q{i}]")
+            else:
+                chains.append(f"aevalsrc=0|0:s={AUDIO_RATE}:d={(b - a) / k:.3f},{fmt}[q{i}]")
+        n = len(parts)
+        return ";".join([*chains, "".join(f"[q{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[a]"])
 
     def fast_forward(self, spans):
         """A filter graph from [0:v] to [v] that plays each (start, end) span
@@ -2091,13 +2208,7 @@ class Demo:
         if not spans:
             return "[0:v]null[v]"
         ff = self.filter_font()
-        parts, t = [], 0.0
-        for a, b in sorted(spans):
-            if a > t:
-                parts.append((t, a, 1))
-            parts.append((a, b, max(2, round((b - a) / FAST_TARGET))))
-            t = b
-        parts.append((t, None, 1))
+        parts = self.speed_parts(spans)
         chains = []
         for i, (a, b, k) in enumerate(parts):
             trim = f"trim=start={a}" + (f":end={b}" if b is not None else "")
@@ -2131,7 +2242,10 @@ class Demo:
         return None
 
     def make_trailer(self):
-        """The trailer clips, captioned, after a title card: videos/trailer.mp4."""
+        """The trailer clips, captioned, after a title card: videos/trailer.mp4.
+        The screen is shrunk a little to leave a band under it for the
+        captions, so they never cover anything on screen. The clips' sound
+        comes along (silence where a clip has none), with --music under it."""
         parts = [(m, c) for sc in TRAILER for _g, m, c in self.videos.get(sc, [])
                  if m and m.suffix == ".mp4"]
         if self.dry:
@@ -2147,15 +2261,18 @@ class Demo:
         _x, _y, w, h = self.area
         W = 1920
         H = int(round(W * h / w / 2) * 2)
+        band = int(round(H * CAPTION_BAND / 2) * 2)
         work = self.raw_dir / "trailer"
         work.mkdir(parents=True, exist_ok=True)
-        fit = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p")
-        # One frame rate and time base for every segment: concat -c copy
-        # keeps each file's timestamps, and the title card (1/30 time base)
-        # played for two frames among clips with another one.
-        enc = ["-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-               "-pix_fmt", "yuv420p", "-video_track_timescale", "15360"]
+        fit = (f"scale={W}:{H - band}:force_original_aspect_ratio=decrease,"
+               f"pad={W}:{H}:(ow-iw)/2:0:color={BRAND_BG},fps=30,format=yuv420p")
+        # One frame rate, time base and sound format for every segment:
+        # concat -c copy keeps each file's timestamps, and the title card
+        # (1/30 time base) played for two frames among clips with another one.
+        enc = ["-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+               "-pix_fmt", "yuv420p", "-video_track_timescale", "15360",
+               "-c:a", "aac", "-b:a", "160k", "-ar", str(AUDIO_RATE), "-ac", "2"]
+        silence = ["-f", "lavfi", "-i", f"anullsrc=r={AUDIO_RATE}:cl=stereo"]
         segs = []
 
         def card(name, title, subtitle, seconds):
@@ -2165,11 +2282,12 @@ class Demo:
             out = work / f"{name}.mp4"
             r = subprocess.run([
                 "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-                f"color=c=0x2c001e:s={W}x{H}:d={seconds}:r=30", "-vf",
+                f"color=c={BRAND_BG}:s={W}x{H}:d={seconds}:r=30", *silence, "-vf",
                 f"drawtext=expansion=none:fontfile={ff}:textfile={work / f'{name}-1.txt'}:fontsize=140:"
                 f"fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2-60,"
                 f"drawtext=expansion=none:fontfile={ff}:textfile={work / f'{name}-2.txt'}:fontsize=48:"
-                f"fontcolor=0xE95420:x=(w-text_w)/2:y=(h/2)+70,format=yuv420p", *enc, str(out)])
+                f"fontcolor=0xE95420:x=(w-text_w)/2:y=(h/2)+70,format=yuv420p",
+                "-t", str(seconds), *enc, str(out)])
             return out if r.returncode == 0 else None
 
         title = card("00-title", "Umoja", "The desktop you can just talk to", 2.5)
@@ -2181,12 +2299,18 @@ class Demo:
             # running off both edges.
             txt.write_text(wrap_caption(caption))
             out = work / f"{i:02d}.mp4"
+            # The sound padded or cut to the picture's length, so the clips
+            # after it stay in sync.
+            length = duration(mp4)
+            sound = has_audio(mp4)
             r = subprocess.run([
-                "ffmpeg", "-loglevel", "error", "-y", "-i", str(mp4), "-vf",
+                "ffmpeg", "-loglevel", "error", "-y", "-i", str(mp4), *([] if sound else silence),
+                "-vf",
                 f"{fit},drawtext=expansion=none:fontfile={ff}:textfile={txt}:fontsize=40:fontcolor=white:"
-                f"text_align=C:line_spacing=10:"
-                f"box=1:boxcolor=black@0.6:boxborderw=22:x=(w-text_w)/2:y=h-text_h-70",
-                *enc, str(out)])
+                f"text_align=C:line_spacing=10:x=(w-text_w)/2:y=h-{band // 2}-text_h/2",
+                "-af", f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo,apad",
+                "-map", "0:v", "-map", "0:a" if sound else "1:a",
+                *(["-t", f"{length:.3f}"] if length else ["-shortest"]), *enc, str(out)])
             if r.returncode == 0:
                 segs.append(out)
         end = card("99-end", "Umoja", REPO_URL, 3.0)
@@ -2197,10 +2321,33 @@ class Demo:
             return
         lst = work / "list.txt"
         lst.write_text("".join(f"file '{p}'\n" for p in segs))
-        dest = self.vid_dir / "trailer.mp4"
+        joined = work / "joined.mp4"
         r = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
-                            "-i", str(lst), "-c", "copy", "-movflags", "+faststart", str(dest)])
-        if r.returncode == 0:
+                            "-i", str(lst), "-c", "copy", str(joined)])
+        if r.returncode != 0:
+            log("  ! trailer concat failed")
+            return
+        dest = self.vid_dir / "trailer.mp4"
+        music = self.opts.music
+        if music and not music.exists():
+            log(f"  ! no {music}, the trailer has no music")
+            music = None
+        if music:
+            # Quietly under everything, ducked while the clips make sound
+            # (Umoja reading aloud), faded in and out with the cards.
+            total = duration(joined) or 0
+            graph = (f"[0:a]asplit[keep][key];"
+                     f"[1:a]aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo,volume=0.25,"
+                     f"afade=t=in:d=1.5,afade=t=out:st={max(total - 3, 0):.2f}:d=3[bed];"
+                     f"[bed][key]sidechaincompress=threshold=0.02:ratio=10:attack=20:release=600[duck];"
+                     f"[keep][duck]amix=inputs=2:duration=first:normalize=0[a]")
+            cmd = ["ffmpeg", "-loglevel", "error", "-y", "-i", str(joined), "-stream_loop", "-1",
+                   "-i", str(music), "-filter_complex", graph, "-map", "0:v", "-map", "[a]",
+                   "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dest)]
+        else:
+            cmd = ["ffmpeg", "-loglevel", "error", "-y", "-i", str(joined), "-c", "copy",
+                   "-movflags", "+faststart", str(dest)]
+        if subprocess.run(cmd).returncode == 0:
             self.trailer = dest
 
     def version(self):
@@ -2438,6 +2585,10 @@ def main():
     p.add_argument("--effect", help="screensaver effect to show (see umoja-screensaver --list-effects)")
     p.add_argument("--output", help="monitor connector to capture, e.g. eDP-1 (default: primary)")
     p.add_argument("--no-video", action="store_true", help="stills only")
+    p.add_argument("--no-audio", action="store_true", help="silent clips (don't record the desktop's sound)")
+    p.add_argument("--music", type=Path, metavar="FILE",
+                   help="an audio file to play quietly under the trailer (looped, faded out, "
+                        "ducked while Umoja speaks)")
     p.add_argument("--no-apps", action="store_true", help="don't open apps for the tour")
     p.add_argument("--no-demo-folder", action="store_true",
                    help=f"don't create ~/{DEMO_DIR_NAME} for Files and Text Editor to show")

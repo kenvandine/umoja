@@ -13,7 +13,8 @@ It checks for everything the scenes you picked need before it starts, and
 stops with the `sudo apt install` line for whatever is missing:
 grim (stills), wf-recorder and ffmpeg (clips, GIFs, MP4s and the trailer,
 not needed with `--no-video`), fc-match from fontconfig (the trailer's
-captions), parec from pulseaudio-utils (`ai-captions`), GTK 4 for Python
+captions), parec and pactl from pulseaudio-utils (`ai-captions`, and the
+clips' sound unless `--no-audio`), GTK 4 for Python
 (`ai-rewrite`'s note window), snapd (`ai-btop`, `ai-opencode`), Files and
 Text Editor (unless `--no-apps`) and umoja-screensaver (`screensaver`).
 
@@ -45,7 +46,7 @@ The test hooks some scenes use (`Overlay.AnswerConfirm`, `AskRows`,
 | `ai-setups` | tiles Files left and Text Editor right, asks "Save this window layout as my Writing setup", floats and moves both windows, then types "writing" in Ask Umoja and picks the Setup row (`Overlay.AskRows` / `AskActivate`), which tiles them back. The saved setup is removed again (`~/.config/umoja/setups.json` put back as it was) | `images/ai-setups-saved.png`, `images/ai-setups-row.png`, `images/ai-setups.png`, `videos/ai-setups.*` |
 | `ai-settings` | starts from light style with Night Light off, then "Turn on Night Light and switch to dark style"; the answer's Undo button (`Overlay.TestAction("undo")`) puts the style back on camera (both put back straight after) | `images/ai-settings.png`, `images/ai-settings-undo.png`, `videos/ai-settings.*` |
 | `ai-rewrite` | opens a scratch window (`tools/test/testpad.py`, titled "Note to Priya") with a hasty note, selects it, `Overlay.AskAboutScreen` (Super+Shift+A), picks "Make It More Formal", then presses Replace, which types the rewrite over the selection | `images/ai-rewrite-rows.png`, `images/ai-rewrite.png`, `images/ai-rewrite-replaced.png`, `videos/ai-rewrite.*` |
-| `ai-captions` | `Overlay.ToggleCaptions`, then `Overlay.Speak` reads a short update in Umoja's read-aloud voice (Piper) and the captions follow it; Summarize (`TestAction("captions-summarize")`) hands the transcript to the assistant. Needs parec and the Piper voice; the clips have no sound, so the captions carry it | `images/ai-captions.png`, `images/ai-captions-summary.png`, `videos/ai-captions.*` |
+| `ai-captions` | `Overlay.ToggleCaptions`, then `Overlay.Speak` reads a short update in Umoja's read-aloud voice (Piper) and the captions follow it; Summarize (`TestAction("captions-summarize")`) hands the transcript to the assistant. Needs parec and the Piper voice, which is warmed up off camera first so the clip doesn't sit on "Listening…"; the clip has the voice's sound | `images/ai-captions.png`, `images/ai-captions-summary.png`, `videos/ai-captions.*` |
 | `ai-install` | "I need VLC" (`--app`): stops at Ask Umoja's "Allow Umoja to do this?" confirmation and cancels it; nothing is installed | `images/ai-install.png`, `videos/ai-install.*` |
 | `ai-updates` | "Are there any updates for my computer?", then "Install all available updates", which stops at the Allow confirmation and is cancelled | `images/ai-updates*.png`, `videos/ai-updates*.*` |
 | `ai-troubleshoot` | "How is my battery doing?" (answered from a live system report; "why is it slow" only finds the tour's own recorder) | `images/ai-troubleshoot.png`, `videos/ai-troubleshoot.*` |
@@ -83,7 +84,13 @@ GIF). The output directory gets:
 - `videos/trailer.mp4`: a title card, then the best clips in story order
   (assistant tiling, drag tiling, settings, install, updates, reply,
   overview, workspaces, notifications, troubleshooting, screensaver), each
-  captioned, in real time (`--no-trailer` to skip).
+  in real time, with long waits fast-forwarded (`--no-trailer` to skip).
+  The captions sit on a band under the screen, which is shrunk a little to
+  make room, so they never hide anything on it. The clips carry the
+  desktop's sound (Umoja reading aloud, alert sounds), recorded from the
+  default output's monitor, so play the tour with the volume up and nothing
+  else playing; fast-forwarded stretches are silent. `--music FILE` adds a
+  quiet, looped bed under the trailer that ducks while Umoja speaks.
 - `snippet.md`: a short gallery with root-relative links (`/docs/demo/...`),
   so it renders both on its own and pasted into the top-level README.
 - `images/`, `videos/`.
@@ -122,6 +129,8 @@ change). A rerun replaces only the files the previous run wrote.
 --effect rain         screensaver effect (umoja-screensaver --list-effects)
 --output eDP-1        monitor to capture (default: the primary one)
 --no-video            stills only
+--no-audio            silent clips (don't record the desktop's sound)
+--music bed.ogg       quiet music under the trailer (ducked under the voice)
 --no-apps             don't open any apps
 --no-demo-folder      don't create ~/Umoja Tour (a tidy folder Files and Text Editor show)
 --keep-terminal       don't minimize the terminal the tour runs in
