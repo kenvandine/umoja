@@ -1650,15 +1650,22 @@ impl Spread {
             }
             match self.selected.get() {
                 None => (0, 0),
+                // Left and Right go on to the next or previous row at the
+                // ends of one, in reading order, so each window can be
+                // reached with them when the previews are stacked.
+                Some((r, c)) if dy == 0 => {
+                    let c2 = c as i32 + dx;
+                    if c2 >= nav[r].len() as i32 {
+                        if r + 1 < nav.len() { (r + 1, 0) } else { (r, c) }
+                    } else if c2 < 0 {
+                        if r > 0 { (r - 1, nav[r - 1].len().max(1) - 1) } else { (r, c) }
+                    } else {
+                        (r, c2 as usize)
+                    }
+                }
                 Some((r, c)) => {
                     let r2 = (r as i32 + dy).clamp(0, nav.len() as i32 - 1) as usize;
-                    let len = nav[r2].len().max(1);
-                    let c2 = if dy != 0 {
-                        c.min(len - 1)
-                    } else {
-                        (c as i32 + dx).clamp(0, len as i32 - 1) as usize
-                    };
-                    (r2, c2)
+                    (r2, c.min(nav[r2].len().max(1) - 1))
                 }
             }
         };
