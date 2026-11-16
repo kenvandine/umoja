@@ -27,6 +27,7 @@ argument, so the test can read exactly what Umoja typed into a real app.
 first size (umoja-wm-test).
 """
 
+import os
 import sys
 import time
 
@@ -85,12 +86,31 @@ class Pad(Gtk.Application):
         with open(OUT, "w", encoding="utf-8") as f:
             f.write(text)
 
+    pending = b""
+
     def command(self, source, cond):
-        line = sys.stdin.readline()
-        if not line:
+        # Raw reads: Python's buffered readline() could swallow a second
+        # command that arrived with the first, and the watch never fired
+        # for it again. Every command is answered, even one that fails, so
+        # the test never waits on a pad that went deaf.
+        data = os.read(sys.stdin.fileno(), 4096)
+        if not data:
             self.quit()
             return False
-        cmd, _, arg = line.rstrip("\n").partition(" ")
+        self.pending += data
+        while b"\n" in self.pending:
+            raw, _, self.pending = self.pending.partition(b"\n")
+            try:
+                more = self.run_command(raw.decode("utf-8", "replace"))
+            except Exception as e:  # noqa: BLE001
+                print(f"error {type(e).__name__}: {e}", flush=True)
+                more = True
+            if not more:
+                return False
+        return True
+
+    def run_command(self, line):
+        cmd, _, arg = line.partition(" ")
         buf = self.view.get_buffer()
         if cmd == "text":
             buf.set_text(arg.replace("\\n", "\n"))

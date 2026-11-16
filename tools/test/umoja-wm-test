@@ -37,6 +37,7 @@ puts back every setting it changes.
 import argparse
 import datetime
 import json
+import select
 import os
 import shutil
 import signal
@@ -303,7 +304,7 @@ class Pad:
             cmd += ["--size", f"{size[0]}x{size[1]}"]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, text=True)
-        line = self.proc.stdout.readline().strip()
+        line = self._reply(20)
         if line != "ready":
             self.proc.kill()
             raise Skip(f"the test pad didn't start (got {line!r}; it needs gir1.2-gtk-4.0)")
@@ -312,10 +313,22 @@ class Pad:
         run.pads.append(self)
         run.wait(0.4)
 
+    def _reply(self, timeout):
+        """The pad's next line, or "" if it doesn't answer in time: a pad
+        that stops answering fails its test instead of hanging the run."""
+        if not select.select([self.proc.stdout], [], [], timeout)[0]:
+            return ""
+        return self.proc.stdout.readline().strip()
+
     def cmd(self, *words):
+        if self.proc.poll() is not None:
+            raise AssertionError(f"the test pad {self.file.stem} has exited")
         self.proc.stdin.write(" ".join(str(w) for w in words) + "\n")
         self.proc.stdin.flush()
-        return self.proc.stdout.readline().strip()
+        reply = self._reply(10)
+        if not reply:
+            raise AssertionError(f"the test pad {self.file.stem} didn't answer {words[0]!r} in 10 s")
+        return reply
 
     def state(self):
         reply = self.cmd("state")
@@ -344,7 +357,7 @@ class Pad:
         try:
             self.cmd("quit")
             self.proc.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired, BrokenPipeError, ValueError):
+        except (OSError, subprocess.TimeoutExpired, BrokenPipeError, ValueError, AssertionError):
             self.proc.kill()
 
 
