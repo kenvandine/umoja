@@ -751,7 +751,14 @@ fn session_row() -> gtk::Box {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     row.append(&spacer);
-    let items: [(&str, String, &str, fn()); 4] = [
+    // gnome-shell's order: Take Screenshot, Settings, Lock, then power.
+    let items: [(&str, String, &str, fn()); 5] = [
+        (
+            "screenshot-ui-area-symbolic",
+            i18n::shell("Take Screenshot"),
+            "screenshot",
+            take_screenshot,
+        ),
         (
             "emblem-system-symbolic",
             i18n::control_center("Settings"),
@@ -789,6 +796,22 @@ fn session_row() -> gtk::Box {
         row.append(&b);
     }
     row
+}
+
+/// How long to wait after closing Quick Settings before the screenshot UI
+/// freezes the screen: the popover is unmapped at once, but the compositor
+/// still has to put a frame without it on screen (a couple of refreshes,
+/// even at 30 Hz).
+const SCREENSHOT_DELAY_MS: u64 = 150;
+
+/// Take Screenshot: like gnome-shell, the menu is already closed (see
+/// session_row), so open the screenshot UI (the Print key) only once it
+/// is off the screen, or it would be in the frozen picture.
+fn take_screenshot() {
+    glib::timeout_add_local_once(
+        std::time::Duration::from_millis(SCREENSHOT_DELAY_MS),
+        || crate::call_overlay("ShowScreenshotUI"),
+    );
 }
 
 /// Close Quick Settings before acting, as gnome-shell does, so the menu

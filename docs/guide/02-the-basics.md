@@ -154,8 +154,10 @@ Click the status icons at the right of the top bar.
 
 ![Quick Settings: battery level and buttons for Settings, Lock, Log Out and Power Off along the top, a volume slider, and tiles for Wi-Fi, Bluetooth, Power Mode, Dark Style, Night Light and the keyboard backlight](images/quick-settings.png)
 
-- **Along the top**: the battery level, then buttons for **Settings**,
-  **Lock**, **Log Out** and **Power Off**.
+- **Along the top**: the battery level, then buttons for **Take
+  Screenshot**, **Settings**, **Lock**, **Log Out** and **Power Off**.
+  Take Screenshot closes the menu and opens the screenshot tool, just like
+  the **Print** key, so the menu isn't in the picture.
 - **Sliders** for volume, for the screen brightness on laptops, and for
   your microphone while an app is using it. The arrow beside the volume
   slider picks the speakers or headphones.

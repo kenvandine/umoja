@@ -319,21 +319,27 @@ fn watch_workspaces(dots: &gtk::Box) {
 
 /// Activities: ask umoja-overlay to show/hide the overview (window spread).
 pub fn toggle_overlay() {
-    gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, |conn| {
+    call_overlay("ToggleOverview");
+}
+
+/// Calls a no-argument org.umoja.Overlay method (ToggleOverview,
+/// ShowScreenshotUI...), logging a failure.
+pub fn call_overlay(method: &'static str) {
+    gio::bus_get(gio::BusType::Session, gio::Cancellable::NONE, move |conn| {
         let Ok(conn) = conn else { return };
         conn.call(
             Some(dbus::OVERLAY_BUS_NAME),
             dbus::OVERLAY_OBJECT_PATH,
             dbus::OVERLAY_INTERFACE,
-            "ToggleOverview",
+            method,
             None,
             None,
             gio::DBusCallFlags::NONE,
             1000,
             gio::Cancellable::NONE,
-            |res| {
+            move |res| {
                 if let Err(e) = res {
-                    tracing::warn!(error = %e, "could not toggle overlay");
+                    tracing::warn!(error = %e, method, "could not call umoja-overlay");
                 }
             },
         );
