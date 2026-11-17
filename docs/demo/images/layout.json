@@ -2,9 +2,9 @@
  "ai-btop-1": {
   "regions": {
    "card": [
-    544,
+    444,
     96,
-    640,
+    840,
     406
    ]
   },
@@ -40,9 +40,9 @@
  "ai-btop-2": {
   "regions": {
    "card": [
-    544,
+    444,
     96,
-    640,
+    840,
     438
    ]
   },
@@ -151,9 +151,9 @@
  "ai-captions-summary": {
   "regions": {
    "card": [
-    512,
+    460,
     96,
-    703,
+    808,
     357
    ]
   },
@@ -251,7 +251,7 @@
      652,
      489
     ],
-    "title": "OC | Rust GTK 4 hello-gtk project"
+    "title": "OC | hello-gtk Rust GTK 4 project"
    },
    {
     "app": "org.gnome.TextEditor",
@@ -304,7 +304,7 @@
      652,
      489
     ],
-    "title": "OC | Rust GTK 4 hello-gtk project"
+    "title": "OC | hello-gtk Rust GTK 4 project"
    }
   ]
  },
@@ -320,7 +320,7 @@
     888,
     504,
     546,
-    545
+    410
    ]
   },
   "screen": [
@@ -386,9 +386,9 @@
  "ai-rewrite": {
   "regions": {
    "card": [
-    90,
+    125,
     96,
-    1547,
+    1478,
     273
    ]
   },
@@ -526,9 +526,9 @@
  "ai-settings": {
   "regions": {
    "card": [
-    542,
+    544,
     96,
-    644,
+    640,
     277
    ]
   },
@@ -564,9 +564,9 @@
  "ai-settings-undo": {
   "regions": {
    "card": [
-    542,
+    544,
     96,
-    644,
+    640,
     277
    ]
   },
@@ -709,9 +709,9 @@
  "ai-summary": {
   "regions": {
    "card": [
-    460,
+    473,
     96,
-    808,
+    781,
     337
    ]
   },
@@ -778,9 +778,9 @@
  "ai-troubleshoot": {
   "regions": {
    "card": [
-    225,
+    361,
     96,
-    1278,
+    1005,
     249
    ]
   },
@@ -816,9 +816,9 @@
  "ai-updates": {
   "regions": {
    "card": [
-    408,
+    405,
     96,
-    912,
+    918,
     245
    ]
   },
@@ -1002,7 +1002,7 @@
     544,
     96,
     640,
-    286
+    344
    ]
   },
   "screen": [
@@ -1432,7 +1432,7 @@
     "demo": true,
     "rect": [
      684,
-     178,
+     184,
      360,
      616
     ],

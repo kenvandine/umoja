@@ -1,6 +1,6 @@
 # A tour of Umoja
 
-Captured hands-free by `tools/demo/umoja-demo` on 2026-11-15 (umoja-desktop 2026.46.8).
+Captured hands-free by `tools/demo/umoja-demo` on 2026-11-16 (umoja-desktop 2026.47.1+git202611162208.a37fec01).
 
 **[Watch the trailer](videos/trailer.mp4)** (all the clips below in one video, real time).
 
