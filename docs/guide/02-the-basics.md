@@ -11,8 +11,10 @@ There are four ways to open an app. Use whichever you like.
 - **From the dock.** Click an icon on the dock on the left. Click again
   on a running app to bring its window forward; an app with several
   windows comes forward with the one you used last, and clicking it again
-  shows all of them to pick from. **Middle-click** (or **Ctrl+click**)
-  opens a new window, **Shift+click** hides the app's windows, and
+  shows all of them to pick from. Clicking an app whose only window is
+  already in front minimizes it. **Middle-click** (or **Ctrl+click**)
+  opens a new window, as does **Shift+click**; **Shift+middle-click**
+  hides the app's windows, scrolling over an icon switches workspace, and
   **Super+1** to **Super+9** do a click on the first nine apps. Hold
   **Super** for a moment and each of those apps shows its number.
 - **From the app grid.** Click **Show Apps** (the grid of dots at the
@@ -82,8 +84,11 @@ and the other to the right edge. There is much more about this in
 ### Switching between windows
 
 - **Alt+Tab** switches between windows, showing a live preview of each,
-  and **Super+Tab** between apps, showing their icons. Keep holding **Alt** (or **Super**) and press **Tab** again to go
-  further along. Add **Shift** to go back.
+  and **Super+Tab** between apps, showing their icons. Keep holding **Alt**
+  (or **Super**) and press **Tab** again to go further along. Add **Shift**
+  to go back. In the app switcher, **`** (the key above Tab) or **↓** shows
+  the selected app's windows. **Q** quits the selected app and **W** closes
+  the selected window.
 - **Alt+`** (the key above Tab) switches between windows of the same app,
   also with previews.
 - **Super** opens the overview, where you can see every window at once

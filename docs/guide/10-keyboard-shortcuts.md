@@ -24,6 +24,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Alt+F2** | Run a command |
 | **Super+Escape** | Take the shortcuts back from an app that holds them (a virtual machine or remote desktop viewer) |
 | **Ctrl+Alt+Tab** | Move the keyboard focus to the top bar or the dock |
+| **Ctrl+Alt+Esc** | Cycle the keyboard focus through the top bar and dock, without the switcher |
 | **Super+L** | Lock the screen |
 | **Super+/** | Keyboard shortcuts guide |
 
@@ -62,6 +63,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Alt+F4** | Close |
 | **Super+H** | Hide (minimize) |
 | **Alt+F10** | Maximize or restore |
+| **Alt+F5** | Restore |
 | **Alt+Space** | Window menu |
 | **Alt+F7** / **Alt+F8** | Move or resize with the keyboard |
 | **Super+Shift+Left**, **Right**, **Up**, **Down** | Move to the monitor on that side |
@@ -90,6 +92,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Super+End** | Last workspace |
 | **Super+Shift+Page Up** (or add **Shift** to the keys above) | Take the window to the previous workspace |
 | **Super+Shift+Page Down** (or add **Shift** to the keys above) | Take the window to the next workspace |
+| **Super+Shift+Home** / **Super+Shift+End** | Take the window to the first or last workspace |
 
 ## Screenshots
 
