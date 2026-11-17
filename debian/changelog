@@ -1,3 +1,21 @@
+umoja-desktop (2026.47.2) stonking; urgency=medium
+
+  * Window management on par with GNOME: Super+1..9 for dock apps,
+    dragging windows between monitors and workspaces in the overview
+    (including the small windows and dock apps), an overview on every
+    monitor, open, close, minimize and restore animations, attention
+    marks and "is ready" notices, a not-responding dialog, a window menu
+    on any title bar, virtual machines and remote desktops getting every
+    key, and tiles that respect an app's minimum size and keep its
+    dialogs centred. Remote desktop input no longer freezes the
+    compositor. Dock: drag icons to reorder, pin and unpin; panel mode
+    sits flush with the edges. Num Lock is remembered across sessions.
+    Quick Settings: Take Screenshot button. Ask Umoja wraps long prompts;
+    plainer command confirmations. Welcome back greeting after the first
+    login. User guide brought up to date with window management.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Tue, 17 Nov 2026 01:57:14 +0000
+
 umoja-desktop (2026.47.1) stonking; urgency=medium
 
   * Installer ISO: much faster and smoother on low-RAM machines. The live
