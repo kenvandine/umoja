@@ -11,7 +11,8 @@ piled on top of one another. Umoja snaps windows into place for you.
 
 - to the **left or right edge** of the screen for half the screen
 - into a **corner** for a quarter
-- to the **top edge** to maximize it
+- to the **top edge** to maximize it, or the **bottom edge** for the
+  bottom half
 
 A shaded area shows where the window will go before you let go.
 
@@ -32,13 +33,16 @@ make one wider and the other narrower at the same time.
 While you move a window it **snaps** to the edges of the screen and of other
 windows when it gets close, and its title bar never goes under the top bar
 or off the screen. Maximizing a tiled window and restoring it puts it back
-in its tile.
+in its tile. An app that can't be made as small as a quarter keeps its
+smallest size and grows away from the screen edges, and its open dialogs
+move along with it.
 
 ### The layout picker
 
-Drag a window to the top of the screen and pause there. A small card of
-layouts opens, each one split into tiles. Drop the window on the
-tile you want it in.
+As soon as you start dragging a window, a small card of layouts peeks out
+from under the middle of the top bar. Move the pointer up to it and it
+slides down: halves side by side, halves one above the other, quarters,
+and the whole screen. Drop the window on the tile you want it in.
 
 ![A window tiled into the top-left quarter of the screen](images/tiling-quarter.jpg)
 
@@ -114,8 +118,9 @@ monitor.
 When an app wants your attention while you're busy in another window (a
 download finished, a chat came in), Umoja doesn't pull you away. Its dock
 icon lights up and a notification says it's ready; click either to go to
-it. An app that stops responding gets a dialog after a few seconds where
-you can **Wait** or **Force Quit** it.
+it. If you click or close an app's window and the app doesn't answer
+within 5 seconds, a dialog says it isn't responding, where you can
+**Wait** or **Force Quit** it.
 
 ## Virtual machines and remote desktops
 

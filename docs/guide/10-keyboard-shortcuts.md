@@ -49,8 +49,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 
 | Keys | What it does |
 | --- | --- |
-| **Super+Tab** | Switch apps (add **Shift** to go back) |
-| **Alt+Tab** | Switch windows (add **Shift** to go back) |
+| **Alt+Tab** or **Super+Tab** | Switch apps (add **Shift** to go back; **`** or **↓** while it's open shows the app's windows) |
 | **Alt+`** or **Super+`** | Switch windows of the same app |
 | **Alt+F6** | Cycle the app's windows, without the switcher |
 | **Alt+Esc** | Cycle all windows, without the switcher |
@@ -62,6 +61,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Alt+F4** | Close |
 | **Super+H** | Hide (minimize) |
 | **Alt+F10** | Maximize or restore |
+| **Alt+F5** | Restore |
 | **Alt+Space** | Window menu |
 | **Alt+F7** / **Alt+F8** | Move or resize with the keyboard |
 | **Super+Shift+Left**, **Right**, **Up**, **Down** | Move to the monitor on that side |
@@ -90,6 +90,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Super+End** | Last workspace |
 | **Super+Shift+Page Up** (or add **Shift** to the keys above) | Take the window to the previous workspace |
 | **Super+Shift+Page Down** (or add **Shift** to the keys above) | Take the window to the next workspace |
+| **Super+Shift+Home** / **Super+Shift+End** | Take the window to the first or last workspace |
 
 ## Screenshots
 
