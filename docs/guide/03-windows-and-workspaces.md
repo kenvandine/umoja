@@ -33,7 +33,8 @@ make one wider and the other narrower at the same time.
 While you move a window it **snaps** to the edges of the screen and of other
 windows when it gets close, and its title bar never goes under the top bar
 or off the screen. Maximizing a tiled window and restoring it puts it back
-in its tile. An app that can't be made as small as a quarter keeps its
+in its tile, and dragging a tiled or maximized window away gives it back
+its old size. **Super+keypad 5** maximizes too. An app that can't be made as small as a quarter keeps its
 smallest size and grows away from the screen edges, and its open dialogs
 move along with it.
 
@@ -88,6 +89,8 @@ on), your workspaces are along the top:
 - **Drag an app from the dock** onto a workspace to open a new window of
   it there, or between two workspaces to open it on a new one.
 - Use the **arrow keys** to pick a window and **Enter** to go to it.
+  **Page Up**/**Page Down** or scrolling switch workspace, the **×** on a
+  window closes it, and clicking the empty background leaves the overview.
 
 ![The overview on the second workspace, which has a calculator open](images/workspace-2.jpg)
 
@@ -106,12 +109,23 @@ monitor.
   **Super+Shift+Right** (or up and down), by dragging it across, or from
   the window menu.
 - Umoja **remembers** each window's size, position, workspace and monitor,
-  so apps open where you left them, even after you log out.
+  so apps open where you left them. Apps that support it get them back
+  even after you log out.
+- **Workspaces** switch on the main monitor only, and windows on the
+  other monitors stay put, as in GNOME.
+- **New windows** open on the monitor the pointer is on.
 - The **overview** shows on every monitor: the main one has the
   workspaces and the search, and each other monitor shows its own windows.
   Drag a window from one monitor's view to another's to move it there.
 - **Super+P** switches between using the displays side by side, mirrored,
   or only the external or built-in one.
+
+## Animations
+
+Windows fade and grow in when they open and out when they close, a
+minimized window shrinks into its dock icon and grows back out of it, and
+the overview fades in and out. To turn this off, use **Settings ›
+Accessibility › Reduce Animation**.
 
 ## When an app asks for you
 

@@ -24,6 +24,7 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 | **Alt+F2** | Run a command |
 | **Super+Escape** | Take the shortcuts back from an app that holds them (a virtual machine or remote desktop viewer) |
 | **Ctrl+Alt+Tab** | Move the keyboard focus to the top bar or the dock |
+| **Ctrl+Alt+Esc** | Cycle the keyboard focus through the top bar and dock, without the switcher |
 | **Super+L** | Lock the screen |
 | **Super+/** | Keyboard shortcuts guide |
 
@@ -49,7 +50,8 @@ Change shortcuts in **Settings › Keyboard › Keyboard Shortcuts**.
 
 | Keys | What it does |
 | --- | --- |
-| **Alt+Tab** or **Super+Tab** | Switch apps (add **Shift** to go back; **`** or **↓** while it's open shows the app's windows) |
+| **Super+Tab** | Switch apps (add **Shift** to go back) |
+| **Alt+Tab** | Switch windows (add **Shift** to go back) |
 | **Alt+`** or **Super+`** | Switch windows of the same app |
 | **Alt+F6** | Cycle the app's windows, without the switcher |
 | **Alt+Esc** | Cycle all windows, without the switcher |
