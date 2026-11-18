@@ -10,7 +10,7 @@ their picture along the bottom of the screen.
 
 If you've set up **Fingerprint Login** (in **Settings › System › Users**),
 you can touch the fingerprint reader instead of typing your password; the
-login screen says "(or place finger on reader)" under the password box.
+login screen says "Touch the fingerprint reader to log in" under the password box.
 Logging in with your fingerprint doesn't unlock your keyring of saved
 passwords, so some apps may ask for your password once.
 

@@ -98,7 +98,10 @@ impl Fingerprint {
         match device.verify_start().await {
             Ok(()) => {
                 self.verifying.set(true);
-                (self.cb.hint)(Some(fprint::or_hint(self.scan.get())));
+                (self.cb.hint)(Some(fprint::touch_hint(
+                    self.scan.get(),
+                    fprint::Purpose::Unlock,
+                )));
                 tracing::info!("fingerprint reader listening");
             }
             Err(e) => {

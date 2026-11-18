@@ -8,9 +8,13 @@
 //! Fingerprint login works like GDM's: the `umoja-greeter` PAM service
 //! (data/pam) asks fprintd first, so for a user with enrolled fingers PAM
 //! sits waiting for a finger while the password field stays usable, with
-//! "(or place finger on reader)" under it. Submitting a password then
-//! restarts PAM with the reader claimed by the greeter, which makes
-//! pam_fprintd step aside at once and go straight to the password.
+//! "Touch the fingerprint reader to log in" under it. The hint comes from
+//! fprintd's list of the selected account's enrolled fingers (the greeter
+//! may ask for other users thanks to data/polkit), and also from PAM
+//! saying it waits for a finger, in case that list can't be read.
+//! Submitting a password then restarts PAM with the reader claimed by the
+//! greeter, which makes pam_fprintd step aside at once and go straight to
+//! the password.
 
 use crate::auth::{self, Greeter, MessageType, PromptType, User};
 use crate::backdrop::{self, Backdrop};
@@ -46,8 +50,13 @@ struct State {
     session_buttons: RefCell<Vec<gtk::CheckButton>>,
     user_strip: gtk::Box,
     busy: Cell<bool>,
-    /// "(or place finger on reader)" under the password field.
-    fp_hint: gtk::Label,
+    /// "Touch the fingerprint reader to log in" under the password field.
+    fp_hint: gtk::Box,
+    fp_hint_label: gtk::Label,
+    /// The selected user has fingers enrolled on the reader.
+    enrolled: Cell<bool>,
+    /// This conversation got to the password prompt: pam_fprintd is done.
+    past_fingerprint: Cell<bool>,
     /// fprintd's reader, if there is one.
     reader: RefCell<Option<fprint::Device>>,
     scan: Cell<ScanType>,
@@ -147,12 +156,15 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
     fields.set_valign(gtk::Align::Center);
     fields.append(&name);
     fields.append(&pill);
-    let fp_hint = gtk::Label::builder()
-        .wrap(true)
-        .xalign(0.0)
+    let fp_hint_label = gtk::Label::builder().wrap(true).xalign(0.0).build();
+    let fp_hint = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
         .css_classes(["fingerprint-hint"])
         .visible(false)
         .build();
+    fp_hint.append(&gtk::Image::from_icon_name(fprint::ICON));
+    fp_hint.append(&fp_hint_label);
     fields.append(&fp_hint);
     fields.append(&message_revealer);
     card.append(&avatar);
@@ -241,6 +253,9 @@ pub fn build(app: &adw::Application, greeter: Greeter) {
         user_strip,
         busy: Cell::new(false),
         fp_hint,
+        fp_hint_label,
+        enrolled: Cell::new(false),
+        past_fingerprint: Cell::new(false),
         reader: RefCell::default(),
         scan: Cell::new(ScanType::Press),
         prompt_pending: Cell::new(false),
@@ -479,6 +494,7 @@ fn wire(state: &Rc<State>) {
             return;
         }
         // Past pam_fprintd (no fingers, gave up, or skipped): password time.
+        s.past_fingerprint.set(true);
         set_fingerprint(&s, false);
         if let Some(password) = s.queued.borrow_mut().take() {
             let _ = s.greeter.respond(&password);
@@ -670,9 +686,14 @@ fn start_auth(state: &Rc<State>, password_only: bool) {
     };
     state.greeter.cancel();
     state.prompt_pending.set(false);
-    set_fingerprint(state, false);
+    state.past_fingerprint.set(false);
     let password_only = password_only || !fprint::enabled_by_settings();
     state.password_only.set(password_only);
+    if !password_only {
+        // A different user: forget the last one's fingers until we know.
+        state.enrolled.set(false);
+    }
+    set_fingerprint(state, false);
     let generation = state.generation.get() + 1;
     state.generation.set(generation);
     if state.greeter.is_preview() {
@@ -689,6 +710,16 @@ fn start_auth(state: &Rc<State>, password_only: bool) {
         }
         let reader = s.reader.borrow().clone();
         if let Some(reader) = reader {
+            if !password_only {
+                // Needs data/polkit's rule to name another user; without it
+                // the hint waits for pam_fprintd's "place your finger".
+                let enrolled = !reader.enrolled_fingers(&user).await.is_empty();
+                if s.generation.get() != generation {
+                    return;
+                }
+                s.enrolled.set(enrolled);
+                update_hint(&s);
+            }
             if password_only {
                 claim_reader(&s, &reader, generation).await;
             } else if s.reader_claimed.replace(false) {
@@ -735,12 +766,26 @@ fn release_reader(state: &Rc<State>) {
     }
 }
 
+/// PAM is (or stopped) waiting for a finger.
 fn set_fingerprint(state: &State, on: bool) {
     state.fingerprint.set(on);
-    if on {
-        state.fp_hint.set_text(&fprint::or_hint(state.scan.get()));
+    update_hint(state);
+}
+
+/// Show the fingerprint hint while a finger would log in: the account has
+/// fingers enrolled (or pam_fprintd says it waits for one), and this
+/// conversation hasn't moved on to the password alone.
+fn update_hint(state: &State) {
+    let listening = !state.password_only.get()
+        && !state.past_fingerprint.get()
+        && (state.fingerprint.get() || state.enrolled.get());
+    if listening {
+        state.fp_hint_label.set_text(&fprint::touch_hint(
+            state.scan.get(),
+            fprint::Purpose::LogIn,
+        ));
     }
-    state.fp_hint.set_visible(on);
+    state.fp_hint.set_visible(listening);
 }
 
 /// Battery level from UPower's display device; hidden on desktops.

@@ -1,0 +1,12 @@
+// umoja-greeter (running as the "lightdm" user) asks fprintd which fingers
+// the selected account has enrolled, so the login screen can say that a
+// fingerprint works before anyone touches the reader. fprintd only lets a
+// caller name another user with net.reactivated.fprint.device.setusername
+// (auth_admin_keep by default). Logins themselves still go through PAM
+// (pam_fprintd runs as root), so this grants no way in.
+polkit.addRule(function (action, subject) {
+    if (action.id == "net.reactivated.fprint.device.setusername" &&
+        subject.user == "lightdm") {
+        return polkit.Result.YES;
+    }
+});

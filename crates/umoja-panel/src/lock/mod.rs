@@ -47,7 +47,11 @@ struct PromptUi {
     stack: gtk::Stack,
     entry: gtk::PasswordEntry,
     message: gtk::Label,
-    hint: gtk::Label,
+    /// Fingerprint icon + "Touch the fingerprint reader to unlock".
+    hint: gtk::Box,
+    hint_label: gtk::Label,
+    /// The curtain's "Click or press a key to unlock".
+    curtain_hint: gtk::Label,
 }
 
 thread_local! {
@@ -195,8 +199,14 @@ impl Locker {
         let fp = fingerprint::Fingerprint::new(fingerprint::Callbacks {
             hint: Box::new(|text| {
                 if let Some(ui) = locker().ui.borrow().clone() {
-                    ui.hint.set_label(text.as_deref().unwrap_or(""));
+                    ui.hint_label.set_label(text.as_deref().unwrap_or(""));
                     ui.hint.set_visible(text.is_some());
+                    // On the curtain too: a finger works from there.
+                    ui.curtain_hint.set_label(&if text.is_some() {
+                        i18n::umoja("Touch the fingerprint reader, click or press a key to unlock")
+                    } else {
+                        i18n::shell("Click or press a key to unlock")
+                    });
                 }
             }),
             error: Box::new(|text| {
@@ -276,20 +286,23 @@ fn lock_window(with_prompt: bool) -> (gtk::Window, Option<PromptUi>) {
         .transition_type(gtk::StackTransitionType::SlideUp)
         .transition_duration(250)
         .build();
-    stack.add_named(&clock(), Some("clock"));
+    let (curtain, curtain_hint) = clock();
+    stack.add_named(&curtain, Some("clock"));
     overlay.add_overlay(&stack);
     window.set_child(Some(&overlay));
 
     if !with_prompt {
         return (window, None);
     }
-    let (prompt, entry, message, hint) = prompt();
+    let (prompt, entry, message, (hint, hint_label)) = prompt();
     stack.add_named(&prompt, Some("prompt"));
     let ui = PromptUi {
         stack: stack.clone(),
         entry: entry.clone(),
         message,
         hint,
+        hint_label,
+        curtain_hint,
     };
 
     // Any key or click lifts the curtain; the key that did it is typed
@@ -334,7 +347,7 @@ fn lock_window(with_prompt: bool) -> (gtk::Window, Option<PromptUi>) {
 }
 
 /// Big time and date, gnome-shell's lock screen "curtain".
-fn clock() -> gtk::Box {
+fn clock() -> (gtk::Box, gtk::Label) {
     let b = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .halign(gtk::Align::Center)
@@ -350,6 +363,7 @@ fn clock() -> gtk::Box {
         .css_classes(["lock-hint"])
         .build();
     b.append(&hint);
+    let hint_out = hint.clone();
 
     let update = move || {
         let Ok(now) = glib::DateTime::now_local() else {
@@ -373,11 +387,16 @@ fn clock() -> gtk::Box {
         update();
         glib::ControlFlow::Continue
     });
-    b
+    (b, hint_out)
 }
 
 /// Avatar, name, password field, fingerprint hint and message line.
-fn prompt() -> (gtk::Box, gtk::PasswordEntry, gtk::Label, gtk::Label) {
+fn prompt() -> (
+    gtk::Box,
+    gtk::PasswordEntry,
+    gtk::Label,
+    (gtk::Box, gtk::Label),
+) {
     let user = glib::user_name().to_string_lossy().into_owned();
     let real = glib::real_name().to_string_lossy().into_owned();
     let name = if real.is_empty() || real == "Unknown" {
@@ -412,12 +431,17 @@ fn prompt() -> (gtk::Box, gtk::PasswordEntry, gtk::Label, gtk::Label) {
         .css_classes(["lock-entry"])
         .build();
     b.append(&entry);
-    // "(or place finger on reader)" while the fingerprint reader listens.
-    let hint = gtk::Label::builder()
+    // "Touch the fingerprint reader to unlock" while the reader listens.
+    let hint_label = gtk::Label::builder().wrap(true).build();
+    let hint = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .halign(gtk::Align::Center)
         .css_classes(["lock-fingerprint-hint"])
-        .wrap(true)
         .visible(false)
         .build();
+    hint.append(&gtk::Image::from_icon_name(umoja_common::fprint::ICON));
+    hint.append(&hint_label);
     b.append(&hint);
     let message = gtk::Label::builder()
         .css_classes(["lock-message"])
@@ -450,5 +474,5 @@ fn prompt() -> (gtk::Box, gtk::PasswordEntry, gtk::Label, gtk::Label) {
             }
         });
     });
-    (b, entry, message_out, hint)
+    (b, entry, message_out, (hint, hint_label))
 }

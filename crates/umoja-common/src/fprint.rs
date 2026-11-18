@@ -72,13 +72,29 @@ pub fn retry_message(result: &str, scan: ScanType) -> String {
     }
 }
 
-/// gnome-shell's hint under the password field while the reader listens.
-pub fn or_hint(scan: ScanType) -> String {
-    match scan {
-        ScanType::Press => crate::i18n::shell("(or place finger on reader)"),
-        ScanType::Swipe => crate::i18n::shell("(or swipe finger across reader)"),
+/// What a fingerprint does on the screen showing [`touch_hint`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    LogIn,
+    Unlock,
+}
+
+/// The line shown whenever the account has fingers enrolled, so people
+/// know the reader works here before they try it.
+pub fn touch_hint(scan: ScanType, purpose: Purpose) -> String {
+    use crate::i18n::umoja;
+    match (scan, purpose) {
+        (ScanType::Press, Purpose::LogIn) => umoja("Touch the fingerprint reader to log in"),
+        (ScanType::Press, Purpose::Unlock) => umoja("Touch the fingerprint reader to unlock"),
+        (ScanType::Swipe, Purpose::LogIn) => umoja("Swipe your finger across the reader to log in"),
+        (ScanType::Swipe, Purpose::Unlock) => {
+            umoja("Swipe your finger across the reader to unlock")
+        }
     }
 }
+
+/// The fingerprint icon for hints (Adwaita's, which Yaru inherits).
+pub const ICON: &str = "auth-fingerprint-symbolic";
 
 #[derive(Clone)]
 pub struct Device {
