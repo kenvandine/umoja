@@ -157,6 +157,7 @@ struct Request<'a> {
     temperature: f32,
     stream: bool,
     max_tokens: u32,
+    chat_template_kwargs: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -506,6 +507,7 @@ fn stream(
         temperature,
         stream: true,
         max_tokens,
+        chat_template_kwargs: lemonade::chat_template_kwargs(),
     };
     let body = serde_json::to_vec(&request).unwrap_or_default();
     let model = request.model.clone();

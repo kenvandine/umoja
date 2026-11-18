@@ -192,6 +192,7 @@ impl LemonadeClient {
         let token = token.map(|t| backend::clean_key(&t));
         if !self.backend.cloud {
             lemonade::idle::note_chat_use(&self.model);
+            body["chat_template_kwargs"] = lemonade::chat_template_kwargs();
         }
         if self.backend.cloud {
             let shape = token.as_deref().map(backend::key_shape);

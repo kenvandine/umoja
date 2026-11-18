@@ -28,6 +28,15 @@ pub const DEFAULT_MODEL: &str = "Qwen3-4B-Instruct-2507-GGUF";
 pub const SMALL_MODEL: &str = "Qwen3.5-2B-GGUF";
 /// Last resort after the small model got OOM-killed too.
 pub const TINY_MODEL: &str = "Qwen3.5-0.8B-GGUF";
+/// Sent as `chat_template_kwargs` with every local chat request. Qwen3.5
+/// models think by default; Lemonade returns the reasoning in
+/// `reasoning_content`, which Umoja doesn't show, and after a tool call the
+/// model often spent its turn there and left `content` empty (6 of 38
+/// `live_tool_choice` prompts with Qwen3.5-4B, 2.5x the output tokens).
+/// Templates without the flag (Qwen3-4B-Instruct-2507) ignore it.
+pub fn chat_template_kwargs() -> serde_json::Value {
+    serde_json::json!({ "enable_thinking": false })
+}
 /// Below this much RAM (MemTotal, GiB) the small model is the default. A
 /// "16 GB" laptop reports ~15, an "8 GB" one 6.5 to 7.8.
 pub const SMALL_RAM_GB: f64 = 12.0;
