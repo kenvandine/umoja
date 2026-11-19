@@ -40,6 +40,13 @@ pub fn app_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
         .or(Some(found))
 }
 
+/// `app_for_window`, falling back to the entry inside a running AppImage
+/// that was never integrated (see [`crate::appimage`]), for a window's
+/// name and icon. That entry has no desktop id.
+pub fn app_or_appimage_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
+    app_for_window(app_id).or_else(|| crate::appimage::entry_for_window(app_id))
+}
+
 /// An app's executable, or `None` when its entry has no `Exec` line.
 ///
 /// Use this instead of `AppInfo::executable()`: gio returns NULL for an

@@ -1372,7 +1372,7 @@ impl Spread {
             let Some((x, y, rw, rh)) = thumb_rect(w, origin, mon, scale) else {
                 continue;
             };
-            let icon = apps::app_for_window(&w.app_id)
+            let icon = apps::app_or_appimage_for_window(&w.app_id)
                 .and_then(|i| i.icon())
                 .unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast());
             let thumb = previews.get(&w.id).cloned();
@@ -1522,7 +1522,7 @@ impl Spread {
     ) -> (gtk::Widget, gtk::Button) {
         let width = (w.w as f64 * scale).round().max(48.0) as i32;
         let height = (w.h as f64 * scale).round().max(48.0) as i32;
-        let info = apps::app_for_window(&w.app_id);
+        let info = apps::app_or_appimage_for_window(&w.app_id);
         let icon = info
             .as_ref()
             .and_then(|i| i.icon())

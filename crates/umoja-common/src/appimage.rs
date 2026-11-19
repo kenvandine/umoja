@@ -17,13 +17,43 @@ pub const APPDIR_KEY: &str = "X-Umoja-AppDir";
 /// `app_id`: the AppImage's own entry, with `Exec` running the AppImage
 /// file and `Icon` the icon file inside its mount. It has no desktop id,
 /// so it can't be pinned.
+///
+/// Remembered per app id while that AppImage runs; a miss is looked up
+/// again after a few seconds, since an app id may belong to an AppImage
+/// started later.
 pub fn entry_for_window(app_id: &str) -> Option<gio::DesktopAppInfo> {
     if app_id.is_empty() {
         return None;
     }
-    running()
+    let hit = CACHE.with(|c| c.borrow().get(app_id).cloned());
+    match hit {
+        Some(Lookup::Found(info)) if still_running(&info) => return Some(info),
+        Some(Lookup::Missing(at)) if at.elapsed() < MISS_TTL => return None,
+        _ => {}
+    }
+    let found = running()
         .into_iter()
-        .find_map(|(appdir, appimage)| entry_in(&appdir, &appimage, app_id))
+        .find_map(|(appdir, appimage)| entry_in(&appdir, &appimage, app_id));
+    let entry = match &found {
+        Some(info) => Lookup::Found(info.clone()),
+        None => Lookup::Missing(std::time::Instant::now()),
+    };
+    CACHE.with(|c| c.borrow_mut().insert(app_id.to_string(), entry));
+    found
+}
+
+/// How long "no AppImage has this app id" is believed.
+const MISS_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Clone)]
+enum Lookup {
+    Found(gio::DesktopAppInfo),
+    Missing(std::time::Instant),
+}
+
+thread_local! {
+    static CACHE: std::cell::RefCell<std::collections::HashMap<String, Lookup>> =
+        Default::default();
 }
 
 /// Whether the mount a stand-in entry came from is still there.

@@ -655,7 +655,7 @@ struct Switcher {
 }
 
 fn icon_for(app_id: &str) -> (gio::Icon, String) {
-    match umoja_common::apps::app_for_window(app_id) {
+    match umoja_common::apps::app_or_appimage_for_window(app_id) {
         Some(info) => (
             info.icon()
                 .unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast()),
