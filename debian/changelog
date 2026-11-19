@@ -1,3 +1,14 @@
+umoja-desktop (2026.47.3) stonking; urgency=medium
+
+  * Fingerprint login now works at the login screen (a matching finger
+    used to be refused), and both the login and lock screens say when you
+    can use your fingerprint. The dock, Alt+Tab and the overview show
+    AppImages with their own name and icon, and the dock lists windows
+    that have no desktop file. The local assistant no longer gives empty
+    answers after using a tool (Qwen3.5 thinking is turned off).
+
+ -- Umoja Maintainers <dev@umoja.internal>  Thu, 19 Nov 2026 21:04:03 +0000
+
 umoja-desktop (2026.47.2) stonking; urgency=medium
 
   * Window management on par with GNOME: Super+1..9 for dock apps,
