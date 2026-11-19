@@ -50,12 +50,30 @@ pub fn window_key(w: &WindowInfo) -> String {
     }
 }
 
-/// A stand-in app for a window no desktop file claims (an AppImage that
-/// was never integrated, a script's window), like gnome-shell's
+/// The entry inside a running AppImage that was never integrated, with its
+/// own name and icon, looked up once per app id while that AppImage runs.
+fn running_appimage(app_id: &str) -> Option<gio::DesktopAppInfo> {
+    let key = format!("appimage:{app_id}");
+    let stale = CACHE.with(|c| {
+        c.borrow()
+            .get(&key)
+            .is_some_and(|hit| hit.as_ref().is_some_and(|i| !umoja_common::appimage::still_running(i)))
+    });
+    if stale {
+        CACHE.with(|c| c.borrow_mut().remove(&key));
+    }
+    cached(&key, || umoja_common::appimage::entry_for_window(app_id))
+}
+
+/// A stand-in app for a window no desktop file claims (a script's window,
+/// or an AppImage whose own entry can't be found), like gnome-shell's
 /// window-backed apps: named after the window, with the icon its app id
 /// names in the icon theme or the generic program icon. It has no id, so
 /// it can't be pinned, and no Exec, so it only ever shows its windows.
 pub fn window_backed(w: &WindowInfo) -> Option<gio::DesktopAppInfo> {
+    if let Some(info) = running_appimage(&w.app_id) {
+        return Some(info);
+    }
     let name = if w.title.is_empty() {
         &w.app_id
     } else {

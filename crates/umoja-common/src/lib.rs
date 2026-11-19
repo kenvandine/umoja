@@ -7,6 +7,7 @@
 
 pub mod agents;
 pub mod app_scope;
+pub mod appimage;
 pub mod apps;
 pub mod assistant_backend;
 pub mod calendar;
