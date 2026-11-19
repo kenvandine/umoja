@@ -1,7 +1,9 @@
 //! Mapping between Wayland app-ids and `.desktop` files, and launching apps.
 
+use crate::tracker::WindowInfo;
 use gio::prelude::*;
 use gtk::gdk;
+use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use std::cell::RefCell;
@@ -36,6 +38,50 @@ fn cached(
     let found = lookup();
     CACHE.with(|c| c.borrow_mut().insert(key.to_string(), found.clone()));
     found
+}
+
+/// The dock's key for a window with no desktop file: its app id, or the
+/// window itself when it has none.
+pub fn window_key(w: &WindowInfo) -> String {
+    if w.app_id.is_empty() {
+        format!("window#{}", w.id)
+    } else {
+        format!("window:{}", w.app_id)
+    }
+}
+
+/// A stand-in app for a window no desktop file claims (an AppImage that
+/// was never integrated, a script's window), like gnome-shell's
+/// window-backed apps: named after the window, with the icon its app id
+/// names in the icon theme or the generic program icon. It has no id, so
+/// it can't be pinned, and no Exec, so it only ever shows its windows.
+pub fn window_backed(w: &WindowInfo) -> Option<gio::DesktopAppInfo> {
+    let name = if w.title.is_empty() {
+        &w.app_id
+    } else {
+        &w.title
+    };
+    let name = if name.is_empty() {
+        "Unknown"
+    } else {
+        name.as_str()
+    };
+    let icon = gdk::Display::default()
+        .map(|d| gtk::IconTheme::for_display(&d))
+        .and_then(|theme| {
+            [w.app_id.clone(), w.app_id.to_lowercase()]
+                .into_iter()
+                .find(|n| !n.is_empty() && theme.has_icon(n))
+        })
+        .unwrap_or_else(|| "application-x-executable".to_string());
+    let kf = glib::KeyFile::new();
+    let group = "Desktop Entry";
+    kf.set_string(group, "Type", "Application");
+    kf.set_string(group, "Name", name);
+    kf.set_string(group, "Icon", &icon);
+    // Nothing to launch, so no "New Window" item.
+    kf.set_boolean(group, "SingleMainWindow", true);
+    gio::DesktopAppInfo::from_keyfile(&kf)
 }
 
 /// Desktop id without the `.desktop` suffix, used as the dock's key.

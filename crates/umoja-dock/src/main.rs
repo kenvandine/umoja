@@ -418,34 +418,50 @@ impl Dock {
 
         // Favorites first (in order), then running apps that aren't pinned.
         let windows = self.windows.borrow();
-        let mut entries: Vec<(gio::DesktopAppInfo, bool, Vec<WindowInfo>)> = launcher::favorites()
-            .into_iter()
-            .map(|a| (a, true, Vec::new()))
-            .collect();
+        let mut entries: Vec<(gio::DesktopAppInfo, bool, Vec<WindowInfo>, String)> =
+            launcher::favorites()
+                .into_iter()
+                .map(|a| {
+                    let key = launcher::key_for(&a);
+                    (a, true, Vec::new(), key)
+                })
+                .collect();
         let isolate = cfg.isolate_monitors;
         let isolate_ws = cfg.isolate_workspaces;
         for w in windows.values().filter(|w| {
             (!isolate || self.homes.shows_on(w.id, &self.monitor))
                 && (!isolate_ws || self.homes.on_current_workspace(w.id))
         }) {
-            let key = launcher::app_for_window(&w.app_id).map(|a| launcher::key_for(&a));
-            match entries
-                .iter_mut()
-                .find(|(a, _, _)| Some(launcher::key_for(a)) == key)
-            {
-                Some(entry) => entry.2.push(w.clone()),
-                None => match launcher::app_for_window(&w.app_id) {
-                    Some(app) => entries.push((app, false, vec![w.clone()])),
-                    None => tracing::debug!(app_id = w.app_id, "no desktop file for window"),
-                },
+            let app = launcher::app_for_window(&w.app_id);
+            // A window with no desktop file (an AppImage, a script's window)
+            // still gets an icon, as gnome-shell's window-backed apps do:
+            // one per app id, named after its window, and not pinnable.
+            let key = match &app {
+                Some(app) => launcher::key_for(app),
+                None => launcher::window_key(w),
+            };
+            if let Some(entry) = entries.iter_mut().find(|e| e.3 == key) {
+                entry.2.push(w.clone());
+                continue;
             }
+            let app = match app {
+                Some(app) => app,
+                None => {
+                    tracing::debug!(app_id = w.app_id, "no desktop file for window");
+                    let Some(app) = launcher::window_backed(w) else {
+                        continue;
+                    };
+                    app
+                }
+            };
+            entries.push((app, false, vec![w.clone()], key));
         }
         drop(windows);
 
         // Pins can be dragged to reorder them, and running apps dragged in
         // among them, unless favorite-apps is locked down.
         let draggable = umoja_common::apps::favorites_writable();
-        for (app, pinned, wins) in entries {
+        for (app, pinned, wins, _) in entries {
             let widget = self.app_button(&app, pinned, wins, cfg.icon_size);
             self.list.append(&widget);
             if let (true, Some(id)) = (draggable, app.id()) {
@@ -1064,8 +1080,9 @@ impl Dock {
             );
         }
 
+        // Only apps with a desktop file can be pinned.
         let id = app.id().map(|s| s.to_string()).unwrap_or_default();
-        if umoja_common::apps::favorites_writable() {
+        if !id.is_empty() && umoja_common::apps::favorites_writable() {
             separator();
             let label = if pinned {
                 i18n::shell("Unpin")
