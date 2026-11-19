@@ -188,3 +188,8 @@ patches and the changelog entry, and leaves `mir-<ver>/` ready for
 and uploads the source package to the PPA.
 
 When the archive moves to a new Mir, bump `UPSTREAM` (and refresh the patch).
+
+`upstream-prs/` has drafts for submitting these patches to canonical/mir:
+one file per pull request (title and description) and `00-overview.md`
+with the submission order, dependencies and the patches that are not
+needed upstream. `upstream-bugs/` has the matching issue drafts.
