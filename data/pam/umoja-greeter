@@ -12,6 +12,10 @@ auth    requisite       pam_nologin.so
 auth    sufficient      pam_succeed_if.so user ingroup nopasswdlogin quiet
 -auth   [success=1 default=ignore]      pam_fprintd.so max-tries=3 timeout=-1
 auth    substack        lightdm
+# A jump on its own doesn't make the stack succeed (pam_nologin returns
+# PAM_IGNORE without /etc/nologin), so a fingerprint match needs a module
+# that says yes; after a failed password it can't undo the substack's no.
+auth    required        pam_permit.so
 account include         lightdm
 password include        lightdm
 session include         lightdm
