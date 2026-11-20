@@ -1,7 +1,10 @@
 //! The Power Off and Log Out confirmations, like gnome-shell's end-session
 //! dialog: a card over a dimmed screen that acts by itself after 60
-//! seconds, with Cancel, Restart and Power Off, Cancel and Restart (an app
-//! asking org.gnome.SessionManager to reboot), or Cancel and Log Out.
+//! seconds, with Cancel, Suspend, Restart and Power Off, Cancel and Restart
+//! (an app asking org.gnome.SessionManager to reboot), or Cancel and Log Out.
+//! Suspend only shows when logind's CanSuspend allows it, and never runs by
+//! itself; the lock screen comes up on logind's PrepareForSleep (lock/mod.rs),
+//! as it does for a lid close.
 
 use gtk::{gdk, glib, prelude::*};
 use gtk4 as gtk;
@@ -29,7 +32,7 @@ enum Kind {
 /// What a button (or the countdown running out) does.
 #[derive(Clone, Copy)]
 enum Action {
-    /// A logind Manager method: "PowerOff" or "Reboot".
+    /// A logind Manager method: "PowerOff", "Reboot" or "Suspend".
     Logind(&'static str),
     LogOut,
 }
@@ -52,6 +55,7 @@ impl Action {
 // What gnome-session does: ask logind directly over D-Bus.
 const POWER_OFF: Action = Action::Logind("PowerOff");
 const REBOOT: Action = Action::Logind("Reboot");
+const SUSPEND: Action = Action::Logind("Suspend");
 
 /// The user's full name, when they have one (gnome-shell names them in the
 /// Log Out countdown).
@@ -133,7 +137,7 @@ fn show(kind: Kind) {
         .spacing(8)
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
-        .width_request(380)
+        .width_request(if kind == Kind::PowerOff { 460 } else { 380 })
         .css_classes(["end-session-card"])
         .build();
     card.append(
@@ -168,6 +172,20 @@ fn show(kind: Kind) {
     };
     let cancel = button(&i18n::shell("Cancel"), &[]);
     buttons.append(&cancel);
+    // Suspend, hidden until logind says this user may (the buttons are
+    // homogeneous, so a hidden one takes no room).
+    let suspend = (kind == Kind::PowerOff).then(|| {
+        let b = button(&i18n::shell("Suspend"), &[]);
+        b.set_visible(false);
+        buttons.append(&b);
+        let weak = b.downgrade();
+        crate::login::can_suspend(move |ok| {
+            if let Some(b) = weak.upgrade() {
+                b.set_visible(ok);
+            }
+        });
+        b
+    });
     // The other buttons, the last one being the default (also what the
     // countdown does).
     let choices: &[(String, Action)] = &match kind {
@@ -225,6 +243,10 @@ fn show(kind: Kind) {
         let f = finish.clone();
         move |_| f(None)
     });
+    if let Some(b) = &suspend {
+        let f = finish.clone();
+        b.connect_clicked(move |_| f(Some(SUSPEND)));
+    }
     for (b, action) in choice_buttons {
         let f = finish.clone();
         b.connect_clicked(move |_| f(Some(action)));

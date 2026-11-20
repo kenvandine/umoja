@@ -177,3 +177,30 @@ pub fn manager_call(method: &str) {
     };
     bus::call(&conn, LOGIN1, LOGIN1_PATH, MANAGER, method, Some((true,).to_variant()));
 }
+
+/// Asks logind whether this user may suspend, the way gnome-shell's
+/// systemActions does: anything but "na" and "no" ("yes", "challenge")
+/// means the action is offered. `f` runs on the main loop with the answer;
+/// it gets false when logind can't be reached.
+pub fn can_suspend(f: impl FnOnce(bool) + 'static) {
+    let Some(conn) = bus::system_bus() else {
+        f(false);
+        return;
+    };
+    conn.call(
+        Some(LOGIN1),
+        LOGIN1_PATH,
+        MANAGER,
+        "CanSuspend",
+        None,
+        Some(glib::VariantTy::new("(s)").unwrap()),
+        gio::DBusCallFlags::NONE,
+        2000,
+        gio::Cancellable::NONE,
+        move |r| {
+            let answer = r.ok().and_then(|v| v.child_value(0).str().map(str::to_owned));
+            tracing::debug!(?answer, "logind CanSuspend");
+            f(matches!(answer.as_deref(), Some("yes" | "challenge")));
+        },
+    );
+}

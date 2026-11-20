@@ -201,7 +201,9 @@ dot or number on the icon means the app wants your attention.
   instead, even before you click; the lock screen says so when it can.
 - **Log out** or **power off** with the buttons in Quick Settings. A card
   asks you to confirm. It goes ahead by itself after 60 seconds, so you can
-  walk away. From the Power Off card you can also choose **Restart**.
+  walk away. From the Power Off card you can also choose **Restart**, or
+  **Suspend** to put the computer to sleep (the screen locks first, and
+  Suspend never happens by itself).
 - **When you leave the computer alone**, a screensaver comes on at the time
   set in **Settings › Power › Screen Blank**. A little later the screen
   turns off, and it locks if **Settings › Privacy › Screen Lock** says so.
