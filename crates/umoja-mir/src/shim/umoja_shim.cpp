@@ -461,6 +461,7 @@ public:
         unsized_placement.reset();
         if (unsized && is_app_window(info)) awaiting_size[info.window()] = *unsized;
         if (!is_app_window(info)) {
+            shell_surfaces.insert(info.window());
             if (process_name(miral::pid_of(info.window().application())) == "umoja-dock")
                 dock_windows.push_back(info.window());
             // Chrome mapped during a drag (tile preview) goes under the window.
@@ -492,6 +493,7 @@ public:
         if (key_grab && key_grab->window == w) key_grab.reset();
         erase(lock_surfaces, w);
         erase(dock_windows, w);
+        shell_surfaces.erase(w);
         if (lock_focus == w) lock_focus = Window{};
         // Mir refocuses from its MRU list after this returns, which never
         // holds a lock surface that a grab kept from being focused.
@@ -1538,7 +1540,7 @@ public:
     // Mir also "removes" every output when the screen blanks (power mode
     // off). With no output left nothing moves, and when they come back on
     // the layout is the one windows were placed for, so nothing moves then
-    // either.
+    // either. Layer surfaces are another matter: see reattach_shell_surfaces.
 
     // Output connector name -> extents, as windows were last placed for.
     std::map<std::string, geom::Rectangle> settled_layout;
@@ -1602,6 +1604,8 @@ public:
             schedule_output_settle();
             return;
         }
+        // Before the early return: waking from a blank is "no change".
+        reattach_shell_surfaces();
         auto const before = settled_layout.empty() ? now : settled_layout;
         settled_layout = now;
         if (before == now) return;
@@ -1619,6 +1623,35 @@ public:
             guarded("monitor change", [&] { rehome(w, before, now, primary); });
         }
         rehoming = was_rehoming;
+    }
+
+    // Layer surfaces (dock, wallpaper, panel) asked for an output, but Mir
+    // keeps them in whichever display area it last attached them to. When
+    // the screen wakes from a blank the outputs come back one at a time:
+    // Mir drops the dead areas as soon as the first one (the laptop panel)
+    // is back and re-attaches every surface it held, and a surface whose
+    // output isn't back yet falls through to the area it overlaps most,
+    // the laptop panel. Nothing moves it back when its output returns, so
+    // the external monitor's dock sat beside the laptop's and its wallpaper
+    // went under the laptop's, leaving that monitor black. Setting the
+    // output_id again makes Mir re-attach the surface to that output.
+    void reattach_shell_surfaces() {
+        std::vector<Window> const surfaces{shell_surfaces.begin(), shell_surfaces.end()};
+        for (auto const& w : surfaces) {
+            guarded("reattach shell surface", [&] {
+                if (!w) return;
+                auto& info = tools.info_for(w);
+                if (info.state() != mir_window_state_attached || !info.has_output_id()) return;
+                auto const out = outputs.find(info.output_id());
+                if (out == outputs.end() || out->second.contains(centre_of(w))) return;
+                if (debug_windows())
+                    std::fprintf(stderr, "umoja-mir: wm: reattaching %s to %s\n", describe(info).c_str(),
+                                 output_key(out->first).c_str());
+                WindowSpecification spec;
+                spec.output_id() = out->first;
+                tools.modify_window(info, spec);
+            });
+        }
     }
 
     void rehome(Window const& w, std::map<std::string, geom::Rectangle> const& before,
@@ -2313,6 +2346,8 @@ private:
     std::vector<std::shared_ptr<Workspace>> workspaces;
     size_t current = 0;
     std::set<Window> all_windows;
+    // Everything else: layer-shell surfaces and other shell chrome.
+    std::set<Window> shell_surfaces;
     std::map<Window, MirWindowState> hidden_states;
     // When each window was last hidden for a workspace switch.
     std::map<Window, std::chrono::steady_clock::time_point> hidden_at;
