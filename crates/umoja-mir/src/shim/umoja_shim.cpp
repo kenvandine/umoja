@@ -1602,6 +1602,7 @@ public:
             schedule_output_settle();
             return;
         }
+        reattach_shell_surfaces();
         auto const before = settled_layout.empty() ? now : settled_layout;
         settled_layout = now;
         if (before == now) return;
@@ -1619,6 +1620,40 @@ public:
             guarded("monitor change", [&] { rehome(w, before, now, primary); });
         }
         rehoming = was_rehoming;
+    }
+
+    // Layer-shell surfaces (wallpaper, dock, panel) that asked for an
+    // output go back to it once it is on again. When an output's display
+    // area dies while another is still on (the screen blanking, which Mir
+    // reports as outputs going away, or an unplug), Mir moves the area's
+    // attached windows to a surviving area, and nothing moves them back
+    // when the output returns: on p16g3 the external monitor's wallpaper
+    // and dock stayed on the laptop panel after the screen woke, leaving
+    // the external monitor black with no dock. The window still carries
+    // the output_id it asked for, so setting it again re-attaches it.
+    void reattach_shell_surfaces() {
+        std::vector<Window> stray;
+        tools.for_each_application([&](miral::ApplicationInfo& app) {
+            for (auto const& w : app.windows()) {
+                if (!w) continue;
+                auto const& info = tools.info_for(w);
+                if (info.state() != mir_window_state_attached || !info.has_output_id()) continue;
+                auto const it = outputs.find(info.output_id());
+                if (it == outputs.end()) continue; // its output is still off or gone
+                if (it->second.contains(centre_of(w))) continue;
+                stray.push_back(w);
+            }
+        });
+        for (auto const& w : stray) {
+            guarded("reattach shell surface", [&] {
+                auto& info = tools.info_for(w);
+                if (debug_windows())
+                    std::fprintf(stderr, "umoja-mir: wm: back to its output %s\n", describe(info).c_str());
+                WindowSpecification spec;
+                spec.output_id() = info.output_id();
+                tools.modify_window(info, spec);
+            });
+        }
     }
 
     void rehome(Window const& w, std::map<std::string, geom::Rectangle> const& before,
