@@ -47,6 +47,7 @@ ibus-table
 im-config
 kdump-tools
 laptop-detect
+libgdm1
 libglib2.0-bin
 libnss-mdns
 libpam-fprintd

@@ -59,7 +59,10 @@ Depends: ${shlibs:Depends},
          ubuntu-wallpapers,
          grim,
          wf-recorder
+# libgdm1 ships the org.gnome.login-screen schema; without it (no GDM)
+# GNOME Settings hides Users > Fingerprint Login.
 Recommends: umoja-greeter,
+            libgdm1,
             zenity,
             myna-config,
             ibus,

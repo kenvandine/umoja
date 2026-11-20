@@ -39,7 +39,9 @@ ADD = {
     # GStreamer apps (the demo trailer is H.264; Ken, 2026-11-15).
     # vim: full Vim from the archive (Ubuntu only ships vim-tiny by
     # default; Ken, 2026-11-16).
-    "Recommends": ["gnome-snapshot", "gstreamer1.0-libav", "showtime", "vim"],
+    # libgdm1: the org.gnome.login-screen schema, which GNOME Settings
+    # needs to show Users > Fingerprint Login (gdm3 is dropped above).
+    "Recommends": ["gnome-snapshot", "gstreamer1.0-libav", "libgdm1", "showtime", "vim"],
 }
 
 # Recommended by Ubuntu, but made hard dependencies here.
