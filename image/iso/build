@@ -188,8 +188,11 @@ done
 # agent. Accessibility (AT-SPI, Orca) and PipeWire (Orca speaks through
 # it) stay. Never mask a snap's units here: seeding enables them, fails on
 # a masked one and starts over (lightdm waited six minutes for it).
+# Low disk space warnings (gsd-housekeeping) would only be about the live
+# overlay.
 for unit in mpris-proxy.service ssh-agent.service ssh-agent.socket \
-        gcr-ssh-agent.service gcr-ssh-agent.socket; do
+        gcr-ssh-agent.service gcr-ssh-agent.socket \
+        umoja-gsd@housekeeping.service; do
     ln -sf /dev/null "$LIVE/etc/systemd/user/$unit"
 done
 mkdir -p "$LIVE/etc/xdg/autostart"
