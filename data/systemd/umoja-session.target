@@ -40,5 +40,24 @@ After=graphical-session-pre.target
 # as with the autostart target above, order it after us to avoid a loop.
 Wants=user-dirs-update-gtk.service
 Before=user-dirs-update-gtk.service
-Wants=umoja-welcome.service umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service umoja-rfkill.service
+Wants=umoja-welcome.service umoja-panel.service umoja-tray-ready.service umoja-dock.service umoja-overlay.service umoja-lemonade.service umoja-files.service xdg-desktop-portal-umoja.service umoja-ibus.service umoja-agent-setup.service umoja-automations.service
+# gnome-settings-daemon plugins (see umoja-gsd@.service). Settings and apps
+# rely on these:
+#   rfkill              Bluetooth and Airplane Mode panels, radio switches
+#   wwan                Mobile Network panel, SIM PIN unlock
+#   sharing             starts and stops Media/File/Remote Desktop sharing
+#                       on the networks chosen in Settings → Sharing
+#   datetime            automatic time zone (Settings → Date & Time)
+#   housekeeping        low disk space warnings, thumbnail cache cleanup
+#   print-notifications printer status and job notifications
+#   sound               reloads event sounds when the sound theme changes
+#   a11y-settings       turns on toolkit accessibility when an assistive
+#                       technology is enabled
+# Left out because Umoja does the job itself or can't support them yet:
+# media-keys, power, keyboard and screensaver-proxy (umoja-mir handles keys,
+# idle, lid and org.freedesktop.ScreenSaver), color (night light needs gamma
+# ramps in umoja-mir first), wacom and xsettings (they drive Mutter), and
+# smartcard and usb-protection (they lock through org.gnome.ScreenSaver,
+# which Umoja doesn't serve).
+Wants=umoja-gsd@rfkill.service umoja-gsd@wwan.service umoja-gsd@sharing.service umoja-gsd@datetime.service umoja-gsd@housekeeping.service umoja-gsd@print-notifications.service umoja-gsd@sound.service umoja-gsd@a11y-settings.service
 StopWhenUnneeded=no
