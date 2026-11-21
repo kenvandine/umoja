@@ -1,3 +1,12 @@
+umoja-desktop (2026.47.4) stonking; urgency=medium
+
+  * GNOME Settings now sees Bluetooth and the other gnome-settings-daemon
+    features it needs, and offers fingerprint enrollment under Users. The
+    Power Off dialog has a Suspend button. The dock and wallpaper go back
+    to their own monitor after the screen blanks.
+
+ -- Umoja Maintainers <dev@umoja.internal>  Sat, 21 Nov 2026 01:15:15 +0000
+
 umoja-desktop (2026.47.3) stonking; urgency=medium
 
   * Fingerprint login now works at the login screen (a matching finger
