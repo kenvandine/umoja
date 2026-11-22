@@ -41,6 +41,10 @@ pub struct BackgroundAgentRow {
     preset: gtk::DropDown,
     status: gtk::Label,
     action: gtk::Button,
+    /// "Telegram: not connected  [Connect…]", once the agent is set up.
+    phone: gtk::Box,
+    phone_label: gtk::Label,
+    phone_button: gtk::Button,
     /// Agent ids, in the agent dropdown's order.
     ids: RefCell<Vec<String>>,
     /// The setup state last read ("none", "working", "ready", "error").
@@ -87,14 +91,29 @@ impl BackgroundAgentRow {
         let action = gtk::Button::builder().css_classes(["pill", "suggested-action"]).build();
         bottom.append(&status);
         bottom.append(&action);
+        let phone = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        phone.set_visible(false);
+        let phone_label = gtk::Label::builder()
+            .xalign(0.0)
+            .hexpand(true)
+            .css_classes(["dim-label", "caption"])
+            .build();
+        let phone_button = gtk::Button::builder().css_classes(["pill"]).build();
+        phone_button.connect_clicked(|_| crate::messaging_setup::open());
+        phone.append(&phone_label);
+        phone.append(&phone_button);
         root.append(&top);
         root.append(&bottom);
+        root.append(&phone);
         let row = Rc::new(Self {
             root,
             agent,
             preset,
             status,
             action,
+            phone,
+            phone_label,
+            phone_button,
             ids: RefCell::default(),
             setup: RefCell::default(),
             needs: RefCell::default(),
@@ -266,6 +285,15 @@ impl BackgroundAgentRow {
                 Some(i18n::umoja("Set Up")),
             ),
         };
+        let connected = state["messaging"]["platform"] == "telegram";
+        self.phone.set_visible(setup == "ready");
+        self.phone_label.set_text(&if connected {
+            i18n::umoja("Telegram: connected")
+        } else {
+            i18n::umoja("Telegram: send {name} jobs from your phone").replace("{name}", &name)
+        });
+        self.phone_button
+            .set_label(&if connected { i18n::umoja("Manage…") } else { i18n::umoja("Connect…") });
         *self.setup.borrow_mut() = setup;
         *self.needs.borrow_mut() = state["needs"].as_str().unwrap_or_default().to_owned();
         self.status.set_text(&text);

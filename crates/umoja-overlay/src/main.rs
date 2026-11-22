@@ -18,6 +18,7 @@ mod dictation;
 mod dictation_page;
 mod downloads;
 mod files;
+mod messaging_setup;
 mod background_agent;
 mod lemonade;
 mod model;
@@ -84,6 +85,8 @@ const IFACE_XML: &str = r#"
     <method name="ShowAgentTask">
       <arg name="task" type="s" direction="in"/>
     </method>
+    <!-- The guided "Talk to Hermes from Telegram" setup. -->
+    <method name="ShowMessagingSetup"/>
     <!-- flags: 1 = the local model, 2 = type the question out first -->
     <method name="AskWith">
       <arg name="question" type="s" direction="in"/>
@@ -680,6 +683,11 @@ fn export(
                         spread.hide();
                         grid.hide();
                         methods.show_agent_task(&task)
+                    }
+                    "ShowMessagingSetup" => {
+                        spread.hide();
+                        grid.hide();
+                        methods.show_messaging_setup()
                     }
                     "AskWith" => {
                         let Some((question, flags)) = params.get::<(String, u32)>() else {

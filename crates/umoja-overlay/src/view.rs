@@ -100,6 +100,8 @@ enum Item {
     },
     /// A named setup (umoja-mcp's open_setup).
     Setup(String),
+    /// "Talk to Hermes from Telegram": the guided messaging setup.
+    Messaging(String),
     /// "@hermes …": hand `task` to a background agent; without a task yet,
     /// picking it completes the mention.
     Agent {
@@ -178,6 +180,8 @@ pub struct Overlay {
     foot_backend: gtk::Label,
     question_label: gtk::Label,
     answer: gtk::Label,
+    /// The guided Telegram setup, in place of the answer while it's open.
+    messaging: Rc<crate::messaging_setup::MessagingSetup>,
     /// One line per tool call ("✓ Turn on Dark Style").
     steps: gtk::Box,
     chips: gtk::FlowBox,
@@ -536,6 +540,8 @@ impl Overlay {
         card.append(&model_status);
         card.append(&stack);
         card.append(&assistant);
+        let messaging = crate::messaging_setup::MessagingSetup::new();
+        card.append(&messaging.root);
 
         // The card floats over the focused window, about a sixth of the way
         // down; clicking anywhere else closes it.
@@ -616,6 +622,7 @@ impl Overlay {
             history: clipboard::history(),
             clip_button,
             stack,
+            messaging,
             clip_list,
             clip_empty,
             copy_button,
@@ -656,6 +663,20 @@ impl Overlay {
             }
         });
         root.add_controller(outside);
+        {
+            let weak = Rc::downgrade(&overlay);
+            overlay.messaging.set_on_close(move || {
+                if let Some(o) = weak.upgrade() {
+                    o.hide();
+                }
+            });
+            let weak = Rc::downgrade(&overlay);
+            crate::messaging_setup::set_opener(move || {
+                if let Some(o) = weak.upgrade() {
+                    o.show_messaging_setup();
+                }
+            });
+        }
         overlay.connect_signals();
         overlay.connect_context();
         // The assistant's read_focused_window tool steps the overlay aside too.
@@ -677,6 +698,14 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         self.entry.connect_search_changed(move |_| {
             if let Some(o) = weak.upgrade() {
+                if o.messaging.is_open() {
+                    // Typing leaves the setup for the usual rows.
+                    if o.entry.text().is_empty() {
+                        return;
+                    }
+                    o.messaging.stop();
+                    o.assistant.set_visible(true);
+                }
                 o.selected.set(0);
                 o.refresh_results();
             }
@@ -945,6 +974,7 @@ impl Overlay {
             return;
         }
         self.entry.set_text("");
+        self.messaging.stop();
         self.assistant.set_visible(false);
         appgrid::hide_after_clean_frame(self.window.upcast_ref(), self.hide_serial.clone(), serial);
     }
@@ -1581,6 +1611,13 @@ impl Overlay {
                 scored.push((s + 1, Item::Setup(name)));
             }
         }
+        if let Some((name, true)) = crate::background_agent::current() {
+            let title = i18n::umoja("Talk to {name} from Telegram").replace("{name}", &name);
+            let s = ask::score(&title, &["telegram", "messaging", "phone", "chat", "bot", "connect"], &words);
+            if s > 0 {
+                scored.push((s + 2, Item::Messaging(name)));
+            }
+        }
         // Stable: equal scores keep apps, then actions, then the catalog.
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
         let best = scored.first().map(|(s, _)| *s);
@@ -1770,6 +1807,11 @@ impl Overlay {
                 String::new(),
                 i18n::umoja("Web"),
             ),
+            Item::Messaging(name) => (
+                i18n::umoja("Talk to {name} from Telegram").replace("{name}", name),
+                i18n::umoja("Send it jobs from your phone · a quick guided setup"),
+                i18n::umoja("Background agent"),
+            ),
             Item::Agent { name, task: Some(task), .. } => (
                 i18n::umoja("Hand to {name}: “{task}”").replace("{name}", name).replace("{task}", task),
                 i18n::umoja("Works on it in the background, in its sandbox · Enter"),
@@ -1809,7 +1851,7 @@ impl Overlay {
             Item::Ask { .. } => gtk::Image::from_icon_name("umoja-ask-symbolic"),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
             // Ours (data/icons): no fallbacks.
-            Item::Agent { .. } => gtk::Image::from_icon_name("umoja-agents-symbolic"),
+            Item::Agent { .. } | Item::Messaging(_) => gtk::Image::from_icon_name("umoja-agents-symbolic"),
             Item::Setup(_) => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "view-grid-symbolic",
                 "focus-windows-symbolic",
@@ -1948,6 +1990,7 @@ impl Overlay {
                 }
             }
             Item::Ask { question, .. } => self.ask(&question),
+            Item::Messaging(_) => self.show_messaging_setup(),
             Item::Agent { task: Some(task), .. } => self.hand_to_agent(task),
             Item::Agent { mention, task: None, .. } => {
                 let text = format!("@{mention} ");
@@ -2376,6 +2419,21 @@ impl Overlay {
     /// asked, the whole answer (its saved file when it wrote one), a chip
     /// for the file, and the reply box to follow up in the same
     /// conversation.
+    /// The guided "Talk to Hermes from Telegram" setup, in the card.
+    pub fn show_messaging_setup(self: &Rc<Self>) {
+        if !self.is_visible() {
+            self.show();
+        }
+        crate::model_picker::close();
+        self.generation.set(self.generation.get() + 1);
+        self.end_conversation();
+        self.reset_card();
+        self.entry.set_text("");
+        self.stack.set_visible(false);
+        self.assistant.set_visible(false);
+        self.messaging.start();
+    }
+
     pub fn show_agent_task(self: &Rc<Self>, id: &str) {
         if !self.is_visible() {
             self.show();
