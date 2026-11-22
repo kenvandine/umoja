@@ -45,7 +45,9 @@ pub struct Agent {
 #[derive(Debug, Clone)]
 enum Note {
     Approval(String),
-    Open(PathBuf),
+    /// A finished task: the body opens its answer in Ask Umoja (to read it
+    /// all and reply), the button its file or folder.
+    Result(String, PathBuf),
 }
 
 type Snapshot = BTreeMap<PathBuf, SystemTime>;
@@ -742,9 +744,12 @@ impl Agent {
                     )
                     .await;
             }
-            Some(Note::Open(path)) => {
-                let _ = tokio::process::Command::new("gio").arg("open").arg(&path).spawn();
+            Some(Note::Result(task, path)) => {
                 self.notes.lock().await.remove(&id);
+                let shown = key == "default" && show_in_ask(&self.conn, &task).await;
+                if !shown {
+                    let _ = tokio::process::Command::new("gio").arg("open").arg(&path).spawn();
+                }
             }
             None => {}
         }
@@ -753,6 +758,22 @@ impl Agent {
     // ---- tasks ----
 
     pub async fn submit(self: &Arc<Self>, prompt: &str) -> Result<String> {
+        self.start_task(prompt, None).await
+    }
+
+    /// Carries on from task `parent` in the same conversation: "make it
+    /// cheaper", "add a day in the desert". A new task, so it has its own
+    /// progress, answer and files.
+    pub async fn follow_up(self: &Arc<Self>, parent: &str, text: &str) -> Result<String> {
+        let session = {
+            let s = self.state.lock().await;
+            let t = s.tasks.iter().find(|t| t.id == parent).ok_or_else(|| anyhow!("That job isn't there any more."))?;
+            t.session.clone()
+        };
+        self.start_task(text, Some((parent.to_owned(), session))).await
+    }
+
+    async fn start_task(self: &Arc<Self>, prompt: &str, parent: Option<(String, String)>) -> Result<String> {
         let prompt = prompt.trim().trim_start_matches("@hermes").trim().to_owned();
         if prompt.is_empty() {
             bail!("Tell {n} what to do.", n = catalog::active().name);
@@ -775,6 +796,8 @@ impl Agent {
             id: id.clone(),
             title: title_for(&host_words(&prompt, &shared)),
             prompt: prompt.clone(),
+            parent: parent.as_ref().map(|(p, _)| p.clone()).unwrap_or_default(),
+            session: parent.as_ref().map(|(_, s)| s.clone()).unwrap_or_default(),
             status: TaskStatus::Running,
             step: "Starting…".into(),
             started: now(),
@@ -802,7 +825,8 @@ impl Agent {
             }
         }
         let instructions = bridge::instructions(&catalog::active().name);
-        match bridge::submit(&gw, &prompt, &instructions, None).await {
+        let session = parent.as_ref().map(|(_, s)| s.as_str()).filter(|s| !s.is_empty());
+        match bridge::submit(&gw, &prompt, &instructions, session).await {
             Ok((run, session)) => {
                 if let Some(t) = self.state.lock().await.task_mut(&id) {
                     t.run = run;
@@ -1287,9 +1311,9 @@ impl Agent {
         }
         let target = files.first().cloned().unwrap_or_else(paths::workspace);
         let label = if files.is_empty() { "Show Folder" } else { "Open" };
-        let nid = notify::send(&self.conn, &summary, &body, &[("default", label), ("open", label)], false).await;
+        let nid = notify::send(&self.conn, &summary, &body, &[("default", "Show"), ("open", label)], false).await;
         if nid != 0 {
-            self.notes.lock().await.insert(nid, Note::Open(target));
+            self.notes.lock().await.insert(nid, Note::Result(id.to_owned(), target));
         }
     }
 
@@ -1804,6 +1828,14 @@ fn changed_files(before: &Snapshot, after: &Snapshot) -> Vec<PathBuf> {
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
     files.into_iter().map(|(_, p)| p).take(20).collect()
+}
+
+/// Opens a task's answer in Ask Umoja, where it can be read whole and
+/// replied to. False when Ask Umoja isn't there.
+async fn show_in_ask(conn: &zbus::Connection, task: &str) -> bool {
+    conn.call_method(Some("org.umoja.Overlay"), "/org/umoja/Overlay", Some("org.umoja.Overlay"), "ShowAgentTask", &(task,))
+        .await
+        .is_ok()
 }
 
 /// Writes an answer as "<title>.md" in `dir` (" 2", " 3"… if taken).

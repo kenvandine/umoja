@@ -79,6 +79,11 @@ const IFACE_XML: &str = r#"
     <method name="Ask">
       <arg name="question" type="s" direction="in"/>
     </method>
+    <!-- A background agent's task (org.umoja.Agents id): its answer in
+         full, with a reply box that follows up in the same conversation. -->
+    <method name="ShowAgentTask">
+      <arg name="task" type="s" direction="in"/>
+    </method>
     <!-- flags: 1 = the local model, 2 = type the question out first -->
     <method name="AskWith">
       <arg name="question" type="s" direction="in"/>
@@ -663,6 +668,18 @@ fn export(
                         spread.hide();
                         grid.hide();
                         methods.ask_now(&question)
+                    }
+                    "ShowAgentTask" => {
+                        let Some((task,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (s)",
+                            );
+                            return;
+                        };
+                        spread.hide();
+                        grid.hide();
+                        methods.show_agent_task(&task)
                     }
                     "AskWith" => {
                         let Some((question, flags)) = params.get::<(String, u32)>() else {

@@ -237,6 +237,9 @@ pub struct Overlay {
     /// The last answer asked the user something: the search entry is a
     /// reply box until it's answered.
     awaiting_reply: Cell<bool>,
+    /// The background agent's task the card shows: the reply box follows
+    /// up on it (org.umoja.Agents.FollowUp) instead of asking Umoja.
+    agent_thread: RefCell<Option<String>>,
     /// This conversation started on the local model (crash diagnosis), so
     /// its follow-ups stay local too.
     local_chat: Cell<bool>,
@@ -609,6 +612,7 @@ impl Overlay {
             answer_text: RefCell::default(),
             conversation: RefCell::default(),
             awaiting_reply: Cell::new(false),
+            agent_thread: RefCell::default(),
             local_chat: Cell::new(false),
             hide_serial: Rc::new(Cell::new(0)),
         });
@@ -2339,6 +2343,11 @@ impl Overlay {
             self.hand_to_agent(task);
             return;
         }
+        // Replying to a background agent's answer: it follows up there.
+        if replying && let Some(parent) = self.agent_thread.borrow().clone() {
+            self.agent_follow_up(parent, text);
+            return;
+        }
         let context = context::build_context(&attachments).or_else(|| {
             (!replying && self.conversation.borrow().is_empty())
                 .then(|| self.focus_context())
@@ -2349,6 +2358,164 @@ impl Overlay {
             context,
             history: Vec::new(),
         });
+    }
+
+    /// Opens a background agent's finished (or running) task: what was
+    /// asked, the whole answer (its saved file when it wrote one), a chip
+    /// for the file, and the reply box to follow up in the same
+    /// conversation.
+    pub fn show_agent_task(self: &Rc<Self>, id: &str) {
+        if !self.is_visible() {
+            self.show();
+        }
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.end_conversation();
+        self.reset_card();
+        self.stack.set_visible(false);
+        self.answer.set_text(&i18n::umoja("Loading…"));
+        self.follow_agent_task(id.to_owned(), generation);
+    }
+
+    /// Shows task `id` once it has an answer, updating its progress line
+    /// until then (every 2 s, while the card is open and current).
+    fn follow_agent_task(self: &Rc<Self>, id: String, generation: u64) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            loop {
+                let state = agents_state().await;
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation || !o.is_visible() {
+                    return;
+                }
+                let Some(state) = state else {
+                    o.answer.set_text(&i18n::umoja("The background agent isn't running."));
+                    return;
+                };
+                let name = state["agent_name"].as_str().unwrap_or("Hermes").to_owned();
+                let Some(t) = state["tasks"].as_array().and_then(|a| a.iter().find(|t| t["id"] == id.as_str())).cloned()
+                else {
+                    o.answer.set_text(&i18n::umoja("That job isn't there any more."));
+                    return;
+                };
+                o.question_label.set_text(&context::truncate_chars(t["prompt"].as_str().unwrap_or_default().trim(), 200));
+                o.question_label.set_visible(true);
+                let status = t["status"].as_str().unwrap_or_default();
+                if matches!(status, "running" | "waiting") {
+                    let step = t["step"].as_str().filter(|s| !s.is_empty()).unwrap_or("Working…");
+                    let line = if status == "waiting" {
+                        i18n::umoja("{name} is waiting for you: answer on the Agents button in the top bar.")
+                            .replace("{name}", &name)
+                    } else {
+                        format!("{name}: {step}")
+                    };
+                    o.answer.set_text(&line);
+                    glib::timeout_future(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                let files: Vec<String> = t["files"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
+                // The whole answer: its file when that's text, else the
+                // (shortened) answer the task kept.
+                let mut text = files
+                    .first()
+                    .filter(|f| f.ends_with(".md") || f.ends_with(".txt"))
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .filter(|t| t.len() < 200_000)
+                    .unwrap_or_default();
+                if text.trim().is_empty() {
+                    text = t["result"].as_str().unwrap_or_default().to_owned();
+                }
+                o.answer.set_text(text.trim());
+                *o.answer_text.borrow_mut() = text.trim().to_owned();
+                o.show_answer_actions(!text.trim().is_empty());
+                while let Some(c) = o.chips.first_child() {
+                    o.chips.remove(&c);
+                }
+                if let Some(f) = files.first() {
+                    o.chips.append(&o.open_file_chip(f));
+                }
+                if status == "done" {
+                    o.agent_thread.replace(Some(id.clone()));
+                    o.awaiting_reply.set(true);
+                    o.entry.set_placeholder_text(Some(
+                        &i18n::umoja("Reply to {name}…").replace("{name}", &name),
+                    ));
+                    o.entry.set_text("");
+                    o.entry.grab_focus();
+                }
+                return;
+            }
+        });
+    }
+
+    /// A follow-up to the agent's task `parent`, shown as it goes.
+    fn agent_follow_up(self: &Rc<Self>, parent: String, text: String) {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.set_awaiting_reply(false);
+        self.reset_card();
+        self.stack.set_visible(false);
+        self.entry.set_text("");
+        self.question_label.set_text(&context::truncate_chars(text.trim(), 200));
+        self.question_label.set_visible(true);
+        self.answer.set_text(&i18n::umoja("Handing it to your background agent…"));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let res = match gio::bus_get_future(gio::BusType::Session).await {
+                Ok(conn) => conn
+                    .call_future(
+                        Some("org.umoja.Agents"),
+                        "/org/umoja/Agents",
+                        "org.umoja.Agents",
+                        "FollowUp",
+                        Some(&(parent.as_str(), text.as_str()).to_variant()),
+                        Some(glib::VariantTy::new("(s)").expect("type")),
+                        gio::DBusCallFlags::NONE,
+                        60_000,
+                    )
+                    .await
+                    .map(|v| v.get::<(String,)>().map(|(s,)| s).unwrap_or_default())
+                    .map_err(|mut e| {
+                        gio::DBusError::strip_remote_error(&mut e);
+                        e.message().to_string()
+                    }),
+                Err(e) => Err(e.to_string()),
+            };
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() != generation {
+                return;
+            }
+            match res {
+                Ok(id) => o.follow_agent_task(id, generation),
+                Err(e) => o.answer.set_text(&e),
+            }
+        });
+    }
+
+    /// "Open “Marrakech week.md”".
+    fn open_file_chip(self: &Rc<Self>, path: &str) -> gtk::Widget {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let button = gtk::Button::builder()
+            .label(i18n::umoja("Open “%s”").replace("%s", &name))
+            .css_classes(["pill", "reply-chip", "flat"])
+            .build();
+        let path = path.to_owned();
+        let weak = Rc::downgrade(self);
+        button.connect_clicked(move |_| {
+            let Some(o) = weak.upgrade() else { return };
+            let ctx = WidgetExt::display(&o.window).app_launch_context();
+            match crate::files::open(&path, Some(ctx.upcast_ref())) {
+                Ok(()) => o.hide(),
+                Err(e) => o.show_error(&e.to_string()),
+            }
+        });
+        button.upcast()
     }
 
     fn hand_to_agent(self: &Rc<Self>, task: String) {
@@ -2390,6 +2557,7 @@ impl Overlay {
 
     /// Forget the conversation: the next question starts afresh.
     fn end_conversation(&self) {
+        self.agent_thread.replace(None);
         self.conversation.borrow_mut().clear();
         self.local_chat.set(false);
         self.set_awaiting_reply(false);
@@ -3705,6 +3873,26 @@ fn agent_ids() -> Vec<String> {
         }
     }
     ids
+}
+
+/// org.umoja.Agents' state, or None when it isn't running.
+async fn agents_state() -> Option<serde_json::Value> {
+    let conn = gio::bus_get_future(gio::BusType::Session).await.ok()?;
+    let v = conn
+        .call_future(
+            Some("org.umoja.Agents"),
+            "/org/umoja/Agents",
+            "org.umoja.Agents",
+            "GetState",
+            None,
+            Some(glib::VariantTy::new("(s)").expect("type")),
+            gio::DBusCallFlags::NONE,
+            5_000,
+        )
+        .await
+        .ok()?;
+    let (json,) = v.get::<(String,)>()?;
+    serde_json::from_str(&json).ok()
 }
 
 /// The rows for a prompt starting with "@": the agent a complete mention

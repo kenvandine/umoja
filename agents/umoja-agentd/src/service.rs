@@ -47,6 +47,12 @@ impl Agents {
         self.0.submit(prompt).await.map_err(err)
     }
 
+    /// A follow-up to a task, in the same conversation; returns the new
+    /// task's id.
+    async fn follow_up(&self, task: &str, text: &str) -> fdo::Result<String> {
+        self.0.follow_up(task, text).await.map_err(err)
+    }
+
     async fn stop(&self, task: &str) -> fdo::Result<()> {
         self.0.stop_task(task).await.map_err(err)
     }

@@ -746,6 +746,32 @@ impl Pill {
             });
             row.append(&b);
         }
+        // The row itself opens the task in Ask Umoja: the whole answer, and
+        // a reply box to follow up.
+        row.set_tooltip_text(Some(&i18n::umoja("Show the whole answer and reply")));
+        row.set_cursor_from_name(Some("pointer"));
+        let click = gtk::GestureClick::new();
+        let id = t.id.clone();
+        let weak = Rc::downgrade(self);
+        // (The row's own button claims its clicks, so they don't get here.)
+        click.connect_released(move |_, _, _, _| {
+            let Some(this) = weak.upgrade() else { return };
+            this.popover.popdown();
+            let Some(conn) = this.conn.borrow().clone() else { return };
+            conn.call(
+                Some("org.umoja.Overlay"),
+                "/org/umoja/Overlay",
+                "org.umoja.Overlay",
+                "ShowAgentTask",
+                Some(&(id.as_str(),).to_variant()),
+                None,
+                gio::DBusCallFlags::NONE,
+                5_000,
+                gio::Cancellable::NONE,
+                |_| {},
+            );
+        });
+        row.add_controller(click);
         row
     }
 }

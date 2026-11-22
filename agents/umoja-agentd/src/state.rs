@@ -102,6 +102,9 @@ pub struct Task {
     /// Tools it ran, in order (name only).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// The task this one follows up on (same conversation), if any.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
     /// Hermes's session (its conversation), to carry on in it.
     #[serde(default)]
     pub session: String,
