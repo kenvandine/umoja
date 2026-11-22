@@ -543,6 +543,7 @@ impl Agent {
         if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
+        let chat = self.clone();
         tokio::spawn(async move {
             let mut tick: u64 = 0;
             loop {
@@ -553,6 +554,98 @@ impl Agent {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
             }
         });
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = chat.poll_chat().await {
+                    tracing::debug!(error = %e, "chat poll");
+                }
+                tokio::time::sleep(Duration::from_secs(4)).await;
+            }
+        });
+    }
+
+    /// Messages from Telegram go straight to the agent's own chat gateway,
+    /// not through Submit, so this follows along: while the gateway is busy
+    /// with a chat turn there's a task for it (the top bar, Quick Settings
+    /// and the local model's idle unload see the agent working), and when
+    /// the turn ends the task gets its answer.
+    async fn poll_chat(self: &Arc<Self>) -> Result<()> {
+        let (on, current) = {
+            let s = self.state.lock().await;
+            let on = s.setup == Setup::Ready
+                && !s.paused
+                && s.switching.is_empty()
+                && s.sandbox == "running"
+                && s.messaging.as_ref().is_some_and(|m| m.platform == "telegram");
+            let current = s
+                .tasks
+                .iter()
+                .find(|t| t.source == "telegram" && matches!(t.status, TaskStatus::Running | TaskStatus::Waiting))
+                .map(|t| (t.id.clone(), t.session.clone()));
+            (on, current)
+        };
+        if !on && current.is_none() {
+            return Ok(());
+        }
+        let gw = self.gateway().await?;
+        let busy = on && {
+            let v = bridge::call(&gw, &["call", "GET", "/health/detailed"], None).await?;
+            v["body"]["active_agents"].as_u64().unwrap_or(0) > 0
+        };
+        match (busy, current) {
+            (true, None) => {
+                let session = bridge::call(&gw, &["call", "GET", "/api/sessions?source=telegram&limit=1"], None)
+                    .await
+                    .ok()
+                    .and_then(|v| v["body"]["data"][0]["id"].as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                let asked = if session.is_empty() {
+                    String::new()
+                } else {
+                    last_message(&gw, &session, "user").await
+                };
+                let prompt = if asked.trim().is_empty() { "A message from Telegram".to_owned() } else { asked };
+                let shared = self.state.lock().await.shared.clone();
+                let task = Task {
+                    id: format!("t{}", now_ms()),
+                    title: title_for(&host_words(&prompt, &shared)),
+                    prompt,
+                    source: "telegram".into(),
+                    session,
+                    status: TaskStatus::Running,
+                    step: "Answering you in Telegram…".into(),
+                    started: now(),
+                    ..Default::default()
+                };
+                {
+                    let mut s = self.state.lock().await;
+                    s.tasks.push(task);
+                    s.trim_tasks();
+                }
+                self.changed().await;
+            }
+            (false, Some((id, session))) => {
+                let answer = if session.is_empty() || !on {
+                    String::new()
+                } else {
+                    last_message(&gw, &session, "assistant").await
+                };
+                {
+                    let mut s = self.state.lock().await;
+                    let shared = s.shared.clone();
+                    let stopped = !on;
+                    if let Some(t) = s.task_mut(&id) {
+                        t.status = if stopped { TaskStatus::Cancelled } else { TaskStatus::Done };
+                        t.step = if stopped { "Stopped".into() } else { "Answered in Telegram".into() };
+                        t.result = host_words(&answer, &shared).chars().take(4000).collect();
+                        t.finished = now();
+                    }
+                }
+                self.changed().await;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn poll(self: &Arc<Self>, tick: u64) -> Result<()> {
@@ -1150,7 +1243,7 @@ impl Agent {
     pub async fn before_sleep(&self) {
         let mut any = false;
         for t in self.state.lock().await.tasks.iter_mut() {
-            if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
+            if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) && t.source.is_empty() {
                 t.interrupted = true;
                 any = true;
             }
@@ -1319,13 +1412,16 @@ impl Agent {
     }
 
     pub async fn stop_task(&self, id: &str) -> Result<()> {
-        let run = self
+        let (run, source) = self
             .state
             .lock()
             .await
             .task_mut(id)
-            .map(|t| t.run.clone())
+            .map(|t| (t.run.clone(), t.source.clone()))
             .ok_or_else(|| anyhow!("no such task"))?;
+        if source == "telegram" {
+            bail!("Send /stop in Telegram to stop it.");
+        }
         let gw = self.gateway().await?;
         bridge::stop(&gw, &run).await
     }
@@ -1932,6 +2028,32 @@ fn random_key() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     (0..32).map(|_| format!("{:02x}", rng.random::<u8>())).collect()
+}
+
+/// The text of the last `role` message in the agent's session `session`.
+async fn last_message(gw: &Gateway, session: &str, role: &str) -> String {
+    let path = format!("/api/sessions/{session}/messages");
+    let Ok(v) = bridge::call(gw, &["call", "GET", &path], None).await else { return String::new() };
+    v["body"]["data"]
+        .as_array()
+        .and_then(|m| m.iter().rev().find(|m| m["role"] == role).map(|m| message_text(&m["content"])))
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_default()
+}
+
+/// A message's text: a plain string, or the text parts of a list.
+fn message_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.trim().to_owned(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str().or_else(|| p.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_owned(),
+        _ => String::new(),
+    }
 }
 
 fn now_ms() -> u128 {

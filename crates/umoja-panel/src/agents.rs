@@ -55,6 +55,9 @@ pub struct Task {
     pub files: Vec<String>,
     #[serde(default)]
     pub finished: u64,
+    /// "telegram" for a job sent from Telegram.
+    #[serde(default)]
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -876,7 +879,8 @@ impl Pill {
         let sub = if active {
             t.step.clone()
         } else if !t.result.is_empty() {
-            t.result.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_owned()
+            let line = t.result.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_owned();
+            if t.source == "telegram" { format!("{} · {line}", i18n::umoja("Telegram")) } else { line }
         } else {
             match t.status.as_str() {
                 "done" => i18n::umoja("Done"),
@@ -898,7 +902,8 @@ impl Pill {
         } else {
             ("document-open-symbolic", i18n::umoja("Open"), "Open")
         };
-        if active || t.status == "done" {
+        // A Telegram job is stopped from Telegram (/stop).
+        if (active && t.source.is_empty()) || t.status == "done" {
             let b = gtk::Button::builder()
                 .icon_name(icon)
                 .tooltip_text(tip)

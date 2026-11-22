@@ -820,7 +820,9 @@ or click **Connect…** next to Telegram under **Background agent** in Ask
 Umoja's settings, and follow the three steps: make a bot with BotFather and
 paste its message (Umoja picks out the token and checks it), send your bot
 any message so Hermes learns who you are, and confirm **Is this you?**. The
-bot says hello, and from then on Hermes only answers your account. The
+bot says hello, and from then on Hermes only answers your account. Jobs sent
+from Telegram show in the Agents menu (marked Telegram) and on the Quick
+Settings tile while Hermes works on them; stop one with `/stop` in Telegram. The
 token is kept in your keyring. **Disconnect** in the same setup turns it
 off. Without the setup:
 `busctl --user call org.umoja.Agents /org/umoja/Agents org.umoja.Agents SetMessaging sss telegram TOKEN USER_ID`

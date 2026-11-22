@@ -294,7 +294,10 @@ Hermes from Telegram**, or click **Connect…** next to **Telegram** under
 3. **Is this you?** Check the name and click **Yes, Connect**. The bot
    says hello back.
 
-From then on the agent only answers your account. Your bot's token is kept
+From then on the agent only answers your account. While it works on a
+message from Telegram, the Agents button and the Quick Settings tile show
+it, and the job is listed in the Agents menu with its answer. To stop it,
+send `/stop` in Telegram. Your bot's token is kept
 in your keyring. To stop, open the same setup and click **Disconnect**.
 
 ### Pausing, and closing the lid
