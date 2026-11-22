@@ -108,8 +108,9 @@ impl State {
 
     /// Whether the pill shows at all.
     pub fn visible(&self) -> bool {
-        self.setup == "ready" || self.setup == "working" || !self.approvals.is_empty()
-            || (self.setup == "error" && !self.tasks.is_empty())
+        // "error" only follows a Set Up the user pressed, so the button stays
+        // to show what went wrong and how to fix it (Allow, Try Again).
+        matches!(self.setup.as_str(), "ready" | "working" | "error") || !self.approvals.is_empty()
     }
 
     pub fn running(&self) -> usize {
@@ -312,7 +313,8 @@ impl Pill {
             args,
             None,
             gio::DBusCallFlags::NONE,
-            30_000,
+            // FixLxd waits on the password prompt (and may install LXD).
+            if method == "FixLxd" { i32::MAX } else { 30_000 },
             gio::Cancellable::NONE,
             move |res| {
                 if let Err(e) = res {
@@ -769,6 +771,9 @@ mod tests {
         let s = State { setup: "working".into(), step: "Starting the guardrails".into(), ..Default::default() };
         assert!(s.visible());
         assert_eq!(s.summary(), "Starting the guardrails…");
+        // A failed setup keeps the button, for its Allow / Try Again.
+        let s = State { setup: "error".into(), needs: "lxd-group".into(), ..Default::default() };
+        assert!(s.visible());
     }
 
     #[test]

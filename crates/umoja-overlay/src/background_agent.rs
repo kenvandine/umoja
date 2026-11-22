@@ -31,6 +31,8 @@ pub struct BackgroundAgentRow {
     ids: RefCell<Vec<String>>,
     /// The setup state last read ("none", "working", "ready", "error").
     setup: RefCell<String>,
+    /// What the user can do about a failed setup ("lxd-group"…).
+    needs: RefCell<String>,
     /// Set while show() fills the dropdowns, so they don't save a pick.
     filling: Cell<bool>,
 }
@@ -81,8 +83,10 @@ impl BackgroundAgentRow {
             action,
             ids: RefCell::default(),
             setup: RefCell::default(),
+            needs: RefCell::default(),
             filling: Cell::new(false),
         });
+        row.watch();
         {
             let weak = Rc::downgrade(&row);
             row.agent.connect_selected_notify(move |_| {
@@ -120,6 +124,21 @@ impl BackgroundAgentRow {
             row.action.connect_clicked(move |_| {
                 let Some(r) = weak.upgrade() else { return };
                 r.action.set_sensitive(false);
+                let needs = r.needs.borrow().clone();
+                if matches!(needs.as_str(), "lxd-install" | "lxd-group") {
+                    // The password prompt; setup carries on by itself after.
+                    r.status.set_text(&i18n::umoja("Waiting for your permission…"));
+                    let weak = Rc::downgrade(&r);
+                    call("FixLxd", None, move |res| {
+                        if let Some(r) = weak.upgrade() {
+                            r.action.set_sensitive(true);
+                            if res.is_err() {
+                                r.refresh();
+                            }
+                        }
+                    });
+                    return;
+                }
                 r.status.set_text(&i18n::umoja("Setting up…"));
                 let weak = Rc::downgrade(&r);
                 call("Setup", Some((r.preset_id(),).to_variant()), move |res| {
@@ -140,6 +159,31 @@ impl BackgroundAgentRow {
 
     fn preset_id(&self) -> &'static str {
         PRESETS.get(self.preset.selected() as usize).copied().unwrap_or("balanced")
+    }
+
+    /// Follows StateChanged, so the row shows setup's progress and asks
+    /// for what it needs while the settings are open.
+    fn watch(self: &Rc<Self>) {
+        let Ok(conn) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        // The subscription lives as long as the session bus connection.
+        let _ = conn.signal_subscribe(
+            Some(BUS),
+            Some(IFACE),
+            Some("StateChanged"),
+            Some(PATH),
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |_, _, _, _, _, params| {
+                let Some(r) = weak.upgrade() else { return };
+                let Some((json,)) = params.get::<(String,)>() else { return };
+                if let Ok(state) = serde_json::from_str::<Value>(&json) {
+                    r.show(&state);
+                }
+            },
+        );
     }
 
     /// Reads the agent's state again (each time the popover opens).
@@ -192,7 +236,12 @@ impl BackgroundAgentRow {
             ),
             "error" => (
                 state["error"].as_str().map(str::to_owned).unwrap_or_else(|| i18n::umoja("Setup didn't finish.")),
-                Some(i18n::umoja("Try Again")),
+                match state["needs"].as_str().unwrap_or_default() {
+                    "lxd-install" | "lxd-group" => Some(i18n::umoja("Allow")),
+                    // Waiting on a new login: nothing to press.
+                    "relogin" => None,
+                    _ => Some(i18n::umoja("Try Again")),
+                },
             ),
             _ => (
                 i18n::umoja("{name} isn't set up. It runs in a sandbox and only sees the folders you share.")
@@ -201,6 +250,7 @@ impl BackgroundAgentRow {
             ),
         };
         *self.setup.borrow_mut() = setup;
+        *self.needs.borrow_mut() = state["needs"].as_str().unwrap_or_default().to_owned();
         self.status.set_text(&text);
         self.action.set_visible(button.is_some());
         if let Some(b) = button {
@@ -219,10 +269,12 @@ fn preset_text(preset: &str) -> String {
 
 /// An org.umoja.Agents call; `done` gets the reply or a message to show.
 fn call(method: &'static str, args: Option<glib::Variant>, done: impl FnOnce(Result<glib::Variant, String>) + 'static) {
+    // FixLxd waits on the password prompt (and may install LXD).
+    let timeout = if method == "FixLxd" { i32::MAX } else { 30_000 };
     glib::spawn_future_local(async move {
         let res = match gio::bus_get_future(gio::BusType::Session).await {
             Ok(conn) => conn
-                .call_future(Some(BUS), PATH, IFACE, method, args.as_ref(), None, gio::DBusCallFlags::NONE, 30_000)
+                .call_future(Some(BUS), PATH, IFACE, method, args.as_ref(), None, gio::DBusCallFlags::NONE, timeout)
                 .await
                 .map_err(|mut e| {
                     gio::DBusError::strip_remote_error(&mut e);

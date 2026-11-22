@@ -176,7 +176,29 @@ impl Agent {
         let this = self.clone();
         tokio::spawn(async move {
             let _guard = this.lifecycle.lock().await;
-            let result = this.bring_up(true).await;
+            let mut result = this.bring_up(true).await;
+            // This account can't use the sandbox yet: pressing Set Up is the
+            // ask, so put up the password prompt now instead of failing.
+            let needs = this.state.lock().await.needs.clone();
+            if result.is_err() && matches!(needs.as_str(), "lxd-install" | "lxd-group") {
+                this.set_step("Waiting for your permission").await;
+                match this.grant_lxd().await {
+                    Ok(true) => {
+                        this.state.lock().await.needs.clear();
+                        result = this.bring_up(true).await;
+                    }
+                    Ok(false) => {
+                        this.state.lock().await.needs = "relogin".into();
+                        result = Err(anyhow::anyhow!(
+                            "Almost there. Log out and back in, then set up {n} again.",
+                            n = catalog::active().name
+                        ));
+                    }
+                    // Dismissed or failed: keep the first error and its
+                    // Allow button.
+                    Err(e) => tracing::info!(error = %format!("{e:#}"), "sandbox permission not given"),
+                }
+            }
             let mut s = this.state.lock().await;
             match result {
                 Ok(()) => {
@@ -215,7 +237,7 @@ impl Agent {
             }
             Access::Denied => {
                 self.state.lock().await.needs = "lxd-group".into();
-                bail!("{n} needs your permission to set up its sandbox. Allow it, then log out and back in.", n = catalog::active().name);
+                bail!("{n} needs your permission to set up its sandbox.", n = catalog::active().name);
             }
         }
         let bridge = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -1426,34 +1448,43 @@ impl Agent {
     }
 
     /// Gives this account LXD access (joins the lxd group through polkit).
-    pub async fn fix_lxd(&self) -> Result<()> {
-        let needs = self.state.lock().await.needs.clone();
-        let user = paths::user_name();
-        // lxd-setup installs/initialises LXD only where needed and adds
-        // the account to the lxd group (polkit: org.umoja.agents.lxd-setup).
-        let _ = needs;
+    pub async fn fix_lxd(self: &Arc<Self>) -> Result<()> {
+        let ready = self.grant_lxd().await?;
+        let mut s = self.state.lock().await;
+        if ready {
+            // Allowed: carry on with the setup the user started.
+            s.needs.clear();
+            s.error.clear();
+            let preset = s.preset;
+            drop(s);
+            self.setup(preset).await;
+            return Ok(());
+        }
+        s.needs = "relogin".into();
+        s.error = format!("Almost there. Log out and back in, then set up {n} again.", n = catalog::active().name);
+        drop(s);
+        self.changed().await;
+        Ok(())
+    }
+}
+
+impl Agent {
+    /// Runs lxd-setup through polkit (org.umoja.agents.lxd-setup): installs
+    /// and initialises LXD only where needed, adds the account to the lxd
+    /// group and lets it reach the socket until its next login. Whether this
+    /// session can use LXD now.
+    async fn grant_lxd(&self) -> Result<bool> {
         let status = tokio::process::Command::new("pkexec")
             .arg(paths::libexec("lxd-setup"))
-            .arg(&user)
+            .arg(paths::user_name())
             .status()
             .await?;
         if !status.success() {
             bail!("That didn't work ({status}).");
         }
-        // lxd-setup also adds the user to the lxd group; group membership
-        // only reaches this session after a new login.
-        let ready = matches!(Lxd::new(&paths::lxd_project()).access(), crate::lxd::Access::Ok);
-        let mut s = self.state.lock().await;
-        if ready {
-            s.needs.clear();
-            s.error = format!("All set. Set up {n} again.", n = catalog::active().name);
-        } else {
-            s.needs = "relogin".into();
-            s.error = format!("Done. Log out and back in, then set up {n} again.", n = catalog::active().name);
-        }
-        drop(s);
-        self.changed().await;
-        Ok(())
+        let project = paths::lxd_project();
+        let access = tokio::task::spawn_blocking(move || Lxd::new(&project).access()).await?;
+        Ok(matches!(access, crate::lxd::Access::Ok))
     }
 }
 

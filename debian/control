@@ -151,7 +151,8 @@ Depends: ${shlibs:Depends},
          ${misc:Depends},
          umoja-desktop (= ${binary:Version}),
          pkexec,
-         libsecret-tools
+         libsecret-tools,
+         acl
 Recommends: snapd
 Description: Hermes agent for Umoja, sandboxed by OpenShell on LXD
  Runs the Hermes agent for the signed-in user inside an NVIDIA OpenShell
