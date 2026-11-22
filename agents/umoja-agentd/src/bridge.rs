@@ -118,7 +118,12 @@ pub fn parse_line(line: &[u8]) -> Option<Value> {
 pub async fn call(gw: &Gateway, args: &[&str], body: Option<&Value>) -> Result<Value> {
     let mut answer = Value::Null;
     let code = bridge(gw, args, body, |v| answer = v).await?;
-    if let Some(err) = answer.get("error").and_then(Value::as_str) {
+    // A failed call answers {"error": "..."}. A status answer carries the
+    // run's own error field (empty while the run is fine), which
+    // RunStatus::parse reads: that one isn't a failed call.
+    if let Some(err) = answer.get("error").and_then(Value::as_str).filter(|e| !e.is_empty())
+        && answer.get("status").is_none()
+    {
         bail!("{err}");
     }
     if code != 0 && answer.is_null() {
