@@ -16,32 +16,53 @@ drop the buttons silently.
 import pathlib
 import sys
 
-ANCHOR = "        data = query.data\n"
 MARK = "# umoja: consent buttons"
-BLOCK = '''        # umoja: consent buttons (agents/hermes-image/umoja-patch-hermes)
-        if data.startswith("umoja:"):
-            import json as _uj, os as _uo, time as _ut
-            _parts = data.split(":", 2)
-            _caller = str(getattr(query.from_user, "id", ""))
-            _allowed = [x.strip() for x in _uo.environ.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()]
-            if len(_parts) != 3 or _caller not in _allowed:
+# Appended to the adapter module: wraps the adapter class's callback
+# handler (before the gateway registers it), so the patch doesn't depend on
+# the handler's body.
+BLOCK = '''
+
+# umoja: consent buttons (agents/hermes-image/umoja-patch-hermes)
+def _umoja_install_buttons():
+    import json as _uj, os as _uo, time as _ut
+
+    owners = [c for c in list(globals().values())
+              if isinstance(c, type) and "_handle_callback_query" in vars(c)]
+    for cls in owners:
+        orig = cls._handle_callback_query
+
+        async def _handle_callback_query(self, update, context, _orig=orig):
+            query = getattr(update, "callback_query", None)
+            data = (getattr(query, "data", "") or "") if query else ""
+            if not data.startswith("umoja:"):
+                return await _orig(self, update, context)
+            parts = data.split(":", 2)
+            caller = str(getattr(getattr(query, "from_user", None), "id", ""))
+            allowed = [x.strip() for x in _uo.environ.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()]
+            if len(parts) != 3 or caller not in allowed:
                 await query.answer(text="Only the computer's owner can answer this.")
                 return
-            _choice, _key = _parts[1], _parts[2]
-            _dir = "/sandbox/.config/umoja/chat-answers"
-            _uo.makedirs(_dir, exist_ok=True)
-            _tmp = _uo.path.join(_dir, "." + _key + ".tmp")
-            with open(_tmp, "w", encoding="utf-8") as _f:
-                _uj.dump({"key": _key, "choice": _choice, "at": int(_ut.time())}, _f)
-            _uo.replace(_tmp, _uo.path.join(_dir, _key + ".json"))
-            _label = {"allow": "Allowed once", "always": "Always allowed", "deny": "Denied"}.get(_choice, "Answered")
-            await query.answer(text=_label)
+            choice, key = parts[1], parts[2]
+            folder = "/sandbox/.config/umoja/chat-answers"
+            _uo.makedirs(folder, exist_ok=True)
+            tmp = _uo.path.join(folder, "." + key + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                _uj.dump({"key": key, "choice": choice, "at": int(_ut.time())}, f)
+            _uo.replace(tmp, _uo.path.join(folder, key + ".json"))
+            label = {"allow": "Allowed once", "always": "Always allowed", "deny": "Denied"}.get(choice, "Answered")
+            await query.answer(text=label)
             try:
-                _text = getattr(query.message, "text", "") or ""
-                await query.edit_message_text(text=_text + "\\n\\n" + _label + ".", reply_markup=None)
+                text = getattr(getattr(query, "message", None), "text", "") or ""
+                await query.edit_message_text(text=text + "\\n\\n" + label + ".", reply_markup=None)
             except Exception:
                 pass
-            return
+
+        cls._handle_callback_query = _handle_callback_query
+    return len(owners)
+
+
+if not _umoja_install_buttons():
+    raise ImportError("umoja: no Telegram callback handler to wrap")
 '''
 
 
@@ -49,14 +70,9 @@ def patch(path: pathlib.Path) -> bool:
     src = path.read_text(encoding="utf-8")
     if MARK in src:
         return True
-    head = src.find("async def _handle_callback_query(")
-    if head < 0:
+    if "async def _handle_callback_query(" not in src:
         return False
-    at = src.find(ANCHOR, head)
-    if at < 0 or at - head > 2000:
-        return False
-    at += len(ANCHOR)
-    path.write_text(src[:at] + BLOCK + src[at:], encoding="utf-8")
+    path.write_text(src + BLOCK, encoding="utf-8")
     return True
 
 
