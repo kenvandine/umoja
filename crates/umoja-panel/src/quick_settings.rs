@@ -109,6 +109,7 @@ fn menu() -> gtk::Box {
         dark_style_tile().upcast(),
         night_light_tile().upcast(),
         kbd.upcast(),
+        crate::agents::quick_tile(tile).upcast(),
     ];
     // Two tiles a row, hidden ones left out so they leave no hole. Network
     // and Bluetooth tiles appear a moment after start-up (their state is

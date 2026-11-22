@@ -155,6 +155,9 @@ struct Pill {
     approvals: gtk::Box,
     tasks: gtk::Box,
     problem: gtk::Box,
+    /// Why the last button press didn't work ("That request isn't waiting
+    /// any more."), for a few seconds.
+    error: gtk::Label,
     state: RefCell<State>,
     /// Text typed into question replies, kept across redraws.
     drafts: RefCell<HashMap<String, String>>,
@@ -221,11 +224,19 @@ pub fn button() -> gtk::MenuButton {
     let problem = gtk::Box::new(gtk::Orientation::Vertical, 6);
     problem.add_css_class("agents-problem");
     problem.set_visible(false);
+    let error = gtk::Label::builder()
+        .wrap(true)
+        .xalign(0.0)
+        .max_width_chars(40)
+        .css_classes(["agents-error"])
+        .visible(false)
+        .build();
     let approvals = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let tasks = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
     card.append(&head);
     card.append(&problem);
+    card.append(&error);
     card.append(&approvals);
     card.append(&tasks);
     let scroller = gtk::ScrolledWindow::builder()
@@ -265,6 +276,7 @@ pub fn button() -> gtk::MenuButton {
         approvals,
         tasks,
         problem,
+        error,
         state: RefCell::default(),
         drafts: RefCell::default(),
         rendered: RefCell::default(),
@@ -301,6 +313,58 @@ pub fn button() -> gtk::MenuButton {
     button
 }
 
+thread_local! {
+    /// Others following the agent's state (the Quick Settings tile).
+    static LISTENERS: RefCell<Vec<Box<dyn Fn(&State)>>> = RefCell::default();
+    static LAST: RefCell<Option<State>> = RefCell::default();
+}
+
+/// The Agents tile in Quick Settings (the mockup's kill switch): on while
+/// the agent may work, off pauses it. Subtitle like the pill's ("Working on
+/// 1 task", "Waiting for you"); accent-amber while it waits. Shown once the
+/// agent is set up.
+pub fn quick_tile(make: fn(&str, &str) -> gtk::ToggleButton) -> gtk::ToggleButton {
+    let t = make("umoja-agents-symbolic", &i18n::umoja("Agents"));
+    t.set_visible(false);
+    t.set_tooltip_text(Some(&i18n::umoja("Turn off to pause the background agent")));
+    let syncing = Rc::new(std::cell::Cell::new(false));
+    let show = {
+        let (t, syncing) = (t.clone(), syncing.clone());
+        move |state: &State| {
+            t.set_visible(state.setup == "ready");
+            syncing.set(true);
+            t.set_active(!state.paused);
+            syncing.set(false);
+            let text = format!("{}: {}", state.name(), state.summary());
+            crate::network::set_tile_subtitle(&t, &text);
+            if state.approvals.is_empty() {
+                t.remove_css_class("agents-waiting");
+            } else {
+                t.add_css_class("agents-waiting");
+            }
+        }
+    };
+    if let Some(state) = LAST.with(|l| l.borrow().clone()) {
+        show(&state);
+    }
+    LISTENERS.with(|l| l.borrow_mut().push(Box::new(show)));
+    t.connect_toggled(move |t| {
+        if syncing.get() {
+            return;
+        }
+        let paused = !t.is_active();
+        glib::spawn_future_local(async move {
+            if let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await {
+                let _ = conn
+                    .call_future(Some(BUS), PATH, IFACE, "SetPaused", Some(&(paused,).to_variant()), None,
+                        gio::DBusCallFlags::NONE, 30_000)
+                    .await;
+            }
+        });
+    });
+    t
+}
+
 /// "using 231 MB of its 4 GB memory": what the sandbox uses, under its cap.
 fn memory_text(used_mb: u32, cap_mb: u32) -> String {
     fn size(mb: u32) -> String {
@@ -323,6 +387,8 @@ impl Pill {
     fn call(&self, method: &str, args: Option<&glib::Variant>) {
         let Some(conn) = self.conn.borrow().clone() else { return };
         let name = method.to_owned();
+        let error = self.error.clone();
+        error.set_visible(false);
         conn.call(
             Some(BUS),
             PATH,
@@ -335,14 +401,26 @@ impl Pill {
             if method == "FixLxd" { i32::MAX } else { 30_000 },
             gio::Cancellable::NONE,
             move |res| {
-                if let Err(e) = res {
+                if let Err(mut e) = res {
                     glib::g_warning!("umoja-panel", "Agents.{name}: {e}");
+                    // umoja-agentd's errors are written for people.
+                    gio::DBusError::strip_remote_error(&mut e);
+                    error.set_text(e.message());
+                    error.set_visible(true);
+                    let error = error.clone();
+                    glib::timeout_add_seconds_local_once(8, move || error.set_visible(false));
                 }
             },
         );
     }
 
     fn update(self: &Rc<Self>, state: State) {
+        LISTENERS.with(|l| {
+            for f in l.borrow().iter() {
+                f(&state);
+            }
+        });
+        LAST.replace(Some(state.clone()));
         let visible = state.visible();
         self.button.set_visible(visible);
         if !visible {

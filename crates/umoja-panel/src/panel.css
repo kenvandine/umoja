@@ -943,3 +943,12 @@ popover.agents-popover .agents-task.done .agents-task-icon {
 popover.agents-popover .agents-task.failed .agents-task-icon {
   color: @warning_color;
 }
+/* The Agents tile while the agent waits for an answer. */
+.quick-settings .tile.agents-waiting {
+  box-shadow: inset 0 0 0 2px @warning_color;
+}
+popover.agents-popover .agents-error {
+  color: @warning_color;
+  font-size: 0.92em;
+  padding: 0 4px;
+}

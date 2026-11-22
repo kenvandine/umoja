@@ -626,6 +626,10 @@ impl Agent {
             for p in &proposals {
                 let id = format!("net-{}", p.chunk_id);
                 if known.contains_key(&id) {
+                    // The gateway re-reviews a pending proposal now and
+                    // then, which gives it a new review token: keep the
+                    // latest, or answering it is refused.
+                    known.insert(id, p.clone());
                     continue;
                 }
                 known.insert(id.clone(), p.clone());
@@ -766,9 +770,10 @@ impl Agent {
         let gw = self.gateway().await?;
         let before = snapshot(&paths::workspace());
         let id = format!("t{}", now_ms());
+        let shared = self.state.lock().await.shared.clone();
         let task = Task {
             id: id.clone(),
-            title: title_for(&prompt),
+            title: title_for(&host_words(&prompt, &shared)),
             prompt: prompt.clone(),
             status: TaskStatus::Running,
             step: "Starting…".into(),
@@ -1205,10 +1210,14 @@ impl Agent {
     }
 
     async fn finish(&self, id: &str, status: TaskStatus, result: &str, files: Vec<PathBuf>) {
+        let stale: Vec<Approval>;
         let (title, ok) = {
             let mut s = self.state.lock().await;
-            let removed: Vec<String> = s.approvals.iter().filter(|a| a.task == id && a.kind != ApprovalKind::Network).map(|a| a.id.clone()).collect();
-            s.approvals.retain(|a| !removed.contains(&a.id));
+            // Its questions and sites wait on nothing now: the task is over.
+            let removed: Vec<Approval> = s.approvals.iter().filter(|a| a.task == id).cloned().collect();
+            s.approvals.retain(|a| a.task != id);
+            stale = removed;
+            let result = host_words(result, &s.shared);
             let Some(t) = s.task_mut(id) else { return };
             t.status = status.clone();
             t.finished = now();
@@ -1221,6 +1230,15 @@ impl Agent {
             };
             (t.title.clone(), status == TaskStatus::Done)
         };
+        for a in &stale {
+            if a.kind == ApprovalKind::Network {
+                let p = self.proposals.lock().await.remove(&a.id);
+                if let (Some(p), Ok(gw)) = (p, self.gateway().await) {
+                    let _ = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await;
+                }
+            }
+            self.close_note_for(&a.id).await;
+        }
         self.changed().await;
         let task_json = {
             let s = self.state.lock().await;
@@ -1282,11 +1300,29 @@ impl Agent {
                     .get(&a.id)
                     .cloned()
                     .ok_or_else(|| anyhow!("That request has expired."))?;
-                let mut gw = gw.clone();
                 if allow {
-                    gw.approve(&paths::sandbox(), &p).await?;
-                } else {
-                    gw.reject(&paths::sandbox(), &p.chunk_id).await?;
+                    if let Err(e) = gw.clone().approve(&paths::sandbox(), &p).await {
+                        // A stale review token: fetch the proposal again and
+                        // answer that; gone means nothing is waiting any more.
+                        tracing::info!(error = %e, "approving again with a fresh proposal");
+                        let fresh = gw
+                            .clone()
+                            .snapshot()
+                            .await?
+                            .into_iter()
+                            .find(|s| s.info.name == paths::sandbox())
+                            .and_then(|s| s.proposals.into_iter().find(|x| x.chunk_id == p.chunk_id));
+                        match fresh {
+                            Some(fresh) => gw.clone().approve(&paths::sandbox(), &fresh).await?,
+                            None => {
+                                self.settle(&a).await;
+                                bail!("That request isn't waiting any more.");
+                            }
+                        }
+                    }
+                } else if let Err(e) = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await {
+                    // Turned down either way: it's gone, or it will lapse.
+                    tracing::info!(error = %e, "couldn't reject; dropping the card");
                 }
             }
             ApprovalKind::Command => {
@@ -1551,6 +1587,23 @@ impl Agent {
         let access = tokio::task::spawn_blocking(move || Lxd::new(&project).access()).await?;
         Ok(matches!(access, crate::lxd::Access::Ok))
     }
+}
+
+/// Paths inside the sandbox as the user knows them: "/sandbox/workspace/
+/// plan.md" is "~/Agents/Hermes/plan.md", a shared folder its own place.
+pub fn host_words(text: &str, shared: &[crate::state::Shared]) -> String {
+    let tilde = |p: &Path| match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if p.starts_with(&home) => format!("~/{}", p.strip_prefix(&home).unwrap_or(p).display()),
+        _ => p.display().to_string(),
+    };
+    let mut out = text.replace(paths::SANDBOX_WORKSPACE, &tilde(&paths::workspace()));
+    // Longest first, so /sandbox/shared/Downloads2 isn't cut at Downloads.
+    let mut shared: Vec<_> = shared.iter().collect();
+    shared.sort_by_key(|s| std::cmp::Reverse(s.inside.len()));
+    for s in shared {
+        out = out.replace(&s.inside, &tilde(Path::new(&s.path)));
+    }
+    out
 }
 
 /// An error as the user sees it: what went wrong and what to do, never a
@@ -1897,6 +1950,18 @@ fn clear_secret(kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_paths_in_host_words() {
+        let shared = vec![crate::state::Shared {
+            path: "/elsewhere/Finances".into(),
+            writable: false,
+            inside: "/sandbox/shared/Finances".into(),
+        }];
+        let text = host_words("Read /sandbox/shared/Finances/bank.csv", &shared);
+        assert_eq!(text, "Read /elsewhere/Finances/bank.csv");
+        assert!(!host_words("saved /sandbox/workspace/x.md", &shared).contains("/sandbox"));
+    }
 
     #[test]
     fn errors_for_people() {
