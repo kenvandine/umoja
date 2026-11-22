@@ -68,8 +68,9 @@ pub async fn bridge(
     // Right after the daemon (so the guardrails) restarts, the sandbox's
     // supervisor is still registered with the previous guardrails process
     // until it reconnects, a few seconds later; until then an exec is
-    // refused before anything runs. Wait for it rather than fail.
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    // refused before anything runs ("not ready" while it starts again).
+    // Wait for it rather than fail.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
     let (_input, mut output) = loop {
         let started = gw
             .exec_interactive(
@@ -121,9 +122,12 @@ pub async fn bridge(
 }
 
 /// The guardrails refusing an exec because the sandbox's supervisor is
-/// still with an earlier guardrails process (it reconnects shortly).
+/// still with an earlier guardrails process (it reconnects shortly), or
+/// hasn't finished starting again.
 fn supervisor_moving(error: &str) -> bool {
-    error.contains("owned by gateway replica") || error.contains("advertises no peer endpoint")
+    error.contains("owned by gateway replica")
+        || error.contains("advertises no peer endpoint")
+        || error.contains("sandbox is not ready")
 }
 
 /// `@@{...}` → the JSON; anything else (TTY noise, Python warnings) → None.

@@ -164,6 +164,7 @@ impl Agent {
                 tracing::error!(error = %format!("{e:#}"), "couldn't start the agent");
                 let mut s = this.state.lock().await;
                 s.sandbox = "error".into();
+                s.step.clear();
                 s.error = for_people(&e);
                 drop(s);
                 this.changed().await;
