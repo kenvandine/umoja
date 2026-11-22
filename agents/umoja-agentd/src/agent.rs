@@ -746,8 +746,10 @@ impl Agent {
             }
             Some(Note::Result(task, path)) => {
                 self.notes.lock().await.remove(&id);
-                let shown = key == "default" && show_in_ask(&self.conn, &task).await;
-                if !shown {
+                // Both open the task in Ask Umoja (answer, Open file, reply);
+                // the file itself only when Ask Umoja isn't there.
+                let _ = key;
+                if !show_in_ask(&self.conn, &task).await {
                     let _ = tokio::process::Command::new("gio").arg("open").arg(&path).spawn();
                 }
             }
@@ -1310,8 +1312,7 @@ impl Agent {
             body.push('…');
         }
         let target = files.first().cloned().unwrap_or_else(paths::workspace);
-        let label = if files.is_empty() { "Show Folder" } else { "Open" };
-        let nid = notify::send(&self.conn, &summary, &body, &[("default", "Show"), ("open", label)], false).await;
+        let nid = notify::send(&self.conn, &summary, &body, &[("default", "Open"), ("open", "Open")], false).await;
         if nid != 0 {
             self.notes.lock().await.insert(nid, Note::Result(id.to_owned(), target));
         }

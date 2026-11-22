@@ -54,6 +54,8 @@ const SPEAKING_ICON: &str = "media-playback-stop-symbolic";
 /// File rows for typed text.
 const MAX_FILES: u32 = 3;
 /// Width of the card, as in the mockup.
+/// Tallest the answer text grows before it scrolls.
+const ANSWER_MAX_HEIGHT: i32 = 440;
 const CARD_WIDTH: i32 = 640;
 /// Pause in typing before umoja-files is asked, and before the top row is
 /// read out.
@@ -472,7 +474,17 @@ impl Overlay {
             .build();
         let answer_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         answer.set_hexpand(true);
-        answer_row.append(&answer);
+        answer.set_valign(gtk::Align::Start);
+        // A long answer (a background agent's whole report) scrolls inside
+        // the card instead of running off the bottom of the screen.
+        let answer_scroll = gtk::ScrolledWindow::builder()
+            .child(&answer)
+            .hexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(ANSWER_MAX_HEIGHT)
+            .build();
+        answer_row.append(&answer_scroll);
         answer_row.append(&speak_button);
         answer_row.append(&copy_button);
         let confirm_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
