@@ -23,7 +23,7 @@ The scenes:
     agent-followup a reply under the plan ("add a rainy-day Saturday"): it
                    carries on in the same conversation
     agent-weather  the guardrails: it asks before reaching a new site
-                   (wttr.in), you Allow, and the forecast lands in the plan
+                   (a weather site), you Allow, and the forecast lands in the plan
     agent-tidy     a messy Downloads folder, shared with it, sorted into
                    folders, with a note of what it moved
     agent-budget   a bank export, shared read-only, turned into a budget
@@ -43,7 +43,7 @@ Finances folders) live in ~/Umoja Agent Demo and are removed at the end,
 shares included.
 
 Nothing is installed or sent anywhere except what the jobs need: the model,
-and wttr.in once you'd Allow it (the scene does, on camera).
+and the weather site it asks for once you'd Allow it (the scene does, on camera).
 """
 
 import importlib.machinery
@@ -85,8 +85,8 @@ TRIP = ("Plan a relaxed 3-day weekend in Lisbon for two, arriving Friday evening
         "itinerary with one neighbourhood a day, where to eat (one pastelaria, one tasca, one view), "
         "how to get around, and a rough budget in euros. Use what you know; look things up on "
         f"Wikipedia only if you must. Save it as {TRIP_FILE}.")
-WEATHER = ("Check this weekend's weather in Lisbon: run curl -s 'https://wttr.in/Lisbon?format=3' "
-           f"and add the forecast as a line at the top of {TRIP_FILE}, with one tip on what to pack.")
+WEATHER = ("What's the weather looking like in Lisbon this weekend? Put the forecast at the top of my "
+           "Lisbon plan, with a tip on what to pack.")
 
 # A Downloads folder as people really have it.
 DOWNLOADS = {
@@ -465,7 +465,7 @@ class AgentDemo(tour.Demo):
     def scene_agent_weather(self):
         trip = self.workspace() / TRIP_FILE
         prompt = WEATHER if (trip.exists() or self.dry) else WEATHER.replace(
-            f"add the forecast as a line at the top of {TRIP_FILE}", "save the forecast in Lisbon weather.md")
+            "Put the forecast at the top of my Lisbon plan", "Save the forecast in Lisbon weather.md")
         before = trip.read_text() if trip.exists() else ""
         self.job(
             "agent-weather", prompt,

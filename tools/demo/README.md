@@ -171,7 +171,7 @@ fast-forwarded in the clips.
 | `agent-intro` | Where it lives: Ask Umoja's settings (Background agent row), the Agents button on the top bar and the Agents tile in Quick Settings | `images/agent-intro*.png` |
 | `agent-trip` | "Plan a weekend in Lisbon": a day-by-day plan with a budget, saved as `Lisbon weekend.md`, read in Ask Umoja (`Overlay.ShowAgentTask`) | `images/agent-trip*.png`, `videos/agent-trip.*` |
 | `agent-followup` | A reply typed under the plan in Ask Umoja (`Overlay.ReplyAgentTask`): "Add a rainy-day plan for Saturday…"; the agent carries on in the same conversation and the updated answer is shown. Needs `agent-trip` in the same run | `images/agent-followup*.png`, `videos/agent-followup.*` |
-| `agent-weather` | The guardrails: it asks before reaching a site that isn't open (wttr.in), the scene presses Allow on camera, and the forecast lands at the top of the plan | `images/agent-weather*.png`, `videos/agent-weather.*` |
+| `agent-weather` | The guardrails: asked in plain words ("What's the weather looking like in Lisbon this weekend?"), it asks before reaching a weather site that isn't open, the scene presses Allow on camera, and the forecast lands at the top of the plan | `images/agent-weather*.png`, `videos/agent-weather.*` |
 | `agent-tidy` | A messy Downloads folder (15 made-up files) shared with it writable, before and after in Files: sorted into Documents, Images, Receipts and Installers, with `What I moved.md` | `images/agent-tidy*.png`, `videos/agent-tidy.*` |
 | `agent-budget` | A made-up bank export shared read-only, turned into `October budget.md` (by category, biggest costs, subscriptions worth cancelling); the answer glides down to the subscriptions (`Overlay.TestAction answer-scroll:0.75`) and holds; the scene checks the CSV is unchanged. The prompts name shared folders the way a person would ("my Downloads folder", "my October bank export in Finances"); the agent is told where each shared folder is | `images/agent-budget*.png`, `videos/agent-budget.*` |
 | `agent-lid` | Only with `--suspend`: a five-part job, then a real 25 s suspend (`sudo -n rtcwake -m mem -s 25`, so it needs passwordless sudo for rtcwake); after the wake it carries on and finishes | `images/agent-lid*.png`, `videos/agent-lid*.*` |
@@ -188,4 +188,4 @@ the demo opens is closed again with `Panel.CloseMenus`. The demo's own
 input files live in `~/Umoja Agent Demo` and are removed at the end, with
 their shares. Nothing is
 installed; the only site it reaches beyond the model and the Balanced open
-sites is wttr.in, after the on-camera Allow.
+sites is the weather site it picks, after the on-camera Allow.
