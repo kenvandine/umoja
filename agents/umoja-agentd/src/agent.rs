@@ -811,6 +811,18 @@ impl Agent {
                 }
             }
             tokio::time::sleep(Duration::from_millis(1500)).await;
+            // Ended elsewhere (Pause, Remove): nothing left to follow.
+            let ended = self
+                .state
+                .lock()
+                .await
+                .tasks
+                .iter()
+                .find(|t| t.id == id)
+                .is_none_or(|t| !matches!(t.status, TaskStatus::Running | TaskStatus::Waiting));
+            if ended {
+                break;
+            }
             // Running fine a while after waking up: no longer interrupted.
             if woke.is_some_and(|w| w.elapsed() > CARRY_ON_WINDOW) {
                 woke = None;
@@ -1255,17 +1267,22 @@ impl Agent {
             for run in runs {
                 let _ = bridge::stop(&gw, &run).await;
             }
-            self.state.lock().await.paused = true;
+            // Tasks end now, before the sandbox stops (that can take a
+            // minute): their watchers see them finished and let go.
+            {
+                let mut s = self.state.lock().await;
+                s.paused = true;
+                for t in s.tasks.iter_mut() {
+                    if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
+                        t.status = TaskStatus::Cancelled;
+                        t.step = "Stopped (agents paused)".into();
+                        t.finished = now();
+                    }
+                }
+                s.approvals.clear();
+            }
             self.changed().await;
             gw.clone().stop(&paths::sandbox()).await?;
-            for t in self.state.lock().await.tasks.iter_mut() {
-                if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
-                    t.status = TaskStatus::Cancelled;
-                    t.step = "Stopped (agents paused)".into();
-                    t.finished = now();
-                }
-            }
-            self.state.lock().await.approvals.clear();
         } else {
             self.state.lock().await.paused = false;
             self.changed().await;
