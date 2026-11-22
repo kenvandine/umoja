@@ -21,6 +21,7 @@ mod files;
 mod messaging_setup;
 mod background_agent;
 mod lemonade;
+mod markdown;
 mod model;
 mod model_picker;
 mod myna;

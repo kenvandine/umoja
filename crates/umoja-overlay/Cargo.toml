@@ -27,3 +27,5 @@ wayland-protocols-misc.workspace = true
 libc.workspace = true
 # Emoji names and shortcodes for Ask Umoja (Unicode + GitHub/gemoji data).
 emojis = "0.6"
+# Agent answers are Markdown; drawn as widgets by markdown.rs.
+pulldown-cmark = { version = "0.13", default-features = false }

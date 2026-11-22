@@ -233,6 +233,8 @@ pub struct Overlay {
     /// Bumped per read-aloud, so a finished one can't reset a newer one.
     speak_serial: Cell<u64>,
     answer_text: RefCell<String>,
+    /// Holds a Markdown answer's widgets (shown instead of `answer`).
+    answer_md: gtk::Box,
     /// The conversation so far: earlier user and assistant messages, sent
     /// along with follow-ups. Cleared when the card opens or the entry is
     /// emptied.
@@ -481,8 +483,15 @@ impl Overlay {
         answer.set_valign(gtk::Align::Start);
         // A long answer (a background agent's whole report) scrolls inside
         // the card instead of running off the bottom of the screen.
+        // An agent's answer is Markdown, drawn as widgets in answer_md in
+        // place of the label.
+        let answer_md = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        answer_md.set_visible(false);
+        let answer_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        answer_body.append(&answer);
+        answer_body.append(&answer_md);
         let answer_scroll = gtk::ScrolledWindow::builder()
-            .child(&answer)
+            .child(&answer_body)
             .hexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .propagate_natural_height(true)
@@ -629,6 +638,7 @@ impl Overlay {
             speak_button,
             speak_serial: Cell::new(0),
             answer_text: RefCell::default(),
+            answer_md,
             conversation: RefCell::default(),
             awaiting_reply: Cell::new(false),
             agent_thread: RefCell::default(),
@@ -2552,16 +2562,25 @@ impl Overlay {
                     .unwrap_or_default();
                 // The whole answer: its file when that's text, else the
                 // (shortened) answer the task kept.
-                let mut text = files
-                    .first()
-                    .filter(|f| f.ends_with(".md") || f.ends_with(".txt"))
+                let file = files.first().filter(|f| f.ends_with(".md") || f.ends_with(".txt"));
+                let mut text = file
                     .and_then(|f| std::fs::read_to_string(f).ok())
                     .filter(|t| t.len() < 200_000)
                     .unwrap_or_default();
+                // Agents write Markdown; only a .txt answer is plain.
+                let mut plain = file.is_some_and(|f| f.ends_with(".txt"));
                 if text.trim().is_empty() {
                     text = t["result"].as_str().unwrap_or_default().to_owned();
+                    plain = false;
                 }
-                o.answer.set_text(text.trim());
+                if plain || text.trim().is_empty() {
+                    o.clear_markdown();
+                    o.answer.set_visible(true);
+                    o.answer.set_text(text.trim());
+                } else {
+                    let base = file.and_then(|f| std::path::Path::new(f).parent().map(|p| p.to_path_buf()));
+                    o.show_markdown(text.trim(), base);
+                }
                 *o.answer_text.borrow_mut() = text.trim().to_owned();
                 o.show_answer_actions(!text.trim().is_empty());
                 while let Some(c) = o.chips.first_child() {
@@ -2971,6 +2990,7 @@ impl Overlay {
         self.cancel_confirm();
         self.assistant.set_visible(true);
         self.answer.set_visible(true);
+        self.clear_markdown();
         self.question_label.set_visible(false);
         self.show_answer_actions(false);
         self.stop_speaking();
@@ -2987,6 +3007,41 @@ impl Overlay {
             self.steps.remove(&c);
         }
         self.steps.set_visible(false);
+    }
+
+    fn clear_markdown(&self) {
+        while let Some(c) = self.answer_md.first_child() {
+            self.answer_md.remove(&c);
+        }
+        self.answer_md.set_visible(false);
+    }
+
+    /// Shows `md` drawn as Markdown in place of the answer label. Relative
+    /// links resolve against `base` (the answer file's folder).
+    fn show_markdown(self: &Rc<Self>, md: &str, base: Option<std::path::PathBuf>) {
+        self.clear_markdown();
+        let weak = Rc::downgrade(self);
+        let on_link: crate::markdown::LinkHandler = Rc::new(move |uri: &str| {
+            let Some(o) = weak.upgrade() else { return };
+            let uri = if glib::Uri::peek_scheme(uri).is_some() {
+                uri.to_owned()
+            } else {
+                let path = std::path::Path::new(uri);
+                let path = match &base {
+                    Some(b) if path.is_relative() => b.join(path),
+                    _ => path.to_path_buf(),
+                };
+                gio::File::for_path(path).uri().to_string()
+            };
+            let ctx = WidgetExt::display(&o.window).app_launch_context();
+            match gio::AppInfo::launch_default_for_uri(&uri, Some(&ctx)) {
+                Ok(()) => o.hide(),
+                Err(e) => o.show_error(&e.to_string()),
+            }
+        });
+        self.answer_md.append(&crate::markdown::render(md, on_link));
+        self.answer.set_visible(false);
+        self.answer_md.set_visible(true);
     }
 
     fn show_error(&self, text: &str) {
