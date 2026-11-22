@@ -19,7 +19,8 @@ Hermes in particular. An agent is two things:
      "min_context": 65536,
      "approval_modes": { "careful": "manual", "balanced": "smart", "hands-off": "smart" },
      "messaging": ["telegram"],
-     "quiet_hosts": ["hermes-agent.nousresearch.com"]
+     "quiet_hosts": ["hermes-agent.nousresearch.com"],
+     "state_dir": "/sandbox/.hermes"
    }
    ```
 
@@ -31,6 +32,9 @@ Hermes in particular. An agent is two things:
    `image` is always an exact tag, never `:latest`, so a deb runs the image
    it was tested with: after a change to `agents/<id>-image` is published,
    `packaging/bump-agent-image <id>` points the entry at it.
+   When the image changes, umoja-agentd makes the sandbox again from the
+   new one; `state_dir` (the agent's memory and conversations) lives on
+   the host in `~/.local/state/umoja/agents/<id>-home`, so it survives.
    `approval_modes` maps Umoja's presets onto the agent's own approval
    setting, which the bridge receives as `UMOJA_APPROVALS`.
 

@@ -110,6 +110,12 @@ pub fn driver_socket() -> PathBuf {
     runtime_dir().join("lxd-driver.sock")
 }
 
+/// The agent's memory and conversations on the host (its catalog
+/// state_dir): ~/.local/state/umoja/agents/hermes-home.
+pub fn agent_home() -> PathBuf {
+    state_dir().join(format!("{}-home", crate::catalog::active().id))
+}
+
 /// The agent's own folder on the host: ~/Agents/Hermes.
 pub fn workspace() -> PathBuf {
     std::env::var_os("UMOJA_AGENTS_WORKSPACE")

@@ -292,21 +292,23 @@ impl Agent {
         match exists {
             None => {
                 self.set_step(&format!("Downloading {} (first time only)", catalog::active().name)).await;
-                let mem = paths::memory_cap_mb();
-                gw.clone()
-                    .create(
-                        &paths::sandbox(),
-                        &CreateOptions {
-                            image: paths::image(),
-                            memory_mb: mem,
-                            command: catalog::active().command.clone(),
-                            labels: vec![("umoja.agent".into(), catalog::active().id.clone())],
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                    .with_context(|| format!("Couldn't create {n}'s sandbox", n = catalog::active().name))?;
-                self.state.lock().await.memory_mb = mem;
+                self.create_sandbox(&gw).await?;
+            }
+            // A new image (an Umoja update): the sandbox is made again from
+            // it. The agent's memory is kept on the host (state_dir), and
+            // its folder and shares are mounted again.
+            Some(info) if !paused && !info.image.is_empty() && !same_image(&info.image, &paths::image()) => {
+                tracing::info!(from = %info.image, to = %paths::image(), "new agent image: making the sandbox again");
+                self.set_step(&format!("Updating {}", catalog::active().name)).await;
+                gw.clone().delete(&paths::sandbox()).await?;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+                while gw.clone().list().await?.iter().any(|s| s.name == paths::sandbox()) {
+                    if tokio::time::Instant::now() > deadline {
+                        bail!("{n}'s old sandbox didn't go away. Restart this computer, then try again.", n = catalog::active().name);
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                self.create_sandbox(&gw).await?;
             }
             Some(info) if info.state == Phase::Stopped && !paused => {
                 self.set_step(&format!("Starting {n}'s sandbox", n = catalog::active().name)).await;
@@ -345,10 +347,10 @@ impl Agent {
             self.apply_policy(&gw).await?;
         }
         self.set_step(&format!("Sharing ~/Agents/{n}", n = catalog::active().name)).await;
-        self.mount_folders().await?;
+        let home_added = self.mount_folders().await?;
 
         self.set_step(&format!("Connecting {n} to the model", n = catalog::active().name)).await;
-        if configure || !bridge::health(&gw).await {
+        if configure || home_added || !bridge::health(&gw).await {
             self.write_config(&gw).await?;
             bridge::restart(&gw).await.ok();
         }
@@ -491,9 +493,37 @@ impl Agent {
         });
     }
 
-    async fn mount_folders(&self) -> Result<()> {
+    async fn create_sandbox(&self, gw: &Gateway) -> Result<()> {
+        let mem = paths::memory_cap_mb();
+        gw.clone()
+            .create(
+                &paths::sandbox(),
+                &CreateOptions {
+                    image: paths::image(),
+                    memory_mb: mem,
+                    command: catalog::active().command.clone(),
+                    labels: vec![("umoja.agent".into(), catalog::active().id.clone())],
+                    ..Default::default()
+                },
+            )
+            .await
+            .with_context(|| format!("Couldn't create {n}'s sandbox", n = catalog::active().name))?;
+        self.state.lock().await.memory_mb = mem;
+        Ok(())
+    }
+
+    /// Returns true when the agent's home was just mounted (the agent must
+    /// restart to use it).
+    async fn mount_folders(&self) -> Result<bool> {
         let workspace = paths::workspace();
         std::fs::create_dir_all(&workspace)?;
+        let state_dir = catalog::active().state_dir.clone();
+        let home = paths::agent_home();
+        if !state_dir.is_empty() {
+            std::fs::create_dir_all(&home)?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
+        }
         // A shared folder that was deleted or moved since is let go, so it
         // can't stop the agent from starting.
         let shared = {
@@ -511,7 +541,7 @@ impl Agent {
             }
             s.shared.clone()
         };
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        tokio::task::spawn_blocking(move || -> Result<bool> {
             let lxd = Lxd::new(&paths::lxd_project());
             let (workload, _) = lxd.sandbox(&paths::sandbox())?;
             let workload = workload.ok_or_else(|| anyhow!("can't find {n}'s container in LXD", n = catalog::active().name))?;
@@ -521,6 +551,9 @@ impl Agent {
                 SANDBOX_WORKSPACE.to_owned(),
                 false,
             )];
+            if !state_dir.is_empty() {
+                wanted.push((HOME_DEVICE.to_owned(), home.display().to_string(), state_dir.clone(), false));
+            }
             for s in &shared {
                 wanted.push((device_for(&s.inside), s.path.clone(), s.inside.clone(), !s.writable));
             }
@@ -533,6 +566,7 @@ impl Agent {
                     }
                 }
             }
+            let mut home_added = false;
             for (device, source, path, readonly) in wanted {
                 let have = workload.devices.get(&device);
                 if have.is_some_and(|d| d.get("source") == Some(&source)) {
@@ -540,8 +574,9 @@ impl Agent {
                 }
                 lxd.add_disk(&workload.name, &device, &source, &path, readonly)
                     .with_context(|| format!("Couldn't share {source} with {n}", n = catalog::active().name))?;
+                home_added |= device == HOME_DEVICE;
             }
-            Ok(())
+            Ok(home_added)
         })
         .await?
     }
@@ -2157,6 +2192,16 @@ fn random_key() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     (0..32).map(|_| format!("{:02x}", rng.random::<u8>())).collect()
+}
+
+/// The agent's home inside the sandbox, as an LXD disk device.
+const HOME_DEVICE: &str = "umoja-agent-home";
+
+/// Whether two image references name the same image ("name:tag", ignoring
+/// how the registry is spelled).
+fn same_image(a: &str, b: &str) -> bool {
+    let last = |s: &str| s.rsplit('/').next().unwrap_or(s).to_owned();
+    last(a) == last(b)
 }
 
 /// A short key for approval `id`, for Telegram's 64-byte button data.

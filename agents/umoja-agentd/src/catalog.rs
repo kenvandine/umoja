@@ -46,6 +46,11 @@ pub struct AgentKind {
     /// that stay blocked without a consent card.
     #[serde(default)]
     pub quiet_hosts: Vec<String>,
+    /// Where the agent keeps its own memory and conversations inside the
+    /// sandbox ("/sandbox/.hermes"): kept on the host, so a new image
+    /// (an update) doesn't lose them.
+    #[serde(default)]
+    pub state_dir: String,
 }
 
 fn default_command() -> Vec<String> {

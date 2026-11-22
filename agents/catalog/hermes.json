@@ -2,7 +2,7 @@
   "id": "hermes",
   "name": "Hermes",
   "description": "Nous Research's personal agent: research, writing and chores in the background.",
-  "image": "ghcr.io/kenvandine/umoja-hermes:046c3e7fd422ebae447a17ab0c4ef55de6f471cf",
+  "image": "ghcr.io/kenvandine/umoja-hermes:15a0689f45a5c2fc4a5a12761480dc1e96fc7a12",
   "command": [
     "/usr/local/bin/umoja-agent-start"
   ],
@@ -15,6 +15,7 @@
   "messaging": [
     "telegram"
   ],
+  "state_dir": "/sandbox/.hermes",
   "quiet_hosts": [
     "hermes-agent.nousresearch.com",
     "nousresearch.github.io"
