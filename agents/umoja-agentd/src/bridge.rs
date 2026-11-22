@@ -65,19 +65,33 @@ pub async fn bridge(
     if let Some(body) = body {
         environment.push(("UMOJA_BODY".into(), body.to_string()));
     }
-    let (_input, mut output) = gw
-        .exec_interactive(
-            &crate::paths::sandbox(),
-            ExecOptions {
-                command,
-                workdir: String::new(),
-                environment,
-                cols: 1000,
-                rows: 40,
-            },
-        )
-        .await
-        .map_err(|e| anyhow!("sandbox exec: {e}"))?;
+    // Right after the daemon (so the guardrails) restarts, the sandbox's
+    // supervisor is still registered with the previous guardrails process
+    // until it reconnects, a few seconds later; until then an exec is
+    // refused before anything runs. Wait for it rather than fail.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let (_input, mut output) = loop {
+        let started = gw
+            .exec_interactive(
+                &crate::paths::sandbox(),
+                ExecOptions {
+                    command: command.clone(),
+                    workdir: String::new(),
+                    environment: environment.clone(),
+                    cols: 1000,
+                    rows: 40,
+                },
+            )
+            .await;
+        match started {
+            Ok(io) => break io,
+            Err(e) if supervisor_moving(&e.to_string()) && std::time::Instant::now() < until => {
+                tracing::debug!(error = %e, "sandbox supervisor not reconnected yet, waiting");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(e) => bail!("sandbox exec: {e}"),
+        }
+    };
     let mut buffer = Vec::<u8>::new();
     loop {
         match output.next().await.map_err(|e| anyhow!("sandbox exec: {e}"))? {
@@ -104,6 +118,12 @@ pub async fn bridge(
             }
         }
     }
+}
+
+/// The guardrails refusing an exec because the sandbox's supervisor is
+/// still with an earlier guardrails process (it reconnects shortly).
+fn supervisor_moving(error: &str) -> bool {
+    error.contains("owned by gateway replica") || error.contains("advertises no peer endpoint")
 }
 
 /// `@@{...}` → the JSON; anything else (TTY noise, Python warnings) → None.
