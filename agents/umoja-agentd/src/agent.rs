@@ -1417,7 +1417,39 @@ impl Agent {
 
     // ---- lifecycle ----
 
+    /// Returns at once: stopping or starting the sandbox can take a minute,
+    /// longer than a D-Bus call waits. The shell follows `switching`.
+    /// Presses while one is under way do nothing.
     pub async fn set_paused(self: &Arc<Self>, paused: bool) -> Result<()> {
+        {
+            let mut s = self.state.lock().await;
+            if !s.switching.is_empty() || s.paused == paused {
+                return Ok(());
+            }
+            s.switching = if paused { "pausing" } else { "resuming" }.into();
+        }
+        self.changed().await;
+        let this = self.clone();
+        tokio::spawn(async move {
+            let res = this.switch_paused(paused).await;
+            let mut s = this.state.lock().await;
+            s.switching.clear();
+            if let Err(e) = res {
+                tracing::error!(error = %format!("{e:#}"), paused, "couldn't pause or resume");
+                if !paused {
+                    // Back to paused, so Resume can be pressed again.
+                    s.paused = true;
+                    s.sandbox = "error".into();
+                    s.error = for_people(&e);
+                }
+            }
+            drop(s);
+            this.changed().await;
+        });
+        Ok(())
+    }
+
+    async fn switch_paused(self: &Arc<Self>, paused: bool) -> Result<()> {
         let _guard = self.lifecycle.lock().await;
         let gw = self.gateway().await?;
         if paused {
@@ -1450,7 +1482,11 @@ impl Agent {
             self.changed().await;
             gw.clone().stop(&paths::sandbox()).await?;
         } else {
-            self.state.lock().await.paused = false;
+            {
+                let mut s = self.state.lock().await;
+                s.paused = false;
+                s.error.clear();
+            }
             self.changed().await;
             gw.clone().start(&paths::sandbox()).await?;
             self.wait_running(&gw, Duration::from_secs(300)).await?;

@@ -79,6 +79,9 @@ pub struct State {
     pub preset: String,
     #[serde(default)]
     pub paused: bool,
+    /// "pausing" or "resuming" while the sandbox stops or starts.
+    #[serde(default)]
+    pub switching: String,
     #[serde(default)]
     pub sandbox: String,
     #[serde(default)]
@@ -127,6 +130,11 @@ impl State {
         }
         if self.setup == "error" {
             return i18n::umoja("Needs attention");
+        }
+        match self.switching.as_str() {
+            "pausing" => return i18n::umoja("Pausing…"),
+            "resuming" => return i18n::umoja("Resuming…"),
+            _ => {}
         }
         if self.paused {
             return i18n::umoja("Paused");
@@ -334,6 +342,7 @@ pub fn quick_tile(make: fn(&str, &str) -> gtk::ToggleButton) -> gtk::ToggleButto
             t.set_visible(state.setup == "ready");
             syncing.set(true);
             t.set_active(!state.paused);
+            t.set_sensitive(state.switching.is_empty());
             syncing.set(false);
             let text = format!("{}: {}", state.name(), state.summary());
             crate::network::set_tile_subtitle(&t, &text);
@@ -464,6 +473,7 @@ impl Pill {
             i18n::umoja("Pause {name}").replace("{name}", &name)
         }));
         self.pause.set_visible(state.setup == "ready");
+        self.pause.set_sensitive(state.switching.is_empty());
 
         self.fill_problem(&state);
         let shown_tasks = tasks_shown(&state.tasks);

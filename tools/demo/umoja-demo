@@ -2149,7 +2149,10 @@ class Demo:
             return False
         if s.get("paused"):
             log("  resuming the paused background agent")
-            self.bus.call(AGENTS, "SetPaused", GLib.Variant("(b)", (False,)), timeout=400_000)
+            self.bus.call(AGENTS, "SetPaused", GLib.Variant("(b)", (False,)))
+            deadline = time.monotonic() + 420
+            while self.agent_state().get("switching") and time.monotonic() < deadline:
+                time.sleep(2)
         return True
 
     def agent_name(self):

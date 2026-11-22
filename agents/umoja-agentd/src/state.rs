@@ -204,6 +204,9 @@ pub struct State {
     pub model: String,
     #[serde(default)]
     pub paused: bool,
+    /// "pausing" or "resuming" while the sandbox stops or starts.
+    #[serde(default, skip_deserializing)]
+    pub switching: String,
     /// Sandbox phase as OpenShell reports it: running, stopped, starting…
     #[serde(default)]
     pub sandbox: String,

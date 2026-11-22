@@ -337,7 +337,12 @@ class Run:
         if s.get("setup") == "ready" and not s.get("paused"):
             return s
         if s.get("paused"):
-            self.agent("SetPaused", "(b)", False, timeout=400_000)
+            # SetPaused returns at once; "switching" clears when it's done.
+            self.agent("SetPaused", "(b)", False)
+            self.wait_for(lambda: (lambda s: s if not s.get("switching") else None)(self.state()), 420, "Resume")
+            s = self.state()
+            if s.get("setup") == "ready" and not s.get("paused"):
+                return s
         elif s.get("setup") != "working":
             self.agent("Setup", "(s)", "balanced")
         s = self.wait_for(lambda: (lambda s: s if s.get("setup") in ("ready", "error") else None)(self.state()),
@@ -755,8 +760,14 @@ def t_pause(run):
     run.ensure_ready()
     tid = run.submit("Wait a bit [[slow 300]]")
     run.wait(5)
-    run.agent("SetPaused", "(b)", True, timeout=300_000)
-    s = run.wait_for(lambda: (lambda s: s if s.get("paused") else None)(run.state()), 60, "paused")
+    t0 = time.monotonic()
+    run.agent("SetPaused", "(b)", True)
+    run.check(time.monotonic() - t0 < 5, f"SetPaused answers at once ({time.monotonic() - t0:.1f} s)")
+    s = run.state()
+    run.check(s.get("switching") == "pausing", "the state says it's pausing", s.get("switching"))
+    run.agent("SetPaused", "(b)", False)  # ignored while pausing
+    s = run.wait_for(lambda: (lambda s: s if s.get("paused") and not s.get("switching") else None)(run.state()),
+                     300, "paused")
     run.menu(True)
     run.shot("paused", "Agents paused")
     run.menu(False)
@@ -764,9 +775,9 @@ def t_pause(run):
     code, out = run.lxc("list", "--format", "csv", "-c", "ns")
     run.check("RUNNING" not in out, "the container isn't running", out)
     run.save_state("paused")
-    run.agent("SetPaused", "(b)", False, timeout=400_000)
-    run.wait_for(lambda: (lambda s: s if not s.get("paused") and s.get("setup") == "ready" else None)(run.state()),
-                 120, "resumed")
+    run.agent("SetPaused", "(b)", False)
+    run.wait_for(lambda: (lambda s: s if not s.get("paused") and not s.get("switching") else None)(run.state()),
+                 420, "resumed")
     code, out = run.lxc("list", "--format", "csv", "-c", "ns")
     run.check("RUNNING" in out, "the container runs again", out)
     if not run.opts.real_model:
