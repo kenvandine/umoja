@@ -13,6 +13,20 @@ use gtk4 as gtk;
 use serde_json::Value;
 use umoja_common::i18n;
 
+thread_local! {
+    /// The set-up agent's name and whether it's ready, for "@agent" rows.
+    static CURRENT: RefCell<(String, bool)> = RefCell::default();
+}
+
+/// The agent "@agent" goes to ("Hermes"), and whether it's set up. None
+/// until umoja-agentd has answered once.
+pub fn current() -> Option<(String, bool)> {
+    CURRENT.with(|c| {
+        let c = c.borrow();
+        (!c.0.is_empty()).then(|| c.clone())
+    })
+}
+
 const BUS: &str = "org.umoja.Agents";
 const PATH: &str = "/org/umoja/Agents";
 const IFACE: &str = "org.umoja.Agents";
@@ -87,6 +101,8 @@ impl BackgroundAgentRow {
             filling: Cell::new(false),
         });
         row.watch();
+        // Know the agent's name before the settings are first opened.
+        row.refresh();
         {
             let weak = Rc::downgrade(&row);
             row.agent.connect_selected_notify(move |_| {
@@ -207,6 +223,7 @@ impl BackgroundAgentRow {
         let setup = state["setup"].as_str().unwrap_or("none").to_owned();
         let preset = state["preset"].as_str().unwrap_or("balanced");
         let name = state["agent_name"].as_str().filter(|n| !n.is_empty()).unwrap_or("Hermes").to_owned();
+        CURRENT.with(|c| *c.borrow_mut() = (name.clone(), state["setup"] == "ready"));
         let current = state["agent"].as_str().unwrap_or_default();
         let agents: Vec<(String, String)> = state["agents"]
             .as_array()

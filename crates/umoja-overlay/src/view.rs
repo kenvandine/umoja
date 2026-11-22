@@ -98,6 +98,13 @@ enum Item {
     },
     /// A named setup (umoja-mcp's open_setup).
     Setup(String),
+    /// "@hermes …": hand `task` to a background agent; without a task yet,
+    /// picking it completes the mention.
+    Agent {
+        mention: String,
+        name: String,
+        task: Option<String>,
+    },
 }
 
 /// Names of the saved setups (`~/.config/umoja/setups.json`, written by
@@ -1438,6 +1445,14 @@ impl Overlay {
             }
             return out;
         }
+        // "@…": which background agent it goes to, while still typing.
+        if let Some(rows) = agent_rows(text) {
+            out.extend(rows.into_iter().map(Entry::Item));
+            if !text.trim_start_matches('@').is_empty() {
+                out.push(ask_row(i18n::umoja("Ask Umoja: “%s”").replace("%s", text), i18n::umoja("Tab")));
+            }
+            return out;
+        }
         let focus = self.focused_app();
         let usage = self.usage.borrow();
 
@@ -1739,6 +1754,21 @@ impl Overlay {
                 String::new(),
                 i18n::umoja("Web"),
             ),
+            Item::Agent { name, task: Some(task), .. } => (
+                i18n::umoja("Hand to {name}: “{task}”").replace("{name}", name).replace("{task}", task),
+                i18n::umoja("Works on it in the background, in its sandbox · Enter"),
+                i18n::umoja("Background agent"),
+            ),
+            Item::Agent { name, mention, task: None } => (
+                i18n::umoja("Hand a job to {name}").replace("{name}", name),
+                match crate::background_agent::current() {
+                    Some((_, false)) if mention == "agent" => {
+                        i18n::umoja("Set it up first, in Ask Umoja's settings")
+                    }
+                    _ => i18n::umoja("Type what it should do"),
+                },
+                i18n::umoja("Background agent"),
+            ),
         }
     }
 
@@ -1762,6 +1792,8 @@ impl Overlay {
             // Ours (data/icons): no fallbacks, or Yaru's would win.
             Item::Ask { .. } => gtk::Image::from_icon_name("umoja-ask-symbolic"),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
+            // Ours (data/icons): no fallbacks.
+            Item::Agent { .. } => gtk::Image::from_icon_name("umoja-agents-symbolic"),
             Item::Setup(_) => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "view-grid-symbolic",
                 "focus-windows-symbolic",
@@ -1778,7 +1810,7 @@ impl Overlay {
         icon.set_accessible_role(gtk::AccessibleRole::Presentation);
         let icon_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         icon_box.add_css_class("ask-icon");
-        if matches!(item, Item::Ask { .. }) {
+        if matches!(item, Item::Ask { .. } | Item::Agent { .. }) {
             icon_box.add_css_class("ask-icon-accent");
         }
         icon_box.set_valign(gtk::Align::Center);
@@ -1900,6 +1932,12 @@ impl Overlay {
                 }
             }
             Item::Ask { question, .. } => self.ask(&question),
+            Item::Agent { task: Some(task), .. } => self.hand_to_agent(task),
+            Item::Agent { mention, task: None, .. } => {
+                let text = format!("@{mention} ");
+                self.entry.set_text(&text);
+                self.entry.set_position(-1);
+            }
             Item::Rewrite { instruction, .. } => self.rewrite(&instruction),
             Item::Setup(name) => self.call_tool("open_setup", serde_json::json!({ "name": name }), None),
             Item::Web(q) => {
@@ -3669,6 +3707,66 @@ fn agent_ids() -> Vec<String> {
     ids
 }
 
+/// The rows for a prompt starting with "@": the agent a complete mention
+/// goes to (with the task once there is one), or every agent the partial
+/// word could be. None when it isn't about an agent.
+fn agent_rows(text: &str) -> Option<Vec<Item>> {
+    agent_rows_for(text, &agent_ids())
+}
+
+fn agent_rows_for(text: &str, ids: &[String]) -> Option<Vec<Item>> {
+    let p = text.trim_start().strip_prefix('@')?;
+    let word_len = p.find(|c: char| !c.is_ascii_alphanumeric() && c != '-').unwrap_or(p.len());
+    let word = &p[..word_len];
+    let typed_on = word_len < p.len();
+    let exact = ids.iter().find(|i| i.eq_ignore_ascii_case(word));
+    let item = |id: &str, task: Option<String>| Item::Agent {
+        mention: id.to_owned(),
+        name: agent_display_name(id),
+        task,
+    };
+    if let Some(id) = exact {
+        if typed_on || word_len > 0 {
+            return Some(vec![item(id, agent_task_for(text, ids))]);
+        }
+    }
+    if typed_on {
+        // "@someone else …": not ours.
+        return None;
+    }
+    let mut names = Vec::new();
+    let matches: Vec<Item> = ids
+        .iter()
+        .filter(|i| i.to_lowercase().starts_with(&word.to_lowercase()))
+        .map(|i| item(i, None))
+        // "@agent" and "@hermes" are one agent when Hermes is the one set up.
+        .filter(|it| match it {
+            Item::Agent { name, .. } if names.contains(name) => false,
+            Item::Agent { name, .. } => {
+                names.push(name.clone());
+                true
+            }
+            _ => true,
+        })
+        .collect();
+    (!matches.is_empty()).then_some(matches)
+}
+
+/// "Hermes" for "@hermes" (its catalog name) and for "@agent" (whichever
+/// is set up).
+fn agent_display_name(id: &str) -> String {
+    if id == "agent" {
+        return crate::background_agent::current()
+            .map(|(n, _)| n)
+            .unwrap_or_else(|| i18n::umoja("your background agent"));
+    }
+    std::fs::read_to_string(format!("/usr/share/umoja/agents/catalog/{id}.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["name"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| capitalize(id))
+}
+
 /// The task in "@hermes plan a trip" ("@Agent, ..." too), if the prompt is
 /// addressed to a background agent.
 pub fn agent_task(prompt: &str) -> Option<String> {
@@ -3688,7 +3786,22 @@ fn agent_task_for(prompt: &str, ids: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod agent_prefix_tests {
-    use super::agent_task_for;
+    use super::{Item, agent_rows_for, agent_task_for};
+
+    #[test]
+    fn rows_while_typing() {
+        let ids: Vec<String> = ["agent", "hermes", "picoclaw"].iter().map(|s| s.to_string()).collect();
+        let task = |t: &str| match agent_rows_for(t, &ids).as_deref() {
+            Some([Item::Agent { task, mention, .. }]) => Some((mention.clone(), task.clone())),
+            _ => None,
+        };
+        assert_eq!(task("@agent"), Some(("agent".into(), None)));
+        assert_eq!(task("@hermes plan a trip"), Some(("hermes".into(), Some("plan a trip".into()))));
+        assert_eq!(task("@pico"), Some(("picoclaw".into(), None)));
+        assert!(agent_rows_for("@", &ids).is_some_and(|r| r.len() >= 2));
+        assert!(agent_rows_for("@bob hello", &ids).is_none());
+        assert!(agent_rows_for("plan a trip", &ids).is_none());
+    }
 
     #[test]
     fn prefix() {
