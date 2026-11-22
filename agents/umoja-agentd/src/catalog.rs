@@ -42,6 +42,10 @@ pub struct AgentKind {
     /// Chat platforms its bridge can connect ("telegram").
     #[serde(default)]
     pub messaging: Vec<String>,
+    /// Sites the agent fetches for itself (update checks, plugin catalogs)
+    /// that stay blocked without a consent card.
+    #[serde(default)]
+    pub quiet_hosts: Vec<String>,
 }
 
 fn default_command() -> Vec<String> {

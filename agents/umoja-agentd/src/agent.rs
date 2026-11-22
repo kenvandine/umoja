@@ -341,13 +341,13 @@ impl Agent {
         };
         let mut gw = gw.clone();
         for (host, port) in self.model_endpoints().await {
-            gw.add_rule(&paths::sandbox(), &host, port, None).await.context("model rule")?;
+            gw.add_rule(&paths::sandbox(), &host, port, Some(ANY_PROGRAM)).await.context("model rule")?;
         }
         for (host, port) in preset.open_sites() {
-            gw.add_rule(&paths::sandbox(), host, *port, None).await?;
+            gw.add_rule(&paths::sandbox(), host, *port, Some(ANY_PROGRAM)).await?;
         }
         if messaging.as_ref().is_some_and(|m| m.platform == "telegram") {
-            gw.add_rule(&paths::sandbox(), "api.telegram.org", 443, None).await?;
+            gw.add_rule(&paths::sandbox(), "api.telegram.org", 443, Some(ANY_PROGRAM)).await?;
         }
         if let Err(e) = gw.set_auto_approve(&paths::sandbox(), preset.auto_approve()).await {
             tracing::warn!(error = %e, "couldn't set OpenShell auto-approval");
@@ -387,7 +387,9 @@ impl Agent {
             ("UMOJA_APPROVALS", catalog::active().approval_mode(s.preset)),
             ("UMOJA_AGENT_KEY", s.private.api_key.clone()),
         ];
-        if local && std::env::var_os("UMOJA_AGENTS_MODEL_PORT").is_none() {
+        // Always say how big the context is: otherwise Hermes looks the model
+        // up on OpenRouter, a site the sandbox would have to ask for.
+        if local {
             env.push(("UMOJA_MODEL_CONTEXT", context_for_agent().to_string()));
         }
         let token;
@@ -486,7 +488,15 @@ impl Agent {
                 Phase::Transitioning => s.info.phase.to_lowercase(),
             })
             .unwrap_or_default();
-        let proposals = mine.map(|s| s.proposals).unwrap_or_default();
+        let mut proposals = mine.map(|s| s.proposals).unwrap_or_default();
+        // Sites the agent reaches for on its own (update checks, catalogs)
+        // stay blocked without asking the user.
+        let quiet = catalog::active().quiet_hosts.clone();
+        for p in proposals.iter().filter(|p| quiet.iter().any(|h| h.eq_ignore_ascii_case(&p.host))) {
+            tracing::debug!(host = %p.host, "turning down the agent's own background fetch");
+            let _ = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await;
+        }
+        proposals.retain(|p| !quiet.iter().any(|h| h.eq_ignore_ascii_case(&p.host)));
 
         // Supervisors allowed on the model relay, and memory, every ~6 s.
         let mut memory = None;
@@ -1453,6 +1463,11 @@ fn fill_agent_info(s: &mut State) {
 
 /// A task interrupted by sleep is carried on at most this often.
 const MAX_CARRY_ON: u32 = 2;
+
+/// The program a network rule applies to: any in the sandbox. OpenShell
+/// matches a rule only for the programs it lists, so a rule with none
+/// allows nothing (only a proposal the user allows names one program).
+const ANY_PROGRAM: &str = "/**";
 /// Running fine this long after waking: it no longer counts as interrupted.
 const CARRY_ON_WINDOW: Duration = Duration::from_secs(10 * 60);
 

@@ -18,13 +18,16 @@ Hermes in particular. An agent is two things:
      "command": ["/usr/local/bin/umoja-agent-start"],
      "min_context": 65536,
      "approval_modes": { "careful": "manual", "balanced": "smart", "hands-off": "smart" },
-     "messaging": ["telegram"]
+     "messaging": ["telegram"],
+     "quiet_hosts": ["hermes-agent.nousresearch.com"]
    }
    ```
 
    `id` names the sandbox and the `@id` hand-off in Ask Umoja (`@agent`
    always works too). `min_context` is the smallest model context the agent
    accepts; the local model is loaded with at least that much.
+   `quiet_hosts` are sites the agent fetches for itself (update checks,
+   plugin catalogs): Umoja keeps them blocked without asking the user.
    `approval_modes` maps Umoja's presets onto the agent's own approval
    setting, which the bridge receives as `UMOJA_APPROVALS`.
 

@@ -163,6 +163,9 @@ def yaml_str(s):
     return json.dumps(str(s))  # JSON strings are valid YAML scalars
 
 
+AUX_TASKS = ("vision", "web_extract", "compression", "title_generation", "curator", "background_review")
+
+
 def cmd_configure():
     """Writes Hermes's config from the settings Umoja sent."""
     env = read_env()
@@ -184,6 +187,13 @@ def cmd_configure():
         "  api_key: " + yaml_str(env.get("UMOJA_MODEL_KEY") or "none"),
     ] + (["  context_length: " + str(int(env["UMOJA_MODEL_CONTEXT"]))]
          if env.get("UMOJA_MODEL_CONTEXT", "").isdigit() else []) + [
+        # Side tasks (summaries, titles, compression, images) use the same
+        # model, never Hermes's default OpenRouter route, and Hermes doesn't
+        # fetch its model catalog: the sandbox would have to ask for both.
+        "auxiliary:",
+    ] + ["  %s:\n    provider: main" % t for t in AUX_TASKS] + [
+        "model_catalog:",
+        "  enabled: false",
         "terminal:",
         "  backend: local",
         "  cwd: /sandbox/workspace",
