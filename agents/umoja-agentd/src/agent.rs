@@ -237,6 +237,8 @@ impl Agent {
         let project = paths::lxd_project();
         let lxd = Lxd::new(&project);
 
+        // An earlier start's error (saved with the state) isn't this one's.
+        self.state.lock().await.error.clear();
         self.set_step("Checking this computer").await;
         match tokio::task::spawn_blocking({
             let project = project.clone();
