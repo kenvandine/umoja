@@ -117,6 +117,7 @@ endif
 	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
 	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
 	install -D -m 0644 data/90_umoja.gschema.override $(DESKTOP)/usr/share/glib-2.0/schemas/90_umoja.gschema.override
+	install -D -m 0644 data/umoja-mimeapps.list $(DESKTOP)/usr/share/applications/umoja-mimeapps.list
 	# Ubuntu's extension schemas (dock, tiling, appindicator, desktop icons)
 	# with Ubuntu's and Umoja's dock defaults, for systems without GNOME
 	# Shell. umoja-session adds this directory to XDG_DATA_DIRS only when

@@ -1,0 +1,6 @@
+# Umoja's default apps. Per the XDG mime-apps spec, umoja-mimeapps.list is read
+# because XDG_CURRENT_DESKTOP starts with "Umoja"; a user's own choice in
+# ~/.config/mimeapps.list still wins.
+[Default Applications]
+text/markdown=org.gnome.gitlab.somas.Apostrophe.desktop
+text/x-markdown=org.gnome.gitlab.somas.Apostrophe.desktop
