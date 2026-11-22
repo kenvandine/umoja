@@ -1543,8 +1543,14 @@ impl Agent {
         // only cluttered ~/Agents/<Name>).
         if status == TaskStatus::Done && files.is_empty() {
             let s = self.state.lock().await;
+            // Named by its path, or as people say it ("your Downloads
+            // folder").
             let worked_in = s.shared.iter().find(|sh| {
-                sh.writable && (result.contains(&sh.inside) || host_words(result, &s.shared).contains(&tilde(&sh.path)))
+                let name = Path::new(&sh.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                sh.writable
+                    && (result.contains(&sh.inside)
+                        || host_words(result, &s.shared).contains(&tilde(&sh.path))
+                        || (!name.is_empty() && result.contains(&name)))
             });
             if let Some(sh) = worked_in {
                 files.push(PathBuf::from(&sh.path));

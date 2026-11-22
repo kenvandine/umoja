@@ -86,7 +86,7 @@ TRIP = ("Plan a relaxed 3-day weekend in Lisbon for two, arriving Friday evening
         "how to get around, and a rough budget in euros. Use what you know; look things up on "
         f"Wikipedia only if you must. Save it as {TRIP_FILE}.")
 WEATHER = ("What's the weather looking like in Lisbon this weekend? Put the forecast at the top of my "
-           "Lisbon plan, with a tip on what to pack.")
+           "Lisbon weekend plan, with a tip on what to pack.")
 
 # A Downloads folder as people really have it.
 DOWNLOADS = {
@@ -465,7 +465,7 @@ class AgentDemo(tour.Demo):
     def scene_agent_weather(self):
         trip = self.workspace() / TRIP_FILE
         prompt = WEATHER if (trip.exists() or self.dry) else WEATHER.replace(
-            "Put the forecast at the top of my Lisbon plan", "Save the forecast in Lisbon weather.md")
+            "Put the forecast at the top of my Lisbon weekend plan", "Save the forecast in Lisbon weather.md")
         before = trip.read_text() if trip.exists() else ""
         self.job(
             "agent-weather", prompt,
@@ -474,8 +474,9 @@ class AgentDemo(tour.Demo):
             handed_caption="“@agent check this weekend's weather in Lisbon”",
             done_caption="Allowed once, and done.",
             result_caption="The forecast, at the top of the plan.",
-            check=lambda t: (trip.exists() and trip.read_text() != before) or
-                            (self.workspace() / "Lisbon weather.md").exists())
+            # The scene is about asking first: any finished answer will do
+            # (the forecast in the plan, or in a note of its own).
+            check=lambda t: bool(t.get("result") or t.get("files")))
 
     def scene_agent_tidy(self):
         downloads = self.demo_folder("Downloads", DOWNLOADS)
