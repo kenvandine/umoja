@@ -1,19 +1,25 @@
 #!/opt/hermes/.venv/bin/python3
-"""Umoja's only way to talk to Hermes.
+"""The Umoja agent bridge (protocol v1) for Hermes.
 
-The sandbox has no network card the host can reach, so umoja-agentd runs
-this through OpenShell's exec API (under the sandbox's own policy). It
-talks to Hermes's API server on the sandbox's loopback and prints each
-answer as one `@@{json}` line; everything else on stdout is ignored.
+umoja-agentd speaks one protocol to every agent (see
+agents/umoja-agentd/src/bridge.rs and agents/README.md); this script maps
+it onto Hermes's API server on the sandbox's loopback. The sandbox has no
+network card the host can reach, so umoja-agentd runs this through
+OpenShell's exec API, under the sandbox's own policy. Each answer is one
+`@@{json}` line; everything else on stdout is ignored.
 
   health                 @@{"ok": bool}
-  get PATH               @@{"status": int, "body": json}
-  post PATH              same; request body from $UMOJA_BODY (JSON)
-  events RUN             one @@{"event": name, "data": {...}} per SSE event
-                         until the run ends
+  submit                 $UMOJA_BODY {"input","instructions","session"}
+                         -> @@{"run", "session"}
+  status RUN             -> @@{"status","output","error","session","pending"}
+  events RUN             @@{"event": name, "data": {...}} until the run ends
+  approve                $UMOJA_BODY {"run","id","generation","allow"}
+  answer                 $UMOJA_BODY {"run","id","generation","text"}
+  stop RUN
   write                  $UMOJA_BODY {"path","hex","mode"}: write a file
-  configure              hermes.env -> $HERMES_HOME/config.yaml (+ .env)
+  configure              agent.env -> $HERMES_HOME/config.yaml (+ .env)
   restart                restart `hermes gateway run`
+  get PATH / post PATH   raw Hermes API calls (debugging)
 """
 
 import json
@@ -27,8 +33,8 @@ import urllib.request
 API = "http://127.0.0.1:8642"
 HOME = "/sandbox"
 HERMES_HOME = os.environ.get("HERMES_HOME", "/sandbox/.hermes")
-ENV_FILE = "/sandbox/.config/umoja/hermes.env"
-PID_FILE = "/tmp/umoja-hermes.pid"
+ENV_FILE = "/sandbox/.config/umoja/agent.env"
+PID_FILE = "/tmp/umoja-agent.pid"
 TERMINAL = {"run.completed", "run.failed", "run.cancelled", "run.interrupted"}
 
 
@@ -57,7 +63,7 @@ def read_env():
 
 
 def request(method, path, body=None, timeout=30):
-    key = read_env().get("API_SERVER_KEY", "")
+    key = read_env().get("UMOJA_AGENT_KEY", "")
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(API + path, data=data, method=method)
     req.add_header("Authorization", "Bearer " + key)
@@ -105,7 +111,7 @@ def cmd_events(run_id):
     deadline = time.time() + 6 * 3600
     while time.time() < deadline:
         req = urllib.request.Request("%s/v1/runs/%s/events" % (API, run_id))
-        req.add_header("Authorization", "Bearer " + read_env().get("API_SERVER_KEY", ""))
+        req.add_header("Authorization", "Bearer " + read_env().get("UMOJA_AGENT_KEY", ""))
         req.add_header("Accept", "text/event-stream")
         if last is not None:
             req.add_header("Last-Event-ID", str(last))
@@ -170,7 +176,7 @@ def cmd_configure():
         mode = "manual"
     os.makedirs(HERMES_HOME, exist_ok=True)
     config = "\n".join([
-        "# Written by Umoja (umoja-hermes-bridge configure); edits are replaced.",
+        "# Written by Umoja (umoja-agent-bridge configure); edits are replaced.",
         "model:",
         "  provider: custom",
         "  default: " + yaml_str(model),
@@ -195,9 +201,10 @@ def cmd_configure():
         f.write(config)
     os.replace(path + ".tmp", path)
     # Secrets Hermes reads from its .env (the gateway also gets them from
-    # the environment umoja-hermes-start exports).
-    keep = ("API_SERVER_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS")
-    lines = ["%s=%s" % (k, env[k]) for k in keep if env.get(k)]
+    # the environment umoja-agent-start exports).
+    keep = (("API_SERVER_KEY", "UMOJA_AGENT_KEY"), ("TELEGRAM_BOT_TOKEN", "UMOJA_TELEGRAM_TOKEN"),
+            ("TELEGRAM_ALLOWED_USERS", "UMOJA_TELEGRAM_ALLOWED"))
+    lines = ["%s=%s" % (k, env[u]) for k, u in keep if env.get(u)]
     dotenv = os.path.join(HERMES_HOME, ".env")
     fd = os.open(dotenv + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -205,6 +212,153 @@ def cmd_configure():
     os.replace(dotenv + ".tmp", dotenv)
     out({"ok": True})
     return 0
+
+
+def str_of(d, keys):
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+def pending_of(run):
+    """Hermes's pending_controls (a list or a map) in the protocol's shape."""
+    controls = run.get("pending_controls")
+    items = []
+    if isinstance(controls, list):
+        items = controls
+    elif isinstance(controls, dict):
+        for v in controls.values():
+            items.extend(v if isinstance(v, list) else [v])
+    top_gen = run.get("execution_generation")
+    out_items = []
+    for c in items:
+        if not isinstance(c, dict):
+            continue
+        rid = str_of(c, ("prompt_id", "request_id", "id"))
+        if not rid:
+            continue
+        kind_text = str_of(c, ("kind", "type", "control"))
+        question = "clarif" in kind_text or "question" in c
+        gen = c.get("execution_generation", c.get("generation", top_gen))
+        text = str_of(c, ("command", "question", "prompt", "title", "summary", "tool"))
+        if not text and "arguments" in c:
+            text = json.dumps(c["arguments"])
+        out_items.append({
+            "kind": "question" if question else "approval",
+            "id": rid,
+            "generation": "" if gen is None else str(gen),
+            "text": text,
+            "detail": str_of(c, ("description", "reason", "explanation", "risk", "message")),
+            "choices": c.get("choices") or [],
+        })
+    return out_items
+
+
+def output_of(run):
+    o = run.get("output")
+    if isinstance(o, str):
+        return o.strip()
+    if isinstance(o, dict):
+        return str(o.get("text") or "").strip()
+    if isinstance(o, list):
+        parts = []
+        for i in o:
+            if not isinstance(i, dict):
+                continue
+            if isinstance(i.get("text"), str):
+                parts.append(i["text"])
+            elif isinstance(i.get("content"), list):
+                parts.append("".join(p.get("text", "") for p in i["content"] if isinstance(p, dict)))
+        return "\n".join(parts).strip()
+    return ""
+
+
+STATUS = {"completed": "completed", "failed": "failed", "interrupted": "failed", "cancelled": "cancelled"}
+
+
+def body():
+    return json.loads(os.environ.get("UMOJA_BODY") or "{}")
+
+
+def generation(g):
+    try:
+        return int(g)
+    except (TypeError, ValueError):
+        return g
+
+
+def ok_or_error(status, raw, what):
+    if 200 <= status < 300:
+        out({"ok": True})
+        return 0
+    out({"error": "Hermes refused the %s (%d): %s" % (what, status, raw.decode("utf-8", "replace")[:300])})
+    return 1
+
+
+def cmd_submit():
+    b = body()
+    req = {"input": b.get("input", ""), "instructions": b.get("instructions", "")}
+    if b.get("session"):
+        req["session_id"] = b["session"]
+    status, raw = request("POST", "/v1/runs", req)
+    v = decode(raw)
+    if not (200 <= status < 300) or not isinstance(v, dict):
+        out({"error": "Hermes didn't start the run (%d): %s" % (status, str(v)[:300])})
+        return 1
+    out({"run": v.get("run_id") or v.get("id") or "", "session": v.get("session_id") or ""})
+    return 0
+
+
+def cmd_status(run_id):
+    status, raw = request("GET", "/v1/runs/" + run_id)
+    if status in (404, 410):
+        out({"status": "gone"})
+        return 0
+    v = decode(raw)
+    if not (200 <= status < 300) or not isinstance(v, dict):
+        out({"error": "Hermes didn't report the run (%d)" % status})
+        return 1
+    pending = pending_of(v)
+    state = STATUS.get(v.get("status", ""), "waiting" if pending else "running")
+    err = v.get("error")
+    out({
+        "status": state,
+        "output": output_of(v),
+        "error": err if isinstance(err, str) else (json.dumps(err) if err else ""),
+        "session": v.get("session_id") or "",
+        "pending": pending,
+    })
+    return 0
+
+
+def cmd_approve():
+    b = body()
+    status, raw = request("POST", "/v1/runs/%s/approval" % b["run"], {
+        "request_id": b["id"],
+        "execution_generation": generation(b.get("generation")),
+        "choice": "once" if b.get("allow") else "deny",
+    })
+    return ok_or_error(status, raw, "approval")
+
+
+def cmd_answer():
+    b = body()
+    status, raw = request("POST", "/v1/runs/%s/clarify" % b["run"], {
+        "request_id": b["id"],
+        "execution_generation": generation(b.get("generation")),
+        "answer": b.get("text", ""),
+    })
+    return ok_or_error(status, raw, "answer")
+
+
+def cmd_stop(run_id):
+    status, raw = request("POST", "/v1/runs/%s/stop" % run_id, {})
+    if status in (404, 410):
+        out({"ok": True})
+        return 0
+    return ok_or_error(status, raw, "stop")
 
 
 def cmd_restart():
@@ -228,7 +382,7 @@ def cmd_restart():
 
 def main(argv):
     if not argv:
-        out({"error": "usage: umoja-hermes-bridge VERB [ARGS]"})
+        out({"error": "usage: umoja-agent-bridge VERB [ARGS]"})
         return 2
     verb, args = argv[0], argv[1:]
     try:
@@ -237,6 +391,16 @@ def main(argv):
             return 0
         if verb in ("get", "post") and len(args) == 1:
             return cmd_call(verb.upper(), args[0])
+        if verb == "submit":
+            return cmd_submit()
+        if verb == "status" and len(args) == 1:
+            return cmd_status(args[0])
+        if verb == "approve":
+            return cmd_approve()
+        if verb == "answer":
+            return cmd_answer()
+        if verb == "stop" and len(args) == 1:
+            return cmd_stop(args[0])
         if verb == "events" and len(args) == 1:
             return cmd_events(args[0])
         if verb == "write":

@@ -1,13 +1,14 @@
 #!/bin/sh
-# The sandbox's main process: keep Hermes's gateway (and its API server)
-# running. umoja-agentd writes /sandbox/.config/umoja/hermes.env through
-# the bridge and asks for a restart (`umoja-hermes-bridge restart` kills
-# the running gateway; this loop starts it again with the new settings).
+# The sandbox's main process (Umoja agent protocol v1, Hermes image): keep
+# Hermes's gateway (and its API server) running. umoja-agentd writes
+# /sandbox/.config/umoja/agent.env through the bridge and asks for a
+# restart (`umoja-agent-bridge restart` kills the running gateway; this
+# loop starts it again with the new settings).
 set -u
 export HOME=/sandbox
 export HERMES_HOME="${HERMES_HOME:-/sandbox/.hermes}"
-ENV_FILE=/sandbox/.config/umoja/hermes.env
-PID_FILE=/tmp/umoja-hermes.pid
+ENV_FILE=/sandbox/.config/umoja/agent.env
+PID_FILE=/tmp/umoja-agent.pid
 LOG=/sandbox/.hermes/umoja-gateway.log
 mkdir -p "$HERMES_HOME" /sandbox/workspace /sandbox/.config/umoja /tmp/hermes-runtime
 cd /sandbox/workspace 2>/dev/null || cd /sandbox
@@ -19,11 +20,13 @@ while :; do
         sleep 1
         continue
     fi
-    /usr/local/bin/umoja-hermes-bridge configure >>"$LOG" 2>&1 || { sleep 3; continue; }
+    /usr/local/bin/umoja-agent-bridge configure >>"$LOG" 2>&1 || { sleep 3; continue; }
     (
         set -a
         . "$ENV_FILE"
         set +a
+        export API_SERVER_KEY="${UMOJA_AGENT_KEY:-}"
+        [ -n "${UMOJA_TELEGRAM_TOKEN:-}" ] && export TELEGRAM_BOT_TOKEN="$UMOJA_TELEGRAM_TOKEN" TELEGRAM_ALLOWED_USERS="${UMOJA_TELEGRAM_ALLOWED:-}"
         export API_SERVER_ENABLED=true API_SERVER_HOST=127.0.0.1 API_SERVER_PORT=8642
         exec hermes gateway run
     ) >>"$LOG" 2>&1 &

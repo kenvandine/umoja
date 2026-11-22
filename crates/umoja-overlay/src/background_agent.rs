@@ -1,10 +1,11 @@
-//! "Hermes: [Balanced ▾] Set Up": the background agent (umoja-agents) in
-//! the settings popover. Shows whether Hermes is set up, sets it up with
-//! the chosen guardrail preset, and changes the preset afterwards. Hidden
-//! when umoja-agents isn't installed. Hermes's tasks and consent cards
-//! live in the panel's Agents button; this row is only the setup.
+//! "Background agent: [Hermes ▾] [Balanced ▾] Set Up": the personal agent
+//! umoja-agents runs in a sandbox, in the settings popover. Picks which
+//! agent (Hermes first; whatever umoja-agentd's catalog lists), sets it up
+//! with the chosen guardrail preset, and changes the preset afterwards.
+//! Hidden when umoja-agents isn't installed. The agent's tasks and consent
+//! cards live in the panel's Agents button; this row is only the setup.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::{gio, glib, prelude::*};
@@ -19,18 +20,22 @@ const IFACE: &str = "org.umoja.Agents";
 /// Preset ids, in the dropdown's order.
 const PRESETS: [&str; 3] = ["careful", "balanced", "hands-off"];
 
-pub struct HermesRow {
+pub struct BackgroundAgentRow {
     pub root: gtk::Box,
-    drop: gtk::DropDown,
+    /// Which agent; shown only when there's a choice and none is set up.
+    agent: gtk::DropDown,
+    preset: gtk::DropDown,
     status: gtk::Label,
     action: gtk::Button,
+    /// Agent ids, in the agent dropdown's order.
+    ids: RefCell<Vec<String>>,
     /// The setup state last read ("none", "working", "ready", "error").
-    setup: Rc<std::cell::RefCell<String>>,
-    /// Set while refresh() fills the dropdown, so it doesn't save a pick.
-    filling: Rc<Cell<bool>>,
+    setup: RefCell<String>,
+    /// Set while show() fills the dropdowns, so they don't save a pick.
+    filling: Cell<bool>,
 }
 
-impl HermesRow {
+impl BackgroundAgentRow {
     pub fn new() -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
         root.set_margin_top(6);
@@ -41,16 +46,20 @@ impl HermesRow {
             .xalign(0.0)
             .hexpand(true)
             .tooltip_text(i18n::umoja(
-                "Hermes works on longer jobs in the background, in a sandbox. Type @hermes in Ask Umoja to hand it one.",
+                "An agent that works on longer jobs in the background, in a sandbox. Type @agent in Ask Umoja to hand it one.",
             ))
             .build();
+        let agent = gtk::DropDown::from_strings(&[]);
+        agent.set_visible(false);
+        agent.set_tooltip_text(Some(&i18n::umoja("Which agent to set up")));
         let names = [i18n::umoja("Careful"), i18n::umoja("Balanced"), i18n::umoja("Hands-off")];
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        let drop = gtk::DropDown::from_strings(&refs);
-        drop.set_selected(1);
-        drop.set_tooltip_text(Some(&i18n::umoja("How often Hermes asks you first")));
+        let preset = gtk::DropDown::from_strings(&refs);
+        preset.set_selected(1);
+        preset.set_tooltip_text(Some(&i18n::umoja("How often the agent asks you first")));
         top.append(&label);
-        top.append(&drop);
+        top.append(&agent);
+        top.append(&preset);
         let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let status = gtk::Label::builder()
             .xalign(0.0)
@@ -66,22 +75,43 @@ impl HermesRow {
         root.append(&bottom);
         let row = Rc::new(Self {
             root,
-            drop,
+            agent,
+            preset,
             status,
             action,
-            setup: Rc::default(),
-            filling: Rc::default(),
+            ids: RefCell::default(),
+            setup: RefCell::default(),
+            filling: Cell::new(false),
         });
         {
             let weak = Rc::downgrade(&row);
-            row.drop.connect_selected_notify(move |_| {
+            row.agent.connect_selected_notify(move |_| {
                 let Some(r) = weak.upgrade() else { return };
                 if r.filling.get() {
                     return;
                 }
-                r.status.set_text(&preset_text(r.preset()));
+                let Some(id) = r.ids.borrow().get(r.agent.selected() as usize).cloned() else { return };
+                let weak = Rc::downgrade(&r);
+                call("SetAgent", Some((id,).to_variant()), move |res| {
+                    if let Some(r) = weak.upgrade() {
+                        match res {
+                            Ok(_) => r.refresh(),
+                            Err(e) => r.status.set_text(&e),
+                        }
+                    }
+                });
+            });
+        }
+        {
+            let weak = Rc::downgrade(&row);
+            row.preset.connect_selected_notify(move |_| {
+                let Some(r) = weak.upgrade() else { return };
+                if r.filling.get() {
+                    return;
+                }
+                r.status.set_text(&preset_text(r.preset_id()));
                 if r.setup.borrow().as_str() == "ready" {
-                    call("SetPreset", Some((r.preset(),).to_variant()), |_| {});
+                    call("SetPreset", Some((r.preset_id(),).to_variant()), |_| {});
                 }
             });
         }
@@ -90,9 +120,9 @@ impl HermesRow {
             row.action.connect_clicked(move |_| {
                 let Some(r) = weak.upgrade() else { return };
                 r.action.set_sensitive(false);
-                r.status.set_text(&i18n::umoja("Setting up Hermes…"));
+                r.status.set_text(&i18n::umoja("Setting up…"));
                 let weak = Rc::downgrade(&r);
-                call("Setup", Some((r.preset(),).to_variant()), move |res| {
+                call("Setup", Some((r.preset_id(),).to_variant()), move |res| {
                     if let Some(r) = weak.upgrade() {
                         match res {
                             Ok(_) => r.status.set_text(&i18n::umoja(
@@ -108,11 +138,11 @@ impl HermesRow {
         row
     }
 
-    fn preset(&self) -> &'static str {
-        PRESETS.get(self.drop.selected() as usize).copied().unwrap_or("balanced")
+    fn preset_id(&self) -> &'static str {
+        PRESETS.get(self.preset.selected() as usize).copied().unwrap_or("balanced")
     }
 
-    /// Reads Hermes's state again (each time the popover opens).
+    /// Reads the agent's state again (each time the popover opens).
     pub fn refresh(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         call("GetState", None, move |res| {
@@ -132,13 +162,30 @@ impl HermesRow {
         self.root.set_visible(true);
         let setup = state["setup"].as_str().unwrap_or("none").to_owned();
         let preset = state["preset"].as_str().unwrap_or("balanced");
+        let name = state["agent_name"].as_str().filter(|n| !n.is_empty()).unwrap_or("Hermes").to_owned();
+        let current = state["agent"].as_str().unwrap_or_default();
+        let agents: Vec<(String, String)> = state["agents"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| Some((x["id"].as_str()?.to_owned(), x["name"].as_str()?.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
         self.filling.set(true);
-        self.drop
+        let names: Vec<&str> = agents.iter().map(|(_, n)| n.as_str()).collect();
+        self.agent.set_model(Some(&gtk::StringList::new(&names)));
+        self.agent
+            .set_selected(agents.iter().position(|(id, _)| id == current).unwrap_or(0) as u32);
+        *self.ids.borrow_mut() = agents.iter().map(|(id, _)| id.clone()).collect();
+        self.preset
             .set_selected(PRESETS.iter().position(|p| *p == preset).unwrap_or(1) as u32);
         self.filling.set(false);
+        let set_up = matches!(setup.as_str(), "ready" | "working");
+        self.agent.set_visible(agents.len() > 1 && !set_up);
         let (text, button) = match setup.as_str() {
-            "ready" if state["paused"] == true => (i18n::umoja("Set up, and paused."), None),
-            "ready" => (preset_text(preset), None),
+            "ready" if state["paused"] == true => (format!("{name}: {}", i18n::umoja("set up, and paused.")), None),
+            "ready" => (format!("{name}: {}", preset_text(preset)), None),
             "working" => (
                 format!("{}…", state["step"].as_str().unwrap_or(&i18n::umoja("Setting up"))),
                 None,
@@ -148,7 +195,8 @@ impl HermesRow {
                 Some(i18n::umoja("Try Again")),
             ),
             _ => (
-                i18n::umoja("Not set up. It runs in a sandbox and only sees the folders you share."),
+                i18n::umoja("{name} isn't set up. It runs in a sandbox and only sees the folders you share.")
+                    .replace("{name}", &name),
                 Some(i18n::umoja("Set Up")),
             ),
         };
@@ -174,16 +222,7 @@ fn call(method: &'static str, args: Option<glib::Variant>, done: impl FnOnce(Res
     glib::spawn_future_local(async move {
         let res = match gio::bus_get_future(gio::BusType::Session).await {
             Ok(conn) => conn
-                .call_future(
-                    Some(BUS),
-                    PATH,
-                    IFACE,
-                    method,
-                    args.as_ref(),
-                    None,
-                    gio::DBusCallFlags::NONE,
-                    30_000,
-                )
+                .call_future(Some(BUS), PATH, IFACE, method, args.as_ref(), None, gio::DBusCallFlags::NONE, 30_000)
                 .await
                 .map_err(|mut e| {
                     gio::DBusError::strip_remote_error(&mut e);

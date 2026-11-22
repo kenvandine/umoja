@@ -18,7 +18,7 @@ mod dictation;
 mod dictation_page;
 mod downloads;
 mod files;
-mod hermes_row;
+mod background_agent;
 mod lemonade;
 mod model;
 mod model_picker;

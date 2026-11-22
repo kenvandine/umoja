@@ -6,9 +6,10 @@
 #     the user's ~/Agents/Hermes is mounted at /sandbox/workspace
 #   * ships the filesystem policy OpenShell enforces (/etc/openshell/policy.yaml);
 #     network access is decided by Umoja's consent prompts, not here
-#   * umoja-hermes-start keeps `hermes gateway run` (API server on
+#   * umoja-agent-start keeps `hermes gateway run` (API server on
 #     127.0.0.1:8642 inside the sandbox) running; umoja-agentd reaches it
-#     only through umoja-hermes-bridge over OpenShell exec
+#     only through umoja-agent-bridge (Umoja agent protocol v1, see
+#     agents/README.md) over OpenShell exec
 #
 # Built and pushed by .github/workflows/hermes-image.yml as
 # ghcr.io/kenvandine/umoja-hermes.
@@ -26,7 +27,7 @@ RUN set -eu; \
     chown -R sandbox:sandbox /sandbox
 
 COPY --chmod=0644 policy.yaml /etc/openshell/policy.yaml
-COPY --chmod=0755 umoja-hermes-start umoja-hermes-bridge /usr/local/bin/
+COPY --chmod=0755 umoja-agent-start umoja-agent-bridge /usr/local/bin/
 
 ENV HOME=/sandbox \
     HERMES_HOME=/sandbox/.hermes \
@@ -43,4 +44,4 @@ LABEL org.opencontainers.image.title="umoja-hermes" \
 USER sandbox
 WORKDIR /sandbox
 ENTRYPOINT []
-CMD ["/usr/local/bin/umoja-hermes-start"]
+CMD ["/usr/local/bin/umoja-agent-start"]

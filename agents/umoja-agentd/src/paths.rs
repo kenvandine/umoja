@@ -4,15 +4,14 @@
 
 use std::path::PathBuf;
 
-/// The sandbox Umoja keeps Hermes in.
-pub const SANDBOX: &str = "hermes";
+/// The sandbox Umoja keeps the active agent in: its id ("hermes").
+pub fn sandbox() -> String {
+    crate::catalog::active().id.clone()
+}
 
-/// Where the Hermes image comes from: built by .github/workflows/hermes-image.yml.
-pub const DEFAULT_IMAGE: &str = "ghcr.io/kenvandine/umoja-hermes:latest";
-
-/// Inside the sandbox: Hermes's home (OpenShell's working directory, the
+/// Inside the sandbox: the agent's home (OpenShell's working directory, the
 /// one place the default policy lets the agent write), and the folder that
-/// shows up on the host as ~/Agents/Hermes.
+/// shows up on the host as ~/Agents/<Name>.
 #[allow(dead_code)]
 pub const SANDBOX_HOME: &str = "/sandbox";
 pub const SANDBOX_WORKSPACE: &str = "/sandbox/workspace";
@@ -115,7 +114,7 @@ pub fn driver_socket() -> PathBuf {
 pub fn workspace() -> PathBuf {
     std::env::var_os("UMOJA_AGENTS_WORKSPACE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home().join("Agents/Hermes"))
+        .unwrap_or_else(|| home().join("Agents").join(&crate::catalog::active().name))
 }
 
 /// The gateway and driver binaries, from the umoja-agents package.
@@ -126,11 +125,13 @@ pub fn libexec(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The active agent's sandbox image (UMOJA_AGENT_IMAGE overrides it, for
+/// tests of an image not published yet).
 pub fn image() -> String {
-    std::env::var("UMOJA_HERMES_IMAGE")
+    std::env::var("UMOJA_AGENT_IMAGE")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_IMAGE.into())
+        .unwrap_or_else(|| crate::catalog::active().image.clone())
 }
 
 /// The embedded Lemonade's port, as umoja-lemonade.service sets it.

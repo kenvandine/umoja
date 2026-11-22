@@ -152,12 +152,14 @@ endif
 	install -d $(DESKTOP)/usr/share/umoja/agents/skills
 	cp -r data/agents/skills/umoja $(DESKTOP)/usr/share/umoja/agents/skills/
 
-	# Agents: Hermes in a per-user OpenShell sandbox on LXD
+	# Agents: a personal agent (Hermes first; agents/catalog) in a per-user
+	# OpenShell sandbox on LXD
 	install -D -m 0755 target/agents/release/umoja-agentd $(AGENTS)/usr/libexec/umoja-agents/umoja-agentd
 	install -D -m 0755 target/agents/release/umoja-openshell-gateway $(AGENTS)/usr/libexec/umoja-agents/umoja-openshell-gateway
 	install -D -m 0755 target/agents/release/umoja-openshell-lxd $(AGENTS)/usr/libexec/umoja-agents/umoja-openshell-lxd
 	install -D -m 0755 data/agents/lxd-setup $(AGENTS)/usr/libexec/umoja-agents/lxd-setup
 	install -D -m 0755 data/agents/lxd-init $(AGENTS)/usr/libexec/umoja-agents/lxd-init
+	install -D -m 0644 agents/catalog/hermes.json $(AGENTS)/usr/share/umoja/agents/catalog/hermes.json
 	install -D -m 0644 data/agents/umoja-lxd-init.service $(AGENTS)/usr/lib/systemd/system/umoja-lxd-init.service
 	install -d $(AGENTS)/usr/lib/systemd/system/multi-user.target.wants
 	ln -sf ../umoja-lxd-init.service $(AGENTS)/usr/lib/systemd/system/multi-user.target.wants/umoja-lxd-init.service

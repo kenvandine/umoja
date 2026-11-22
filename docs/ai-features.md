@@ -744,7 +744,9 @@ research a topic and write it up, compare prices, tidy a folder. It works in
 the background in a sandbox on your computer, so it only sees the folders
 you share with it and only reaches the sites you allow. It can't see or
 control your desktop, your apps or the rest of your files. Install the
-`umoja-agents` package to get it.
+`umoja-agents` package to get it. Hermes is the first agent Umoja offers;
+when others are available (such as OpenClaw), you pick one under
+**Background agent**.
 
 **Setting it up.** Open the settings button in Ask Umoja and pick how often
 Hermes should ask you first under **Background agent**, then press
@@ -756,7 +758,7 @@ follow along from the **Agents** button on the top bar.
   Wikipedia and DuckDuckGo, and asks for the rest.
 - **Hands-off** only asks when something looks risky.
 
-**Giving it a job.** Type `@hermes` and the job in Ask Umoja ("@hermes
+**Giving it a job.** Type `@hermes` (or `@agent`) and the job in Ask Umoja ("@hermes
 compare the three cheapest flights to Lisbon in March and put it in a
 doc"), or ask the assistant to hand a job to Hermes. Its files land in
 `~/Agents/Hermes`. You get a notification when it's done, with **Open**.

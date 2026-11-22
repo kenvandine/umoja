@@ -394,7 +394,7 @@ class Run:
         if not self.opts.real_model:
             env.update(UMOJA_AGENTS_MODEL_PORT=str(MODEL_PORT), UMOJA_AGENTS_MODEL=MODEL)
         if self.opts.image:
-            env["UMOJA_HERMES_IMAGE"] = self.opts.image
+            env["UMOJA_AGENT_IMAGE"] = self.opts.image
         self.agentd_log = open(self.out / "agentd.log", "w")
         self.agentd = subprocess.Popen([self.opts.agentd], env=env, stdout=self.agentd_log,
                                        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
@@ -907,7 +907,7 @@ def main():
     p.add_argument("--no-video", action="store_true", help="screenshots only")
     p.add_argument("--real-model", action="store_true", help="use your model, not the scripted one")
     p.add_argument("--agentd", default="/usr/libexec/umoja-agents/umoja-agentd", help="umoja-agentd to test")
-    p.add_argument("--image", help="Hermes sandbox image (default: the one umoja-agentd knows)")
+    p.add_argument("--image", help="agent sandbox image, e.g. ghcr.io/kenvandine/umoja-hermes:<sha> (default: the catalog's)")
     p.add_argument("--suspend", action="store_true", help="sleep-resume: really suspend (sudo rtcwake)")
     p.add_argument("--keep", action="store_true", help="keep the test sandbox afterwards")
     p.add_argument("--setup-timeout", type=float, default=900, help="seconds for setup (first image pull)")

@@ -28,7 +28,13 @@ impl Agents {
         self.0.state.lock().await.json()
     }
 
-    /// Install/prepare everything for Hermes with a trust preset
+    /// Choose the agent to set up (a catalog id from the state's `agents`,
+    /// "hermes" by default). Only while none is set up.
+    async fn set_agent(&self, agent: &str) -> fdo::Result<()> {
+        self.0.set_agent(agent).await.map_err(err)
+    }
+
+    /// Install/prepare everything for the agent with a trust preset
     /// ("careful", "balanced", "hands-off"). Progress via StateChanged.
     async fn setup(&self, preset_name: &str) -> fdo::Result<()> {
         let p = preset(preset_name)?;
@@ -36,7 +42,7 @@ impl Agents {
         Ok(())
     }
 
-    /// Hand a task to Hermes; returns the task id.
+    /// Hand a task to the agent; returns the task id.
     async fn submit(&self, prompt: &str) -> fdo::Result<String> {
         self.0.submit(prompt).await.map_err(err)
     }

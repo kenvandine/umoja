@@ -2291,11 +2291,12 @@ impl Overlay {
             "" if !attachments.is_empty() => context::DEFAULT_QUESTION.to_string(),
             q => q.to_string(),
         };
-        // "@hermes <task>" goes straight to Hermes (umoja-agents), without
-        // the model deciding: Hermes works in its sandbox, and its progress
-        // and consent cards are in the panel's Agents pill.
-        if !replying && let Some(task) = hermes_task(&text) {
-            self.hand_to_hermes(task);
+        // "@hermes <task>" (or "@agent", or another agent's id) goes
+        // straight to the background agent (umoja-agents), without the model
+        // deciding: it works in its sandbox, and its progress and consent
+        // cards are in the panel's Agents pill.
+        if !replying && let Some(task) = agent_task(&text) {
+            self.hand_to_agent(task);
             return;
         }
         let context = context::build_context(&attachments).or_else(|| {
@@ -2310,8 +2311,8 @@ impl Overlay {
         });
     }
 
-    fn hand_to_hermes(self: &Rc<Self>, task: String) {
-        self.show_error(&i18n::umoja("Handing it to Hermes…"));
+    fn hand_to_agent(self: &Rc<Self>, task: String) {
+        self.show_error(&i18n::umoja("Handing it to your background agent…"));
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let text = match gio::bus_get_future(gio::BusType::Session).await {
@@ -2329,10 +2330,10 @@ impl Overlay {
                     .await
                 {
                     Ok(_) => i18n::umoja(
-                        "Hermes is on it. Follow along, and answer its questions, from the Agents button on the top bar.",
+                        "It's on it. Follow along, and answer its questions, from the Agents button on the top bar.",
                     ),
                     Err(e) if e.matches(gio::DBusError::ServiceUnknown) => {
-                        i18n::umoja("Hermes isn't installed on this computer.")
+                        i18n::umoja("No background agent is installed on this computer.")
                     }
                     Err(mut e) => {
                         gio::DBusError::strip_remote_error(&mut e);
@@ -3646,32 +3647,57 @@ fn capitalize(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The task in "@hermes plan a trip" ("@Hermes, ..." too), if the prompt
-/// is addressed to Hermes.
-pub fn hermes_task(prompt: &str) -> Option<String> {
-    let p = prompt.trim_start();
-    let head = p.get(..7)?;
-    if !head.eq_ignore_ascii_case("@hermes") {
+/// The background agents a prompt can address: "@agent" for whichever is
+/// set up, and each agent in umoja-agents' catalog by id ("@hermes",
+/// "@openclaw", ...).
+fn agent_ids() -> Vec<String> {
+    let mut ids = vec!["agent".to_owned(), "hermes".to_owned()];
+    if let Ok(dir) = std::fs::read_dir("/usr/share/umoja/agents/catalog") {
+        for e in dir.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "json") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    if !ids.iter().any(|i| i == stem) {
+                        ids.push(stem.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// The task in "@hermes plan a trip" ("@Agent, ..." too), if the prompt is
+/// addressed to a background agent.
+pub fn agent_task(prompt: &str) -> Option<String> {
+    agent_task_for(prompt, &agent_ids())
+}
+
+fn agent_task_for(prompt: &str, ids: &[String]) -> Option<String> {
+    let p = prompt.trim_start().strip_prefix('@')?;
+    let word_len = p.find(|c: char| !c.is_ascii_alphanumeric() && c != '-').unwrap_or(p.len());
+    let word = &p[..word_len];
+    if !ids.iter().any(|i| i.eq_ignore_ascii_case(word)) {
         return None;
     }
-    let rest = &p[7..];
-    if rest.chars().next().is_some_and(|c| !(c.is_whitespace() || c == ',' || c == ':')) {
-        return None;
-    }
-    let rest = rest.trim_start_matches([',', ':', ' ']).trim();
+    let rest = p[word_len..].trim_start_matches([',', ':', ' ']).trim();
     (!rest.is_empty()).then(|| rest.to_owned())
 }
 
 #[cfg(test)]
-mod hermes_prefix_tests {
-    use super::hermes_task;
+mod agent_prefix_tests {
+    use super::agent_task_for;
 
     #[test]
     fn prefix() {
-        assert_eq!(hermes_task("@hermes plan a trip").as_deref(), Some("plan a trip"));
-        assert_eq!(hermes_task("  @Hermes, summarise this").as_deref(), Some("summarise this"));
-        assert_eq!(hermes_task("@hermes"), None);
-        assert_eq!(hermes_task("hermes plan"), None);
-        assert_eq!(hermes_task("@hermesx"), None);
+        let ids: Vec<String> = ["agent", "hermes", "picoclaw"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(agent_task_for("@hermes plan a trip", &ids).as_deref(), Some("plan a trip"));
+        assert_eq!(agent_task_for("  @Hermes, summarise this", &ids).as_deref(), Some("summarise this"));
+        assert_eq!(agent_task_for("@agent: tidy Downloads", &ids).as_deref(), Some("tidy Downloads"));
+        assert_eq!(agent_task_for("@PicoClaw check prices", &ids).as_deref(), Some("check prices"));
+        assert_eq!(agent_task_for("@hermes", &ids), None);
+        assert_eq!(agent_task_for("hermes plan", &ids), None);
+        assert_eq!(agent_task_for("@hermesx do it", &ids), None);
+        assert_eq!(agent_task_for("@someone hi", &ids), None);
     }
 }

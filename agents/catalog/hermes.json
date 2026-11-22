@@ -1,0 +1,10 @@
+{
+  "id": "hermes",
+  "name": "Hermes",
+  "description": "Nous Research's personal agent: research, writing and chores in the background.",
+  "image": "ghcr.io/kenvandine/umoja-hermes:latest",
+  "command": ["/usr/local/bin/umoja-agent-start"],
+  "min_context": 65536,
+  "approval_modes": { "careful": "manual", "balanced": "smart", "hands-off": "smart" },
+  "messaging": ["telegram"]
+}

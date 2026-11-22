@@ -1,4 +1,4 @@
-//! The Agents pill: Hermes, running in its OpenShell sandbox
+//! The Agents pill: the personal agent (Hermes first), running in its sandbox
 //! (umoja-agentd, org.umoja.Agents), in the top bar.
 //!
 //! It shows only once Hermes is set up (or being set up). A sparkle-shield
@@ -10,7 +10,7 @@
 //!   each with Deny / Allow (and Always allow for a site);
 //! * the tasks, with what each is doing now and Stop, or the answer and
 //!   Open for finished ones;
-//! * Pause all, the Hermes folder, and setup progress or problems.
+//! * Pause all, the agent's folder, and setup progress or problems.
 //!
 //! The same consent cards also arrive as notifications (umoja-agentd sends
 //! them), so answering works from either place. This module only renders
@@ -87,6 +87,9 @@ pub struct State {
     pub memory_used_mb: u32,
     #[serde(default)]
     pub workspace: String,
+    /// The agent's name ("Hermes"); agents come from umoja-agentd's catalog.
+    #[serde(default)]
+    pub agent_name: String,
     #[serde(default)]
     pub tasks: Vec<Task>,
     #[serde(default)]
@@ -94,6 +97,11 @@ pub struct State {
 }
 
 impl State {
+    /// The agent's name, or "Agent" before umoja-agentd says.
+    pub fn name(&self) -> String {
+        if self.agent_name.is_empty() { i18n::umoja("Agent") } else { self.agent_name.clone() }
+    }
+
     pub fn parse(json: &str) -> Option<Self> {
         serde_json::from_str(json).ok()
     }
@@ -139,7 +147,9 @@ struct Pill {
     dot: gtk::Box,
     count: gtk::Label,
     popover: gtk::Popover,
+    title: gtk::Label,
     subtitle: gtk::Label,
+    folder: gtk::Button,
     pause: gtk::Button,
     approvals: gtk::Box,
     tasks: gtk::Box,
@@ -154,10 +164,9 @@ struct Pill {
 }
 
 pub fn button() -> gtk::MenuButton {
-    let icon = gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
-        "umoja-agents-symbolic",
-        "security-high-symbolic",
-    ]));
+    // Our own hicolor icon only: with a fallback name GTK would pick the
+    // icon theme's fallback first.
+    let icon = gtk::Image::from_icon_name("umoja-agents-symbolic");
     let dot = gtk::Box::builder()
         .css_classes(["agents-dot"])
         .valign(gtk::Align::Center)
@@ -174,7 +183,7 @@ pub fn button() -> gtk::MenuButton {
     content.append(&count);
 
     let title = gtk::Label::builder()
-        .label("Hermes")
+        .label(i18n::umoja("Agent"))
         .xalign(0.0)
         .css_classes(["heading"])
         .build();
@@ -192,7 +201,7 @@ pub fn button() -> gtk::MenuButton {
         .build();
     let folder = gtk::Button::builder()
         .icon_name("folder-symbolic")
-        .tooltip_text(i18n::umoja("Open Hermes's folder"))
+        .tooltip_text(i18n::umoja("Open the agent's folder"))
         .css_classes(["flat", "circular"])
         .valign(gtk::Align::Center)
         .build();
@@ -248,7 +257,9 @@ pub fn button() -> gtk::MenuButton {
         dot,
         count,
         popover,
+        title,
         subtitle,
+        folder: folder.clone(),
         pause: pause.clone(),
         approvals,
         tasks,
@@ -332,7 +343,11 @@ impl Pill {
         } else {
             self.button.remove_css_class("paused");
         }
-        let tip = format!("Hermes · {}", state.summary());
+        let name = state.name();
+        self.title.set_text(&name);
+        self.folder
+            .set_tooltip_text(Some(&i18n::umoja("Open {name}'s folder").replace("{name}", &name)));
+        let tip = format!("{name} · {}", state.summary());
         self.button.set_tooltip_text(Some(&tip));
 
         let mut sub = state.summary();
@@ -346,9 +361,9 @@ impl Pill {
             "media-playback-pause-symbolic"
         });
         self.pause.set_tooltip_text(Some(&if state.paused {
-            i18n::umoja("Resume Hermes")
+            i18n::umoja("Resume {name}").replace("{name}", &name)
         } else {
-            i18n::umoja("Pause Hermes")
+            i18n::umoja("Pause {name}").replace("{name}", &name)
         }));
         self.pause.set_visible(state.setup == "ready");
 
@@ -376,7 +391,11 @@ impl Pill {
             return;
         }
         let text = gtk::Label::builder()
-            .label(if state.error.is_empty() { "Hermes couldn't start." } else { &state.error })
+            .label(if state.error.is_empty() {
+                i18n::umoja("{name} couldn't start.").replace("{name}", &state.name())
+            } else {
+                state.error.clone()
+            })
             .wrap(true)
             .xalign(0.0)
             .max_width_chars(40)
@@ -470,7 +489,7 @@ impl Pill {
         buttons.set_halign(gtk::Align::End);
         if a.kind == "question" {
             let entry = gtk::Entry::builder()
-                .placeholder_text(i18n::umoja("Answer Hermes"))
+                .placeholder_text(i18n::umoja("Answer {name}").replace("{name}", &self.state.borrow().name()))
                 .hexpand(true)
                 .text(self.drafts.borrow().get(&a.id).cloned().unwrap_or_default())
                 .build();

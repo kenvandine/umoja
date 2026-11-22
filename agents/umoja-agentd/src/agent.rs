@@ -12,9 +12,10 @@ use openshell_gateway_client::{CreateOptions, Gateway, Proposal, State as Phase}
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::hermes::{self, PendingKind};
+use crate::bridge::{self, PendingKind};
+use crate::catalog;
 use crate::lxd::{Access, Lxd};
-use crate::paths::{self, SANDBOX, SANDBOX_SHARED, SANDBOX_WORKSPACE};
+use crate::paths::{self, SANDBOX_SHARED, SANDBOX_WORKSPACE};
 use crate::relay;
 use crate::runtime::Runtime;
 use crate::state::{Approval, ApprovalKind, Messaging, Preset, Setup, Shared, State, Task, TaskStatus, now, title_for};
@@ -52,7 +53,11 @@ type Snapshot = BTreeMap<PathBuf, SystemTime>;
 impl Agent {
     pub fn new(conn: zbus::Connection) -> Arc<Self> {
         let mut state = State::load();
-        state.workspace = paths::workspace().display().to_string();
+        if state.agent.is_empty() || !catalog::set_active(&state.agent) {
+            state.agent = catalog::DEFAULT.into();
+            catalog::set_active(catalog::DEFAULT);
+        }
+        fill_agent_info(&mut state);
         Arc::new(Self {
             state: Mutex::new(state),
             conn,
@@ -80,6 +85,35 @@ impl Agent {
         }
     }
 
+    /// Picks which agent to set up (a catalog id). Only before setup: a
+    /// set-up agent is removed first (Remove), so its sandbox and tasks
+    /// never mix with another's.
+    pub async fn set_agent(&self, id: &str) -> Result<()> {
+        let _guard = self.lifecycle.lock().await;
+        {
+            let s = self.state.lock().await;
+            if s.agent == id {
+                return Ok(());
+            }
+            if matches!(s.setup, Setup::Ready | Setup::Working) {
+                bail!("Remove {} first, then set up another agent.", catalog::active().name);
+            }
+        }
+        if !catalog::set_active(id) {
+            bail!("Umoja doesn't know an agent called {id}.");
+        }
+        {
+            let mut s = self.state.lock().await;
+            s.agent = id.into();
+            s.tasks.clear();
+            s.shared.clear();
+            s.messaging = None;
+            fill_agent_info(&mut s);
+        }
+        self.changed().await;
+        Ok(())
+    }
+
     async fn set_step(&self, step: &str) {
         tracing::info!(%step, "setup");
         self.state.lock().await.step = step.into();
@@ -91,7 +125,7 @@ impl Agent {
             .read()
             .await
             .clone()
-            .ok_or_else(|| anyhow!("Hermes isn't running. Set it up in Ask Umoja's settings first."))
+            .ok_or_else(|| anyhow!("{n} isn't running. Set it up in Ask Umoja's settings first.", n = catalog::active().name))
     }
 
     /// Session end: stop the gateway and driver (the sandbox keeps its
@@ -177,11 +211,11 @@ impl Agent {
             Access::Ok => tracing::debug!("LXD access ok"),
             Access::Missing => {
                 self.state.lock().await.needs = "lxd-install".into();
-                bail!("Hermes needs one more part installed before it can run safely.");
+                bail!("{n} needs one more part installed before it can run safely.", n = catalog::active().name);
             }
             Access::Denied => {
                 self.state.lock().await.needs = "lxd-group".into();
-                bail!("Hermes needs your permission to set up its sandbox. Allow it, then log out and back in.");
+                bail!("{n} needs your permission to set up its sandbox. Allow it, then log out and back in.", n = catalog::active().name);
             }
         }
         let bridge = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -208,29 +242,29 @@ impl Agent {
         self.spawn_poller();
 
         let paused = self.state.lock().await.paused;
-        let exists = gw.clone().list().await?.into_iter().find(|s| s.name == SANDBOX);
+        let exists = gw.clone().list().await?.into_iter().find(|s| s.name == paths::sandbox());
         match exists {
             None => {
-                self.set_step("Downloading Hermes (first time only)").await;
+                self.set_step(&format!("Downloading {} (first time only)", catalog::active().name)).await;
                 let mem = paths::memory_cap_mb();
                 gw.clone()
                     .create(
-                        SANDBOX,
+                        &paths::sandbox(),
                         &CreateOptions {
                             image: paths::image(),
                             memory_mb: mem,
-                            command: vec!["/usr/local/bin/umoja-hermes-start".into()],
-                            labels: vec![("umoja.agent".into(), "hermes".into())],
+                            command: catalog::active().command.clone(),
+                            labels: vec![("umoja.agent".into(), catalog::active().id.clone())],
                             ..Default::default()
                         },
                     )
                     .await
-                    .context("Couldn't create Hermes's sandbox")?;
+                    .with_context(|| format!("Couldn't create {n}'s sandbox", n = catalog::active().name))?;
                 self.state.lock().await.memory_mb = mem;
             }
             Some(info) if info.state == Phase::Stopped && !paused => {
-                self.set_step("Starting Hermes's sandbox").await;
-                gw.clone().start(SANDBOX).await?;
+                self.set_step(&format!("Starting {n}'s sandbox", n = catalog::active().name)).await;
+                gw.clone().start(&paths::sandbox()).await?;
             }
             Some(_) => {}
         }
@@ -243,18 +277,18 @@ impl Agent {
             self.set_step("Applying guardrails").await;
             self.apply_policy(&gw).await?;
         }
-        self.set_step("Sharing ~/Agents/Hermes").await;
+        self.set_step(&format!("Sharing ~/Agents/{n}", n = catalog::active().name)).await;
         self.mount_folders().await?;
 
-        self.set_step("Connecting Hermes to the model").await;
-        if configure || !hermes::health(&gw).await {
+        self.set_step(&format!("Connecting {n} to the model", n = catalog::active().name)).await;
+        if configure || !bridge::health(&gw).await {
             self.write_config(&gw).await?;
-            hermes::restart(&gw).await.ok();
+            bridge::restart(&gw).await.ok();
         }
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-        while !hermes::health(&gw).await {
+        while !bridge::health(&gw).await {
             if tokio::time::Instant::now() > deadline {
-                bail!("Hermes didn't start. Try again in a moment.");
+                bail!("{n} didn't start. Try again in a moment.", n = catalog::active().name);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -279,20 +313,20 @@ impl Agent {
     async fn wait_running(&self, gw: &Gateway, timeout: Duration) -> Result<()> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let info = gw.clone().list().await?.into_iter().find(|s| s.name == SANDBOX);
+            let info = gw.clone().list().await?.into_iter().find(|s| s.name == paths::sandbox());
             match info {
                 Some(i) if i.state == Phase::Running => return Ok(()),
                 Some(i) if i.state == Phase::Failed => {
-                    bail!("Hermes's sandbox failed: {}", if i.detail.is_empty() { i.phase } else { i.detail })
+                    bail!("{n}'s sandbox failed: {}", if i.detail.is_empty() { i.phase } else { i.detail }, n = catalog::active().name)
                 }
                 Some(i) => {
                     let mut s = self.state.lock().await;
                     s.sandbox = i.phase.to_lowercase();
                 }
-                None => bail!("Hermes's sandbox disappeared"),
+                None => bail!("{n}'s sandbox disappeared", n = catalog::active().name),
             }
             if tokio::time::Instant::now() > deadline {
-                bail!("Hermes's sandbox took too long to start");
+                bail!("{n}'s sandbox took too long to start", n = catalog::active().name);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -307,15 +341,15 @@ impl Agent {
         };
         let mut gw = gw.clone();
         for (host, port) in self.model_endpoints().await {
-            gw.add_rule(SANDBOX, &host, port, None).await.context("model rule")?;
+            gw.add_rule(&paths::sandbox(), &host, port, None).await.context("model rule")?;
         }
         for (host, port) in preset.open_sites() {
-            gw.add_rule(SANDBOX, host, *port, None).await?;
+            gw.add_rule(&paths::sandbox(), host, *port, None).await?;
         }
         if messaging.as_ref().is_some_and(|m| m.platform == "telegram") {
-            gw.add_rule(SANDBOX, "api.telegram.org", 443, None).await?;
+            gw.add_rule(&paths::sandbox(), "api.telegram.org", 443, None).await?;
         }
-        if let Err(e) = gw.set_auto_approve(SANDBOX, preset.auto_approve()).await {
+        if let Err(e) = gw.set_auto_approve(&paths::sandbox(), preset.auto_approve()).await {
             tracing::warn!(error = %e, "couldn't set OpenShell auto-approval");
         }
         Ok(())
@@ -350,25 +384,25 @@ impl Agent {
             ("UMOJA_MODEL_URL", url),
             ("UMOJA_MODEL", model),
             ("UMOJA_MODEL_KEY", key),
-            ("UMOJA_APPROVALS", s.preset.hermes_mode().to_owned()),
-            ("API_SERVER_KEY", s.private.api_key.clone()),
+            ("UMOJA_APPROVALS", catalog::active().approval_mode(s.preset)),
+            ("UMOJA_AGENT_KEY", s.private.api_key.clone()),
         ];
         if local && std::env::var_os("UMOJA_AGENTS_MODEL_PORT").is_none() {
-            env.push(("UMOJA_MODEL_CONTEXT", HERMES_CONTEXT.to_string()));
+            env.push(("UMOJA_MODEL_CONTEXT", context_for_agent().to_string()));
         }
         let token;
         if let Some(m) = &s.messaging {
             if m.platform == "telegram" {
                 token = read_secret("telegram").unwrap_or_default();
-                env.push(("TELEGRAM_BOT_TOKEN", token));
-                env.push(("TELEGRAM_ALLOWED_USERS", m.allowed.clone()));
+                env.push(("UMOJA_TELEGRAM_TOKEN", token));
+                env.push(("UMOJA_TELEGRAM_ALLOWED", m.allowed.clone()));
             }
         }
         let text: String = env
             .iter()
             .map(|(k, v)| format!("{k}={}\n", shell_quote(v)))
             .collect();
-        hermes::write_file(gw, "/sandbox/.config/umoja/hermes.env", &text, 0o600).await
+        bridge::write_file(gw, bridge::ENV_FILE, &text, 0o600).await
     }
 
     async fn ensure_relay(&self, bind: std::net::Ipv4Addr) {
@@ -393,8 +427,8 @@ impl Agent {
         let shared = self.state.lock().await.shared.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let lxd = Lxd::new(&paths::lxd_project());
-            let (workload, _) = lxd.sandbox(SANDBOX)?;
-            let workload = workload.ok_or_else(|| anyhow!("can't find Hermes's container in LXD"))?;
+            let (workload, _) = lxd.sandbox(&paths::sandbox())?;
+            let workload = workload.ok_or_else(|| anyhow!("can't find {n}'s container in LXD", n = catalog::active().name))?;
             let mut wanted = vec![(
                 "umoja-workspace".to_owned(),
                 workspace.display().to_string(),
@@ -410,7 +444,7 @@ impl Agent {
                     continue;
                 }
                 lxd.add_disk(&workload.name, &device, &source, &path, readonly)
-                    .with_context(|| format!("couldn't share {source} with Hermes"))?;
+                    .with_context(|| format!("couldn't share {source} with {n}", n = catalog::active().name))?;
             }
             Ok(())
         })
@@ -440,7 +474,7 @@ impl Agent {
     async fn poll(self: &Arc<Self>, tick: u64) -> Result<()> {
         let Ok(gw) = self.gateway().await else { return Ok(()) };
         let snapshot = gw.clone().snapshot().await?;
-        let mine = snapshot.into_iter().find(|s| s.info.name == SANDBOX);
+        let mine = snapshot.into_iter().find(|s| s.info.name == paths::sandbox());
         let mut changed = false;
 
         let phase = mine
@@ -465,7 +499,7 @@ impl Agent {
                     .filter(|i| i.name.starts_with("openshell-sup-"))
                     .filter_map(|i| i.ipv4())
                     .collect();
-                let (workload, _) = lxd.sandbox(SANDBOX)?;
+                let (workload, _) = lxd.sandbox(&paths::sandbox())?;
                 let mem = workload.and_then(|w| lxd.memory_usage(&w.name));
                 Ok((sups, mem))
             })
@@ -510,10 +544,11 @@ impl Agent {
                     id: id.clone(),
                     kind: ApprovalKind::Network,
                     task: task.as_ref().map(|(i, _)| i.clone()).unwrap_or_default(),
-                    title: format!("Hermes wants to reach {}", p.host),
+                    title: format!("{n} wants to reach {}", p.host, n = catalog::active().name),
                     detail: format!(
-                        "Hermes tried to reach {}{what}. Umoja held it back because it isn't one of the sites Hermes may use.",
+                        "{n} tried to reach {}{what}. Umoja held it back because it isn't one of the sites {n} may use.",
                         p.host,
+                        n = catalog::active().name,
                     ),
                     host: p.host.clone(),
                     port: p.port,
@@ -626,14 +661,14 @@ impl Agent {
     pub async fn submit(self: &Arc<Self>, prompt: &str) -> Result<String> {
         let prompt = prompt.trim().trim_start_matches("@hermes").trim().to_owned();
         if prompt.is_empty() {
-            bail!("Tell Hermes what to do.");
+            bail!("Tell {n} what to do.", n = catalog::active().name);
         }
         let (paused, setup) = {
             let s = self.state.lock().await;
             (s.paused, s.setup.clone())
         };
         if setup != Setup::Ready {
-            bail!("Hermes isn't set up yet. Set it up in Ask Umoja's settings.");
+            bail!("{n} isn't set up yet. Set it up in Ask Umoja's settings.", n = catalog::active().name);
         }
         if paused {
             bail!("Agents are paused. Resume them from the panel first.");
@@ -659,10 +694,12 @@ impl Agent {
         if self.state.lock().await.model != "cloud" {
             preload_local_model().await;
         }
-        match hermes::submit(&gw, &prompt).await {
-            Ok(run) => {
+        let instructions = bridge::instructions(&catalog::active().name);
+        match bridge::submit(&gw, &prompt, &instructions, None).await {
+            Ok((run, session)) => {
                 if let Some(t) = self.state.lock().await.task_mut(&id) {
                     t.run = run;
+                    t.session = session;
                     t.step = "Thinking…".into();
                 }
                 self.changed().await;
@@ -670,7 +707,7 @@ impl Agent {
                 Ok(id)
             }
             Err(e) => {
-                self.finish(&id, TaskStatus::Failed, &format!("Hermes couldn't start: {e:#}"), Vec::new())
+                self.finish(&id, TaskStatus::Failed, &format!("{} couldn't start: {e:#}", catalog::active().name), Vec::new())
                     .await;
                 Err(e)
             }
@@ -704,7 +741,7 @@ impl Agent {
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
             let stream = tokio::spawn(async move {
-                let _ = hermes::bridge(&gw, &["events", &run], None, |v| {
+                let _ = bridge::bridge(&gw, &["events", &run], None, |v| {
                     let _ = tx.send(v);
                 })
                 .await;
@@ -772,7 +809,7 @@ impl Agent {
                 }
             }
             let r = match self.gateway().await {
-                Ok(gw) => hermes::run(&gw, &run).await,
+                Ok(gw) => bridge::status(&gw, &run).await,
                 Err(e) => Err(e),
             };
             let r = match r {
@@ -788,15 +825,15 @@ impl Agent {
                             seen_pending.clear();
                             continue;
                         }
-                        self.finish(id, TaskStatus::Failed, &format!("Lost track of Hermes: {e:#}"), Vec::new())
+                        self.finish(id, TaskStatus::Failed, &format!("Lost track of {}: {e:#}", catalog::active().name), Vec::new())
                             .await;
                         break;
                     }
                     continue;
                 }
             };
-            let status = r["status"].as_str().unwrap_or("").to_owned();
-            if let Some(session) = r["session_id"].as_str() {
+            let status = r.status.clone();
+            if let Some(session) = Some(r.session.as_str()).filter(|s| !s.is_empty()) {
                 let mut s = self.state.lock().await;
                 if let Some(t) = s.task_mut(id) {
                     if t.session != session {
@@ -804,7 +841,7 @@ impl Agent {
                     }
                 }
             }
-            for p in hermes::pending_controls(&r) {
+            for p in r.pending.clone() {
                 let aid = format!("{}-{}", match p.kind { PendingKind::Approval => "cmd", PendingKind::Clarify => "ask" }, p.request_id);
                 if !seen_pending.insert(aid.clone()) {
                     continue;
@@ -815,7 +852,7 @@ impl Agent {
                         id: aid.clone(),
                         kind: ApprovalKind::Command,
                         task: id.to_owned(),
-                        title: "Hermes wants to run a command".into(),
+                        title: format!("{n} wants to run a command", n = catalog::active().name),
                         detail: if p.detail.is_empty() {
                             format!("For “{title}”. Its safety rules want you to OK this first.")
                         } else {
@@ -830,7 +867,7 @@ impl Agent {
                         id: aid.clone(),
                         kind: ApprovalKind::Question,
                         task: id.to_owned(),
-                        title: format!("Hermes asks: {}", p.text),
+                        title: format!("{n} asks: {}", p.text, n = catalog::active().name),
                         detail: format!("For “{title}”."),
                         created: now(),
                         answer_key: (p.request_id.clone(), p.generation.clone()),
@@ -863,12 +900,15 @@ impl Agent {
                         continue;
                     }
                 }
-                let mut text = hermes::output_text(&r);
+                let name = catalog::active().name.clone();
+                let mut text = r.output.clone();
                 if text.is_empty() && end == TaskStatus::Failed {
                     text = if status == "gone" {
-                        "Hermes restarted and lost this task. Ask again to start it over.".to_owned()
+                        format!("{name} restarted and lost this task. Ask again to start it over.")
+                    } else if !r.error.is_empty() {
+                        r.error.clone()
                     } else {
-                        r["error"].as_str().unwrap_or("Hermes stopped with an error.").to_owned()
+                        format!("{name} stopped with an error.")
                     };
                 }
                 let files = changed_files(before, &snapshot(&paths::workspace()));
@@ -896,7 +936,7 @@ impl Agent {
                 if !restarting && !waiting && woke.is_some() && stalled {
                     tracing::info!(task = id, "run stalled after wake; carrying it on");
                     if let Ok(gw) = self.gateway().await {
-                        restarting = hermes::stop(&gw, &run).await.is_ok();
+                        restarting = bridge::stop(&gw, &run).await.is_ok();
                     }
                 }
             }
@@ -920,7 +960,7 @@ impl Agent {
         };
         let gw = self.gateway().await.ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
-        while !hermes::health(&gw).await {
+        while !bridge::health(&gw).await {
             if tokio::time::Instant::now() > deadline {
                 return None;
             }
@@ -930,11 +970,15 @@ impl Agent {
             preload_local_model().await;
         }
         let text = carry_on_text(&prompt, &log, !session.is_empty());
-        match hermes::submit_in(&gw, &text, Some(&session)).await {
-            Ok(run) => {
+        let instructions = bridge::instructions(&catalog::active().name);
+        match bridge::submit(&gw, &text, &instructions, Some(&session)).await {
+            Ok((run, new_session)) => {
                 tracing::info!(task = id, run = %run, "carrying on after an interruption");
                 if let Some(t) = self.state.lock().await.task_mut(id) {
                     t.run = run.clone();
+                    if !new_session.is_empty() {
+                        t.session = new_session;
+                    }
                     t.resumes += 1;
                     t.interrupted = false;
                     t.status = TaskStatus::Running;
@@ -998,7 +1042,7 @@ impl Agent {
                 Ok(gw) => {
                     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
                     loop {
-                        if hermes::health(&gw).await {
+                        if bridge::health(&gw).await {
                             break true;
                         }
                         if tokio::time::Instant::now() > deadline {
@@ -1087,9 +1131,9 @@ impl Agent {
             return;
         }
         let summary = if ok {
-            format!("Hermes finished “{title}”")
+            format!("{n} finished “{title}”", n = catalog::active().name)
         } else {
-            format!("Hermes couldn't finish “{title}”")
+            format!("{n} couldn't finish “{title}”", n = catalog::active().name)
         };
         let mut body: String = result.chars().take(220).collect();
         if result.chars().count() > 220 {
@@ -1112,7 +1156,7 @@ impl Agent {
             .map(|t| t.run.clone())
             .ok_or_else(|| anyhow!("no such task"))?;
         let gw = self.gateway().await?;
-        hermes::stop(&gw, &run).await
+        bridge::stop(&gw, &run).await
     }
 
     pub async fn answer(self: &Arc<Self>, approval: &str, choice: &str) -> Result<()> {
@@ -1138,17 +1182,17 @@ impl Agent {
                     .ok_or_else(|| anyhow!("That request has expired."))?;
                 let mut gw = gw.clone();
                 if allow {
-                    gw.approve(SANDBOX, &p).await?;
+                    gw.approve(&paths::sandbox(), &p).await?;
                 } else {
-                    gw.reject(SANDBOX, &p.chunk_id).await?;
+                    gw.reject(&paths::sandbox(), &p.chunk_id).await?;
                 }
             }
             ApprovalKind::Command => {
                 let run = self.state.lock().await.task_mut(&a.task).map(|t| t.run.clone()).unwrap_or_default();
-                hermes::approve(&gw, &run, &a.answer_key.0, &a.answer_key.1, allow).await?;
+                bridge::approve(&gw, &run, &a.answer_key.0, &a.answer_key.1, allow).await?;
             }
             ApprovalKind::Question => {
-                bail!("Answer Hermes's question with Reply.");
+                bail!("Answer {n}'s question with Reply.", n = catalog::active().name);
             }
         }
         self.settle(&a).await;
@@ -1167,7 +1211,7 @@ impl Agent {
             .ok_or_else(|| anyhow!("That question was already answered."))?;
         let gw = self.gateway().await?;
         let run = self.state.lock().await.task_mut(&a.task).map(|t| t.run.clone()).unwrap_or_default();
-        hermes::clarify(&gw, &run, &a.answer_key.0, &a.answer_key.1, text).await?;
+        bridge::answer(&gw, &run, &a.answer_key.0, &a.answer_key.1, text).await?;
         self.settle(&a).await;
         Ok(())
     }
@@ -1199,11 +1243,11 @@ impl Agent {
                 .map(|t| t.run.clone())
                 .collect();
             for run in runs {
-                let _ = hermes::stop(&gw, &run).await;
+                let _ = bridge::stop(&gw, &run).await;
             }
             self.state.lock().await.paused = true;
             self.changed().await;
-            gw.clone().stop(SANDBOX).await?;
+            gw.clone().stop(&paths::sandbox()).await?;
             for t in self.state.lock().await.tasks.iter_mut() {
                 if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
                     t.status = TaskStatus::Cancelled;
@@ -1215,11 +1259,11 @@ impl Agent {
         } else {
             self.state.lock().await.paused = false;
             self.changed().await;
-            gw.clone().start(SANDBOX).await?;
+            gw.clone().start(&paths::sandbox()).await?;
             self.wait_running(&gw, Duration::from_secs(300)).await?;
             self.mount_folders().await?;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-            while !hermes::health(&gw).await && tokio::time::Instant::now() < deadline {
+            while !bridge::health(&gw).await && tokio::time::Instant::now() < deadline {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
@@ -1233,7 +1277,7 @@ impl Agent {
         let gw = self.gateway().await?;
         self.apply_policy(&gw).await?;
         self.write_config(&gw).await?;
-        hermes::restart(&gw).await
+        bridge::restart(&gw).await
     }
 
     pub async fn set_model(self: &Arc<Self>, model: &str) -> Result<()> {
@@ -1248,7 +1292,7 @@ impl Agent {
         let gw = self.gateway().await?;
         self.apply_policy(&gw).await?;
         self.write_config(&gw).await?;
-        hermes::restart(&gw).await
+        bridge::restart(&gw).await
     }
 
     pub async fn share(self: &Arc<Self>, path: &str, writable: bool) -> Result<String> {
@@ -1281,7 +1325,7 @@ impl Agent {
         if let Some(g) = gone {
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let lxd = Lxd::new(&paths::lxd_project());
-                if let (Some(w), _) = lxd.sandbox(SANDBOX)? {
+                if let (Some(w), _) = lxd.sandbox(&paths::sandbox())? {
                     lxd.remove_device(&w.name, &device_for(&g.inside))?;
                 }
                 Ok(())
@@ -1303,7 +1347,7 @@ impl Agent {
                 bail!("Paste the bot token from @BotFather.");
             }
             if allowed.trim().is_empty() {
-                bail!("Add your Telegram user id, so only you can talk to Hermes.");
+                bail!("Add your Telegram user id, so only you can talk to {n}.", n = catalog::active().name);
             }
             self.state.lock().await.messaging = Some(Messaging { platform: platform.into(), allowed: allowed.trim().into() });
         } else {
@@ -1313,16 +1357,16 @@ impl Agent {
         let gw = self.gateway().await?;
         self.apply_policy(&gw).await?;
         self.write_config(&gw).await?;
-        hermes::restart(&gw).await
+        bridge::restart(&gw).await
     }
 
     /// Deletes the sandbox and stops OpenShell (tests, or "Remove Hermes").
     pub async fn remove(self: &Arc<Self>) -> Result<()> {
         let _guard = self.lifecycle.lock().await;
         if let Ok(gw) = self.gateway().await {
-            gw.clone().delete(SANDBOX).await.ok();
+            gw.clone().delete(&paths::sandbox()).await.ok();
             for _ in 0..60 {
-                if !gw.clone().list().await.map(|l| l.iter().any(|s| s.name == SANDBOX)).unwrap_or(false) {
+                if !gw.clone().list().await.map(|l| l.iter().any(|s| s.name == paths::sandbox())).unwrap_or(false) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1375,10 +1419,10 @@ impl Agent {
         let mut s = self.state.lock().await;
         if ready {
             s.needs.clear();
-            s.error = "All set. Set up Hermes again.".into();
+            s.error = format!("All set. Set up {n} again.", n = catalog::active().name);
         } else {
             s.needs = "relogin".into();
-            s.error = "Done. Log out and back in, then set up Hermes again.".into();
+            s.error = format!("Done. Log out and back in, then set up {n} again.", n = catalog::active().name);
         }
         drop(s);
         self.changed().await;
@@ -1394,6 +1438,17 @@ fn refresh_waiting(s: &mut State) {
             t.status = TaskStatus::Running;
         }
     }
+}
+
+/// The active agent's name, folder and the agents on offer, for the shell.
+fn fill_agent_info(s: &mut State) {
+    let kind = catalog::active();
+    s.agent_name = kind.name.clone();
+    s.workspace = paths::workspace().display().to_string();
+    s.agents = catalog::all()
+        .into_values()
+        .map(|k| crate::state::AgentChoice { id: k.id, name: k.name, description: k.description })
+        .collect();
 }
 
 /// A task interrupted by sleep is carried on at most this often.
@@ -1552,10 +1607,13 @@ fn gsetting(key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The context window to load the local model with for the agent: its
+/// catalog floor (Hermes refuses less than 64K), at least 32K.
+fn context_for_agent() -> u32 {
+    catalog::active().min_context.max(32768)
+}
+
 /// The Lemonade model the assistant uses, picked the same way.
-/// Hermes refuses models with less context than this (its tool-calling
-/// floor), so the local model is loaded with this window for it.
-const HERMES_CONTEXT: u32 = 65536;
 
 fn local_model() -> String {
     if let Ok(m) = std::env::var("UMOJA_AGENTS_MODEL") {
@@ -1581,7 +1639,7 @@ async fn preload_local_model() {
     if std::env::var_os("UMOJA_AGENTS_MODEL_PORT").is_some() {
         return;
     }
-    let body = serde_json::json!({ "model_name": local_model(), "ctx_size": HERMES_CONTEXT }).to_string();
+    let body = serde_json::json!({ "model_name": local_model(), "ctx_size": context_for_agent() }).to_string();
     let port = paths::lemonade_port();
     let result = tokio::time::timeout(Duration::from_secs(180), async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

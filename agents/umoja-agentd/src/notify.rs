@@ -30,7 +30,6 @@ pub trait Notifications {
     fn action_invoked(&self, id: u32, action_key: String) -> zbus::Result<()>;
 }
 
-pub const APP: &str = "Hermes";
 pub const ICON: &str = "umoja-agents-symbolic";
 
 /// Sends one; returns its id (0 when there is no notification server).
@@ -51,7 +50,7 @@ pub async fn send(
         hints.insert("resident", Value::from(true));
     }
     proxy
-        .notify(APP, 0, ICON, summary, body, &flat, hints, if urgent { 0 } else { -1 })
+        .notify(&crate::catalog::active().name, 0, ICON, summary, body, &flat, hints, if urgent { 0 } else { -1 })
         .await
         .unwrap_or(0)
 }

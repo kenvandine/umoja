@@ -40,14 +40,6 @@ impl Preset {
         }
     }
 
-    /// Hermes's approvals.mode for terminal commands.
-    pub fn hermes_mode(self) -> &'static str {
-        match self {
-            Self::Careful => "manual",
-            Self::Balanced | Self::HandsOff => "smart",
-        }
-    }
-
     /// Sites (host, port) allowed up front, besides the model.
     pub fn open_sites(self) -> &'static [(&'static str, u16)] {
         match self {
@@ -185,6 +177,15 @@ pub struct Messaging {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     pub setup: Setup,
+    /// The agent this account runs: a catalog id ("hermes").
+    #[serde(default = "default_agent")]
+    pub agent: String,
+    /// Its display name, and every agent Umoja can set up (id, name,
+    /// description), for the shell. Filled in at start, not saved.
+    #[serde(default, skip_deserializing)]
+    pub agent_name: String,
+    #[serde(default, skip_deserializing)]
+    pub agents: Vec<AgentChoice>,
     /// What setup is doing now, for the progress card.
     #[serde(default)]
     pub step: String,
@@ -220,6 +221,17 @@ pub struct State {
     /// Secrets and ids kept on disk only (never sent over D-Bus).
     #[serde(default, skip_serializing)]
     pub private: Private,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentChoice {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+fn default_agent() -> String {
+    crate::catalog::DEFAULT.into()
 }
 
 fn local() -> String {
@@ -365,7 +377,6 @@ mod tests {
     fn presets() {
         assert_eq!(Preset::parse("hands-off"), Some(Preset::HandsOff));
         assert!(Preset::Careful.open_sites().is_empty());
-        assert_eq!(Preset::Careful.hermes_mode(), "manual");
         assert!(Preset::HandsOff.auto_approve());
     }
 }

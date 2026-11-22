@@ -1,8 +1,10 @@
-//! umoja-agentd: runs Hermes in a per-user OpenShell sandbox (LXD driver)
-//! and puts its consent prompts on the Umoja desktop.
+//! umoja-agentd: runs a personal agent (Hermes first; see catalog.rs) in a
+//! per-user OpenShell sandbox (LXD driver) and puts its consent prompts on
+//! the Umoja desktop.
 
 mod agent;
-mod hermes;
+mod bridge;
+mod catalog;
 mod lxd;
 mod notify;
 mod paths;
