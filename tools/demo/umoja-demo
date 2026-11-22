@@ -59,6 +59,7 @@ except (ImportError, ValueError, AttributeError):
 
 OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
 PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
+AGENTS = ("org.umoja.Agents", "/org/umoja/Agents", "org.umoja.Agents")
 COMPOSITOR = ("org.umoja.Compositor", "/org/umoja/Compositor", "org.umoja.Compositor")
 NOTIFICATIONS = ("org.umoja.Notifications", "/org/umoja/Notifications", "org.umoja.Notifications")
 NOTIFY = (
@@ -154,6 +155,14 @@ OPENCODE_RULES = {
     },
 }
 TESTPAD = Path(__file__).resolve().parent.parent / "test" / "testpad.py"
+# ai-agent: a job for the background agent (Hermes), handed over from Ask
+# Umoja with "@agent". It runs in its sandbox while the tour goes on and
+# its file opens at the end of the clip.
+AGENT_TRIP = ("Plan a relaxed 3-day weekend in Lisbon for two: a day-by-day itinerary with a "
+              "neighbourhood each day, where to eat, how to get around and a rough budget in euros. "
+              "Use what you know; look things up on Wikipedia only if you must. "
+              "Save it as Lisbon weekend.md.")
+AGENT_DONE = ("done", "failed", "cancelled")
 # Night Light, toggled by the settings ask and put back afterwards.
 NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
 
@@ -174,7 +183,7 @@ ASK_TYPEAHEAD = [
 # only because ai-reply and ai-summary need its bubbles. ("assistant" in
 # --only/--skip means ask-umoja and all ai-* scenes.)
 SCENES = [
-    "ask-umoja", "ai-btop", "ai-opencode", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
+    "ask-umoja", "ai-btop", "ai-opencode", "ai-agent", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
     "ai-install", "ai-updates", "ai-troubleshoot",
     "notifications", "ai-reply", "ai-summary",
     "desktop", "tiling", "app-grid", "overview", "workspaces", "quick-settings", "shortcuts",
@@ -202,9 +211,29 @@ AUDIO_RATE = 48000
 REPO_URL = "github.com/kenvandine/umoja"
 
 # ai-install is left out: ai-btop already shows an install, all the way.
-TRAILER = ["ask-umoja", "ai-btop", "ai-opencode", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
+TRAILER = ["ask-umoja", "ai-btop", "ai-opencode", "ai-agent", "ai-tiling", "ai-setups", "ai-settings", "ai-rewrite", "ai-captions",
            "ai-updates", "ai-troubleshoot", "notifications", "ai-reply", "ai-summary",
            "tiling", "overview", "workspaces", "screensaver"]
+
+
+TITLES = {
+    "desktop": "Desktop", "tiling": "Window tiling", "app-grid": "App grid and search",
+    "overview": "Activities overview", "workspaces": "Workspaces",
+    "quick-settings": "Quick Settings", "notifications": "Notifications",
+    "shortcuts": "Keyboard shortcuts guide", "screenshot-ui": "Screenshot UI",
+    "screensaver": "Screensaver",
+    "ask-umoja": "Ask Umoja: type-ahead",
+    "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
+    "ai-btop": "Ask Umoja: install and run btop",
+    "ai-opencode": "Coding agent: OpenCode",
+    "ai-agent": "Background agent: plan a trip",
+    "ai-setups": "Assistant: saved setups", "ai-rewrite": "Rewrite selected text",
+    "ai-captions": "Live captions",
+    "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
+    "ai-reply": "Assistant: reply to a notification",
+    "ai-troubleshoot": "Assistant: troubleshooting",
+    "ai-summary": "Assistant: notification digest", "ai-custom": "Assistant",
+}
 
 
 def wrap_caption(text, limit=CAPTION_CHARS):
@@ -408,6 +437,20 @@ class Recorder:
 
 
 class Demo:
+    """The tour. tools/demo/umoja-agent-demo subclasses it with its own
+    scenes, titles and trailer cards."""
+
+    SCENES = SCENES
+    AI_SCENES = AI_SCENES
+    TRAILER = TRAILER
+    TITLES = TITLES
+    HEADING = "A tour of Umoja"
+    TAGLINE = "The desktop you can just talk to"
+    # Scenes for the README gallery (first four found) and its lead clip.
+    HERO = ("ai-btop", "ai-opencode", "ai-agent", "ai-tiling", "ai-settings", "overview", "ai-install")
+    LEAD = ("ai-btop", "ai-tiling", "ai-settings", "overview")
+    TOOL = "tools/demo/umoja-demo"
+
     def __init__(self, opts):
         self.opts = opts
         self.dry = opts.dry_run
@@ -2084,6 +2127,177 @@ class Demo:
             self.editor_to_front()
             self.scrub_overlay()
 
+    # ---- the background agent (umoja-agents) ----------------------------
+
+    def agent_state(self):
+        if self.dry:
+            return {"setup": "ready", "agent_name": "Hermes", "tasks": [], "approvals": []}
+        res = self.bus.call(AGENTS, "GetState", None, "(s)", quiet=True)
+        try:
+            return json.loads(res[0]) if res else {}
+        except ValueError:
+            return {}
+
+    def agent_ready(self):
+        """The background agent is set up and running (Resume if paused)."""
+        s = self.agent_state()
+        if not s:
+            log("  the background agent (umoja-agents) isn't running, skipping")
+            return False
+        if s.get("setup") != "ready":
+            log("  the background agent isn't set up (Ask Umoja's settings, Background agent, Set Up), skipping")
+            return False
+        if s.get("paused"):
+            log("  resuming the paused background agent")
+            self.bus.call(AGENTS, "SetPaused", GLib.Variant("(b)", (False,)), timeout=400_000)
+        return True
+
+    def agent_name(self):
+        return self.agent_state().get("agent_name") or "Hermes"
+
+    def agent_task(self, tid):
+        return next((t for t in self.agent_state().get("tasks", []) if t.get("id") == tid), None)
+
+    def agent_menu(self, open_):
+        """The Agents button's menu on the top bar (tasks and consent cards)."""
+        if open_:
+            self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("agents",)), quiet=True)
+            self.wait(1.2)
+        else:
+            self.bus.call(PANEL, "Unfocus", quiet=True)
+            self.wait(0.6)
+
+    def hand_to_agent(self, prompt, shot=None, caption=None):
+        """Types "@agent <prompt>" into Ask Umoja, the way a person hands a
+        job over. Returns the new task's id, or None."""
+        before = {t["id"] for t in self.agent_state().get("tasks", [])}
+        text = f"@agent {prompt}"
+        log(f"  hand over {prompt[:70]!r}...")
+        if self.dry:
+            self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (text, 2)))
+            return "dry-task"
+        flags = 0 if self.opts.no_typing else 2
+        self.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (text, flags)))
+        new = self.wait_for(lambda: next((t["id"] for t in self.agent_state().get("tasks", [])
+                                          if t["id"] not in before), None), self.typing_time(text) + 30)
+        if new:
+            self.wait(1.5)  # "Handed to Hermes" in the card
+            if shot:
+                self.shot(shot, caption or "Handed over from Ask Umoja.")
+        self.bus.call(OVERLAY, "Hide", quiet=True)
+        self.wait(0.6)
+        return new
+
+    def follow_agent(self, tid, name, allow=True, command_answer="deny", working_shot=True, timeout=None):
+        """Watches a task to the end, like a person would glance at it:
+        the Agents menu while it works, each consent card it raises (shot,
+        then Allow, or Deny with allow=False), and the result. The waits in
+        between are fast-forwarded in the clip. Returns the task, or None."""
+        if self.dry:
+            log(f"  follow {tid}")
+            return {"id": tid, "status": "done", "files": ["/dry/run.md"], "result": ""}
+        n = self.agent_name()
+        timeout = timeout or self.opts.task_timeout
+        end = time.monotonic() + timeout
+        span = time.monotonic()
+        shown_working = not working_shot
+        started = time.monotonic()
+        answered = set()
+        while time.monotonic() < end:
+            self.wait(1.0)
+            s = self.agent_state()
+            t = next((x for x in s.get("tasks", []) if x.get("id") == tid), None)
+            if t is None:
+                return None
+            if t.get("status") in AGENT_DONE:
+                self.recorder.waited(span, time.monotonic())
+                return t
+            for a in s.get("approvals", []):
+                if a["id"] in answered or a.get("task") not in ("", tid):
+                    continue
+                answered.add(a["id"])
+                self.recorder.waited(span, time.monotonic())
+                kind = a.get("kind")
+                self.agent_menu(True)
+                tag = "" if len(answered) == 1 else f"-{len(answered)}"
+                if kind == "network":
+                    self.shot(f"{name}-consent{tag}",
+                              f"{n} wants to reach {a.get('host')}: it can't until you say so.")
+                    choice = "allow" if allow else "deny"
+                elif kind == "command":
+                    self.shot(f"{name}-command{tag}", f"{n} asks before running a risky command.")
+                    choice = command_answer
+                else:
+                    self.shot(f"{name}-question{tag}", f"{n} has a question.")
+                    choice = None
+                self.wait(1.2)
+                if choice:
+                    log(f"  {choice}: {a.get('title')}")
+                    self.bus.call(AGENTS, "Answer", GLib.Variant("(ss)", (a["id"], choice)), quiet=True)
+                else:
+                    self.bus.call(AGENTS, "Reply", GLib.Variant("(ss)", (a["id"], "Use your best judgement.")),
+                                  quiet=True)
+                self.wait(1.5)
+                self.agent_menu(False)
+                span = time.monotonic()
+            if not shown_working and time.monotonic() - started > 6 and t.get("status") == "running":
+                shown_working = True
+                self.recorder.waited(span, time.monotonic())
+                self.agent_menu(True)
+                self.wait(0.8)
+                self.shot(f"{name}-working", f"{n} works in the background: the Agents button shows what it's doing.")
+                self.wait(1.5)
+                self.agent_menu(False)
+                span = time.monotonic()
+        log(f"  ! {tid} didn't finish in {timeout:.0f} s")
+        return None
+
+    def open_agent_result(self, t, name, caption):
+        """Opens the task's file (Agents.Open, as its notification's button
+        does) and shoots it. Returns the window it opened, or None."""
+        before = {w[0] for w in self.windows()} if not self.dry else set()
+        self.bus.call(AGENTS, "Open", GLib.Variant("(s)", (t["id"],)), quiet=True)
+        new = None if self.dry else self.wait_for_window(before, timeout=10)
+        self.wait(2.0)
+        self.shot(name, caption)
+        return new
+
+    def scene_ai_agent(self):
+        """The background agent, for a job that takes a while: "@agent plan
+        a weekend in Lisbon" in Ask Umoja. It works in its sandbox, shows
+        on the top bar, notifies when it's done, and its file opens."""
+        if not self.agent_ready():
+            return
+        n = self.agent_name()
+        caption = (f"Hand {n} a bigger job from Ask Umoja: “@agent plan a weekend in Lisbon”. "
+                   f"It works in its own sandbox and saves the plan for you.")
+        self.recorder.start("ai-agent")
+        opened = None
+        try:
+            tid = self.hand_to_agent(AGENT_TRIP, "ai-agent-handed",
+                                     f"“@agent …” in Ask Umoja hands the job to {n}.")
+            if not tid:
+                log("  ! the hand-off didn't make a task, leaving ai-agent out")
+                self.recorder.discard()
+                return
+            t = self.follow_agent(tid, "ai-agent")
+            if not t or t.get("status") != "done" or not t.get("files"):
+                log(f"  ! the task didn't finish with a file ({(t or {}).get('status')}: "
+                    f"{(t or {}).get('result', '')[:120]!r}), leaving ai-agent out")
+                self.recorder.discard()
+                return
+            self.wait(2.0)  # the "done" notification
+            self.shot("ai-agent-done", f"Done: {n} says so, and the plan is in ~/Agents/{n}.")
+            opened = self.open_agent_result(t, "ai-agent", "The weekend, planned: day by day, with a budget.")
+            self.wait(1.5)
+            self.recorder.stop(caption)
+        finally:
+            self.agent_menu(False)
+            if opened is not None:
+                self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (opened,)), quiet=True)
+                self.wait(0.8)
+            self.scrub_overlay()
+
     def scene_ai_install(self):
         self.ask("ai-install", f"I need {self.opts.app}",
                  f"“I need {self.opts.app}”: it finds the snap or deb and asks before installing.",
@@ -2244,7 +2458,7 @@ class Demo:
         The screen is shrunk a little to leave a band under it for the
         captions, so they never cover anything on screen. The clips' sound
         comes along (silence where a clip has none), with --music under it."""
-        parts = [(m, c) for sc in TRAILER for _g, m, c in self.videos.get(sc, [])
+        parts = [(m, c) for sc in self.TRAILER for _g, m, c in self.videos.get(sc, [])
                  if m and m.suffix == ".mp4"]
         if self.dry:
             log(f"  trailer from {len(parts)} clips")
@@ -2288,7 +2502,7 @@ class Demo:
                 "-t", str(seconds), *enc, str(out)])
             return out if r.returncode == 0 else None
 
-        title = card("00-title", "Umoja", "The desktop you can just talk to", 2.5)
+        title = card("00-title", "Umoja", self.TAGLINE, 2.5)
         if title:
             segs.append(title)
         for i, (mp4, caption) in enumerate(parts, 1):
@@ -2359,35 +2573,19 @@ class Demo:
         return os.path.relpath(p, self.out)
 
     def write_markdown(self):
-        titles = {
-            "desktop": "Desktop", "tiling": "Window tiling", "app-grid": "App grid and search",
-            "overview": "Activities overview", "workspaces": "Workspaces",
-            "quick-settings": "Quick Settings", "notifications": "Notifications",
-            "shortcuts": "Keyboard shortcuts guide", "screenshot-ui": "Screenshot UI",
-            "screensaver": "Screensaver",
-            "ask-umoja": "Ask Umoja: type-ahead",
-            "ai-tiling": "Assistant: tile windows", "ai-settings": "Assistant: change settings",
-            "ai-btop": "Ask Umoja: install and run btop",
-            "ai-opencode": "Coding agent: OpenCode",
-            "ai-setups": "Assistant: saved setups", "ai-rewrite": "Rewrite selected text",
-            "ai-captions": "Live captions",
-            "ai-install": "Assistant: install an app", "ai-updates": "Assistant: software updates",
-            "ai-reply": "Assistant: reply to a notification",
-            "ai-troubleshoot": "Assistant: troubleshooting",
-            "ai-summary": "Assistant: notification digest", "ai-custom": "Assistant",
-        }
+        titles = self.TITLES
         today = datetime.date.today().isoformat()
         lines = [
-            "# A tour of Umoja",
+            f"# {self.HEADING}",
             "",
-            f"Captured hands-free by `tools/demo/umoja-demo` on {today} "
+            f"Captured hands-free by `{self.TOOL}` on {today} "
             f"(umoja-desktop {self.version()}).",
             "",
         ]
         if self.trailer:
             lines += [f"**[Watch the trailer]({self.rel(self.trailer)})** "
                       f"(all the clips below in one video, real time).", ""]
-        for scene in SCENES + ["ai-custom"]:
+        for scene in self.SCENES + ["ai-custom"]:
             shots = self.shots.get(scene, [])
             vids = self.videos.get(scene, [])
             if not shots and not vids:
@@ -2416,10 +2614,9 @@ class Demo:
             # A leading "/" makes GitHub resolve links from the repository
             # root, so the same links work in snippet.md and in README.md.
             base = "/" + base
-        hero = [s for s in ("ai-btop", "ai-opencode", "ai-tiling", "ai-settings", "overview", "ai-install")
-                if s in self.shots][:4]
+        hero = [s for s in self.HERO if s in self.shots][:4]
         snippet = ["## Screenshots", ""]
-        lead = next((s for s in ("ai-btop", "ai-tiling", "ai-settings", "overview")
+        lead = next((s for s in self.LEAD
                      if s in self.videos and self.videos[s][0][0]), None)
         if lead:
             gif, video, caption = self.videos[lead][0]
@@ -2472,7 +2669,7 @@ class Demo:
             if mp4.name == "trailer.mp4" or not mp4.exists():
                 continue
             name = mp4.stem
-            scene = next((s for s in TRAILER if name == s or name.startswith(s + "-")), name)
+            scene = next((s for s in self.TRAILER if name == s or name.startswith(s + "-")), name)
             self.videos.setdefault(scene, []).append((self.out / m["gif"], mp4, m["cap"]))
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.make_trailer()
@@ -2497,8 +2694,8 @@ class Demo:
         if self.opts.trailer_only:
             return self.trailer_only()
         def picked(s, names):
-            return s in names or (s in AI_SCENES and "assistant" in names)
-        scenes = [s for s in SCENES if (not self.opts.only or picked(s, self.opts.only))
+            return s in names or (s in self.AI_SCENES and "assistant" in names)
+        scenes = [s for s in self.SCENES if (not self.opts.only or picked(s, self.opts.only))
                   and not picked(s, self.opts.skip or [])]
         if self.opts.ask:
             scenes = [s for s in scenes if not s.startswith("ai-")] + ["ai-custom"]
@@ -2551,13 +2748,15 @@ class Demo:
         return 1 if stopped else 0
 
 
-def main():
+def parser(cls=Demo, out_name="demo", description=None):
+    """The command line; tools/demo/umoja-agent-demo adds its own options."""
     here = Path(__file__).resolve().parent
-    default_out = here.parent.parent / "docs" / "demo"
+    default_out = here.parent.parent / "docs" / out_name
     if not (here.parent.parent / ".git").exists():
-        default_out = Path.home() / f"umoja-demo-{time.strftime('%Y%m%d-%H%M')}"
-    p = argparse.ArgumentParser(
-        description="Drive a hands-free tour of a live Umoja session and capture screenshots and clips.")
+        default_out = Path.home() / f"umoja-{out_name}-{time.strftime('%Y%m%d-%H%M')}"
+    SCENES = cls.SCENES  # noqa: N806 (the choices below)
+    p = argparse.ArgumentParser(description=description or
+                                "Drive a hands-free tour of a live Umoja session and capture screenshots and clips.")
     p.add_argument("--out", type=Path, default=default_out,
                    help=f"output directory (default: {default_out})")
     p.add_argument("--only", nargs="+", choices=SCENES + ["assistant"], metavar="SCENE",
@@ -2599,8 +2798,13 @@ def main():
     p.add_argument("--pace", type=float, default=1.0, help="multiply every pause by this (e.g. 1.5 on a slow machine)")
     p.add_argument("--countdown", type=int, default=5, help="seconds before it starts (default 5)")
     p.add_argument("--dry-run", action="store_true", help="print the steps without touching the desktop")
-    opts = p.parse_args()
-    sys.exit(Demo(opts).run())
+    p.add_argument("--task-timeout", type=float, default=420.0,
+                   help="background agent scenes: give up on a task after this many seconds (default 420)")
+    return p
+
+
+def main():
+    sys.exit(Demo(parser().parse_args()).run())
 
 
 if __name__ == "__main__":

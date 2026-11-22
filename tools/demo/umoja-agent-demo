@@ -1,0 +1,474 @@
+#!/usr/bin/python3
+"""Film the background agent (Hermes) doing real jobs for a person.
+
+A separate recording from the desktop tour (tools/demo/umoja-demo, whose
+machinery it reuses: the same safety checks, clips, captions, GIFs and
+trailer). Run it from a terminal inside an Umoja session with the
+background agent set up (Ask Umoja's settings, Background agent, Set Up),
+then keep your hands off the keyboard and mouse. Each job is handed over the
+way a person would, by typing "@agent ..." into Ask Umoja, and is real: the
+agent runs on your model (local, cloud, or both with "Use the cloud model
+for harder requests") and writes real files.
+
+    tools/demo/umoja-agent-demo                    # every scene, into docs/agent-demo
+    tools/demo/umoja-agent-demo --only agent-tidy agent-budget
+    tools/demo/umoja-agent-demo --suspend          # also film "close the lid"
+
+The scenes:
+
+    agent-intro    where it lives: Ask Umoja's settings and the Agents button
+    agent-trip     "plan a weekend in Lisbon": a day-by-day plan with a budget
+    agent-weather  the guardrails: it asks before reaching a new site
+                   (wttr.in), you Allow, and the forecast lands in the plan
+    agent-tidy     a messy Downloads folder, shared with it, sorted into
+                   folders, with a note of what it moved
+    agent-budget   a bank export, shared read-only, turned into a budget
+                   summary with subscriptions worth cancelling
+    agent-lid      (--suspend) close the lid mid-job: it carries on after
+                   the laptop wakes (sudo -n rtcwake, 25 s)
+    agent-wrap     everything it made, in ~/Agents/<Name>
+
+The demo's own files (the Downloads and Finances folders) live in
+~/Umoja Agent Demo and are removed at the end, shares included. What the
+agent wrote stays in ~/Agents/<Name>; files from an earlier run with the
+same names are moved aside first so every run starts clean.
+
+Nothing is installed or sent anywhere except what the jobs need: the model,
+and wttr.in once you'd Allow it (the scene does, on camera).
+"""
+
+import importlib.machinery
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+_loader = importlib.machinery.SourceFileLoader("umoja_demo", str(HERE / "umoja-demo"))
+_spec = importlib.util.spec_from_loader("umoja_demo", _loader)
+tour = importlib.util.module_from_spec(_spec)
+_loader.exec_module(tour)
+
+GLib, Gio, log = tour.GLib, tour.Gio, tour.log
+AGENTS, OVERLAY, COMPOSITOR = tour.AGENTS, tour.OVERLAY, tour.COMPOSITOR
+
+SCENES = ["agent-intro", "agent-trip", "agent-weather", "agent-tidy", "agent-budget", "agent-lid", "agent-wrap"]
+TITLES = {
+    "agent-intro": "Your background agent",
+    "agent-trip": "Plan a weekend away",
+    "agent-weather": "It asks before it goes online",
+    "agent-tidy": "Tidy up a messy Downloads folder",
+    "agent-budget": "Make sense of a bank statement",
+    "agent-lid": "Close the lid, it carries on",
+    "agent-wrap": "Everything it made",
+    "ai-custom": "Agent",
+}
+
+DEMO_DIR_NAME = "Umoja Agent Demo"
+TRIP_FILE = "Lisbon weekend.md"
+TRIP = ("Plan a relaxed 3-day weekend in Lisbon for two, arriving Friday evening: a day-by-day "
+        "itinerary with one neighbourhood a day, where to eat (one pastelaria, one tasca, one view), "
+        "how to get around, and a rough budget in euros. Use what you know; look things up on "
+        f"Wikipedia only if you must. Save it as {TRIP_FILE}.")
+WEATHER = ("Check this weekend's weather in Lisbon: run curl -s 'https://wttr.in/Lisbon?format=3' "
+           f"and add the forecast as a line at the top of {TRIP_FILE}, with one tip on what to pack.")
+
+# A Downloads folder as people really have it.
+DOWNLOADS = {
+    "Invoice-2026-10-Electricity.pdf": "Electricity invoice, October 2026. Amount due: 84.20 EUR.\n",
+    "IMG_2041.jpg": "(photo)\n",
+    "IMG_2042.jpg": "(photo)\n",
+    "Screenshot from 2026-11-03 09-14-22.png": "(screenshot)\n",
+    "boarding-pass-LIS-TP1351.pdf": "Boarding pass TP1351 to Lisbon, seat 14C.\n",
+    "receipt-coffee-machine.txt": "Receipt: coffee machine, 149.00 EUR, 2 year warranty.\n",
+    "Receipt_Groceries_0311.txt": "Groceries 03/11: 62.35 EUR.\n",
+    "zoom_amd64.deb": "(installer)\n",
+    "VSCode-linux-x64.tar.gz": "(installer)\n",
+    "rental-agreement-signed.pdf": "Rental agreement, signed.\n",
+    "CV_2026_final_FINAL(2).docx": "My CV.\n",
+    "notes (1).txt": "Call the dentist. Renew passport before March.\n",
+    "family-photo-xmas.png": "(photo)\n",
+    "warranty-headphones.pdf": "Headphones warranty card.\n",
+    "setup-printer-driver.run": "(installer)\n",
+}
+TIDY = ("Tidy up my Downloads folder at {inside}: sort every file into folders called Documents, "
+        "Images, Receipts and Installers (make them), don't delete or rename anything, and write a short "
+        "'What I moved.md' in that folder listing where each file went.")
+TIDY_NOTE = "What I moved.md"
+
+BANK = """date,description,category,amount_eur
+2026-10-01,Rent October,Housing,-950.00
+2026-10-01,Salary,Income,2850.00
+2026-10-02,Supermercado Pingo,Groceries,-58.40
+2026-10-03,StreamFlix subscription,Subscriptions,-13.99
+2026-10-04,Metro card top-up,Transport,-40.00
+2026-10-05,Cafe Central,Eating out,-7.80
+2026-10-06,Gym membership,Health,-39.00
+2026-10-07,Supermercado Pingo,Groceries,-71.25
+2026-10-08,MusicBox Premium,Subscriptions,-10.99
+2026-10-09,Electricity,Utilities,-84.20
+2026-10-10,Restaurant O Velho,Eating out,-46.50
+2026-10-11,Bookshop,Shopping,-22.90
+2026-10-12,CloudDrive 2TB,Subscriptions,-9.99
+2026-10-13,Phone plan,Utilities,-25.00
+2026-10-14,Supermercado Pingo,Groceries,-64.10
+2026-10-15,Taxi airport,Transport,-31.00
+2026-10-16,Cafe Central,Eating out,-6.40
+2026-10-17,Coffee machine,Shopping,-149.00
+2026-10-18,NewsDaily digital,Subscriptions,-8.99
+2026-10-19,Pharmacy,Health,-18.75
+2026-10-20,Supermercado Pingo,Groceries,-55.80
+2026-10-21,Internet,Utilities,-35.00
+2026-10-22,Restaurant Sol,Eating out,-58.20
+2026-10-23,Cinema,Leisure,-19.00
+2026-10-24,Meal kit box,Subscriptions,-59.90
+2026-10-25,Supermercado Pingo,Groceries,-49.95
+2026-10-26,Train to Porto,Transport,-64.00
+2026-10-27,Cafe Central,Eating out,-8.10
+2026-10-28,Gaming pass,Subscriptions,-14.99
+2026-10-29,Water,Utilities,-21.40
+2026-10-30,Clothes,Shopping,-89.00
+2026-10-31,Supermercado Pingo,Groceries,-38.60
+"""
+BANK_FILE = "bank-export-october.csv"
+BUDGET = ("Read {inside}/" + BANK_FILE + " and write me a one-page budget summary for October: money in "
+          "and out, spending by category, the three biggest expenses, the subscriptions I could cancel and "
+          "what that would save a year, and one realistic tip. Save it as October budget.md.")
+BUDGET_FILE = "October budget.md"
+
+QUIZ = ("Make a 5-question pub quiz about Lisbon, one question per file: quiz-1.md to quiz-5.md, writing "
+        "each file with its own command, then quiz-answers.md with the answers.")
+QUIZ_FILES = [f"quiz-{i}.md" for i in range(1, 6)] + ["quiz-answers.md"]
+
+TRAILER = ["agent-intro", "agent-trip", "agent-weather", "agent-tidy", "agent-budget", "agent-lid", "agent-wrap"]
+
+
+class AgentDemo(tour.Demo):
+    SCENES = SCENES
+    AI_SCENES = []
+    TRAILER = TRAILER
+    TITLES = TITLES
+    HEADING = "Umoja's background agent"
+    TAGLINE = "Hand off the busywork. Stay in charge."
+    HERO = ("agent-trip", "agent-tidy", "agent-budget", "agent-weather")
+    LEAD = ("agent-trip", "agent-tidy", "agent-budget")
+    TOOL = "tools/demo/umoja-agent-demo"
+
+    def __init__(self, opts):
+        super().__init__(opts)
+        self.agent_dir = None  # ~/Umoja Agent Demo, made by this run
+        self.shares = []  # host folders shared for the demo
+        self.extra_windows = []  # windows our scenes opened (Files on a folder)
+
+    # ---- helpers ------------------------------------------------------
+
+    def workspace(self):
+        s = self.agent_state()
+        return Path.home() / "Agents" / (s.get("agent_name") or "Hermes")
+
+    def clear_old(self, names):
+        """Move files of an earlier run aside, so this one starts clean."""
+        ws = self.workspace()
+        old = ws / f"earlier demo runs/{time.strftime('%Y%m%d-%H%M%S')}"
+        for n in names:
+            f = ws / n
+            if f.exists() and not self.dry:
+                old.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(f), str(old / n))
+                log(f"  moved an earlier {n} aside")
+
+    def demo_folder(self, name, files):
+        """A folder of demo files under ~/Umoja Agent Demo."""
+        root = Path.home() / DEMO_DIR_NAME
+        if self.agent_dir is None and not self.dry:
+            if root.exists():
+                shutil.rmtree(root, ignore_errors=True)
+            root.mkdir()
+            self.agent_dir = root
+        d = root / name
+        if not self.dry:
+            d.mkdir(parents=True, exist_ok=True)
+            for rel, text in files.items():
+                (d / rel).write_text(text)
+        return d
+
+    def share(self, path, writable):
+        """Shares a host folder with the agent; returns where it sees it."""
+        if self.dry:
+            log(f"  share {path} ({'writable' if writable else 'read-only'})")
+            return f"/sandbox/shared/{path.name}"
+        res = self.bus.call(AGENTS, "ShareFolder", GLib.Variant("(sb)", (str(path), writable)), "(s)",
+                            timeout=180_000)
+        if not res:
+            return None
+        self.shares.append(path)
+        log(f"  shared {path} as {res[0]}")
+        return res[0]
+
+    def show_folder(self, path):
+        """Files on `path`, as a window of its own (closed at the end)."""
+        if self.dry:
+            return None
+        before = {w[0] for w in self.windows()}
+        try:
+            tour.DesktopAppInfo.new("org.gnome.Nautilus.desktop").launch_uris(
+                [Gio.File.new_for_path(str(path)).get_uri()], None)
+        except (GLib.Error, TypeError, AttributeError) as e:
+            log(f"  ! couldn't open {path} in Files: {e}")
+            return None
+        wid = self.wait_for_window(before)
+        if wid is not None:
+            self.extra_windows.append(wid)
+            self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (wid,)), quiet=True)
+        self.wait(1.0)
+        return wid
+
+    def close_window(self, wid):
+        if wid is not None:
+            self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)), quiet=True)
+            if wid in self.extra_windows:
+                self.extra_windows.remove(wid)
+            self.wait(0.6)
+
+    def job(self, name, prompt, caption, handed_caption, done_caption, result_caption, check=None,
+            allow=True, show_result=True, before_follow=None):
+        """One filmed job: hand it over in Ask Umoja, follow it (consent
+        cards answered on camera), then the result. `check(task)` says
+        whether it really did the job. Returns the task, or None (the clip
+        is dropped)."""
+        if not self.agent_ready():
+            return None
+        n = self.agent_name()
+        self.recorder.start(name)
+        opened = None
+        try:
+            tid = self.hand_to_agent(prompt, f"{name}-handed", handed_caption.format(n=n))
+            if not tid:
+                log(f"  ! the hand-off didn't make a task, leaving {name} out")
+                self.recorder.discard()
+                return None
+            if before_follow:
+                before_follow(tid)
+            t = self.follow_agent(tid, name, allow=allow)
+            ok = bool(t) and t.get("status") == "done" and (check(t) if check and not self.dry else True)
+            if not ok:
+                log(f"  ! {name}: {(t or {}).get('status')}: {(t or {}).get('result', '')[:160]!r}, leaving it out")
+                self.recorder.discard()
+                return None
+            self.wait(2.0)  # its "done" notification
+            self.shot(f"{name}-done", done_caption.format(n=n))
+            if show_result and (t.get("files") or self.dry):
+                opened = self.open_agent_result(t, name, result_caption.format(n=n))
+                self.wait(2.0)
+            self.recorder.stop(caption.format(n=n))
+            return t
+        finally:
+            self.agent_menu(False)
+            if opened is not None:
+                self.close_window(opened)
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.scrub_overlay()
+
+    # ---- scenes -------------------------------------------------------
+
+    def scene_agent_intro(self):
+        """Where the agent lives: its row in Ask Umoja's settings (which
+        agent, how often it asks first), and the Agents button."""
+        if not self.agent_ready():
+            return
+        n = self.agent_name()
+        self.demo_flag(True)
+        self.recorder.start("agent-intro")
+        try:
+            self.bus.call(OVERLAY, "ToggleAsk", quiet=True)
+            self.wait(1.2)
+            res = self.bus.call(OVERLAY, "TestAction", GLib.Variant("(s)", ("settings-open",)), "(bs)", quiet=True)
+            if res and res[0] or self.dry:
+                self.wait(1.8)
+                self.shot("agent-intro-settings", f"{n} is set up from Ask Umoja's settings: pick how often it "
+                          "asks you first. It runs in a sandbox and only sees what you share.")
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.wait(0.8)
+            self.agent_menu(True)
+            self.shot("agent-intro-menu", f"The Agents button on the top bar: {n}'s jobs, and anything it needs "
+                      "from you.")
+            self.wait(1.5)
+            self.agent_menu(False)
+            self.recorder.stop(f"Meet {n}: an agent that works on longer jobs in the background, safely in its "
+                               "own sandbox. You hand it jobs from Ask Umoja.")
+        finally:
+            self.demo_flag(False)
+            self.agent_menu(False)
+            self.scrub_overlay()
+
+    def scene_agent_trip(self):
+        self.clear_old([TRIP_FILE])
+        self.job(
+            "agent-trip", TRIP,
+            caption="“@agent plan a weekend in Lisbon”: {n} plans it while you get on with your day, "
+                    "and saves the plan for you.",
+            handed_caption="Type “@agent” and the job in Ask Umoja: {n} takes it from there.",
+            done_caption="Done: a notification says so.",
+            result_caption="Three days in Lisbon, planned: where to go, where to eat, how to get around, what it costs.",
+            check=lambda t: (self.workspace() / TRIP_FILE).exists())
+
+    def scene_agent_weather(self):
+        trip = self.workspace() / TRIP_FILE
+        prompt = WEATHER if (trip.exists() or self.dry) else WEATHER.replace(
+            f"add the forecast as a line at the top of {TRIP_FILE}", "save the forecast in Lisbon weather.md")
+        before = trip.read_text() if trip.exists() else ""
+        self.job(
+            "agent-weather", prompt,
+            caption="It only goes online where you let it: {n} asks before reaching a new site, "
+                    "you Allow, and the forecast lands in your plan.",
+            handed_caption="“@agent check this weekend's weather in Lisbon”",
+            done_caption="Allowed once, and done.",
+            result_caption="The forecast, at the top of the plan.",
+            check=lambda t: (trip.exists() and trip.read_text() != before) or
+                            (self.workspace() / "Lisbon weather.md").exists())
+
+    def scene_agent_tidy(self):
+        downloads = self.demo_folder("Downloads", DOWNLOADS)
+        inside = self.share(downloads, writable=True)
+        if not inside:
+            log("  ! couldn't share the Downloads folder, skipping")
+            return
+        files_window = self.show_folder(downloads)
+        self.shot("agent-tidy-before", "A Downloads folder like everyone's: invoices, photos, installers, "
+                  "receipts, all in one heap.")
+
+        def tidied(_t):
+            loose = [p.name for p in downloads.iterdir() if p.is_file() and p.name != TIDY_NOTE]
+            return (downloads / TIDY_NOTE).exists() and len(loose) <= 2
+
+        try:
+            t = self.job(
+                "agent-tidy", TIDY.format(inside=inside),
+                caption="Share a folder and say what you want: {n} sorts your Downloads into folders "
+                        "and leaves a note of what went where. Nothing is deleted.",
+                handed_caption="Shared with {n}, writable: “sort my Downloads into folders”.",
+                done_caption="Sorted.",
+                result_caption="Documents, Images, Receipts, Installers, and a note of what it moved.",
+                check=tidied, show_result=False)
+            if t and files_window is not None:
+                self.recorder.start("agent-tidy-after")
+                self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (files_window,)), quiet=True)
+                self.wait(2.0)
+                self.shot("agent-tidy-after", "After: four folders and a note. Everything is still there.")
+                self.recorder.stop("Before and after: four tidy folders, and a note of what moved where.")
+        finally:
+            self.close_window(files_window)
+
+    def scene_agent_budget(self):
+        finances = self.demo_folder("Finances", {BANK_FILE: BANK})
+        inside = self.share(finances, writable=False)
+        if not inside:
+            log("  ! couldn't share the Finances folder, skipping")
+            return
+        self.clear_old([BUDGET_FILE])
+        self.job(
+            "agent-budget", BUDGET.format(inside=inside),
+            caption="Share a bank export, read-only: {n} turns it into a budget, with the "
+                    "subscriptions you could cancel. It can read the file, never change it.",
+            handed_caption="A bank statement, shared read-only: “make me a budget summary”.",
+            done_caption="Done, and the statement is untouched.",
+            result_caption="October at a glance: by category, the biggest costs, subscriptions to cancel, one tip.",
+            check=lambda t: (self.workspace() / BUDGET_FILE).exists() and
+                            (finances / BANK_FILE).read_text() == BANK)
+
+    def scene_agent_lid(self):
+        """Close the lid mid-job: a real 25 s suspend (sudo -n rtcwake). The
+        agent carries on from where it was when the laptop wakes."""
+        if not self.opts.suspend:
+            log("  needs --suspend (a real 25 s suspend of this computer), skipping")
+            return
+        if not self.dry and subprocess.run(["sudo", "-n", "rtcwake", "--help"], capture_output=True).returncode:
+            log("  needs passwordless sudo for rtcwake, skipping")
+            return
+        if not self.agent_ready():
+            return
+        n = self.agent_name()
+        ws = self.workspace()
+        self.clear_old(QUIZ_FILES)
+        self.recorder.start("agent-lid")
+        tid = self.hand_to_agent(QUIZ, "agent-lid-handed", f"A job with a few steps for {n}…")
+        if not tid:
+            self.recorder.discard()
+            return
+        # Wait for the first file, then close the lid.
+        got = self.wait_for(lambda: (ws / QUIZ_FILES[0]).exists(), 180)
+        if not got and not self.dry:
+            log("  ! the first step never came, leaving agent-lid out")
+            self.recorder.discard()
+            return
+        self.shot("agent-lid-before", "One question written…")
+        self.recorder.stop(f"Halfway through a job for {n}…")
+        log("  suspending for 25 s")
+        if not self.dry:
+            subprocess.run(["sudo", "-n", "rtcwake", "-m", "mem", "-s", "25"], capture_output=True)
+            time.sleep(8)  # the session comes back
+        self.check_screen()
+        self.recorder.start("agent-lid-after")
+        t = self.follow_agent(tid, "agent-lid", working_shot=False)
+        made = [f for f in QUIZ_FILES if (ws / f).exists()]
+        if not t or t.get("status") != "done" or (len(made) < len(QUIZ_FILES) and not self.dry):
+            log(f"  ! after the wake: {(t or {}).get('status')}, {len(made)} files, leaving the second clip out")
+            self.recorder.discard()
+            return
+        self.wait(2.0)
+        self.shot("agent-lid", f"…and after the lid opens, {n} picks up where it left off.")
+        opened = self.open_agent_result(t, "agent-lid-result", "The whole quiz, answers included.")
+        self.wait(1.5)
+        self.recorder.stop(f"Close the lid mid-job: when the laptop wakes, {n} carries on from where it was.")
+        self.close_window(opened)
+
+    def scene_agent_wrap(self):
+        if not self.agent_ready():
+            return
+        n = self.agent_name()
+        self.recorder.start("agent-wrap")
+        wid = self.show_folder(self.workspace())
+        self.wait(1.0)
+        self.shot("agent-wrap", f"Everything {n} made is in ~/Agents/{n}, yours to keep.")
+        self.agent_menu(True)
+        self.shot("agent-wrap-menu", f"Every job in the Agents menu: what {n} did, and the files it made.")
+        self.wait(1.5)
+        self.agent_menu(False)
+        self.recorder.stop(f"Everything {n} made, in one folder. Hand off the busywork; stay in charge.")
+        self.close_window(wid)
+
+    # ---- tidying ------------------------------------------------------
+
+    def tidy(self):
+        for wid in list(self.extra_windows):
+            self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)), quiet=True)
+        for path in self.shares:
+            self.bus.call(AGENTS, "Unshare", GLib.Variant("(s)", (str(path),)), quiet=True, timeout=120_000)
+        super().tidy()
+        if self.agent_dir:
+            shutil.rmtree(self.agent_dir, ignore_errors=True)
+
+    def missing_tools(self, scenes, trailer_only=False):
+        missing = super().missing_tools(scenes, trailer_only)
+        if not trailer_only and not self.dry and not self.bus.has_name(AGENTS[0]):
+            missing.append(("umoja-agentd", "umoja-agents", "the background agent"))
+        return missing
+
+
+def main():
+    p = tour.parser(AgentDemo, "agent-demo",
+                    "Film the background agent doing real jobs, hands-free, with clips and a trailer.")
+    p.add_argument("--suspend", action="store_true",
+                   help="film agent-lid: really suspend this computer for 25 s mid-job (sudo -n rtcwake)")
+    opts = p.parse_args()
+    for attr, default in (("ask", None), ("local", False), ("reinstall_agent", False)):
+        if not hasattr(opts, attr):
+            setattr(opts, attr, default)
+    sys.exit(AgentDemo(opts).run())
+
+
+if __name__ == "__main__":
+    main()
