@@ -1,0 +1,16 @@
+[Unit]
+Description=Set up LXD for Hermes's sandbox (first boot)
+Documentation=https://github.com/kenvandine/umoja/blob/main/docs/ai-features.md
+ConditionPathExists=!/var/lib/umoja/lxd-initialised
+# Not in the installer's live session.
+ConditionKernelCommandLine=!boot=casper
+Wants=snapd.seeded.service
+After=snapd.seeded.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/umoja-agents/lxd-init
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=multi-user.target

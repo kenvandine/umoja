@@ -157,6 +157,10 @@ endif
 	install -D -m 0755 target/agents/release/umoja-openshell-gateway $(AGENTS)/usr/libexec/umoja-agents/umoja-openshell-gateway
 	install -D -m 0755 target/agents/release/umoja-openshell-lxd $(AGENTS)/usr/libexec/umoja-agents/umoja-openshell-lxd
 	install -D -m 0755 data/agents/lxd-setup $(AGENTS)/usr/libexec/umoja-agents/lxd-setup
+	install -D -m 0755 data/agents/lxd-init $(AGENTS)/usr/libexec/umoja-agents/lxd-init
+	install -D -m 0644 data/agents/umoja-lxd-init.service $(AGENTS)/usr/lib/systemd/system/umoja-lxd-init.service
+	install -d $(AGENTS)/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../umoja-lxd-init.service $(AGENTS)/usr/lib/systemd/system/multi-user.target.wants/umoja-lxd-init.service
 	install -D -m 0644 data/agents/umoja-agentd.service $(AGENTS)/usr/lib/systemd/user/umoja-agentd.service
 	install -D -m 0644 data/agents/org.umoja.Agents.service $(AGENTS)/usr/share/dbus-1/services/org.umoja.Agents.service
 	install -D -m 0644 data/agents/org.umoja.agents.policy $(AGENTS)/usr/share/polkit-1/actions/org.umoja.agents.policy
