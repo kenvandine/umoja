@@ -163,6 +163,9 @@ AGENT_TRIP = ("Plan a relaxed 3-day weekend in Lisbon for two: a day-by-day itin
               "Use what you know; look things up on Wikipedia only if you must. "
               "Save it as Lisbon weekend.md.")
 AGENT_DONE = ("done", "failed", "cancelled")
+# The reply typed under the finished plan: the job carries on in the same
+# conversation.
+AGENT_TRIP_REPLY = ("Add a rainy-day plan for Saturday, indoors, and keep the budget the same.")
 # Night Light, toggled by the settings ask and put back afterwards.
 NIGHT_LIGHT = ("org.gnome.settings-daemon.plugins.color", "night-light-enabled")
 
@@ -2255,6 +2258,35 @@ class Demo:
         log(f"  ! {tid} didn't finish in {timeout:.0f} s")
         return None
 
+    def show_agent_answer(self, tid, name, caption):
+        """The finished job in Ask Umoja, as its notification's Open shows
+        it: the whole answer, a button for its file, and a reply box."""
+        self.bus.call(OVERLAY, "ShowAgentTask", GLib.Variant("(s)", (tid,)), quiet=True)
+        self.wait(2.5)
+        self.shot(name, caption)
+
+    def reply_to_agent(self, tid, text, shot=None, caption=None):
+        """Types `text` into the reply box under the answer on show and
+        sends it: the agent carries on in the same conversation. Returns
+        the follow-up task's id, or None."""
+        log(f"  reply {text[:70]!r}...")
+        if self.dry:
+            self.bus.call(OVERLAY, "ReplyAgentTask", GLib.Variant("(s)", (text,)))
+            return "dry-follow-up"
+        before = {t["id"] for t in self.agent_state().get("tasks", [])}
+        res = self.bus.call(OVERLAY, "ReplyAgentTask", GLib.Variant("(s)", (text,)), "(b)")
+        if not res or not res[0]:
+            log("  ! Ask Umoja had no answer waiting for a reply (needs newer debs)")
+            return None
+        new = self.wait_for(lambda: next((t["id"] for t in self.agent_state().get("tasks", [])
+                                          if t["id"] not in before and t.get("parent") == tid), None),
+                            self.typing_time(text) + 30)
+        if new:
+            self.wait(2.0)  # the card shows the agent working on it
+            if shot:
+                self.shot(shot, caption or "A reply carries on in the same conversation.")
+        return new
+
     def open_agent_result(self, t, name, caption):
         """Opens the task's file (Agents.Open, as its notification's button
         does) and shoots it. Returns the window it opened, or None."""
@@ -2268,12 +2300,14 @@ class Demo:
     def scene_ai_agent(self):
         """The background agent, for a job that takes a while: "@agent plan
         a weekend in Lisbon" in Ask Umoja. It works in its sandbox, shows
-        on the top bar, notifies when it's done, and its file opens."""
+        on the top bar and notifies when it's done; the plan opens in Ask
+        Umoja, a reply refines it, and the file opens in the Markdown
+        viewer."""
         if not self.agent_ready():
             return
         n = self.agent_name()
-        caption = (f"Hand {n} a bigger job from Ask Umoja: “@agent plan a weekend in Lisbon”. "
-                   f"It works in its own sandbox and saves the plan for you.")
+        caption = (f"Hand {n} a bigger job: “@agent plan a weekend in Lisbon”. It works in its own "
+                   f"sandbox; then read the plan in Ask Umoja and reply to refine it.")
         self.recorder.start("ai-agent")
         opened = None
         try:
@@ -2291,7 +2325,22 @@ class Demo:
                 return
             self.wait(2.0)  # the "done" notification
             self.shot("ai-agent-done", f"Done: {n} says so, and the plan is in ~/Agents/{n}.")
-            opened = self.open_agent_result(t, "ai-agent", "The weekend, planned: day by day, with a budget.")
+            self.show_agent_answer(tid, "ai-agent-answer",
+                                   "Open it: the whole plan in Ask Umoja, with a reply box under it.")
+            last = t
+            follow = self.reply_to_agent(tid, AGENT_TRIP_REPLY, "ai-agent-reply",
+                                         f"Reply to refine it: {n} carries on from the same plan.")
+            if follow:
+                t2 = self.follow_agent(follow, "ai-agent-reply", working_shot=False)
+                if t2 and t2.get("status") == "done":
+                    last = t2
+                    self.show_agent_answer(follow, "ai-agent-refined",
+                                           "Refined: a rainy-day Saturday, same budget.")
+                else:
+                    log(f"  ! the follow-up didn't finish ({(t2 or {}).get('status')})")
+            self.bus.call(OVERLAY, "Hide", quiet=True)
+            self.wait(0.6)
+            opened = self.open_agent_result(last, "ai-agent", "The weekend, planned, in the Markdown viewer.")
             self.wait(1.5)
             self.recorder.stop(caption)
         finally:

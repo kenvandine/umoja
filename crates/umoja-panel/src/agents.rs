@@ -33,6 +33,15 @@ const IFACE: &str = "org.umoja.Agents";
 /// Finished tasks kept on the card.
 const DONE_SHOWN: usize = 3;
 
+/// A folder shared with the agent.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct SharedFolder {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub writable: bool,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct Task {
     pub id: String,
@@ -97,6 +106,8 @@ pub struct State {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub approvals: Vec<Approval>,
+    #[serde(default)]
+    pub shared: Vec<SharedFolder>,
 }
 
 impl State {
@@ -163,6 +174,10 @@ struct Pill {
     approvals: gtk::Box,
     tasks: gtk::Box,
     problem: gtk::Box,
+    /// "Shared folders": each share (read-only or can change, Stop
+    /// Sharing) and Share a Folder…
+    shares: gtk::Box,
+    shares_shown: RefCell<Option<Vec<SharedFolder>>>,
     /// Why the last button press didn't work ("That request isn't waiting
     /// any more."), for a few seconds.
     error: gtk::Label,
@@ -247,6 +262,10 @@ pub fn button() -> gtk::MenuButton {
     card.append(&error);
     card.append(&approvals);
     card.append(&tasks);
+    let shares = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    shares.add_css_class("agents-shares");
+    shares.set_visible(false);
+    card.append(&shares);
     let scroller = gtk::ScrolledWindow::builder()
         .child(&card)
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -284,6 +303,8 @@ pub fn button() -> gtk::MenuButton {
         approvals,
         tasks,
         problem,
+        shares,
+        shares_shown: RefCell::default(),
         error,
         state: RefCell::default(),
         drafts: RefCell::default(),
@@ -372,6 +393,16 @@ pub fn quick_tile(make: fn(&str, &str) -> gtk::ToggleButton) -> gtk::ToggleButto
         });
     });
     t
+}
+
+/// "~/Documents/Finances" for a folder under the home folder.
+fn home_words(path: &str) -> String {
+    let home = glib::home_dir();
+    match std::path::Path::new(path).strip_prefix(&home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.to_owned(),
+    }
 }
 
 /// "using 231 MB of its 4 GB memory": what the sandbox uses, under its cap.
@@ -483,10 +514,140 @@ impl Pill {
             self.fill_tasks(&shown_tasks);
             self.rendered.replace(key);
         }
+        self.shares.set_visible(state.setup == "ready");
+        if self.shares_shown.borrow().as_ref() != Some(&state.shared) {
+            self.fill_shares(&state.shared, &name);
+            self.shares_shown.replace(Some(state.shared.clone()));
+        }
         // New consent cards don't pop the card open: the notification
         // umoja-agentd sends for each is the interruption, and opening a
         // popover would take the keyboard from whatever the user is doing.
         self.state.replace(state);
+    }
+
+    fn fill_shares(self: &Rc<Self>, shared: &[SharedFolder], name: &str) {
+        while let Some(c) = self.shares.first_child() {
+            self.shares.remove(&c);
+        }
+        let heading = gtk::Label::builder()
+            .label(i18n::umoja("Shared folders"))
+            .xalign(0.0)
+            .css_classes(["dim-label", "caption-heading"])
+            .build();
+        self.shares.append(&heading);
+        for f in shared {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            row.add_css_class("agents-share");
+            let label = gtk::Label::builder()
+                .label(home_words(&f.path))
+                .xalign(0.0)
+                .hexpand(true)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .max_width_chars(28)
+                .tooltip_text(&f.path)
+                .build();
+            let change = gtk::CheckButton::builder()
+                .label(i18n::umoja("Can change"))
+                .active(f.writable)
+                .tooltip_text(i18n::umoja("Let {name} change files here, not only read them").replace("{name}", name))
+                .build();
+            let stop = gtk::Button::builder()
+                .icon_name("window-close-symbolic")
+                .tooltip_text(i18n::umoja("Stop sharing"))
+                .css_classes(["flat", "circular"])
+                .valign(gtk::Align::Center)
+                .build();
+            let path = f.path.clone();
+            let weak = Rc::downgrade(self);
+            change.connect_toggled(move |c| {
+                if let Some(this) = weak.upgrade() {
+                    this.reshare(path.clone(), c.is_active());
+                }
+            });
+            let path = f.path.clone();
+            let weak = Rc::downgrade(self);
+            stop.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.call("Unshare", Some(&(path.as_str(),).to_variant()));
+                }
+            });
+            row.append(&label);
+            row.append(&change);
+            row.append(&stop);
+            self.shares.append(&row);
+        }
+        if shared.is_empty() {
+            let none = gtk::Label::builder()
+                .label(i18n::umoja("{name} only sees its own folder.").replace("{name}", name))
+                .xalign(0.0)
+                .wrap(true)
+                .css_classes(["dim-label", "caption"])
+                .build();
+            self.shares.append(&none);
+        }
+        let add = gtk::Button::builder()
+            .label(i18n::umoja("Share a Folder…"))
+            .halign(gtk::Align::Start)
+            .css_classes(["flat", "agents-share-add"])
+            .build();
+        let weak = Rc::downgrade(self);
+        add.connect_clicked(move |b| {
+            if let Some(this) = weak.upgrade() {
+                this.pick_folder(b);
+            }
+        });
+        self.shares.append(&add);
+    }
+
+    /// Read-only or can change: shared again with the new access.
+    fn reshare(self: &Rc<Self>, path: String, writable: bool) {
+        let Some(conn) = self.conn.borrow().clone() else { return };
+        let error = self.error.clone();
+        glib::spawn_future_local(async move {
+            let res = async {
+                conn.call_future(Some(BUS), PATH, IFACE, "Unshare", Some(&(path.as_str(),).to_variant()), None,
+                    gio::DBusCallFlags::NONE, 120_000).await?;
+                conn.call_future(Some(BUS), PATH, IFACE, "ShareFolder", Some(&(path.as_str(), writable).to_variant()),
+                    None, gio::DBusCallFlags::NONE, 180_000).await
+            }
+            .await;
+            if let Err(mut e) = res {
+                gio::DBusError::strip_remote_error(&mut e);
+                error.set_text(e.message());
+                error.set_visible(true);
+            }
+        });
+    }
+
+    /// A folder picker; the folder is shared read-only (tick Can change
+    /// to let the agent change it).
+    fn pick_folder(self: &Rc<Self>, from: &gtk::Button) {
+        let window = from.root().and_downcast::<gtk::Window>();
+        self.popover.popdown();
+        let dialog = gtk::FileDialog::builder()
+            .title(i18n::umoja("Share a folder with {name}").replace("{name}", &self.state.borrow().name()))
+            .accept_label(i18n::umoja("Share"))
+            .modal(true)
+            .build();
+        let weak = Rc::downgrade(self);
+        dialog.select_folder(window.as_ref(), gio::Cancellable::NONE, move |res| {
+            let (Some(this), Ok(file)) = (weak.upgrade(), res) else { return };
+            let Some(path) = file.path() else { return };
+            let path = path.to_string_lossy().into_owned();
+            let Some(conn) = this.conn.borrow().clone() else { return };
+            let error = this.error.clone();
+            glib::spawn_future_local(async move {
+                if let Err(mut e) = conn
+                    .call_future(Some(BUS), PATH, IFACE, "ShareFolder", Some(&(path.as_str(), false).to_variant()),
+                        None, gio::DBusCallFlags::NONE, 180_000)
+                    .await
+                {
+                    gio::DBusError::strip_remote_error(&mut e);
+                    error.set_text(e.message());
+                    error.set_visible(true);
+                }
+            });
+        });
     }
 
     fn fill_problem(self: &Rc<Self>, state: &State) {

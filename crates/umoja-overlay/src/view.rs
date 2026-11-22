@@ -2419,6 +2419,37 @@ impl Overlay {
     /// asked, the whole answer (its saved file when it wrote one), a chip
     /// for the file, and the reply box to follow up in the same
     /// conversation.
+    /// Types `text` into the reply box of the agent answer on show and
+    /// sends it, as a person replying would (org.umoja.Overlay
+    /// ReplyAgentTask, for tools/demo). False when no answer is waiting.
+    pub fn reply_agent_task(self: &Rc<Self>, text: &str) -> bool {
+        if !self.is_visible() || self.agent_thread.borrow().is_none() || !self.awaiting_reply.get() {
+            return false;
+        }
+        let generation = self.generation.get();
+        let chars: Vec<char> = text.chars().collect();
+        let weak = Rc::downgrade(self);
+        let text = text.to_owned();
+        glib::spawn_future_local(async move {
+            for n in 1..=chars.len() {
+                glib::timeout_future(Duration::from_millis(38)).await;
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation || !o.is_visible() {
+                    return;
+                }
+                let typed: String = chars[..n].iter().collect();
+                o.entry.set_text(&typed);
+                o.entry.set_position(-1);
+            }
+            glib::timeout_future(Duration::from_millis(350)).await;
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() == generation {
+                o.ask(&text);
+            }
+        });
+        true
+    }
+
     /// The guided "Talk to Hermes from Telegram" setup, in the card.
     pub fn show_messaging_setup(self: &Rc<Self>) {
         if !self.is_visible() {

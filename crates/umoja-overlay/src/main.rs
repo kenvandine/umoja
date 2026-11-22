@@ -85,6 +85,12 @@ const IFACE_XML: &str = r#"
     <method name="ShowAgentTask">
       <arg name="task" type="s" direction="in"/>
     </method>
+    <!-- Type text into the shown agent answer's reply box and send it
+         (tools/demo); false when no answer is waiting for a reply. -->
+    <method name="ReplyAgentTask">
+      <arg name="text" type="s" direction="in"/>
+      <arg name="sent" type="b" direction="out"/>
+    </method>
     <!-- The guided "Talk to Hermes from Telegram" setup. -->
     <method name="ShowMessagingSetup"/>
     <!-- flags: 1 = the local model, 2 = type the question out first -->
@@ -429,6 +435,14 @@ fn export(
                             menu.hide();
                         }
                         methods.toggle()
+                    }
+                    "ReplyAgentTask" => {
+                        let Some((text,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "expected (s)");
+                            return;
+                        };
+                        invocation.return_value(Some(&(methods.reply_agent_task(&text),).to_variant()));
+                        return;
                     }
                     "AskRows" | "AskActivate" | "TestAction" => {
                         if !gtk::glib::user_runtime_dir().join("umoja-demo").exists() {

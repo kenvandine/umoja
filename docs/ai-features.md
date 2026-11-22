@@ -781,21 +781,50 @@ follow along from the **Agents** button on the top bar.
 
 **Giving it a job.** Type `@hermes` (or `@agent`) and the job in Ask Umoja ("@hermes
 compare the three cheapest flights to Lisbon in March and put it in a
-doc"), or ask the assistant to hand a job to Hermes. Its files land in
-`~/Agents/Hermes`. You get a notification when it's done, with **Open**.
+doc"), or ask the assistant to hand a job to Hermes. As soon as you type
+the `@`, the top row shows which agent the job goes to. Its files land in
+`~/Agents/Hermes`; an answer given only in words is saved there too, as
+`<job>.md`.
+
+**Reading the answer, and replying.** When a job is done you get a
+notification. **Open** (or a click on the notification, or on the job in
+the Agents menu) shows it in Ask Umoja: the whole answer (it scrolls when
+it's long), a button that opens its file, and a reply box. Type a reply
+("add a rainy-day plan for Saturday") and Hermes carries on in the same
+conversation, as a new job linked to the first. Markdown files open in
+**Apostrophe** (`umoja-desktop` recommends it and makes it the default
+viewer for Markdown in the Umoja session; your own choice still wins).
 
 **When it asks.** Hermes asks before it reaches a new site or runs a risky
 command. The request shows up as a notification and as a card in the
 **Agents** menu, with **Allow** and **Deny** (and **Always Allow** for a
 site you trust). The Agents button shows a count while something waits for
-you.
+you, and so does the **Agents** tile in Quick Settings.
 
 **Stopping and pausing.** Each running job has a **Stop** button in the
-Agents menu. **Pause Hermes** stops everything it's doing until you resume
-it. The menu also shows how much memory Hermes uses; it has a fixed cap.
+Agents menu. **Pause Hermes** (in the menu, or turning off the Quick
+Settings tile) stops everything it's doing until you resume it; it says
+**Pausing…** or **Resuming…** while the sandbox stops or starts, which can
+take a minute. The menu also shows how much memory Hermes uses; it has a
+fixed cap.
 
-**Its folder.** Hermes only sees `~/Agents/Hermes`; the folder button in
-the Agents menu opens it.
+**Its folder, and sharing others.** Hermes only sees `~/Agents/Hermes`
+(the folder button in the Agents menu opens it) and the folders you share.
+Under **Shared folders** in the Agents menu, **Share a Folder…** shares one
+read-only; tick **Can change** to let Hermes change files there, and **×**
+stops sharing. A shared folder you delete or move is dropped.
+
+**From your phone (Telegram).** Hermes can take jobs and answer you in
+Telegram. Type "telegram" in Ask Umoja (**Talk to Hermes from Telegram**),
+or click **Connect…** next to Telegram under **Background agent** in Ask
+Umoja's settings, and follow the three steps: make a bot with BotFather and
+paste its message (Umoja picks out the token and checks it), send your bot
+any message so Hermes learns who you are, and confirm **Is this you?**. The
+bot says hello, and from then on Hermes only answers your account. The
+token is kept in your keyring. **Disconnect** in the same setup turns it
+off. Without the setup:
+`busctl --user call org.umoja.Agents /org/umoja/Agents org.umoja.Agents SetMessaging sss telegram TOKEN USER_ID`
+(an empty token keeps the saved one; three empty strings turn it off).
 
 **Closing the lid.** If your laptop sleeps while Hermes is working, it picks
 the job up again when you open the lid: it checks what it had already done

@@ -847,3 +847,11 @@ window.captions {
 .input-source-item label {
   font-size: 1.6em;
 }
+
+/* The guided Telegram setup, in place of the answer. */
+.ask-messaging .error {
+  color: @error_color;
+}
+.ask-messaging passwordentry {
+  min-height: 34px;
+}
