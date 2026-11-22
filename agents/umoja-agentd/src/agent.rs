@@ -148,10 +148,10 @@ impl Agent {
         tokio::spawn(async move {
             let _guard = this.lifecycle.lock().await;
             if let Err(e) = this.bring_up(false).await {
-                tracing::error!(error = %e, "couldn't start Hermes");
+                tracing::error!(error = %format!("{e:#}"), "couldn't start the agent");
                 let mut s = this.state.lock().await;
                 s.sandbox = "error".into();
-                s.error = format!("{e:#}");
+                s.error = for_people(&e);
                 drop(s);
                 this.changed().await;
             }
@@ -208,7 +208,7 @@ impl Agent {
                 Err(e) => {
                     tracing::error!(error = %format!("{e:#}"), "setup failed");
                     s.setup = Setup::Error;
-                    s.error = format!("{e:#}");
+                    s.error = for_people(&e);
                 }
             }
             drop(s);
@@ -1488,6 +1488,37 @@ impl Agent {
     }
 }
 
+/// An error as the user sees it: what went wrong and what to do, never a
+/// registry URL or an RPC status (the whole chain goes to the journal).
+pub fn for_people(e: &anyhow::Error) -> String {
+    let n = &catalog::active().name;
+    let chain = format!("{e:#}").to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| chain.contains(w));
+    if has(&["manifest unknown", "name unknown", "repository not found", "unauthorized", "denied: "]) {
+        return format!("{n} isn't available to download right now. Try again later.");
+    }
+    if has(&["dns", "lookup", "connection refused", "network is unreachable", "timed out", "tls", "certificate"])
+        && has(&["registry", "pull", "download", "ghcr", "image"])
+    {
+        return format!("Couldn't download {n}. Check that you're online, then try again.");
+    }
+    if has(&["no space left", "disk quota"]) {
+        return format!("There isn't enough free disk space for {n}. Free some up, then try again.");
+    }
+    // Our own messages are the outermost one (a bail or a context); a
+    // library's raw error is replaced by a plain one.
+    let top = e.to_string();
+    let technical = top.contains("://")
+        || ["error", "status", "rpc", "errno", "os error", "{"].iter().any(|w| top.to_lowercase().contains(w));
+    if technical {
+        format!("{n} couldn't start. Try again in a moment.")
+    } else if top.ends_with('.') {
+        top
+    } else {
+        format!("{top}.")
+    }
+}
+
 /// Tasks waiting on nothing any more go back to running.
 fn refresh_waiting(s: &mut State) {
     let waiting: Vec<String> = s.approvals.iter().map(|a| a.task.clone()).collect();
@@ -1801,6 +1832,21 @@ fn clear_secret(kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errors_for_people() {
+        let raw = anyhow!("registry error: url https://ghcr.io/v2/kenvandine/umoja-hermes/manifests/latest: manifest unknown")
+            .context("Couldn't create Hermes's sandbox");
+        let text = for_people(&raw);
+        assert!(text.contains("isn't available to download"), "{text}");
+        assert!(!text.contains("ghcr"));
+        let ours = anyhow!("Hermes needs your permission to set up its sandbox.");
+        assert_eq!(for_people(&ours), "Hermes needs your permission to set up its sandbox.");
+        let lib = anyhow!("status: Unavailable, message: \"tcp connect error\"");
+        assert!(for_people(&lib).ends_with("couldn't start. Try again in a moment."));
+        let ctx = anyhow!("os error 2").context("Couldn't create Hermes's sandbox");
+        assert_eq!(for_people(&ctx), "Couldn't create Hermes's sandbox.");
+    }
 
     #[test]
     fn carry_on_text_keeps_the_task_and_steps() {

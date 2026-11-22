@@ -1,0 +1,45 @@
+#!/bin/bash
+# Point an agent's catalog entry at the sandbox image built from this
+# checkout's agents/<id>-image (default: hermes).
+#
+#   packaging/bump-agent-image [id]
+#
+# The Hermes image workflow tags every image it publishes with the full
+# commit sha (main also gets :latest). Umoja never runs a floating tag: a
+# deb always names the exact image it was tested with, so after a change to
+# agents/<id>-image is pushed and the workflow has published it, run this
+# and commit the catalog change. It checks the tag can be pulled
+# anonymously first, the way the sandbox will pull it.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+id=${1:-hermes}
+catalog=agents/catalog/$id.json
+dir=agents/$id-image
+[[ -f $catalog && -d $dir ]] || { echo "no $catalog or $dir" >&2; exit 1; }
+
+sha=$(git log -1 --format=%H -- "$dir")
+image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$catalog")
+repo=${image%:*}
+name=${repo#ghcr.io/}
+
+token=$(curl -fsS "https://ghcr.io/token?scope=repository:$name:pull" |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+    "https://ghcr.io/v2/$name/manifests/$sha")
+if [[ $code != 200 ]]; then
+    echo "$repo:$sha isn't published yet (HTTP $code): push, wait for the Hermes image workflow, then rerun." >&2
+    exit 1
+fi
+
+python3 - "$catalog" "$repo:$sha" <<'PY'
+import json, sys
+path, image = sys.argv[1], sys.argv[2]
+data = json.load(open(path))
+data["image"] = image
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+echo "$catalog -> $repo:$sha"

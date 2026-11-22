@@ -3,6 +3,8 @@
 #
 # - Pushes to main that touch agents/hermes-image publish :latest and :<sha>;
 #   pushes to claude/* branches publish :<sha> only (device tests).
+#   agents/catalog/hermes.json names an exact :<sha>; move it with
+#   packaging/bump-agent-image once a new image is published.
 # - A weekly run picks up a new upstream Hermes Agent image.
 # - Pull requests only build.
 #
