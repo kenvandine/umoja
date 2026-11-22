@@ -70,6 +70,10 @@ answer `{"error": "..."}` is shown to the user, so write it for a person.
 | --- | --- | --- |
 | `health` | | `{"ok": bool}` |
 | `restart` | | `{"ok": true}` after the agent is stopped (the start script brings it back with the new agent.env) |
+| `chat-ask` | `{"key","text","buttons":[[label, choice]]}` | `{"messages": [[chat, id]]}`: a consent prompt sent to each allowed chat user, buttons carrying `umoja:<choice>:<key>` (optional: agents with messaging) |
+| `chat-answers` | | `{"answers": [{"key","choice","at"}]}`: button taps since the last call; the agent's chat adapter records them |
+| `chat-settle` | `{"messages","text"}` | `{"ok": true}`: the prompt's messages replaced by `text`, without buttons |
+| `chat-say` | `{"text"}` | `{"ok": true}`: a message to each allowed chat user |
 | `submit` | `{"input", "instructions", "session"}` | `{"run": id, "session": id}`. `session` continues a conversation; it can be empty |
 | `status RUN` | | `{"status", "output", "error", "session", "pending"}` |
 | `events RUN` | | `{"event", "data"}` lines until the run ends |

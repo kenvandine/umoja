@@ -297,7 +297,13 @@ Hermes from Telegram**, or click **Connect…** next to **Telegram** under
 From then on the agent only answers your account. While it works on a
 message from Telegram, the Agents button and the Quick Settings tile show
 it, and the job is listed in the Agents menu with its answer. To stop it,
-send `/stop` in Telegram. Your bot's token is kept
+send `/stop` in Telegram.
+
+When a Telegram job needs a website the agent may not use yet, the
+request comes to Telegram too, with **Allow once**, **Always allow** and
+**Deny** buttons, as well as to your computer. Answer in either place. The
+agent can't reach the site in the meantime, so if it already answered
+without it, ask again once you've allowed it. Your bot's token is kept
 in your keyring. To stop, open the same setup and click **Disconnect**.
 
 ### Pausing, and closing the lid

@@ -34,12 +34,22 @@ pub struct Agent {
     notes: Mutex<HashMap<u32, Note>>,
     /// Proposals as the gateway sent them, by approval id (to approve).
     proposals: Mutex<HashMap<String, Proposal>>,
+    /// Consent prompts also sent to Telegram (a Telegram job's): approval
+    /// id -> its buttons' key and the messages, to settle them.
+    chat_prompts: Mutex<HashMap<String, ChatPrompt>>,
     /// Tasks with a watcher running.
     watching: Mutex<std::collections::HashSet<String>>,
     /// Serialises setup / pause / remove.
     lifecycle: Mutex<()>,
     /// Bumped on every wake from sleep: watchers reconnect.
     wake: std::sync::atomic::AtomicU64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChatPrompt {
+    key: String,
+    messages: Value,
+    host: String,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +79,7 @@ impl Agent {
             relay_running: Mutex::new(false),
             notes: Mutex::new(HashMap::new()),
             proposals: Mutex::new(HashMap::new()),
+            chat_prompts: Mutex::new(HashMap::new()),
             watching: Mutex::new(Default::default()),
             lifecycle: Mutex::new(()),
             wake: Default::default(),
@@ -584,10 +595,13 @@ impl Agent {
                 .map(|t| (t.id.clone(), t.session.clone()));
             (on, current)
         };
-        if !on && current.is_none() {
+        if !on && current.is_none() && self.chat_prompts.lock().await.is_empty() {
             return Ok(());
         }
         let gw = self.gateway().await?;
+        if on && let Err(e) = self.chat_answers(&gw).await {
+            tracing::debug!(error = %e, "chat answers");
+        }
         let busy = on && {
             let v = bridge::call(&gw, &["call", "GET", "/health/detailed"], None).await?;
             v["body"]["active_agents"].as_u64().unwrap_or(0) > 0
@@ -761,18 +775,132 @@ impl Agent {
             known.retain(|id, _| ids.contains(id));
         }
         let before = s.approvals.len();
+        let vanished: Vec<String> = s
+            .approvals
+            .iter()
+            .filter(|a| a.kind == ApprovalKind::Network && !ids.contains(&a.id))
+            .map(|a| a.id.clone())
+            .collect();
         s.approvals
             .retain(|a| a.kind != ApprovalKind::Network || ids.contains(&a.id));
         if s.approvals.len() != before {
             changed = true;
             refresh_waiting(&mut s);
         }
+        // A Telegram job's (or, with no job of Umoja's running, one the
+        // chat turn raised before poll_chat noticed it).
+        let chatting = s.messaging.as_ref().is_some_and(|m| m.platform == "telegram");
+        let from_chat: Vec<bool> = fresh
+            .iter()
+            .map(|a| {
+                chatting
+                    && (a.task.is_empty() || s.tasks.iter().any(|t| t.id == a.task && t.source == "telegram"))
+            })
+            .collect();
         drop(s);
-        for a in fresh {
+        for id in vanished {
+            self.settle_chat(&id, "No longer needed.");
+        }
+        for (a, chat) in fresh.into_iter().zip(from_chat) {
             self.announce(&a).await;
+            if chat {
+                self.ask_in_chat(&a);
+            }
         }
         if changed {
             self.changed().await;
+        }
+        Ok(())
+    }
+
+    /// A Telegram job's consent prompt, in Telegram too, with buttons;
+    /// Hermes's Telegram adapter (umoja-patch-hermes) records the tap and
+    /// poll_chat answers it.
+    fn ask_in_chat(self: &Arc<Self>, a: &Approval) {
+        let this = self.clone();
+        let a = a.clone();
+        tokio::spawn(async move {
+            let Ok(gw) = this.gateway().await else { return };
+            let key = chat_key(&a.id);
+            let n = catalog::active().name.clone();
+            let text = format!(
+                "{n} wants to reach {host}. It can't until you say so.",
+                host = a.host
+            );
+            let mut buttons = vec![("Allow once", "allow")];
+            if !a.flagged {
+                buttons.push(("Always allow", "always"));
+            }
+            buttons.push(("Deny", "deny"));
+            let body = serde_json::json!({ "key": key, "text": text, "buttons": buttons });
+            match bridge::call(&gw, &["chat-ask"], Some(&body)).await {
+                Ok(v) => {
+                    // Answered on the computer meanwhile: nothing to keep.
+                    if this.state.lock().await.approvals.iter().any(|x| x.id == a.id) {
+                        this.chat_prompts.lock().await.insert(
+                            a.id.clone(),
+                            ChatPrompt { key, messages: v["messages"].clone(), host: a.host.clone() },
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(error = %format!("{e:#}"), "couldn't send the prompt to Telegram"),
+            }
+        });
+    }
+
+    /// The Telegram copy of approval `id` loses its buttons (answered on
+    /// the computer, or gone).
+    fn settle_chat(self: &Arc<Self>, id: &str, text: &str) {
+        let this = self.clone();
+        let id = id.to_owned();
+        let text = text.to_owned();
+        tokio::spawn(async move {
+            let Some(p) = this.chat_prompts.lock().await.remove(&id) else { return };
+            let Ok(gw) = this.gateway().await else { return };
+            let n = catalog::active().name.clone();
+            let body = serde_json::json!({
+                "messages": p.messages,
+                "text": format!("{n} wanted to reach {}. {text}", p.host),
+            });
+            let _ = bridge::call(&gw, &["chat-settle"], Some(&body)).await;
+        });
+    }
+
+    /// Button taps in Telegram: answer those prompts as the desktop would.
+    async fn chat_answers(self: &Arc<Self>, gw: &Gateway) -> Result<()> {
+        if self.chat_prompts.lock().await.is_empty() {
+            return Ok(());
+        }
+        let v = bridge::call(gw, &["chat-answers"], None).await?;
+        for ans in v["answers"].as_array().cloned().unwrap_or_default() {
+            let key = ans["key"].as_str().unwrap_or_default();
+            let choice = ans["choice"].as_str().unwrap_or_default().to_owned();
+            let found = {
+                let mut prompts = self.chat_prompts.lock().await;
+                let id = prompts.iter().find(|(_, p)| p.key == key).map(|(id, _)| id.clone());
+                // Settled in Telegram already (the tap edited the message).
+                id.and_then(|id| prompts.remove(&id).map(|p| (id, p)))
+            };
+            let Some((id, prompt)) = found else { continue };
+            let n = catalog::active().name.clone();
+            let say = match self.answer(&id, &choice).await {
+                Ok(()) if choice == "deny" => None,
+                Ok(()) => {
+                    let chatting = self
+                        .state
+                        .lock()
+                        .await
+                        .tasks
+                        .iter()
+                        .any(|t| t.source == "telegram" && matches!(t.status, TaskStatus::Running | TaskStatus::Waiting));
+                    // Mid-answer it may try again by itself; after, it gave up.
+                    (!chatting).then(|| format!("{n} can reach {} now. Ask again and it will use it.", prompt.host))
+                }
+                Err(e) => Some(e.to_string()),
+            };
+            if let Some(text) = say {
+                let _ = bridge::call(gw, &["chat-say"], Some(&serde_json::json!({ "text": text }))).await;
+            }
         }
         Ok(())
     }
@@ -1501,7 +1629,8 @@ impl Agent {
         Ok(())
     }
 
-    async fn settle(&self, a: &Approval) {
+    async fn settle(self: &Arc<Self>, a: &Approval) {
+        self.settle_chat(&a.id, "Answered on the computer.");
         {
             let mut s = self.state.lock().await;
             s.approvals.retain(|x| x.id != a.id);
@@ -2028,6 +2157,15 @@ fn random_key() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     (0..32).map(|_| format!("{:02x}", rng.random::<u8>())).collect()
+}
+
+/// A short key for approval `id`, for Telegram's 64-byte button data.
+fn chat_key(id: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    now_ms().hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 /// The text of the last `role` message in the agent's session `session`.

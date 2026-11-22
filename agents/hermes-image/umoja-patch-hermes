@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Build-time patch: Umoja's Telegram buttons in Hermes's Telegram adapter.
+
+Umoja (umoja-agentd, through umoja-agent-bridge chat-ask) sends the sandbox's
+consent prompts ("Hermes wants to reach example.com") to the user's Telegram
+with Allow/Deny buttons. Hermes's gateway reads the bot's updates, so the
+button taps reach its adapter; this patch makes it handle callback data
+starting "umoja:" (umoja:<choice>:<key>): only an allowed user may answer,
+the answer is written to /sandbox/.config/umoja/chat-answers/<key>.json for
+umoja-agent-bridge chat-answers, and the message loses its buttons.
+
+Fails the build when the adapter changed shape, so an upstream update can't
+drop the buttons silently.
+"""
+
+import pathlib
+import sys
+
+ANCHOR = "        data = query.data\n"
+MARK = "# umoja: consent buttons"
+BLOCK = '''        # umoja: consent buttons (agents/hermes-image/umoja-patch-hermes)
+        if data.startswith("umoja:"):
+            import json as _uj, os as _uo, time as _ut
+            _parts = data.split(":", 2)
+            _caller = str(getattr(query.from_user, "id", ""))
+            _allowed = [x.strip() for x in _uo.environ.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()]
+            if len(_parts) != 3 or _caller not in _allowed:
+                await query.answer(text="Only the computer's owner can answer this.")
+                return
+            _choice, _key = _parts[1], _parts[2]
+            _dir = "/sandbox/.config/umoja/chat-answers"
+            _uo.makedirs(_dir, exist_ok=True)
+            _tmp = _uo.path.join(_dir, "." + _key + ".tmp")
+            with open(_tmp, "w", encoding="utf-8") as _f:
+                _uj.dump({"key": _key, "choice": _choice, "at": int(_ut.time())}, _f)
+            _uo.replace(_tmp, _uo.path.join(_dir, _key + ".json"))
+            _label = {"allow": "Allowed once", "always": "Always allowed", "deny": "Denied"}.get(_choice, "Answered")
+            await query.answer(text=_label)
+            try:
+                _text = getattr(query.message, "text", "") or ""
+                await query.edit_message_text(text=_text + "\\n\\n" + _label + ".", reply_markup=None)
+            except Exception:
+                pass
+            return
+'''
+
+
+def patch(path: pathlib.Path) -> bool:
+    src = path.read_text(encoding="utf-8")
+    if MARK in src:
+        return True
+    head = src.find("async def _handle_callback_query(")
+    if head < 0:
+        return False
+    at = src.find(ANCHOR, head)
+    if at < 0 or at - head > 2000:
+        return False
+    at += len(ANCHOR)
+    path.write_text(src[:at] + BLOCK + src[at:], encoding="utf-8")
+    return True
+
+
+def main() -> int:
+    roots = [pathlib.Path(p) for p in sys.argv[1:]] or [
+        pathlib.Path(p) for p in ("/opt/hermes", "/app", "/usr/local/lib", "/usr/lib/python3") if pathlib.Path(p).is_dir()
+    ]
+    found = [p for r in roots for p in r.rglob("plugins/platforms/telegram/adapter.py")]
+    if not found:
+        print("umoja-patch-hermes: Hermes's Telegram adapter not found", file=sys.stderr)
+        return 1
+    for p in found:
+        if not patch(p):
+            print(f"umoja-patch-hermes: {p} changed shape; update the patch", file=sys.stderr)
+            return 1
+        print(f"umoja-patch-hermes: patched {p}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

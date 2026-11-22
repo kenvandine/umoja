@@ -822,7 +822,10 @@ paste its message (Umoja picks out the token and checks it), send your bot
 any message so Hermes learns who you are, and confirm **Is this you?**. The
 bot says hello, and from then on Hermes only answers your account. Jobs sent
 from Telegram show in the Agents menu (marked Telegram) and on the Quick
-Settings tile while Hermes works on them; stop one with `/stop` in Telegram. The
+Settings tile while Hermes works on them; stop one with `/stop` in Telegram. When a Telegram job wants a new site, the
+consent prompt also goes to Telegram with **Allow once**, **Always allow**
+and **Deny** buttons (only your account can answer them); answering on the
+computer clears the buttons there. The
 token is kept in your keyring. **Disconnect** in the same setup turns it
 off. Without the setup:
 `busctl --user call org.umoja.Agents /org/umoja/Agents org.umoja.Agents SetMessaging sss telegram TOKEN USER_ID`

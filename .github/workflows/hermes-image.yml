@@ -47,7 +47,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Check the bridge script
-        run: python3 -m py_compile agents/hermes-image/umoja-agent-bridge && sh -n agents/hermes-image/umoja-agent-start
+        run: python3 -m py_compile agents/hermes-image/umoja-agent-bridge agents/hermes-image/umoja-patch-hermes && sh -n agents/hermes-image/umoja-agent-start
       - name: Build (and push)
         uses: docker/build-push-action@v6
         with:
