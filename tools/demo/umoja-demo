@@ -2167,11 +2167,20 @@ class Demo:
     def agent_menu(self, open_):
         """The Agents button's menu on the top bar (tasks and consent cards)."""
         if open_:
+            self.close_panel_menus()
             self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("agents",)), quiet=True)
             self.wait(1.2)
         else:
-            self.bus.call(PANEL, "Unfocus", quiet=True)
+            self.close_panel_menus()
             self.wait(0.6)
+
+    def close_panel_menus(self):
+        """Closes whatever top-bar menu is open. (Unfocus alone left a menu
+        opened by OpenMenu up, and the next one then couldn't open.)"""
+        if self.dry or self.bus.has_method(PANEL, "CloseMenus"):
+            self.bus.call(PANEL, "CloseMenus", quiet=True)
+        else:
+            self.bus.call(PANEL, "Unfocus", quiet=True)
 
     def hand_to_agent(self, prompt, shot=None, caption=None):
         """Types "@agent <prompt>" into Ask Umoja, the way a person hands a
@@ -2258,11 +2267,22 @@ class Demo:
         log(f"  ! {tid} didn't finish in {timeout:.0f} s")
         return None
 
-    def show_agent_answer(self, tid, name, caption):
+    def show_agent_answer(self, tid, name, caption, scroll_to=None, hold=2.5):
         """The finished job in Ask Umoja, as its notification's Open shows
-        it: the whole answer, a button for its file, and a reply box."""
+        it: the whole answer, a button for its file, and a reply box.
+        `scroll_to` (0.0 top .. 1.0 end) glides down to the part the caption
+        is about."""
         self.bus.call(OVERLAY, "ShowAgentTask", GLib.Variant("(s)", (tid,)), quiet=True)
         self.wait(2.5)
+        if scroll_to is not None:
+            self.demo_flag(True)  # TestAction only answers during a demo
+            try:
+                self.bus.call(OVERLAY, "TestAction", GLib.Variant("(s)", (f"answer-scroll:{scroll_to}",)), "(bs)",
+                              quiet=True)
+            finally:
+                self.demo_flag(False)
+            self.wait(1.5)
+        self.wait(max(0.0, hold - 2.5))
         self.shot(name, caption)
 
     def reply_to_agent(self, tid, text, shot=None, caption=None):

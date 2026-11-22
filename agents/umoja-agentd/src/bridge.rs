@@ -39,15 +39,32 @@ const BRIDGE: &str = "/usr/local/bin/umoja-agent-bridge";
 pub const ENV_FILE: &str = "/sandbox/.config/umoja/agent.env";
 
 /// What the agent is told about where it runs, with every run.
-pub fn instructions(name: &str) -> String {
-    format!(
+pub fn instructions(name: &str, shared: &[crate::state::Shared]) -> String {
+    let mut text = format!(
         "You are {name}, running for the user inside a sandbox on their computer, set up by the \
 Umoja desktop. Save every file you make in /sandbox/workspace (the user sees it as ~/Agents/{name}) \
 unless they name another shared folder under /sandbox/shared. You cannot see or control the \
 user's desktop, apps or other files. Network access is limited: when a site is blocked the user \
 is asked, so wait and retry once rather than giving up. Keep your final answer short and say \
 which files you wrote."
-    )
+    );
+    // People name a shared folder the way they know it ("my Downloads",
+    // "~/Documents/Finances"): say where each one is in here.
+    if !shared.is_empty() {
+        text.push_str(" Folders the user shared with you, by the name they know and where you find them:");
+        let home = std::env::var("HOME").unwrap_or_default();
+        for s in shared {
+            let known = match s.path.strip_prefix(&home) {
+                Some(rest) if !home.is_empty() => format!("~{rest}"),
+                _ => s.path.clone(),
+            };
+            let access = if s.writable { "you may change it" } else { "read-only" };
+            text.push_str(&format!(" {known} is {inside} ({access});", inside = s.inside));
+        }
+        text.pop();
+        text.push('.');
+    }
+    text
 }
 
 /// Runs the bridge with `args` and feeds every `@@` line to `on_line`.

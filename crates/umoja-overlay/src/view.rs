@@ -973,6 +973,9 @@ impl Overlay {
         if !self.window.is_visible() {
             return;
         }
+        if self.agent_thread.borrow().is_some() || self.question_label.is_visible() {
+            tell_agents_viewing("");
+        }
         self.entry.set_text("");
         self.messaging.stop();
         self.assistant.set_visible(false);
@@ -2321,6 +2324,32 @@ impl Overlay {
                 ),
             ),
             "voice-page" => (crate::model_picker::show_page("voice"), String::new()),
+            // Scroll the answer on show to a fraction of its length (0.0
+            // top, 1.0 end): the demo shows the part a caption is about.
+            a if a.starts_with("answer-scroll:") => {
+                let Ok(f) = a[14..].parse::<f64>() else {
+                    return (false, String::new());
+                };
+                match self.answer.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>() {
+                    Some(sw) => {
+                        let adj = sw.vadjustment();
+                        let span = (adj.upper() - adj.page_size()).max(0.0);
+                        let (from, to) = (adj.value(), adj.lower() + span * f.clamp(0.0, 1.0));
+                        // Glides there over about a second, as a reader would.
+                        glib::spawn_future_local(async move {
+                            const STEPS: u32 = 30;
+                            for i in 1..=STEPS {
+                                glib::timeout_future(Duration::from_millis(33)).await;
+                                let t = f64::from(i) / f64::from(STEPS);
+                                let eased = t * t * (3.0 - 2.0 * t);
+                                adj.set_value(from + (to - from) * eased);
+                            }
+                        });
+                        (span > 0.0, String::new())
+                    }
+                    None => (false, String::new()),
+                }
+            }
             "settings-open" => (crate::model_picker::open(), String::new()),
             a if a.starts_with("agent-pick:") => {
                 (crate::model_picker::test_pick_agent(&a[11..]), String::new())
@@ -2499,6 +2528,9 @@ impl Overlay {
                     o.answer.set_text(&i18n::umoja("That job isn't there any more."));
                     return;
                 };
+                // While it's on show, its "finished" notification would
+                // only cover it.
+                tell_agents_viewing(&id);
                 o.question_label.set_text(&context::truncate_chars(t["prompt"].as_str().unwrap_or_default().trim(), 200));
                 o.question_label.set_visible(true);
                 let status = t["status"].as_str().unwrap_or_default();
@@ -3974,6 +4006,28 @@ fn agent_ids() -> Vec<String> {
         }
     }
     ids
+}
+
+/// Tells the background agent which of its jobs Ask Umoja shows ("" for
+/// none), so a "finished" notification doesn't pop up over it.
+fn tell_agents_viewing(task: &str) {
+    let task = task.to_owned();
+    glib::spawn_future_local(async move {
+        if let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await {
+            let _ = conn
+                .call_future(
+                    Some("org.umoja.Agents"),
+                    "/org/umoja/Agents",
+                    "org.umoja.Agents",
+                    "Viewing",
+                    Some(&(task.as_str(),).to_variant()),
+                    None,
+                    gio::DBusCallFlags::NO_AUTO_START,
+                    2_000,
+                )
+                .await;
+        }
+    });
 }
 
 /// org.umoja.Agents' state, or None when it isn't running.

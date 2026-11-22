@@ -104,6 +104,19 @@ impl Agents {
         self.0.open(task).await.map_err(err)
     }
 
+    /// Forget finished jobs (their files stay) and turn down requests no
+    /// running job is waiting on.
+    async fn clear_finished(&self) {
+        self.0.clear_finished().await;
+    }
+
+    /// Ask Umoja shows task `task` ("" when it stops): its "finished"
+    /// notification goes, and none pops up over it. Said again every
+    /// couple of seconds while it's on show.
+    async fn viewing(&self, task: &str) {
+        self.0.set_viewing(task).await;
+    }
+
     /// Add the user to the lxd group (pkexec); needs a new login.
     async fn fix_lxd(&self) -> fdo::Result<()> {
         self.0.fix_lxd().await.map_err(err)

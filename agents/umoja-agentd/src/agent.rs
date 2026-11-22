@@ -43,6 +43,9 @@ pub struct Agent {
     lifecycle: Mutex<()>,
     /// Bumped on every wake from sleep: watchers reconnect.
     wake: std::sync::atomic::AtomicU64,
+    /// The task Ask Umoja shows (Viewing), and when it last said so: its
+    /// "finished" notification would only cover it.
+    viewing: Mutex<(String, Option<std::time::Instant>)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -83,6 +86,7 @@ impl Agent {
             watching: Mutex::new(Default::default()),
             lifecycle: Mutex::new(()),
             wake: Default::default(),
+            viewing: Mutex::new((String::new(), None)),
         })
     }
 
@@ -1103,7 +1107,10 @@ impl Agent {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
-        let instructions = bridge::instructions(&catalog::active().name);
+        let instructions = {
+            let shared = self.state.lock().await.shared.clone();
+            bridge::instructions(&catalog::active().name, &shared)
+        };
         let session = parent.as_ref().map(|(_, s)| s.as_str()).filter(|s| !s.is_empty());
         match bridge::submit(&gw, &prompt, &instructions, session).await {
             Ok((run, session)) => {
@@ -1392,7 +1399,10 @@ impl Agent {
             preload_local_model().await;
         }
         let text = carry_on_text(&prompt, &log, !session.is_empty());
-        let instructions = bridge::instructions(&catalog::active().name);
+        let instructions = {
+            let shared = self.state.lock().await.shared.clone();
+            bridge::instructions(&catalog::active().name, &shared)
+        };
         match bridge::submit(&gw, &text, &instructions, Some(&session)).await {
             Ok((run, new_session)) => {
                 tracing::info!(task = id, run = %run, "carrying on after an interruption");
@@ -1584,8 +1594,15 @@ impl Agent {
         } else {
             format!("{n} couldn't finish “{title}”", n = catalog::active().name)
         };
-        let mut body: String = result.chars().take(220).collect();
-        if result.chars().count() > 220 {
+        if self.is_viewing(id).await {
+            return;
+        }
+        let shown = {
+            let s = self.state.lock().await;
+            plain_text(&host_words(result, &s.shared))
+        };
+        let mut body: String = shown.chars().take(220).collect();
+        if shown.chars().count() > 220 {
             body.push('…');
         }
         let target = files.first().cloned().unwrap_or_else(paths::workspace);
@@ -1593,6 +1610,71 @@ impl Agent {
         if nid != 0 {
             self.notes.lock().await.insert(nid, Note::Result(id.to_owned(), target));
         }
+    }
+
+    /// Forgets finished jobs (their files stay) and turns down requests
+    /// no running job is waiting on: a clean Agents menu.
+    pub async fn clear_finished(self: &Arc<Self>) {
+        let stray: Vec<Approval> = {
+            let mut s = self.state.lock().await;
+            s.tasks.retain(|t| matches!(t.status, TaskStatus::Running | TaskStatus::Waiting));
+            let running: Vec<String> = s.tasks.iter().map(|t| t.id.clone()).collect();
+            s.approvals.iter().filter(|a| !running.contains(&a.task)).cloned().collect()
+        };
+        for a in stray {
+            if a.kind == ApprovalKind::Question {
+                self.settle(&a).await;
+            } else if let Err(e) = self.answer(&a.id, "deny").await {
+                tracing::info!(error = %e, "couldn't turn down a stray request; dropping it");
+                self.settle(&a).await;
+            }
+        }
+        let results: Vec<u32> = self
+            .notes
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, n)| matches!(n, Note::Result(..)))
+            .map(|(id, _)| *id)
+            .collect();
+        for nid in results {
+            self.notes.lock().await.remove(&nid);
+            notify::close(&self.conn, nid).await;
+        }
+        self.changed().await;
+    }
+
+    /// Ask Umoja shows task `id` (empty: nothing). Its "finished"
+    /// notification is closed, and none comes while it's on show.
+    pub async fn set_viewing(&self, id: &str) {
+        *self.viewing.lock().await = (id.to_owned(), Some(std::time::Instant::now()));
+        if id.is_empty() {
+            return;
+        }
+        let ids: Vec<u32> = self
+            .notes
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, n)| matches!(n, Note::Result(t, _) if t == id))
+            .map(|(nid, _)| *nid)
+            .collect();
+        for nid in ids {
+            self.notes.lock().await.remove(&nid);
+            notify::close(&self.conn, nid).await;
+        }
+    }
+
+    /// Task `id` (or the one it follows up) is on show in Ask Umoja. Ask
+    /// Umoja says so every couple of seconds while it does, so a view that
+    /// went away without saying so stops counting.
+    async fn is_viewing(&self, id: &str) -> bool {
+        let (viewing, at) = self.viewing.lock().await.clone();
+        if viewing.is_empty() || !at.is_some_and(|t| t.elapsed() < Duration::from_secs(8)) {
+            return false;
+        }
+        viewing == id
+            || self.state.lock().await.tasks.iter().any(|t| t.id == id && t.parent == viewing)
     }
 
     pub async fn stop_task(&self, id: &str) -> Result<()> {
@@ -1966,6 +2048,33 @@ impl Agent {
         let access = tokio::task::spawn_blocking(move || Lxd::new(&project).access()).await?;
         Ok(matches!(access, crate::lxd::Access::Ok))
     }
+}
+
+/// Markdown as a notification shows it: no heading marks, emphasis, code
+/// ticks or table rules; list items as bullets, table rows as "a · b".
+pub fn plain_text(md: &str) -> String {
+    let mut lines = Vec::new();
+    for line in md.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("```") {
+            continue;
+        }
+        // A table's |---|---| rule.
+        if t.starts_with('|') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
+            continue;
+        }
+        let t = t.trim_start_matches('#').trim_start();
+        let t = if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            format!("• {rest}")
+        } else if t.starts_with('|') {
+            t.trim_matches('|').split('|').map(str::trim).collect::<Vec<_>>().join(" · ")
+        } else {
+            t.to_owned()
+        };
+        let t = t.replace("**", "").replace("__", "").replace('`', "");
+        lines.push(t);
+    }
+    lines.join("\n")
 }
 
 /// Paths inside the sandbox as the user knows them: "/sandbox/workspace/
@@ -2436,6 +2545,10 @@ mod tests {
         let text = host_words("Read /sandbox/shared/Finances/bank.csv", &shared);
         assert_eq!(text, "Read /elsewhere/Finances/bank.csv");
         assert!(!host_words("saved /sandbox/workspace/x.md", &shared).contains("/sandbox"));
+        assert_eq!(
+            plain_text("# Budget\n\n- **Money in:** €2,850\n| a | b |\n|---|---|\n| `x` | 1 |"),
+            "Budget\n• Money in: €2,850\na · b\nx · 1"
+        );
     }
 
     #[test]

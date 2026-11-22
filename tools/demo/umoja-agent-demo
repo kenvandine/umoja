@@ -34,10 +34,13 @@ The scenes:
                    from your phone (its first step only; nothing is connected)
     agent-wrap     everything it made, in ~/Agents/<Name>
 
-The demo's own files (the Downloads and Finances folders) live in
-~/Umoja Agent Demo and are removed at the end, shares included. What the
-agent wrote stays in ~/Agents/<Name>; files from an earlier run with the
-same names are moved aside first so every run starts clean.
+Every run starts clean: finished jobs are cleared from the Agents menu
+(their files stay), requests still waiting are turned down, every shared
+folder is unshared, and what's in ~/Agents/<Name> is moved aside to
+~/Agents/<Name>/earlier demo runs/. Text Editor doesn't reopen files from
+an earlier session during the run. The demo's own files (the Downloads and
+Finances folders) live in ~/Umoja Agent Demo and are removed at the end,
+shares included.
 
 Nothing is installed or sent anywhere except what the jobs need: the model,
 and wttr.in once you'd Allow it (the scene does, on camera).
@@ -103,7 +106,7 @@ DOWNLOADS = {
     "warranty-headphones.pdf": "Headphones warranty card.\n",
     "setup-printer-driver.run": "(installer)\n",
 }
-TIDY = ("Tidy up my Downloads folder at {inside}: sort every file into folders called Documents, "
+TIDY = ("Tidy up my Downloads folder: sort every file into folders called Documents, "
         "Images, Receipts and Installers (make them), don't delete or rename anything, and write a short "
         "'What I moved.md' in that folder listing where each file went.")
 TIDY_NOTE = "What I moved.md"
@@ -143,7 +146,7 @@ BANK = """date,description,category,amount_eur
 2026-10-31,Supermercado Pingo,Groceries,-38.60
 """
 BANK_FILE = "bank-export-october.csv"
-BUDGET = ("Read {inside}/" + BANK_FILE + " and write me a one-page budget summary for October: money in "
+BUDGET = ("Read my October bank export in Finances and write me a one-page budget summary for October: money in "
           "and out, spending by category, the three biggest expenses, the subscriptions I could cancel and "
           "what that would save a year, and one realistic tip. Save it as October budget.md.")
 BUDGET_FILE = "October budget.md"
@@ -174,6 +177,64 @@ class AgentDemo(tour.Demo):
         self.shares = []  # host folders shared for the demo
         self.extra_windows = []  # windows our scenes opened (Files on a folder)
         self.trip_task = None  # agent-trip's task, for agent-followup
+
+    # ---- a clean start ------------------------------------------------
+
+    def open_apps(self):
+        self.reset_agent()
+        self.editor_sessions(False)
+        super().open_apps()
+
+    def reset_agent(self):
+        """No jobs, cards, shares or files from earlier runs on camera."""
+        s = self.agent_state()
+        if not s:
+            return
+        for sh in s.get("shared", []):
+            log(f"  unshare {sh.get('path')}")
+            self.bus.call(AGENTS, "Unshare", GLib.Variant("(s)", (sh["path"],)), quiet=True, timeout=120_000)
+        if self.dry or self.bus.has_method(AGENTS, "ClearFinished"):
+            log("  clear finished jobs and waiting requests")
+            self.bus.call(AGENTS, "ClearFinished", quiet=True, timeout=60_000)
+        else:
+            log("  ! this umoja-agentd can't clear old jobs (needs newer debs): they'll show")
+        ws = self.workspace()
+        if ws.is_dir() and not self.dry:
+            keep = "earlier demo runs"
+            old = ws / keep / time.strftime("%Y%m%d-%H%M%S")
+            for f in ws.iterdir():
+                if f.name == keep or f.name.startswith("."):
+                    continue
+                old.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(f), str(old / f.name))
+            if old.exists():
+                log(f"  moved earlier files aside to {old}")
+        self.editor_restore = None
+
+    def editor_sessions(self, on):
+        """Text Editor reopening last session's files (Lisbon weekend.md
+        from an earlier run, before the agent writes it) off for the run."""
+        s = tour.settings("org.gnome.TextEditor")
+        if s is None or "restore-session" not in s.props.settings_schema.list_keys() or self.dry:
+            return
+        if not on:
+            self.editor_restore = s.get_boolean("restore-session")
+            s.set_boolean("restore-session", False)
+        elif getattr(self, "editor_restore", None) is not None:
+            s.set_boolean("restore-session", self.editor_restore)
+            self.editor_restore = None
+
+    def deny_stray(self):
+        """Requests no running job waits on (a site the last job reached
+        for after it finished) are turned down before the next job."""
+        if self.dry:
+            return
+        s = self.agent_state()
+        running = {t["id"] for t in s.get("tasks", []) if t.get("status") in ("running", "waiting")}
+        for a in s.get("approvals", []):
+            if a.get("task") not in running and a.get("kind") != "question":
+                log(f"  turn down a leftover request: {a.get('title')}")
+                self.bus.call(AGENTS, "Answer", GLib.Variant("(ss)", (a["id"], "deny")), quiet=True)
 
     # ---- helpers ------------------------------------------------------
 
@@ -231,7 +292,9 @@ class AgentDemo(tour.Demo):
         except (GLib.Error, TypeError, AttributeError) as e:
             log(f"  ! couldn't open {path} in Files: {e}")
             return None
+        t0 = time.monotonic()
         wid = self.wait_for_window(before)
+        self.recorder.waited(t0, time.monotonic())
         if wid is not None:
             self.extra_windows.append(wid)
             self.bus.call(COMPOSITOR, "ActivateWindow", GLib.Variant("(t)", (wid,)), quiet=True)
@@ -246,7 +309,7 @@ class AgentDemo(tour.Demo):
             self.wait(0.6)
 
     def job(self, name, prompt, caption, handed_caption, done_caption, result_caption, check=None,
-            allow=True, show_result=True, before_follow=None):
+            allow=True, show_result=True, before_follow=None, scroll_to=None, hold=2.5):
         """One filmed job: hand it over in Ask Umoja, follow it (consent
         cards answered on camera), then the result. `check(task)` says
         whether it really did the job. Returns the task, or None (the clip
@@ -254,8 +317,8 @@ class AgentDemo(tour.Demo):
         if not self.agent_ready():
             return None
         n = self.agent_name()
+        self.deny_stray()
         self.recorder.start(name)
-        opened = None
         try:
             tid = self.hand_to_agent(prompt, f"{name}-handed", handed_caption.format(n=n))
             if not tid:
@@ -273,19 +336,14 @@ class AgentDemo(tour.Demo):
             self.wait(2.0)  # its "done" notification
             self.shot(f"{name}-done", done_caption.format(n=n))
             if show_result:
-                # Its notification's Open: the whole answer in Ask Umoja.
-                self.show_agent_answer(tid, f"{name}-answer", result_caption.format(n=n))
-                self.bus.call(OVERLAY, "Hide", quiet=True)
-                self.wait(0.6)
-                if t.get("files") or self.dry:
-                    opened = self.open_agent_result(t, name, f"{result_caption.format(n=n)} In the Markdown viewer.")
-                    self.wait(2.0)
+                # Its notification's Open: the whole answer in Ask Umoja
+                # (which closes the notification).
+                self.show_agent_answer(tid, f"{name}-answer", result_caption.format(n=n),
+                                       scroll_to=scroll_to, hold=hold)
             self.recorder.stop(caption.format(n=n))
             return t
         finally:
             self.agent_menu(False)
-            if opened is not None:
-                self.close_window(opened)
             self.bus.call(OVERLAY, "Hide", quiet=True)
             self.scrub_overlay()
 
@@ -394,8 +452,8 @@ class AgentDemo(tour.Demo):
             self.shot("agent-phone", f"A guided setup: make a bot with BotFather, paste its token, say hi, "
                       f"and {n} answers only you.")
             self.wait(2.0)
-            self.recorder.stop(f"Send {n} jobs from your phone: a three-step guided setup in Ask Umoja "
-                               "connects it to Telegram.")
+            self.recorder.stop(f"Type “telegram” in Ask Umoja to connect {n} to Telegram, then send it jobs "
+                               "from your phone.")
         finally:
             self.bus.call(OVERLAY, "Hide", quiet=True)
             self.scrub_overlay()
@@ -431,7 +489,7 @@ class AgentDemo(tour.Demo):
 
         try:
             t = self.job(
-                "agent-tidy", TIDY.format(inside=inside),
+                "agent-tidy", TIDY,
                 caption="Share a folder and say what you want: {n} sorts your Downloads into folders "
                         "and leaves a note of what went where. Nothing is deleted.",
                 handed_caption="Shared with {n}, writable: “sort my Downloads into folders”.",
@@ -455,12 +513,13 @@ class AgentDemo(tour.Demo):
             return
         self.clear_old([BUDGET_FILE])
         self.job(
-            "agent-budget", BUDGET.format(inside=inside),
+            "agent-budget", BUDGET,
             caption="Share a bank export, read-only: {n} turns it into a budget, with the "
                     "subscriptions you could cancel. It can read the file, never change it.",
             handed_caption="A bank statement, shared read-only: “make me a budget summary”.",
             done_caption="Done, and the statement is untouched.",
-            result_caption="October at a glance: by category, the biggest costs, subscriptions to cancel, one tip.",
+            result_caption="October at a glance, down to the subscriptions you could cancel and what that saves.",
+            scroll_to=0.75, hold=6.0,
             check=lambda t: (self.workspace() / BUDGET_FILE).exists() and
                             (finances / BANK_FILE).read_text() == BANK)
 
@@ -516,11 +575,10 @@ class AgentDemo(tour.Demo):
         n = self.agent_name()
         self.recorder.start("agent-wrap")
         wid = self.show_folder(self.workspace())
-        self.wait(1.0)
         self.shot("agent-wrap", f"Everything {n} made is in ~/Agents/{n}, yours to keep.")
         self.agent_menu(True)
         self.shot("agent-wrap-menu", f"Every job in the Agents menu: what {n} did, and the files it made.")
-        self.wait(1.5)
+        self.wait(1.0)
         self.agent_menu(False)
         self.recorder.stop(f"Everything {n} made, in one folder. Hand off the busywork; stay in charge.")
         self.close_window(wid)
@@ -528,6 +586,8 @@ class AgentDemo(tour.Demo):
     # ---- tidying ------------------------------------------------------
 
     def tidy(self):
+        self.editor_sessions(True)
+        self.close_panel_menus()
         for wid in list(self.extra_windows):
             self.bus.call(COMPOSITOR, "CloseWindow", GLib.Variant("(t)", (wid,)), quiet=True)
         for path in self.shares:

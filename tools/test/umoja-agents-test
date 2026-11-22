@@ -328,6 +328,8 @@ class Run:
             self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("agents",)), quiet=True)
             self.wait(1.0)
         else:
+            # Unfocus alone leaves a menu opened by OpenMenu up.
+            self.bus.call(PANEL, "CloseMenus", quiet=True)
             self.bus.call(PANEL, "Unfocus", quiet=True)
             self.wait(0.5)
 
