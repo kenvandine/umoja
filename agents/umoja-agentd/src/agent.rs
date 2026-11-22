@@ -789,6 +789,18 @@ impl Agent {
         if self.state.lock().await.model != "cloud" {
             preload_local_model().await;
         }
+        // Just after a restart the sandbox is still coming up: wait for it
+        // (within the caller's D-Bus timeout) instead of failing the task.
+        if !bridge::health(&gw).await {
+            if let Some(t) = self.state.lock().await.task_mut(&id) {
+                t.step = format!("Waiting for {n} to start…", n = catalog::active().name);
+            }
+            self.changed().await;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+            while !bridge::health(&gw).await && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
         let instructions = bridge::instructions(&catalog::active().name);
         match bridge::submit(&gw, &prompt, &instructions, None).await {
             Ok((run, session)) => {
@@ -802,8 +814,8 @@ impl Agent {
                 Ok(id)
             }
             Err(e) => {
-                self.finish(&id, TaskStatus::Failed, &format!("{} couldn't start: {e:#}", catalog::active().name), Vec::new())
-                    .await;
+                tracing::warn!(error = %format!("{e:#}"), "couldn't start the task");
+                self.finish(&id, TaskStatus::Failed, &for_people(&e), Vec::new()).await;
                 Err(e)
             }
         }
@@ -1210,6 +1222,20 @@ impl Agent {
     }
 
     async fn finish(&self, id: &str, status: TaskStatus, result: &str, files: Vec<PathBuf>) {
+        // An answer given only in words (no file written) is saved too, so
+        // "Open" always has something to show and it's kept with the rest.
+        let mut files = files;
+        if status == TaskStatus::Done && files.is_empty() && !result.trim().is_empty() {
+            let (title, text) = {
+                let s = self.state.lock().await;
+                let title = s.tasks.iter().find(|t| t.id == id).map(|t| t.title.clone()).unwrap_or_default();
+                (title, host_words(result, &s.shared))
+            };
+            match save_answer(&paths::workspace(), &title, &text) {
+                Ok(p) => files.push(p),
+                Err(e) => tracing::warn!(error = %e, "couldn't save the answer"),
+            }
+        }
         let stale: Vec<Approval>;
         let (title, ok) = {
             let mut s = self.state.lock().await;
@@ -1540,10 +1566,21 @@ impl Agent {
     pub async fn open(&self, id: &str) -> Result<()> {
         let target = {
             let mut s = self.state.lock().await;
-            s.task_mut(id).and_then(|t| t.files.first().cloned())
+            let shared = s.shared.clone();
+            s.task_mut(id).and_then(|t| {
+                // Finished before answers were saved: save it now.
+                if t.files.is_empty() && t.status == TaskStatus::Done && !t.result.trim().is_empty() {
+                    let text = host_words(&t.result, &shared);
+                    if let Ok(p) = save_answer(&paths::workspace(), &t.title, &text) {
+                        t.files.push(p.display().to_string());
+                    }
+                }
+                t.files.first().cloned()
+            })
         }
         .map(PathBuf::from)
         .unwrap_or_else(paths::workspace);
+        self.changed().await;
         tokio::process::Command::new("gio").arg("open").arg(target).spawn()?;
         Ok(())
     }
@@ -1769,6 +1806,31 @@ fn changed_files(before: &Snapshot, after: &Snapshot) -> Vec<PathBuf> {
     files.into_iter().map(|(_, p)| p).take(20).collect()
 }
 
+/// Writes an answer as "<title>.md" in `dir` (" 2", " 3"… if taken).
+fn save_answer(dir: &Path, title: &str, text: &str) -> std::io::Result<PathBuf> {
+    let mut stem: String = title
+        .trim_end_matches('…')
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '-' } else { c })
+        .take(60)
+        .collect::<String>()
+        .trim()
+        .trim_end_matches(['.', ',', ' '])
+        .to_owned();
+    if stem.is_empty() {
+        stem = "Answer".into();
+    }
+    std::fs::create_dir_all(dir)?;
+    let mut path = dir.join(format!("{stem}.md"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem} {n}.md"));
+        n += 1;
+    }
+    std::fs::write(&path, format!("# {stem}\n\n{}\n", text.trim()))?;
+    Ok(path)
+}
+
 fn safe_name(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
@@ -1950,6 +2012,17 @@ fn clear_secret(kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_saved_as_files() {
+        let dir = std::env::temp_dir().join(format!("umoja-answer-{}", std::process::id()));
+        let a = save_answer(&dir, "Plan a week long trip to Marrakech, airfare…", "Day 1").unwrap();
+        assert_eq!(a.file_name().unwrap(), "Plan a week long trip to Marrakech, airfare.md");
+        let b = save_answer(&dir, "Plan a week long trip to Marrakech, airfare…", "Day 1").unwrap();
+        assert_eq!(b.file_name().unwrap(), "Plan a week long trip to Marrakech, airfare 2.md");
+        assert!(std::fs::read_to_string(&a).unwrap().contains("Day 1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn sandbox_paths_in_host_words() {
