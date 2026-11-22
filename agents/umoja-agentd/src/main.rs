@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
 
     let conn = zbus::Connection::session().await?;
     let agent = agent::Agent::new(conn.clone());
+    agent.close_stale_notes().await;
     conn.object_server()
         .at(agent::PATH, service::Agents(agent.clone()))
         .await?;

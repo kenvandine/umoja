@@ -252,6 +252,10 @@ fn local() -> String {
 pub struct Private {
     /// Hermes API_SERVER_KEY inside the sandbox.
     pub api_key: String,
+    /// Approval notifications still on screen: closed by the next daemon,
+    /// which asks again for whatever is still waiting.
+    #[serde(default)]
+    pub approval_notes: Vec<u32>,
 }
 
 /// What goes to disk: the state plus the private part.

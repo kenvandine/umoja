@@ -967,6 +967,16 @@ impl Agent {
         let id = notify::send(&self.conn, &a.title, &body, actions, true).await;
         if id != 0 {
             self.notes.lock().await.insert(id, Note::Approval(a.id.clone()));
+            self.state.lock().await.private.approval_notes.push(id);
+        }
+    }
+
+    /// Approval notifications an earlier run left on screen: their
+    /// actions reach nobody now, and what's still waiting is asked again.
+    pub async fn close_stale_notes(&self) {
+        let ids = std::mem::take(&mut self.state.lock().await.private.approval_notes);
+        for id in ids {
+            notify::close(&self.conn, id).await;
         }
     }
 
@@ -981,6 +991,7 @@ impl Agent {
             .collect();
         for id in ids {
             self.notes.lock().await.remove(&id);
+            self.state.lock().await.private.approval_notes.retain(|n| *n != id);
             notify::close(&self.conn, id).await;
         }
     }
