@@ -18,6 +18,8 @@
   "state_dir": "/sandbox/.hermes",
   "quiet_hosts": [
     "hermes-agent.nousresearch.com",
-    "nousresearch.github.io"
+    "nousresearch.github.io",
+    "cloudflare-dns.com",
+    "dns.google"
   ]
 }

@@ -342,10 +342,10 @@ impl Agent {
         }
         self.wait_running(&gw, Duration::from_secs(20 * 60)).await?;
 
-        if configure {
-            self.set_step("Applying guardrails").await;
-            self.apply_policy(&gw).await?;
-        }
+        // Every start: a sandbox made again (an update) starts with no
+        // rules, and adding a rule that's there already changes nothing.
+        self.set_step("Applying guardrails").await;
+        self.apply_policy(&gw).await?;
         self.set_step(&format!("Sharing ~/Agents/{n}", n = catalog::active().name)).await;
         let home_added = self.mount_folders().await?;
 
@@ -374,7 +374,11 @@ impl Agent {
         for id in running {
             self.watch_task(id, Snapshot::new());
         }
-        self.state.lock().await.error.clear();
+        {
+            let mut s = self.state.lock().await;
+            s.error.clear();
+            s.step.clear();
+        }
         self.changed().await;
         Ok(())
     }
@@ -716,11 +720,13 @@ impl Agent {
         // Sites the agent reaches for on its own (update checks, catalogs)
         // stay blocked without asking the user.
         let quiet = catalog::active().quiet_hosts.clone();
-        for p in proposals.iter().filter(|p| quiet.iter().any(|h| h.eq_ignore_ascii_case(&p.host))) {
+        let telegram = self.state.lock().await.messaging.as_ref().is_some_and(|m| m.platform == "telegram");
+        let is_quiet = |host: &str| quiet.iter().any(|h| h.eq_ignore_ascii_case(host)) || (telegram && telegram_host(host));
+        for p in proposals.iter().filter(|p| is_quiet(&p.host)) {
             tracing::debug!(host = %p.host, "turning down the agent's own background fetch");
             let _ = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await;
         }
-        proposals.retain(|p| !quiet.iter().any(|h| h.eq_ignore_ascii_case(&p.host)));
+        proposals.retain(|p| !is_quiet(&p.host));
 
         // Supervisors allowed on the model relay, and memory, every ~6 s.
         let mut memory = None;
@@ -2202,6 +2208,13 @@ const HOME_DEVICE: &str = "umoja-agent-home";
 fn same_image(a: &str, b: &str) -> bool {
     let last = |s: &str| s.rsplit('/').next().unwrap_or(s).to_owned();
     last(a) == last(b)
+}
+
+/// Telegram's own addresses: allowed by the messaging rule (the name),
+/// or asked for only while that rule wasn't in place yet (Hermes's
+/// fallback addresses). Never a question for the user.
+fn telegram_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("api.telegram.org") || host.starts_with("149.154.") || host.starts_with("91.108.")
 }
 
 /// A short key for approval `id`, for Telegram's 64-byte button data.
