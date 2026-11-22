@@ -304,8 +304,20 @@ impl Agent {
             Some(info) if info.state == Phase::Failed && !paused => {
                 tracing::info!(detail = %info.detail, "sandbox failed earlier, starting it again");
                 self.set_step(&format!("Starting {n}'s sandbox", n = catalog::active().name)).await;
-                let project = project.clone();
-                tokio::task::spawn_blocking(move || Lxd::new(&project).stop_sandbox(&paths::sandbox())).await??;
+                // Stopped through the guardrails (they won't start it again
+                // from a failed start otherwise), then started afresh.
+                gw.clone().stop(&paths::sandbox()).await?;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+                loop {
+                    let phase = gw.clone().list().await?.into_iter().find(|s| s.name == paths::sandbox()).map(|s| s.state);
+                    if phase == Some(Phase::Stopped) {
+                        break;
+                    }
+                    if tokio::time::Instant::now() > deadline {
+                        bail!("{n}'s sandbox didn't stop. Restart this computer, then try again.", n = catalog::active().name);
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
                 gw.clone().start(&paths::sandbox()).await?;
             }
             Some(_) => {}
