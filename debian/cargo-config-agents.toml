@@ -1,0 +1,20 @@
+# Copied to debian/.cargo-agents/config.toml by debian/rules for the offline
+# build of agents/ (make vendor-cargo fills vendor/cargo-agents).
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/NVIDIA/OpenShell?rev=39d95b42cb403d883e2f545a3861131ccd3d2ebf"]
+git = "https://github.com/NVIDIA/OpenShell"
+rev = "39d95b42cb403d883e2f545a3861131ccd3d2ebf"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/kenvandine/openshell-desktop?rev=6b12aa0115ae5ffa8b1dd6848fa9e859432fbf93"]
+git = "https://github.com/kenvandine/openshell-desktop"
+rev = "6b12aa0115ae5ffa8b1dd6848fa9e859432fbf93"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "@VENDOR_DIR@"
+
+[net]
+offline = true

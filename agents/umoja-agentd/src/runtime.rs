@@ -56,6 +56,7 @@ impl Runtime {
                     .arg("--staging-dir")
                     .arg(paths::staging_dir())
                     .args(["--project", &paths::lxd_project()])
+                    .args(["--supervisor-network", &paths::lxd_network()])
                     .args(["--grpc-endpoint", &format!("https://host.openshell.internal:{gateway_port}")])
                     .arg("--tls-ca")
                     .arg(&tls_ca);

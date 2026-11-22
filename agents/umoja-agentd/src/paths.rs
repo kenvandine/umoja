@@ -45,6 +45,11 @@ pub fn ports() -> (u16, u16) {
     (base, base + 1)
 }
 
+/// The LXD managed bridge the sandboxes' supervisors join.
+pub fn lxd_network() -> String {
+    std::env::var("UMOJA_AGENTS_NETWORK").unwrap_or_else(|_| "lxdbr0".into())
+}
+
 /// LXD project holding this account's sandboxes: "umoja-ken".
 pub fn lxd_project() -> String {
     let mut name = String::from("umoja-");
@@ -121,6 +126,10 @@ pub fn image() -> String {
 
 /// The embedded Lemonade's port, as umoja-lemonade.service sets it.
 pub fn lemonade_port() -> u16 {
+    // Tests point Hermes at a scripted model instead.
+    if let Some(p) = std::env::var("UMOJA_AGENTS_MODEL_PORT").ok().and_then(|v| v.parse().ok()) {
+        return p;
+    }
     let env = xdg("XDG_CONFIG_HOME", ".config").join("umoja/lemonade.env");
     std::fs::read_to_string(env)
         .ok()

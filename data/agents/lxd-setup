@@ -1,0 +1,52 @@
+#!/bin/sh
+# Prepares LXD for Hermes's sandbox, as root (pkexec from umoja-agentd's
+# FixLxd when LXD is missing): install the snap if it isn't (it is seeded
+# on Umoja's image), initialise it with a local storage pool and the
+# lxdbr0 bridge if it has never been set up, and let USER use it.
+#
+#   lxd-setup USER
+set -eu
+user=${1:?usage: lxd-setup USER}
+id "$user" >/dev/null 2>&1 || { echo "no such user: $user" >&2; exit 1; }
+[ "$(id -u "$user")" -ge 1000 ] || { echo "refusing system account $user" >&2; exit 1; }
+
+if ! snap list lxd >/dev/null 2>&1; then
+    snap install lxd
+fi
+snap wait system seed.loaded
+# The daemon starts on demand; wait for it.
+lxd waitready --timeout=120
+
+if ! lxc storage show default >/dev/null 2>&1 || ! lxc network show lxdbr0 >/dev/null 2>&1; then
+    # Never re-initialise an LXD someone already set up: only the missing
+    # pieces are added.
+    if [ -z "$(lxc storage list --format csv 2>/dev/null)" ] && [ -z "$(lxc network list --format csv 2>/dev/null | grep ',YES,' || true)" ]; then
+        lxd init --preseed <<'PRESEED'
+config: {}
+networks:
+- name: lxdbr0
+  type: bridge
+  config:
+    ipv4.address: auto
+    ipv4.nat: "true"
+    ipv6.address: none
+storage_pools:
+- name: default
+  driver: dir
+profiles:
+- name: default
+  devices:
+    root:
+      path: /
+      pool: default
+      type: disk
+PRESEED
+    else
+        lxc storage show default >/dev/null 2>&1 || lxc storage create default dir
+        lxc network show lxdbr0 >/dev/null 2>&1 || lxc network create lxdbr0 ipv4.address=auto ipv4.nat=true ipv6.address=none
+    fi
+fi
+
+getent group lxd >/dev/null || groupadd --system lxd
+adduser "$user" lxd >/dev/null
+echo "LXD is ready for $user"

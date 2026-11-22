@@ -14,6 +14,7 @@ mod captive_portal;
 mod clock;
 mod crash_watch;
 mod dbusmenu;
+mod agents;
 mod downloads;
 mod event_sound;
 mod events;
@@ -159,11 +160,14 @@ fn build(app: &adw::Application) {
     // Background downloads (the assistant's model, Piper voices), only
     // while there are some.
     end.append(&downloads::indicator());
+    // Hermes (umoja-agents): tasks and consent cards, once set up.
+    let agents = agents::button();
+    end.append(&agents);
     end.append(&TRAY.with(|t| t.get_or_init(sni::Tray::start).widget()));
     let quick = quick_settings::button();
     end.append(&quick);
     if let Some(calendar) = clock.downcast_ref::<gtk::MenuButton>() {
-        menu_api::own_name(window.upcast_ref(), calendar, &quick);
+        menu_api::own_name(window.upcast_ref(), calendar, &quick, &agents);
     }
     bar.set_end_widget(Some(&end));
 

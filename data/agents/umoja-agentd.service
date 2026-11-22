@@ -1,0 +1,20 @@
+[Unit]
+Description=Umoja agents (Hermes in an OpenShell sandbox)
+Documentation=https://github.com/kenvandine/umoja/blob/main/docs/ai-features.md
+PartOf=umoja-session.target
+After=umoja-session.target umoja-lemonade.service
+
+[Service]
+Type=dbus
+BusName=org.umoja.Agents
+ExecStart=/usr/libexec/umoja-agents/umoja-agentd
+EnvironmentFile=-%E/umoja/lemonade.env
+Restart=on-failure
+RestartSec=5s
+# The service, OpenShell's gateway and the LXD driver it starts; the agent
+# itself runs in LXD, with its own memory cap.
+MemoryHigh=400M
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=umoja-session.target

@@ -834,3 +834,112 @@ tooltip.background {
   color: #ffffff;
   border: 1px solid @shell_hairline;
 }
+
+/* Agents pill (agents.rs): Hermes's tasks and consent cards. */
+window.umoja-panel .agents-dot {
+  min-width: 6px;
+  min-height: 6px;
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+}
+window.umoja-panel .agents-count {
+  font-size: 10px;
+  font-weight: bold;
+  min-width: 10px;
+  min-height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+window.umoja-panel button.agents-button.attention image {
+  color: @accent_color;
+}
+window.umoja-panel button.agents-button.paused image {
+  opacity: 0.55;
+}
+popover.agents-popover > contents {
+  min-width: 360px;
+  padding: 12px;
+}
+popover.agents-popover .agents-header {
+  padding: 0 2px 2px 4px;
+}
+popover.agents-popover .agents-badge {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  background-color: @shell_fill;
+  color: @accent_color;
+  -gtk-icon-size: 20px;
+}
+popover.agents-popover .agents-subtitle,
+popover.agents-popover .agents-task-step,
+popover.agents-popover .agents-detail {
+  font-size: 0.9em;
+}
+popover.agents-popover .agents-problem {
+  background-color: alpha(@warning_color, 0.14);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+/* A consent card: accent edge so it reads as "needs you". */
+popover.agents-popover .agents-approval {
+  background-color: @shell_section;
+  border-radius: 12px;
+  padding: 10px 10px 10px 12px;
+  box-shadow: inset 3px 0 0 @accent_bg_color;
+}
+popover.agents-popover .agents-approval-icon {
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 9px;
+  background-color: @shell_fill;
+  -gtk-icon-size: 18px;
+}
+popover.agents-popover .agents-approval-title {
+  font-weight: bold;
+}
+popover.agents-popover .agents-command {
+  font-size: 0.9em;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background-color: alpha(#000000, 0.35);
+}
+window.umoja-panel popover button.agents-allow,
+window.umoja-panel popover button.agents-always,
+window.umoja-panel popover button.agents-deny {
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-weight: bold;
+}
+window.umoja-panel popover button.agents-allow {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+window.umoja-panel popover button.agents-allow:hover {
+  background-color: mix(@accent_bg_color, #ffffff, 0.1);
+}
+window.umoja-panel popover button.agents-always,
+window.umoja-panel popover button.agents-deny {
+  background-color: @shell_fill;
+}
+window.umoja-panel popover button.agents-always:hover,
+window.umoja-panel popover button.agents-deny:hover {
+  background-color: @shell_fill_hover;
+}
+popover.agents-popover .agents-task {
+  background-color: @shell_section;
+  border-radius: 12px;
+  padding: 8px 6px 8px 12px;
+}
+popover.agents-popover .agents-task-title {
+  font-weight: bold;
+}
+popover.agents-popover .agents-task.done .agents-task-icon {
+  color: @accent_color;
+}
+popover.agents-popover .agents-task.failed .agents-task-icon {
+  color: @warning_color;
+}

@@ -183,7 +183,7 @@ impl Agent {
         }
         let bridge = tokio::task::spawn_blocking(move || -> Result<_> {
             lxd.ensure_project()?;
-            lxd.bridge_address("lxdbr0")
+            lxd.bridge_address(&paths::lxd_network())
         })
         .await??;
 
@@ -340,6 +340,7 @@ impl Agent {
                 "lemonade".to_owned(),
             )
         };
+        let local = s.model != "cloud";
         let mut env = vec![
             ("UMOJA_MODEL_URL", url),
             ("UMOJA_MODEL", model),
@@ -347,6 +348,9 @@ impl Agent {
             ("UMOJA_APPROVALS", s.preset.hermes_mode().to_owned()),
             ("API_SERVER_KEY", s.private.api_key.clone()),
         ];
+        if local && std::env::var_os("UMOJA_AGENTS_MODEL_PORT").is_none() {
+            env.push(("UMOJA_MODEL_CONTEXT", HERMES_CONTEXT.to_string()));
+        }
         let token;
         if let Some(m) = &s.messaging {
             if m.platform == "telegram" {
@@ -654,6 +658,9 @@ impl Agent {
             s.trim_tasks();
         }
         self.changed().await;
+        if self.state.lock().await.model != "cloud" {
+            preload_local_model().await;
+        }
         match hermes::submit(&gw, &prompt).await {
             Ok(run) => {
                 if let Some(t) = self.state.lock().await.task_mut(&id) {
@@ -1142,20 +1149,14 @@ impl Agent {
     pub async fn fix_lxd(&self) -> Result<()> {
         let needs = self.state.lock().await.needs.clone();
         let user = paths::user_name();
-        let status = match needs.as_str() {
-            "lxd-install" => {
-                tokio::process::Command::new("pkexec")
-                    .args(["/usr/libexec/umoja-agents/lxd-setup", &user])
-                    .status()
-                    .await?
-            }
-            _ => {
-                tokio::process::Command::new("pkexec")
-                    .args(["/usr/sbin/adduser", &user, "lxd"])
-                    .status()
-                    .await?
-            }
-        };
+        // lxd-setup installs/initialises LXD only where needed and adds
+        // the account to the lxd group (polkit: org.umoja.agents.lxd-setup).
+        let _ = needs;
+        let status = tokio::process::Command::new("pkexec")
+            .arg(paths::libexec("lxd-setup"))
+            .arg(&user)
+            .status()
+            .await?;
         if !status.success() {
             bail!("That didn't work ({status}).");
         }
@@ -1312,7 +1313,16 @@ fn gsetting(key: &str) -> String {
 }
 
 /// The Lemonade model the assistant uses, picked the same way.
+/// Hermes refuses models with less context than this (its tool-calling
+/// floor), so the local model is loaded with this window for it.
+const HERMES_CONTEXT: u32 = 65536;
+
 fn local_model() -> String {
+    if let Ok(m) = std::env::var("UMOJA_AGENTS_MODEL") {
+        if !m.is_empty() {
+            return m;
+        }
+    }
     let set = gsetting("lemonade-model");
     if !set.is_empty() {
         return set;
@@ -1321,6 +1331,35 @@ fn local_model() -> String {
         "Qwen3-4B-Instruct-2507-GGUF".into()
     } else {
         "Qwen3.5-2B-GGUF".into()
+    }
+}
+
+/// Asks Umoja's Lemonade to have the local model loaded with Hermes's
+/// context window (the assistant's default is smaller). Best effort: if
+/// it fails, Hermes reports the context problem itself.
+async fn preload_local_model() {
+    if std::env::var_os("UMOJA_AGENTS_MODEL_PORT").is_some() {
+        return;
+    }
+    let body = serde_json::json!({ "model_name": local_model(), "ctx_size": HERMES_CONTEXT }).to_string();
+    let port = paths::lemonade_port();
+    let result = tokio::time::timeout(Duration::from_secs(180), async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        let req = format!(
+            "POST /api/v1/load HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        sock.write_all(req.as_bytes()).await?;
+        let mut answer = Vec::new();
+        sock.read_to_end(&mut answer).await?;
+        Ok::<_, std::io::Error>(String::from_utf8_lossy(&answer).lines().next().unwrap_or("").to_owned())
+    })
+    .await;
+    match result {
+        Ok(Ok(status)) => tracing::info!(%status, "local model preload"),
+        Ok(Err(e)) => tracing::warn!(error = %e, "local model preload"),
+        Err(_) => tracing::warn!("local model preload timed out"),
     }
 }
 

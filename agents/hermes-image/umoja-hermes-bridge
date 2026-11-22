@@ -1,0 +1,256 @@
+#!/opt/hermes/.venv/bin/python3
+"""Umoja's only way to talk to Hermes.
+
+The sandbox has no network card the host can reach, so umoja-agentd runs
+this through OpenShell's exec API (under the sandbox's own policy). It
+talks to Hermes's API server on the sandbox's loopback and prints each
+answer as one `@@{json}` line; everything else on stdout is ignored.
+
+  health                 @@{"ok": bool}
+  get PATH               @@{"status": int, "body": json}
+  post PATH              same; request body from $UMOJA_BODY (JSON)
+  events RUN             one @@{"event": name, "data": {...}} per SSE event
+                         until the run ends
+  write                  $UMOJA_BODY {"path","hex","mode"}: write a file
+  configure              hermes.env -> $HERMES_HOME/config.yaml (+ .env)
+  restart                restart `hermes gateway run`
+"""
+
+import json
+import os
+import signal
+import sys
+import time
+import urllib.error
+import urllib.request
+
+API = "http://127.0.0.1:8642"
+HOME = "/sandbox"
+HERMES_HOME = os.environ.get("HERMES_HOME", "/sandbox/.hermes")
+ENV_FILE = "/sandbox/.config/umoja/hermes.env"
+PID_FILE = "/tmp/umoja-hermes.pid"
+TERMINAL = {"run.completed", "run.failed", "run.cancelled", "run.interrupted"}
+
+
+def out(obj):
+    sys.stdout.write("@@" + json.dumps(obj, ensure_ascii=True) + "\n")
+    sys.stdout.flush()
+
+
+def read_env():
+    env = {}
+    try:
+        with open(ENV_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                v = v.strip()
+                # umoja-agentd writes single-quoted shell words.
+                if len(v) >= 2 and v[0] == v[-1] == "'":
+                    v = v[1:-1].replace("'\\''", "'")
+                env[k.strip()] = v
+    except FileNotFoundError:
+        pass
+    return env
+
+
+def request(method, path, body=None, timeout=30):
+    key = read_env().get("API_SERVER_KEY", "")
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(API + path, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + key)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def decode(raw):
+    try:
+        return json.loads(raw.decode("utf-8", "replace") or "null")
+    except ValueError:
+        return raw.decode("utf-8", "replace")
+
+
+def cmd_health():
+    try:
+        status, _ = request("GET", "/health", timeout=3)
+        out({"ok": 200 <= status < 300})
+    except Exception as e:  # not listening yet
+        out({"ok": False, "detail": str(e)})
+
+
+def cmd_call(method, path):
+    body = None
+    if method == "POST":
+        body = json.loads(os.environ.get("UMOJA_BODY") or "{}")
+    try:
+        status, raw = request(method, path, body)
+    except Exception as e:
+        out({"error": "Hermes isn't answering: %s" % e})
+        return 1
+    out({"status": status, "body": decode(raw)})
+    return 0
+
+
+def cmd_events(run_id):
+    """Relays the run's SSE stream; reconnects (with Last-Event-ID) if the
+    stream drops before the run ends."""
+    last = None
+    deadline = time.time() + 6 * 3600
+    while time.time() < deadline:
+        req = urllib.request.Request("%s/v1/runs/%s/events" % (API, run_id))
+        req.add_header("Authorization", "Bearer " + read_env().get("API_SERVER_KEY", ""))
+        req.add_header("Accept", "text/event-stream")
+        if last is not None:
+            req.add_header("Last-Event-ID", str(last))
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = []
+                for raw in r:
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                    if line.startswith("id:"):
+                        last = line[3:].strip()
+                    elif line.startswith("data:"):
+                        data.append(line[5:].lstrip())
+                    elif line == "" and data:
+                        try:
+                            ev = json.loads("\n".join(data))
+                        except ValueError:
+                            ev = None
+                        data = []
+                        if isinstance(ev, dict):
+                            name = ev.get("event", "")
+                            out({"event": name, "data": ev})
+                            if name in TERMINAL:
+                                return 0
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                out({"event": "run.gone", "data": {"status": e.code}})
+                return 0
+        except Exception:
+            pass
+        time.sleep(1)
+    return 0
+
+
+def cmd_write():
+    spec = json.loads(os.environ.get("UMOJA_BODY") or "{}")
+    path = spec["path"]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, int(spec.get("mode", 0o600)))
+    with os.fdopen(fd, "wb") as f:
+        f.write(bytes.fromhex(spec.get("hex", "")))
+    os.chmod(tmp, int(spec.get("mode", 0o600)))
+    os.replace(tmp, path)
+    out({"ok": True})
+    return 0
+
+
+def yaml_str(s):
+    return json.dumps(str(s))  # JSON strings are valid YAML scalars
+
+
+def cmd_configure():
+    """Writes Hermes's config from the settings Umoja sent."""
+    env = read_env()
+    url = env.get("UMOJA_MODEL_URL", "")
+    model = env.get("UMOJA_MODEL", "")
+    if not url or not model:
+        out({"error": "no model configured"})
+        return 1
+    mode = env.get("UMOJA_APPROVALS", "manual")
+    if mode not in ("manual", "smart", "off"):
+        mode = "manual"
+    os.makedirs(HERMES_HOME, exist_ok=True)
+    config = "\n".join([
+        "# Written by Umoja (umoja-hermes-bridge configure); edits are replaced.",
+        "model:",
+        "  provider: custom",
+        "  default: " + yaml_str(model),
+        "  base_url: " + yaml_str(url),
+        "  api_key: " + yaml_str(env.get("UMOJA_MODEL_KEY") or "none"),
+    ] + (["  context_length: " + str(int(env["UMOJA_MODEL_CONTEXT"]))]
+         if env.get("UMOJA_MODEL_CONTEXT", "").isdigit() else []) + [
+        "terminal:",
+        "  backend: local",
+        "  cwd: /sandbox/workspace",
+        "  timeout: 180",
+        "approvals:",
+        "  mode: " + mode,
+        "  timeout: 900",
+        # Runs from Umoja always have someone to ask (the panel), and a
+        # chat platform has its own /approve; cron runs deny.
+        "  cron_mode: deny",
+        "",
+    ])
+    path = os.path.join(HERMES_HOME, "config.yaml")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write(config)
+    os.replace(path + ".tmp", path)
+    # Secrets Hermes reads from its .env (the gateway also gets them from
+    # the environment umoja-hermes-start exports).
+    keep = ("API_SERVER_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS")
+    lines = ["%s=%s" % (k, env[k]) for k in keep if env.get(k)]
+    dotenv = os.path.join(HERMES_HOME, ".env")
+    fd = os.open(dotenv + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(dotenv + ".tmp", dotenv)
+    out({"ok": True})
+    return 0
+
+
+def cmd_restart():
+    try:
+        with open(PID_FILE, encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        out({"ok": True, "detail": "not running"})
+        return 0
+    try:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(100):
+            time.sleep(0.1)
+            os.kill(pid, 0)
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    out({"ok": True})
+    return 0
+
+
+def main(argv):
+    if not argv:
+        out({"error": "usage: umoja-hermes-bridge VERB [ARGS]"})
+        return 2
+    verb, args = argv[0], argv[1:]
+    try:
+        if verb == "health":
+            cmd_health()
+            return 0
+        if verb in ("get", "post") and len(args) == 1:
+            return cmd_call(verb.upper(), args[0])
+        if verb == "events" and len(args) == 1:
+            return cmd_events(args[0])
+        if verb == "write":
+            return cmd_write()
+        if verb == "configure":
+            return cmd_configure()
+        if verb == "restart":
+            return cmd_restart()
+    except Exception as e:
+        out({"error": "%s: %s" % (type(e).__name__, e)})
+        return 1
+    out({"error": "unknown verb %r" % verb})
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

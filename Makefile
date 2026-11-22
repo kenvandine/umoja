@@ -48,6 +48,10 @@ vendor-cargo:
 	  $(CARGO) vendor --locked $(VENDOR)/cargo > /dev/null; \
 	fi
 	@echo "vendored crates in $(VENDOR)/cargo"
+	@# agents/ (OpenShell + openshell-desktop git crates) vendors separately;
+	@# debian/cargo-config-agents.toml points at it.
+	cd agents && $(CARGO) vendor --locked $(abspath $(VENDOR))/cargo-agents > /dev/null
+	@echo "vendored agent crates in $(VENDOR)/cargo-agents"
 
 # Download the upstream "embeddable" Lemonade build for each architecture,
 # verify it against lemonade.sha256, and unpack it to vendor/lemonade/<arch>.

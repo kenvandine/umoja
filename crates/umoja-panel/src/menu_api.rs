@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! OpenMenu(s menu)     open "calendar" or "quick-settings" (GNOME's
-//!                      top-edge touch swipe)
+//!                      top-edge touch swipe), or "agents" (Hermes's card,
+//!                      from a consent notification)
 //! ToggleMenu(s menu)   open or close it (Super+V: the notification list)
 //! Focus()              give the top bar the keyboard (Ctrl+Alt+Tab):
 //!                      Tab/arrows move between its buttons, Escape leaves
@@ -112,11 +113,13 @@ pub fn own_name(
     window: &gtk::Window,
     calendar: &gtk::MenuButton,
     quick_settings: &gtk::MenuButton,
+    agents: &gtk::MenuButton,
 ) {
     install_escape(window);
     let window = window.downgrade();
     let calendar = calendar.downgrade();
     let quick_settings = quick_settings.downgrade();
+    let agents = agents.downgrade();
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(XML).expect("valid XML");
         let iface = info
@@ -178,6 +181,7 @@ pub fn own_name(
                 let button = match params.get::<(String,)>().as_ref().map(|(m,)| m.as_str()) {
                     Some("calendar") => calendar.upgrade(),
                     Some("quick-settings") => quick_settings.upgrade(),
+                    Some("agents") => agents.upgrade().filter(|b| b.is_visible()),
                     _ => None,
                 };
                 match button {

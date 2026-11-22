@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.umoja.Agents
+Exec=/usr/libexec/umoja-agents/umoja-agentd
+SystemdService=umoja-agentd.service
