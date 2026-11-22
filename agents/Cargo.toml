@@ -1,0 +1,30 @@
+# Umoja's agent runtime: Hermes in an OpenShell sandbox on LXD.
+#
+# A workspace of its own so the rest of Umoja does not build OpenShell's
+# gateway (a large dependency tree). It produces the umoja-agents package:
+#
+#   umoja-agentd             the session service behind org.umoja.Agents
+#   umoja-openshell-gateway  OpenShell's gateway with no in-tree drivers
+#   umoja-openshell-lxd      the LXD compute driver (from openshell-desktop)
+[workspace]
+members = ["umoja-agentd", "umoja-openshell-gateway", "umoja-openshell-lxd"]
+resolver = "2"
+
+[workspace.package]
+version = "2026.47.4"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/kenvandine/umoja"
+
+[workspace.dependencies]
+# Every OpenShell crate is pinned to the revision openshell-desktop's crates
+# build against, so the gateway, the driver and the client speak one protocol.
+openshell-core = { git = "https://github.com/NVIDIA/OpenShell", rev = "39d95b42cb403d883e2f545a3861131ccd3d2ebf", default-features = false }
+openshell-server = { git = "https://github.com/NVIDIA/OpenShell", rev = "39d95b42cb403d883e2f545a3861131ccd3d2ebf", default-features = false }
+openshell-gateway = { git = "https://github.com/NVIDIA/OpenShell", rev = "39d95b42cb403d883e2f545a3861131ccd3d2ebf", default-features = false }
+openshell-gateway-client = { git = "https://github.com/kenvandine/openshell-desktop", rev = "6b12aa0115ae5ffa8b1dd6848fa9e859432fbf93" }
+openshell-driver-lxd = { git = "https://github.com/kenvandine/openshell-desktop", rev = "6b12aa0115ae5ffa8b1dd6848fa9e859432fbf93" }
+openshell-lxd = { git = "https://github.com/kenvandine/openshell-desktop", rev = "6b12aa0115ae5ffa8b1dd6848fa9e859432fbf93" }
+
+[profile.release]
+lto = "thin"

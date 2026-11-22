@@ -1,0 +1,12 @@
+[package]
+name = "umoja-openshell-gateway"
+description = "OpenShell gateway for Umoja: no in-tree compute drivers, sandboxes come from the LXD driver"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+
+[dependencies]
+openshell-gateway = { workspace = true }
+openshell-server = { workspace = true }
+miette = "7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

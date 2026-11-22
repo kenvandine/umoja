@@ -19,3 +19,4 @@ debian/ubuntu-umoja-desktop/
 /build/
 debian/umoja-installer/
 debian/*.debhelper
+/agents/target
