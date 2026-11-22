@@ -1,0 +1,60 @@
+# Weekly: when openshell-desktop (and with it the OpenShell commit its
+# crates use) has moved on, run packaging/bump-openshell and open a pull
+# request, so the Packages workflow builds the new gateway and driver
+# before anyone merges it. Run it by hand for an urgent OpenShell fix.
+
+name: OpenShell bump
+
+on:
+  schedule:
+    - cron: "23 5 * * 2"
+  workflow_dispatch:
+    inputs:
+      desktop_rev:
+        description: "openshell-desktop commit (empty: latest main)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y -q libz3-dev libclang-dev pkgconf
+      - name: Bump
+        id: bump
+        run: |
+          set +e
+          packaging/bump-openshell --check ${{ inputs.desktop_rev }}
+          code=$?
+          set -e
+          if [ "$code" = 10 ]; then
+            packaging/bump-openshell ${{ inputs.desktop_rev }} | tee bump.log
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$code" != 0 ]; then
+            exit "$code"
+          fi
+      - name: Open a pull request
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: openshell-bump
+          commit-message: "agents: bump OpenShell (packaging/bump-openshell)"
+          title: "agents: bump OpenShell"
+          body: |
+            Weekly OpenShell bump from `packaging/bump-openshell`: openshell-desktop's
+            latest main and the OpenShell commit its crates build against. NVIDIA's
+            supervisor and sandbox images for that commit are published.
+
+            Before merging: check OpenShell's changes to the gateway CLI flags that
+            `agents/umoja-agentd/src/runtime.rs` passes, and run
+            `tools/test/umoja-agents-test` on a test machine.
+          add-paths: |
+            agents/Cargo.toml
+            agents/Cargo.lock
+            agents/.cargo/config.toml
+            debian/cargo-config-agents.toml

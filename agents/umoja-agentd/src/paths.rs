@@ -52,6 +52,12 @@ pub fn lxd_network() -> String {
 
 /// LXD project holding this account's sandboxes: "umoja-ken".
 pub fn lxd_project() -> String {
+    // tools/test/umoja-agents-test runs its own instance beside the user's.
+    if let Ok(p) = std::env::var("UMOJA_AGENTS_PROJECT") {
+        if !p.is_empty() {
+            return p;
+        }
+    }
     let mut name = String::from("umoja-");
     for c in user_name().chars() {
         if c.is_ascii_alphanumeric() {
@@ -92,6 +98,9 @@ pub fn staging_dir() -> PathBuf {
 }
 
 pub fn runtime_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("UMOJA_AGENTS_RUNTIME_DIR") {
+        return d.into();
+    }
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)

@@ -1,0 +1,69 @@
+#!/bin/bash
+# Move Umoja's agent runtime (agents/) to a newer OpenShell.
+#
+#   packaging/bump-openshell            # openshell-desktop's latest main
+#   packaging/bump-openshell <rev>      # a specific openshell-desktop commit
+#
+# The gateway, the LXD driver, the client crates and NVIDIA's supervisor and
+# sandbox images must all speak one protocol, so everything follows
+# openshell-desktop: its commit pins the OpenShell commit its crates build
+# against, and Umoja takes both. The script then
+#   * checks NVIDIA published supervisor + sandbox images for that commit,
+#   * rewrites the revs in agents/Cargo.toml, agents/.cargo/config.toml
+#     (OPENSHELL_IMAGE_TAG) and debian/cargo-config-agents.toml,
+#   * updates agents/Cargo.lock and checks that agents/ still builds.
+# Review the diff (and OpenShell's changes to the gateway CLI flags that
+# agents/umoja-agentd/src/runtime.rs passes), then commit.
+#
+# --check only prints what it would move to and exits 10 when a bump is due
+# (the weekly workflow uses it).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+DESKTOP=https://github.com/kenvandine/openshell-desktop
+OPENSHELL=https://github.com/NVIDIA/OpenShell
+check=0
+if [[ "${1:-}" == --check ]]; then check=1; shift; fi
+
+desktop_rev=${1:-}
+if [[ -z "$desktop_rev" ]]; then
+    desktop_rev=$(git ls-remote "$DESKTOP" refs/heads/main | cut -f1)
+fi
+[[ "$desktop_rev" =~ ^[0-9a-f]{40}$ ]] || { echo "bump-openshell: want a full commit id, got '$desktop_rev'" >&2; exit 1; }
+
+current_desktop=$(sed -n 's#.*openshell-desktop", rev = "\([0-9a-f]*\)".*#\1#p' agents/Cargo.toml | head -n1)
+current_openshell=$(sed -n 's#.*NVIDIA/OpenShell", rev = "\([0-9a-f]*\)".*#\1#p' agents/Cargo.toml | head -n1)
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+git -C "$tmp" init -q
+git -C "$tmp" fetch -q --depth 1 "$DESKTOP" "$desktop_rev"
+openshell_rev=$(git -C "$tmp" show FETCH_HEAD:crates/openshell-gateway-client/Cargo.toml \
+    | sed -n 's#.*NVIDIA/OpenShell", rev = "\([0-9a-f]*\)".*#\1#p' | head -n1)
+[[ "$openshell_rev" =~ ^[0-9a-f]{40}$ ]] || { echo "bump-openshell: can't find the OpenShell rev openshell-desktop $desktop_rev uses" >&2; exit 1; }
+
+echo "openshell-desktop: $current_desktop -> $desktop_rev"
+echo "OpenShell:         $current_openshell -> $openshell_rev"
+if [[ "$desktop_rev" == "$current_desktop" && "$openshell_rev" == "$current_openshell" ]]; then
+    echo "bump-openshell: already up to date"
+    exit 0
+fi
+[[ $check == 1 ]] && exit 10
+
+# NVIDIA publishes both images per commit; without them sandboxes can't start.
+for image in supervisor sandbox; do
+    token=$(curl -fsS "https://ghcr.io/token?scope=repository:nvidia/openshell/$image:pull" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
+        -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+        "https://ghcr.io/v2/nvidia/openshell/$image/manifests/$openshell_rev")
+    [[ "$code" == 200 ]] || { echo "bump-openshell: ghcr.io/nvidia/openshell/$image:$openshell_rev isn't published (HTTP $code)" >&2; exit 1; }
+done
+
+for f in agents/Cargo.toml agents/.cargo/config.toml debian/cargo-config-agents.toml; do
+    sed -i -e "s/$current_openshell/$openshell_rev/g" -e "s/$current_desktop/$desktop_rev/g" "$f"
+done
+(cd agents && cargo update -q -p openshell-core -p openshell-gateway-client && cargo check -q --workspace)
+git --no-pager diff --stat
+echo "bump-openshell: review the diff, then commit"

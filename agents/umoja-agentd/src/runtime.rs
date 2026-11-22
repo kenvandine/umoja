@@ -59,7 +59,8 @@ impl Runtime {
                     .args(["--supervisor-network", &paths::lxd_network()])
                     .args(["--grpc-endpoint", &format!("https://host.openshell.internal:{gateway_port}")])
                     .arg("--tls-ca")
-                    .arg(&tls_ca);
+                    .arg(&tls_ca)
+                    .env("RUST_LOG", child_log());
                 c
             }
         };
@@ -75,7 +76,8 @@ impl Runtime {
                 .args(["--compute-driver", "lxd"])
                 .arg("--compute-driver-socket")
                 .arg(paths::driver_socket())
-                .env("OPENSHELL_LOCAL_TLS_DIR", paths::tls_dir());
+                .env("OPENSHELL_LOCAL_TLS_DIR", paths::tls_dir())
+                .env("RUST_LOG", child_log());
             c
         };
         tokio::spawn(keep_running("openshell-lxd-driver", driver, stopped.clone()));
@@ -161,4 +163,10 @@ async fn keep_running(
         }
         tokio::time::sleep(backoff).await;
     }
+}
+
+/// The gateway logs every RPC at info (agentd polls every 1.5 s), so the
+/// journal gets only warnings unless UMOJA_AGENTS_OPENSHELL_LOG says more.
+fn child_log() -> String {
+    std::env::var("UMOJA_AGENTS_OPENSHELL_LOG").unwrap_or_else(|_| "warn".into())
 }

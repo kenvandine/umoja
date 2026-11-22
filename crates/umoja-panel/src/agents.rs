@@ -292,12 +292,12 @@ pub fn button() -> gtk::MenuButton {
 impl Pill {
     fn call(&self, method: &str, args: Option<&glib::Variant>) {
         let Some(conn) = self.conn.borrow().clone() else { return };
-        let method = method.to_owned();
+        let name = method.to_owned();
         conn.call(
             Some(BUS),
             PATH,
             IFACE,
-            &method,
+            method,
             args,
             None,
             gio::DBusCallFlags::NONE,
@@ -305,7 +305,7 @@ impl Pill {
             gio::Cancellable::NONE,
             move |res| {
                 if let Err(e) = res {
-                    glib::g_warning!("umoja-panel", "Agents.{method}: {e}");
+                    glib::g_warning!("umoja-panel", "Agents.{name}: {e}");
                 }
             },
         );
@@ -383,7 +383,7 @@ impl Pill {
             .build();
         self.problem.append(&text);
         let action = match state.needs.as_str() {
-            "lxd-install" | "lxd-group" => Some((i18n::umoja("Set Up LXD"), "FixLxd", None)),
+            "lxd-install" | "lxd-group" => Some((i18n::umoja("Allow"), "FixLxd", None)),
             "relogin" => None,
             _ if state.setup == "error" => Some((
                 i18n::umoja("Try Again"),
@@ -747,9 +747,9 @@ mod tests {
         assert!(!State::default().visible());
         let s = State { setup: "none".into(), ..Default::default() };
         assert!(!s.visible());
-        let s = State { setup: "working".into(), step: "Starting OpenShell".into(), ..Default::default() };
+        let s = State { setup: "working".into(), step: "Starting the guardrails".into(), ..Default::default() };
         assert!(s.visible());
-        assert_eq!(s.summary(), "Starting OpenShell…");
+        assert_eq!(s.summary(), "Starting the guardrails…");
     }
 
     #[test]

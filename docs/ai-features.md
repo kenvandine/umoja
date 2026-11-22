@@ -48,6 +48,7 @@ and [activity recall](guide/07-everyday-ai.md#activity-recall).
 - [When an app crashes](#when-an-app-crashes)
 - [Finding files](#finding-files)
 - [Handing coding jobs to a coding agent](#handing-coding-jobs-to-a-coding-agent)
+- [Background jobs with Hermes](#background-jobs-with-hermes)
 - [Privacy](#privacy)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Settings reference](#settings-reference)
@@ -735,6 +736,52 @@ undoes it.
 
 The `ai-agent-hotkey` key (unset by default) can open the agent with a
 keyboard shortcut.
+
+## Background jobs with Hermes
+
+Hermes is a personal agent for longer jobs that you don't want to watch:
+research a topic and write it up, compare prices, tidy a folder. It works in
+the background in a sandbox on your computer, so it only sees the folders
+you share with it and only reaches the sites you allow. It can't see or
+control your desktop, your apps or the rest of your files. Install the
+`umoja-agents` package to get it.
+
+**Setting it up.** Open the settings button in Ask Umoja and pick how often
+Hermes should ask you first under **Background agent**, then press
+**Set Up**. The first setup downloads Hermes once and takes a few minutes;
+follow along from the **Agents** button on the top bar.
+
+- **Careful** asks before every new site and every risky command.
+- **Balanced** (the default) leaves a few research sites open, like
+  Wikipedia and DuckDuckGo, and asks for the rest.
+- **Hands-off** only asks when something looks risky.
+
+**Giving it a job.** Type `@hermes` and the job in Ask Umoja ("@hermes
+compare the three cheapest flights to Lisbon in March and put it in a
+doc"), or ask the assistant to hand a job to Hermes. Its files land in
+`~/Agents/Hermes`. You get a notification when it's done, with **Open**.
+
+**When it asks.** Hermes asks before it reaches a new site or runs a risky
+command. The request shows up as a notification and as a card in the
+**Agents** menu, with **Allow** and **Deny** (and **Always Allow** for a
+site you trust). The Agents button shows a count while something waits for
+you.
+
+**Stopping and pausing.** Each running job has a **Stop** button in the
+Agents menu. **Pause Hermes** stops everything it's doing until you resume
+it. The menu also shows how much memory Hermes uses; it has a fixed cap.
+
+**Its folder.** Hermes only sees `~/Agents/Hermes`; the folder button in
+the Agents menu opens it.
+
+**Closing the lid.** If your laptop sleeps while Hermes is working, it picks
+the job up again when you open the lid: it checks what it had already done
+and carries on from there instead of starting over.
+
+**Which model.** Hermes uses the same model as the assistant: the local
+model by default, or your cloud model if you set one up. It needs a model
+that can hold a long conversation (64K tokens), so on computers with little
+memory a cloud model works better.
 
 ## Privacy
 

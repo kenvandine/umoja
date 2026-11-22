@@ -9,6 +9,7 @@ mod paths;
 mod relay;
 mod runtime;
 mod service;
+mod sleep;
 mod state;
 
 use anyhow::Result;
@@ -40,6 +41,13 @@ async fn main() -> Result<()> {
             if let Ok(args) = sig.args() {
                 a.on_action(args.id, &args.action_key).await;
             }
+        }
+    });
+
+    let a = agent.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sleep::watch(a).await {
+            tracing::warn!(error = %e, "not following suspend and resume");
         }
     });
 

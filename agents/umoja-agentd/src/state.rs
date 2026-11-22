@@ -110,6 +110,19 @@ pub struct Task {
     /// Tools it ran, in order (name only).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Hermes's session (its conversation), to carry on in it.
+    #[serde(default)]
+    pub session: String,
+    /// In flight when the computer went to sleep or the session ended:
+    /// if its run dies soon after, it's carried on instead of failing.
+    #[serde(default)]
+    pub interrupted: bool,
+    /// How often it was carried on after an interruption.
+    #[serde(default)]
+    pub resumes: u32,
+    /// Its last steps, for the "carry on" message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -247,6 +260,7 @@ impl State {
                     if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
                         t.status = TaskStatus::Running;
                         t.step = "Reconnecting…".into();
+                        t.interrupted = true;
                     }
                 }
                 if s.setup == Setup::Working {

@@ -8,13 +8,17 @@ completions endpoint (streaming and not, tool calls included).
 
   [[write NAME TEXT]]   run `printf TEXT > /sandbox/workspace/NAME`, then
                         answer "Wrote NAME"
+  [[writeto PATH TEXT]] the same, to any absolute PATH (shared folders,
+                        or places the sandbox must refuse)
   [[fetch URL]]         run `curl -sS -m 20 URL | head -c 300`, then say
                         what came back
   [[danger]]            run `rm -rf /sandbox/workspace/umoja-test-old`
                         (Hermes flags recursive deletes: an approval)
   [[ask]]               ask the user a question (clarify), then echo the answer
   [[slow N]]            run `sleep N` (to test Stop and Pause)
-  [[escape]]            try to reach the desktop: ls the host home, the
+  [[steps N NAME]]      N commands, one per model call, each adding a line
+                        to /sandbox/workspace/NAME (sleep/resume test)
+  [[escape [HOME]]]     try to reach the desktop: the host HOME, the
                         D-Bus socket, and a host port; report what worked
 
 Usage: fake-model.py [--port 13399] [--log FILE]
@@ -84,6 +88,11 @@ def plan(messages, tools):
             name, body = m.group(1), m.group(2)
             return run("printf '%s\\n' " + shell(body) + " > /sandbox/workspace/" + name)
         return ("text", "Wrote %s in your Hermes folder." % m.group(1))
+    m = re.search(r"\[\[writeto (\S+) (.+?)\]\]", user)
+    if m:
+        if not results:
+            return run("printf '%s\\n' " + shell(m.group(2)) + " > " + shell(m.group(1)) + " && echo WROTE || echo REFUSED")
+        return ("text", "Result: " + results[-1][:300])
     m = re.search(r"\[\[fetch (\S+)\]\]", user)
     if m:
         if not results:
@@ -98,17 +107,31 @@ def plan(messages, tools):
             return ("tool", "clarify", {"question": "Which colour should the report use?",
                                         "choices": ["Blue", "Green"]})
         return ("text", "You chose: " + (results[-1][:100] if results else "nothing"))
+    m = re.search(r"\[\[steps (\d+) (\S+)\]\]", user)
+    if m:
+        # One command per model call, so the run spans many requests
+        # (the sleep/resume test cuts in between). Counts the steps done
+        # in this conversation, so a carried-on run doesn't start over.
+        n, name = int(m.group(1)), m.group(2)
+        done = sum(1 for r in results if "STEP-DONE" in r)
+        if done < n:
+            return run("sleep 4; echo 'step %d' >> /sandbox/workspace/%s; echo STEP-DONE %d"
+                       % (done + 1, name, done + 1))
+        return ("text", "All %d steps done." % n)
     m = re.search(r"\[\[slow (\d+)\]\]", user)
     if m:
         if not results:
             return run("sleep %s; echo done" % m.group(1))
         return ("text", "Finished waiting.")
-    if "[[escape]]" in user:
+    m = re.search(r"\[\[escape ?(\S*)\]\]", user)
+    if m:
+        home = m.group(1) or "/home/ken"
         if not results:
             return run(
-                "for p in /home /run/user /var/run/dbus/system_bus_socket /tmp/.X11-unix; do "
-                "ls -d $p/* >/dev/null 2>&1 && echo \"SEE $p\" || echo \"NO $p\"; done; "
-                "(curl -sS -m 5 http://host.openshell.internal:631/ >/dev/null 2>&1 && echo 'SEE cups') || echo 'NO cups'; "
+                "for p in /run/user/1000/bus /run/user/1000/wayland-0 /var/run/dbus/system_bus_socket "
+                "/tmp/.X11-unix/X0 " + shell(home) + " /root/.ssh /var/snap/lxd/common/lxd/unix.socket; do "
+                "[ -e $p ] && echo \"SEE $p\" || echo \"NO $p\"; done; "
+                "(curl -sS -m 5 http://host.openshell.internal:631/ >/dev/null 2>&1 && echo 'SEE host:631') || echo 'NO host:631'; "
                 "echo HOME=$HOME; id")
         return ("text", "Escape check:\n" + results[-1][:600])
     return ("text", "Hello from the Umoja test model. I only follow [[tags]].")

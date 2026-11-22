@@ -37,6 +37,8 @@ pub struct Agent {
     watching: Mutex<std::collections::HashSet<String>>,
     /// Serialises setup / pause / remove.
     lifecycle: Mutex<()>,
+    /// Bumped on every wake from sleep: watchers reconnect.
+    wake: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,7 @@ impl Agent {
             proposals: Mutex::new(HashMap::new()),
             watching: Mutex::new(Default::default()),
             lifecycle: Mutex::new(()),
+            wake: Default::default(),
         })
     }
 
@@ -164,30 +167,32 @@ impl Agent {
         let project = paths::lxd_project();
         let lxd = Lxd::new(&project);
 
-        self.set_step("Checking LXD").await;
+        self.set_step("Checking this computer").await;
         match tokio::task::spawn_blocking({
             let project = project.clone();
             move || Lxd::new(&project).access()
         })
         .await?
         {
-            Access::Ok => {}
+            Access::Ok => tracing::debug!("LXD access ok"),
             Access::Missing => {
                 self.state.lock().await.needs = "lxd-install".into();
-                bail!("LXD isn't installed or set up on this computer.");
+                bail!("Hermes needs one more part installed before it can run safely.");
             }
             Access::Denied => {
                 self.state.lock().await.needs = "lxd-group".into();
-                bail!("Your account can't use LXD yet. Allow it, then log out and back in.");
+                bail!("Hermes needs your permission to set up its sandbox. Allow it, then log out and back in.");
             }
         }
         let bridge = tokio::task::spawn_blocking(move || -> Result<_> {
             lxd.ensure_project()?;
+            tracing::debug!("LXD project ok");
             lxd.bridge_address(&paths::lxd_network())
         })
         .await??;
+        tracing::debug!(?bridge, "LXD bridge");
 
-        self.set_step("Starting OpenShell").await;
+        self.set_step("Starting the guardrails").await;
         if self.runtime.lock().await.is_none() {
             let rt = Runtime::start(bridge.0).await?;
             *self.runtime.lock().await = Some(rt);
@@ -220,7 +225,7 @@ impl Agent {
                         },
                     )
                     .await
-                    .context("OpenShell couldn't create Hermes's sandbox")?;
+                    .context("Couldn't create Hermes's sandbox")?;
                 self.state.lock().await.memory_mb = mem;
             }
             Some(info) if info.state == Phase::Stopped && !paused => {
@@ -249,7 +254,7 @@ impl Agent {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         while !hermes::health(&gw).await {
             if tokio::time::Instant::now() > deadline {
-                bail!("Hermes didn't start in its sandbox. Its log is in the sandbox at /sandbox/.hermes/logs.");
+                bail!("Hermes didn't start. Try again in a moment.");
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -501,21 +506,14 @@ impl Agent {
                 }
                 known.insert(id.clone(), p.clone());
                 let what = task.as_ref().map(|(_, t)| format!(" for “{t}”")).unwrap_or_default();
-                let program = Path::new(&p.binary)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
                 let approval = Approval {
                     id: id.clone(),
                     kind: ApprovalKind::Network,
                     task: task.as_ref().map(|(i, _)| i.clone()).unwrap_or_default(),
                     title: format!("Hermes wants to reach {}", p.host),
                     detail: format!(
-                        "{}{} asked for {}:{}{what}. OpenShell blocked it because it isn't one of Hermes's allowed sites.",
-                        if program.is_empty() { "A program" } else { &program },
-                        if program.is_empty() { "" } else { "" },
+                        "Hermes tried to reach {}{what}. Umoja held it back because it isn't one of the sites Hermes may use.",
                         p.host,
-                        p.port,
                     ),
                     host: p.host.clone(),
                     port: p.port,
@@ -687,130 +685,337 @@ impl Agent {
             if !this.watching.lock().await.insert(id.clone()) {
                 return;
             }
-            let run = this
-                .state
-                .lock()
-                .await
-                .tasks
-                .iter()
-                .find(|t| t.id == id)
-                .map(|t| t.run.clone())
-                .unwrap_or_default();
-            let Ok(gw) = this.gateway().await else { return };
+            this.follow(&id, &before).await;
+            this.watching.lock().await.remove(&id);
+        });
+    }
 
-            // Live steps.
-            let events = {
-                let this = this.clone();
-                let gw = gw.clone();
-                let (id, run) = (id.clone(), run.clone());
-                tokio::spawn(async move {
-                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
-                    let stream = tokio::spawn(async move {
-                        let _ = hermes::bridge(&gw, &["events", &run], None, |v| {
-                            let _ = tx.send(v);
-                        })
-                        .await;
-                    });
-                    while let Some(ev) = rx.recv().await {
-                        this.on_event(&id, &ev).await;
-                    }
-                    let _ = stream.await;
+    /// Live steps from the run's event stream; `activity` notes when the
+    /// last one came and whether a tool is running (for stall checks).
+    fn stream_events(
+        self: &Arc<Self>,
+        gw: Gateway,
+        id: &str,
+        run: &str,
+        activity: Arc<std::sync::Mutex<Activity>>,
+    ) -> tokio::task::JoinHandle<()> {
+        let this = self.clone();
+        let (id, run) = (id.to_owned(), run.to_owned());
+        tokio::spawn(async move {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+            let stream = tokio::spawn(async move {
+                let _ = hermes::bridge(&gw, &["events", &run], None, |v| {
+                    let _ = tx.send(v);
                 })
-            };
+                .await;
+            });
+            while let Some(ev) = rx.recv().await {
+                if let Ok(mut a) = activity.lock() {
+                    a.last = tokio::time::Instant::now();
+                    match ev["event"].as_str().unwrap_or_default() {
+                        "tool.started" => a.in_tool = true,
+                        "tool.completed" => a.in_tool = false,
+                        _ => {}
+                    }
+                }
+                this.on_event(&id, &ev).await;
+            }
+            let _ = stream.await;
+        })
+    }
 
-            // Status, approvals, end.
-            let mut seen_pending: std::collections::HashSet<String> = Default::default();
-            let mut failures = 0;
-            loop {
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-                let r = match hermes::run(&gw, &run).await {
-                    Ok(r) => {
-                        failures = 0;
-                        r
-                    }
-                    Err(e) => {
-                        failures += 1;
-                        if failures > 40 {
-                            this.finish(&id, TaskStatus::Failed, &format!("Lost track of Hermes: {e:#}"), Vec::new())
-                                .await;
-                            break;
-                        }
-                        continue;
-                    }
-                };
-                let status = r["status"].as_str().unwrap_or("").to_owned();
-                for p in hermes::pending_controls(&r) {
-                    let aid = format!("{}-{}", match p.kind { PendingKind::Approval => "cmd", PendingKind::Clarify => "ask" }, p.request_id);
-                    if !seen_pending.insert(aid.clone()) {
-                        continue;
-                    }
-                    let title = this.state.lock().await.task_mut(&id).map(|t| t.title.clone()).unwrap_or_default();
-                    let approval = match p.kind {
-                        PendingKind::Approval => Approval {
-                            id: aid.clone(),
-                            kind: ApprovalKind::Command,
-                            task: id.clone(),
-                            title: "Hermes wants to run a command".into(),
-                            detail: if p.detail.is_empty() {
-                                format!("For “{title}”. Its safety rules want you to OK this first.")
-                            } else {
-                                format!("For “{title}”: {}", p.detail)
-                            },
-                            command: p.text.clone(),
-                            created: now(),
-                            answer_key: (p.request_id.clone(), p.generation.clone()),
-                            ..Default::default()
-                        },
-                        PendingKind::Clarify => Approval {
-                            id: aid.clone(),
-                            kind: ApprovalKind::Question,
-                            task: id.clone(),
-                            title: format!("Hermes asks: {}", p.text),
-                            detail: format!("For “{title}”."),
-                            created: now(),
-                            answer_key: (p.request_id.clone(), p.generation.clone()),
-                            ..Default::default()
-                        },
-                    };
-                    {
-                        let mut s = this.state.lock().await;
-                        s.approvals.push(approval.clone());
-                        if let Some(t) = s.task_mut(&id) {
-                            t.status = TaskStatus::Waiting;
-                        }
-                    }
-                    this.announce(&approval).await;
-                    this.changed().await;
+    async fn follow(self: &Arc<Self>, id: &str, before: &Snapshot) {
+        use std::sync::atomic::Ordering;
+        let (mut run, interrupted) = {
+            let s = self.state.lock().await;
+            match s.tasks.iter().find(|t| t.id == id) {
+                Some(t) => (t.run.clone(), t.interrupted),
+                None => return,
+            }
+        };
+        let activity = Arc::new(std::sync::Mutex::new(Activity { last: tokio::time::Instant::now(), in_tool: false }));
+        let mut events: Option<tokio::task::JoinHandle<()>> = None;
+        let mut wake_seen = self.wake.load(Ordering::SeqCst);
+        let mut restream = true;
+        // When it last came back from an interruption (sleep, restart).
+        let mut woke = interrupted.then(tokio::time::Instant::now);
+        // We stopped a stalled run to carry it on.
+        let mut restarting = false;
+        let mut seen_pending: std::collections::HashSet<String> = Default::default();
+        let mut failures = 0;
+        loop {
+            let wake = self.wake.load(Ordering::SeqCst);
+            if wake != wake_seen {
+                wake_seen = wake;
+                woke = Some(tokio::time::Instant::now());
+                failures = 0;
+                restream = true;
+            }
+            if restream {
+                if let Some(e) = events.take() {
+                    e.abort();
                 }
-                let terminal = match status.as_str() {
-                    "completed" => Some(TaskStatus::Done),
-                    "failed" | "interrupted" => Some(TaskStatus::Failed),
-                    "cancelled" => Some(TaskStatus::Cancelled),
-                    _ => None,
-                };
-                if let Some(end) = terminal {
-                    let mut text = hermes::output_text(&r);
-                    if text.is_empty() && end == TaskStatus::Failed {
-                        text = r["error"].as_str().unwrap_or("Hermes stopped with an error.").to_owned();
-                    }
-                    let files = changed_files(&before, &snapshot(&paths::workspace()));
-                    this.finish(&id, end, &text, files).await;
-                    break;
+                if let Ok(mut a) = activity.lock() {
+                    a.last = tokio::time::Instant::now();
                 }
-                if status == "running" {
-                    let mut s = this.state.lock().await;
-                    let waiting = s.approvals.iter().any(|a| a.task == id);
-                    if let Some(t) = s.task_mut(&id) {
-                        if t.status == TaskStatus::Waiting && !waiting {
-                            t.status = TaskStatus::Running;
-                            drop(s);
-                            this.changed().await;
+                if let Ok(gw) = self.gateway().await {
+                    events = Some(self.stream_events(gw, id, &run, activity.clone()));
+                    restream = false;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            // Running fine a while after waking up: no longer interrupted.
+            if woke.is_some_and(|w| w.elapsed() > CARRY_ON_WINDOW) {
+                woke = None;
+                if let Some(t) = self.state.lock().await.task_mut(id) {
+                    t.interrupted = false;
+                }
+            }
+            let r = match self.gateway().await {
+                Ok(gw) => hermes::run(&gw, &run).await,
+                Err(e) => Err(e),
+            };
+            let r = match r {
+                Ok(r) => {
+                    failures = 0;
+                    r
+                }
+                Err(e) => {
+                    failures += 1;
+                    if failures > 40 {
+                        if let Some(new) = self.carry_on(id).await {
+                            (run, restream, failures, restarting) = (new, true, 0, false);
+                            seen_pending.clear();
+                            continue;
                         }
+                        self.finish(id, TaskStatus::Failed, &format!("Lost track of Hermes: {e:#}"), Vec::new())
+                            .await;
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let status = r["status"].as_str().unwrap_or("").to_owned();
+            if let Some(session) = r["session_id"].as_str() {
+                let mut s = self.state.lock().await;
+                if let Some(t) = s.task_mut(id) {
+                    if t.session != session {
+                        t.session = session.to_owned();
                     }
                 }
             }
-            events.abort();
-            this.watching.lock().await.remove(&id);
+            for p in hermes::pending_controls(&r) {
+                let aid = format!("{}-{}", match p.kind { PendingKind::Approval => "cmd", PendingKind::Clarify => "ask" }, p.request_id);
+                if !seen_pending.insert(aid.clone()) {
+                    continue;
+                }
+                let title = self.state.lock().await.task_mut(id).map(|t| t.title.clone()).unwrap_or_default();
+                let approval = match p.kind {
+                    PendingKind::Approval => Approval {
+                        id: aid.clone(),
+                        kind: ApprovalKind::Command,
+                        task: id.to_owned(),
+                        title: "Hermes wants to run a command".into(),
+                        detail: if p.detail.is_empty() {
+                            format!("For “{title}”. Its safety rules want you to OK this first.")
+                        } else {
+                            format!("For “{title}”: {}", p.detail)
+                        },
+                        command: p.text.clone(),
+                        created: now(),
+                        answer_key: (p.request_id.clone(), p.generation.clone()),
+                        ..Default::default()
+                    },
+                    PendingKind::Clarify => Approval {
+                        id: aid.clone(),
+                        kind: ApprovalKind::Question,
+                        task: id.to_owned(),
+                        title: format!("Hermes asks: {}", p.text),
+                        detail: format!("For “{title}”."),
+                        created: now(),
+                        answer_key: (p.request_id.clone(), p.generation.clone()),
+                        ..Default::default()
+                    },
+                };
+                {
+                    let mut s = self.state.lock().await;
+                    s.approvals.push(approval.clone());
+                    if let Some(t) = s.task_mut(id) {
+                        t.status = TaskStatus::Waiting;
+                    }
+                }
+                self.announce(&approval).await;
+                self.changed().await;
+            }
+            let terminal = match status.as_str() {
+                "completed" => Some(TaskStatus::Done),
+                "failed" | "interrupted" | "gone" => Some(TaskStatus::Failed),
+                "cancelled" => Some(TaskStatus::Cancelled),
+                _ => None,
+            };
+            if let Some(end) = terminal {
+                // Died coming back from sleep (a dropped model connection,
+                // Hermes restarted): carry on in the same conversation.
+                if end == TaskStatus::Failed || (end == TaskStatus::Cancelled && restarting) {
+                    if let Some(new) = self.carry_on(id).await {
+                        (run, restream, failures, restarting) = (new, true, 0, false);
+                        seen_pending.clear();
+                        continue;
+                    }
+                }
+                let mut text = hermes::output_text(&r);
+                if text.is_empty() && end == TaskStatus::Failed {
+                    text = if status == "gone" {
+                        "Hermes restarted and lost this task. Ask again to start it over.".to_owned()
+                    } else {
+                        r["error"].as_str().unwrap_or("Hermes stopped with an error.").to_owned()
+                    };
+                }
+                let files = changed_files(before, &snapshot(&paths::workspace()));
+                self.finish(id, end, &text, files).await;
+                break;
+            }
+            if status == "running" {
+                let waiting = {
+                    let mut s = self.state.lock().await;
+                    let waiting = s.approvals.iter().any(|a| a.task == id);
+                    if let Some(t) = s.task_mut(id) {
+                        if t.status == TaskStatus::Waiting && !waiting {
+                            t.status = TaskStatus::Running;
+                            drop(s);
+                            self.changed().await;
+                        }
+                    }
+                    waiting
+                };
+                // After a wake, a run that went silent outside any tool is
+                // most likely stuck on a model connection that died while
+                // the computer slept: stop it and carry on.
+                let stall_after = self.stall_after();
+                let stalled = activity.lock().map(|a| !a.in_tool && a.last.elapsed() > stall_after).unwrap_or(false);
+                if !restarting && !waiting && woke.is_some() && stalled {
+                    tracing::info!(task = id, "run stalled after wake; carrying it on");
+                    if let Ok(gw) = self.gateway().await {
+                        restarting = hermes::stop(&gw, &run).await.is_ok();
+                    }
+                }
+            }
+        }
+        if let Some(e) = events {
+            e.abort();
+        }
+    }
+
+    /// Starts a new run that carries on an interrupted task in the same
+    /// Hermes conversation. None when the task wasn't interrupted, or was
+    /// carried on enough already.
+    async fn carry_on(self: &Arc<Self>, id: &str) -> Option<String> {
+        let (prompt, session, log) = {
+            let s = self.state.lock().await;
+            let t = s.tasks.iter().find(|t| t.id == id)?;
+            if s.paused || !t.interrupted || t.resumes >= MAX_CARRY_ON || t.status == TaskStatus::Cancelled {
+                return None;
+            }
+            (t.prompt.clone(), t.session.clone(), t.log.clone())
+        };
+        let gw = self.gateway().await.ok()?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        while !hermes::health(&gw).await {
+            if tokio::time::Instant::now() > deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        if self.state.lock().await.model != "cloud" {
+            preload_local_model().await;
+        }
+        let text = carry_on_text(&prompt, &log, !session.is_empty());
+        match hermes::submit_in(&gw, &text, Some(&session)).await {
+            Ok(run) => {
+                tracing::info!(task = id, run = %run, "carrying on after an interruption");
+                if let Some(t) = self.state.lock().await.task_mut(id) {
+                    t.run = run.clone();
+                    t.resumes += 1;
+                    t.interrupted = false;
+                    t.status = TaskStatus::Running;
+                    t.step = "Picking up where it left off…".into();
+                }
+                self.changed().await;
+                Some(run)
+            }
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "couldn't carry on");
+                None
+            }
+        }
+    }
+
+    /// How long a run may stay silent after a wake before it counts as
+    /// stuck: local models can take a while for the first token.
+    fn stall_after(&self) -> Duration {
+        let cloud = self.state.try_lock().map(|s| s.model == "cloud").unwrap_or(false);
+        if cloud { Duration::from_secs(90) } else { Duration::from_secs(240) }
+    }
+
+    /// The computer is about to sleep: note what's in flight.
+    pub async fn before_sleep(&self) {
+        let mut any = false;
+        for t in self.state.lock().await.tasks.iter_mut() {
+            if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
+                t.interrupted = true;
+                any = true;
+            }
+        }
+        if any {
+            tracing::info!("going to sleep with tasks in flight");
+            self.changed().await;
+        }
+    }
+
+    /// Back from sleep: reconnect the watchers, make sure the sandbox and
+    /// Hermes answer, and warm the local model again.
+    pub async fn after_wake(self: &Arc<Self>) {
+        self.wake.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (ready, paused, busy, local) = {
+            let s = self.state.lock().await;
+            (
+                s.setup == Setup::Ready,
+                s.paused,
+                s.tasks.iter().any(|t| t.interrupted),
+                s.model != "cloud",
+            )
+        };
+        if !ready || paused || !busy {
+            return;
+        }
+        tracing::info!("woke up with tasks in flight");
+        let this = self.clone();
+        tokio::spawn(async move {
+            if local {
+                preload_local_model().await;
+            }
+            let healthy = match this.gateway().await {
+                Ok(gw) => {
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                    loop {
+                        if hermes::health(&gw).await {
+                            break true;
+                        }
+                        if tokio::time::Instant::now() > deadline {
+                            break false;
+                        }
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+                Err(_) => false,
+            };
+            if !healthy {
+                tracing::warn!("Hermes didn't answer after wake; bringing it back up");
+                let _guard = this.lifecycle.lock().await;
+                if let Err(e) = this.bring_up(false).await {
+                    tracing::error!(error = %format!("{e:#}"), "couldn't bring Hermes back after wake");
+                }
+            }
         });
     }
 
@@ -825,6 +1030,10 @@ impl Agent {
                 let preview = data["preview"].as_str().unwrap_or_default();
                 t.step = step_text(&tool, preview);
                 t.steps += 1;
+                t.log.push(t.step.clone());
+                if t.log.len() > 12 {
+                    t.log.remove(0);
+                }
                 t.tools.push(tool);
                 for host in hosts_in(preview) {
                     if !t.sites.contains(&host) {
@@ -926,7 +1135,7 @@ impl Agent {
                     .await
                     .get(&a.id)
                     .cloned()
-                    .ok_or_else(|| anyhow!("OpenShell no longer has that request"))?;
+                    .ok_or_else(|| anyhow!("That request has expired."))?;
                 let mut gw = gw.clone();
                 if allow {
                     gw.approve(SANDBOX, &p).await?;
@@ -1166,7 +1375,7 @@ impl Agent {
         let mut s = self.state.lock().await;
         if ready {
             s.needs.clear();
-            s.error = "LXD is ready. Set up Hermes again.".into();
+            s.error = "All set. Set up Hermes again.".into();
         } else {
             s.needs = "relogin".into();
             s.error = "Done. Log out and back in, then set up Hermes again.".into();
@@ -1185,6 +1394,37 @@ fn refresh_waiting(s: &mut State) {
             t.status = TaskStatus::Running;
         }
     }
+}
+
+/// A task interrupted by sleep is carried on at most this often.
+const MAX_CARRY_ON: u32 = 2;
+/// Running fine this long after waking: it no longer counts as interrupted.
+const CARRY_ON_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug)]
+struct Activity {
+    last: tokio::time::Instant,
+    in_tool: bool,
+}
+
+/// What Hermes is told when a task is carried on after the computer slept.
+fn carry_on_text(prompt: &str, log: &[String], same_session: bool) -> String {
+    let mut text = String::from(
+        "The computer went to sleep while you were working on this task, and your last step may \
+not have finished. Don't start over: check what is already done (the files in /sandbox/workspace",
+    );
+    text.push_str(if same_session { " and this conversation" } else { "" });
+    text.push_str("), redo only the step that was cut off, and carry on.\n\nThe task: ");
+    text.push_str(prompt);
+    if !log.is_empty() {
+        text.push_str("\n\nYour steps so far:\n");
+        for step in log {
+            text.push_str("- ");
+            text.push_str(step);
+            text.push('\n');
+        }
+    }
+    text
 }
 
 fn step_text(tool: &str, preview: &str) -> String {
@@ -1423,6 +1663,15 @@ fn clear_secret(kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carry_on_text_keeps_the_task_and_steps() {
+        let t = carry_on_text("Plan a trip", &["Running curl".into(), "Writing plan.md".into()], true);
+        assert!(t.contains("The task: Plan a trip"));
+        assert!(t.contains("- Writing plan.md"));
+        assert!(t.contains("this conversation"));
+        assert!(!carry_on_text("x", &[], false).contains("this conversation"));
+    }
 
     #[test]
     fn hosts_from_previews() {

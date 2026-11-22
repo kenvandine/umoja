@@ -2291,6 +2291,13 @@ impl Overlay {
             "" if !attachments.is_empty() => context::DEFAULT_QUESTION.to_string(),
             q => q.to_string(),
         };
+        // "@hermes <task>" goes straight to Hermes (umoja-agents), without
+        // the model deciding: Hermes works in its sandbox, and its progress
+        // and consent cards are in the panel's Agents pill.
+        if !replying && let Some(task) = hermes_task(&text) {
+            self.hand_to_hermes(task);
+            return;
+        }
         let context = context::build_context(&attachments).or_else(|| {
             (!replying && self.conversation.borrow().is_empty())
                 .then(|| self.focus_context())
@@ -2300,6 +2307,43 @@ impl Overlay {
             text,
             context,
             history: Vec::new(),
+        });
+    }
+
+    fn hand_to_hermes(self: &Rc<Self>, task: String) {
+        self.show_error(&i18n::umoja("Handing it to Hermes…"));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let text = match gio::bus_get_future(gio::BusType::Session).await {
+                Ok(conn) => match conn
+                    .call_future(
+                        Some("org.umoja.Agents"),
+                        "/org/umoja/Agents",
+                        "org.umoja.Agents",
+                        "Submit",
+                        Some(&(task.as_str(),).to_variant()),
+                        Some(glib::VariantTy::new("(s)").expect("type")),
+                        gio::DBusCallFlags::NONE,
+                        60_000,
+                    )
+                    .await
+                {
+                    Ok(_) => i18n::umoja(
+                        "Hermes is on it. Follow along, and answer its questions, from the Agents button on the top bar.",
+                    ),
+                    Err(e) if e.matches(gio::DBusError::ServiceUnknown) => {
+                        i18n::umoja("Hermes isn't installed on this computer.")
+                    }
+                    Err(mut e) => {
+                        gio::DBusError::strip_remote_error(&mut e);
+                        e.message().to_string()
+                    }
+                },
+                Err(e) => e.to_string(),
+            };
+            if let Some(o) = weak.upgrade() {
+                o.show_error(&text);
+            }
         });
     }
 
@@ -3600,4 +3644,34 @@ fn capitalize(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
         .unwrap_or_default()
+}
+
+/// The task in "@hermes plan a trip" ("@Hermes, ..." too), if the prompt
+/// is addressed to Hermes.
+pub fn hermes_task(prompt: &str) -> Option<String> {
+    let p = prompt.trim_start();
+    let head = p.get(..7)?;
+    if !head.eq_ignore_ascii_case("@hermes") {
+        return None;
+    }
+    let rest = &p[7..];
+    if rest.chars().next().is_some_and(|c| !(c.is_whitespace() || c == ',' || c == ':')) {
+        return None;
+    }
+    let rest = rest.trim_start_matches([',', ':', ' ']).trim();
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+#[cfg(test)]
+mod hermes_prefix_tests {
+    use super::hermes_task;
+
+    #[test]
+    fn prefix() {
+        assert_eq!(hermes_task("@hermes plan a trip").as_deref(), Some("plan a trip"));
+        assert_eq!(hermes_task("  @Hermes, summarise this").as_deref(), Some("summarise this"));
+        assert_eq!(hermes_task("@hermes"), None);
+        assert_eq!(hermes_task("hermes plan"), None);
+        assert_eq!(hermes_task("@hermesx"), None);
+    }
 }

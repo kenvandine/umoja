@@ -110,12 +110,17 @@ pub async fn health(gw: &Gateway) -> bool {
 }
 
 pub async fn submit(gw: &Gateway, input: &str) -> Result<String> {
-    let v = call(
-        gw,
-        &["post", "/v1/runs"],
-        Some(&json!({ "input": input, "instructions": INSTRUCTIONS })),
-    )
-    .await?;
+    submit_in(gw, input, None).await
+}
+
+/// A run in an existing Hermes session (its conversation so far), or a new
+/// one.
+pub async fn submit_in(gw: &Gateway, input: &str, session: Option<&str>) -> Result<String> {
+    let mut body = json!({ "input": input, "instructions": INSTRUCTIONS });
+    if let Some(id) = session.filter(|s| !s.is_empty()) {
+        body["session_id"] = json!(id);
+    }
+    let v = call(gw, &["post", "/v1/runs"], Some(&body)).await?;
     let body = &v["body"];
     body["run_id"]
         .as_str()
@@ -124,8 +129,14 @@ pub async fn submit(gw: &Gateway, input: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Hermes didn't start the run: {body}"))
 }
 
+/// A run's status. Hermes forgets runs when it restarts: that comes back
+/// as `{"status": "gone"}`.
 pub async fn run(gw: &Gateway, run_id: &str) -> Result<Value> {
-    Ok(call(gw, &["get", &format!("/v1/runs/{run_id}")], None).await?["body"].clone())
+    let v = call(gw, &["get", &format!("/v1/runs/{run_id}")], None).await?;
+    if v["status"].as_u64() == Some(404) {
+        return Ok(json!({ "status": "gone" }));
+    }
+    Ok(v["body"].clone())
 }
 
 pub async fn stop(gw: &Gateway, run_id: &str) -> Result<()> {

@@ -125,8 +125,8 @@ pub fn own_name(
         let iface = info
             .lookup_interface(dbus::PANEL_INTERFACE)
             .expect("interface");
-        let (window, calendar, quick_settings) =
-            (window.clone(), calendar.clone(), quick_settings.clone());
+        let (window, calendar, quick_settings, agents) =
+            (window.clone(), calendar.clone(), quick_settings.clone(), agents.clone());
         let res = conn
             .register_object(dbus::PANEL_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {

@@ -302,6 +302,19 @@ pub fn tools() -> Vec<Tool> {
             }
         }),
         Tool::new(
+            "hand_to_hermes",
+            "Give a task to Hermes, the user's background agent that works in its own sandbox: research on the web, writing or summarising documents, gathering data, longer multi-step jobs the user doesn't want to watch. Hermes works on its own and saves results in ~/Agents/Hermes; the panel asks the user before it reaches a new website or runs anything risky. Use it when the user says Hermes, or asks for such a job to be done in the background. Not for coding in a project (hand_off_to_agent) or anything on this desktop (Hermes can't see or control it). Pass the whole task in the user's words.",
+            obj(json!({
+                "task": {"type": "string", "description": "The job, fully described"}
+            }), &["task"]),
+            |a| Box::pin(async move { hand_to_hermes(&a).await.hide_if_ok() }),
+        )
+        .with_risk(crate::tool::medium)
+        .with_summary(|a| match arg_str(a, "task") {
+            Some(t) => format!("Ask Hermes to: {}", truncate_words(t, 80)),
+            None => "Ask Hermes".into(),
+        }),
+        Tool::new(
             "sign_in_agent",
             "Sign the user in to a coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode): opens the agent's own sign-in in a terminal, which opens the browser or shows a code. Umoja never sees the password or token.",
             obj(json!({"agent": {"type": "string", "description": "Agent name, e.g. \"codex\"; default: the chosen one"}}), &[]),
@@ -2145,4 +2158,37 @@ mod tests {
         assert!(matches!(redirect("gnome-terminal -- btop"), Some(Redirect::Call("open_in_terminal", _))));
         assert!(matches!(redirect("ptyxis"), Some(Redirect::Call("launch_app", _))));
     }
+}
+
+/// Submits a task to umoja-agentd (org.umoja.Agents.Submit). Hermes's
+/// progress and consent cards then live in the panel's Agents pill.
+async fn hand_to_hermes(args: &Value) -> Outcome {
+    let Some(task) = arg_str(args, "task") else {
+        return Outcome::from(Err::<String, String>("Tell me what Hermes should do.".into()));
+    };
+    let conn = match gio::bus_get_future(gio::BusType::Session).await {
+        Ok(c) => c,
+        Err(e) => return Outcome::from(Err::<String, String>(e.to_string())),
+    };
+    let res = conn
+        .call_future(
+            Some("org.umoja.Agents"),
+            "/org/umoja/Agents",
+            "org.umoja.Agents",
+            "Submit",
+            Some(&(task,).to_variant()),
+            Some(glib::VariantTy::new("(s)").expect("type")),
+            gio::DBusCallFlags::NONE,
+            60_000,
+        )
+        .await;
+    Outcome::from(match res {
+        Ok(_) => Ok("Hermes is on it. Its progress and any questions are in the Agents button on the top bar.".to_string()),
+        Err(e) if e.matches(gio::DBusError::ServiceUnknown) || e.matches(gio::DBusError::NameHasNoOwner) =>
+            Err("Hermes isn't installed (the umoja-agents package).".to_string()),
+        Err(mut e) => {
+            gio::DBusError::strip_remote_error(&mut e);
+            Err(e.message().to_string())
+        }
+    })
 }

@@ -41,8 +41,11 @@ impl Lxd {
         if !std::path::Path::new(&self.socket).exists() {
             return Access::Missing;
         }
-        match UnixStream::connect(&self.socket) {
-            Ok(_) => match self.raw("GET", "/1.0", None) {
+        // Probe, and close the probe before asking: LXD/Incus may not
+        // answer a second connection while an idle first one is open.
+        let probe = UnixStream::connect(&self.socket).map(drop);
+        match probe {
+            Ok(()) => match self.raw("GET", "/1.0", None) {
                 Ok((200, body)) if body["metadata"]["auth"] == "trusted" => Access::Ok,
                 Ok((200, _)) => Access::Denied,
                 Ok(_) => Access::Denied,
@@ -304,5 +307,17 @@ mod tests {
         let mut j = Instance::default();
         j.config.insert("raw.lxc".into(), "lxc.net.0.type = veth\nlxc.net.0.ipv4.address = 10.9.8.7/24\n".into());
         assert_eq!(j.ipv4(), Some("10.9.8.7".parse().unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod live {
+    #[test]
+    #[ignore]
+    fn live_access() {
+        let l = super::Lxd::new("umoja-live");
+        eprintln!("access: {:?}", std::mem::discriminant(&l.access()));
+        eprintln!("project: {:?}", l.ensure_project());
+        eprintln!("bridge: {:?}", l.bridge_address(&std::env::var("UMOJA_AGENTS_NETWORK").unwrap_or("lxdbr0".into())));
     }
 }

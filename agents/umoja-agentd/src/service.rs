@@ -97,6 +97,20 @@ impl Agents {
         self.0.fix_lxd().await.map_err(err)
     }
 
+    /// Test hook (only with UMOJA_AGENTS_TEST=1): what logind's
+    /// PrepareForSleep(start) does, for tools/test/umoja-agents-test.
+    async fn test_sleep(&self, start: bool) -> fdo::Result<()> {
+        if std::env::var("UMOJA_AGENTS_TEST").as_deref() != Ok("1") {
+            return Err(fdo::Error::AccessDenied("test hooks are off".into()));
+        }
+        if start {
+            self.0.before_sleep().await;
+        } else {
+            self.0.after_wake().await;
+        }
+        Ok(())
+    }
+
     #[zbus(signal)]
     pub async fn state_changed(emitter: &SignalEmitter<'_>, state: &str) -> zbus::Result<()>;
 
