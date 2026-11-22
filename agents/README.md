@@ -44,6 +44,7 @@ umoja-agentd writes these as shell-quoted `KEY='value'` lines:
 | Key | Meaning |
 | --- | --- |
 | `UMOJA_MODEL_URL`, `UMOJA_MODEL`, `UMOJA_MODEL_KEY` | OpenAI-compatible endpoint, model and key. The local model is reached through a relay at `http://host.openshell.internal:<port>/api/v1` |
+| | On the local model, `UMOJA_MODEL` is usually `user.Umoja-Agent-Auto`, a Lemonade router that keeps requests local or, with cloud offload on, sends long tasks and complex requests to the user's cloud model (`bin/umoja-lemonade-routing`) |
 | `UMOJA_MODEL_CONTEXT` | context window of the local model, when known |
 | `UMOJA_APPROVALS` | the agent's approval mode for the chosen preset |
 | `UMOJA_AGENT_KEY` | a random secret for the agent's local API, if it has one |

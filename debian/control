@@ -60,7 +60,8 @@ Depends: ${shlibs:Depends},
          yaru-theme-icon,
          ubuntu-wallpapers,
          grim,
-         wf-recorder
+         wf-recorder,
+         python3
 # libgdm1 ships the org.gnome.login-screen schema; without it (no GDM)
 # GNOME Settings hides Users > Fingerprint Login.
 Recommends: umoja-greeter,

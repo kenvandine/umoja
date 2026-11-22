@@ -220,6 +220,27 @@ Only the overlay assistant (questions, desktop actions, clipboard
 Translate/Reformat/Summarize) uses the cloud model. The notification digest,
 quick replies and file search always stay on your computer.
 
+### Local first, the cloud for harder requests
+
+Once a cloud model is set up, **This Computer** shows **Use the cloud model
+for harder requests**. Turn it on to keep the model on your computer for
+everyday requests and send only the harder ones to the cloud model. Umoja's
+Lemonade decides for each request:
+
+| Goes to the cloud model | Stays on this computer |
+| --- | --- |
+| Research, comparisons, plans and itineraries, reports, writing and drafting, code and scripts, translations, budgets and spreadsheets, "step by step" or "in depth" explanations | Everyday requests and desktop actions ("turn on dark mode", "open Files") |
+| A long request (over about 1,200 characters; 600 for Hermes) | Anything you attached from your screen (Super+Shift+A, window or area text), whatever you ask |
+| A long conversation (a long chat, or a Hermes job several steps in) | |
+| Requests with images | |
+
+The footer of the card then says *on this computer, harder requests in the
+cloud*. Hermes uses the same split when it runs on the local model, which
+helps most with long jobs: they start locally and move to the cloud model
+once their tool output piles up. Turning the setting on or off doesn't
+interrupt a Hermes job. `umoja-lemonade-routing --print` shows the exact
+rules.
+
 ## Hearing answers read aloud
 
 The speaker button next to an answer's copy button reads the answer out;
@@ -783,7 +804,10 @@ and carries on from there instead of starting over.
 **Which model.** Hermes uses the same model as the assistant: the local
 model by default, or your cloud model if you set one up. It needs a model
 that can hold a long conversation (64K tokens), so on computers with little
-memory a cloud model works better.
+memory a cloud model works better. With **Use the cloud model for harder
+requests** on, Hermes starts on the local model and hands the harder parts
+of a job to the cloud model (see
+[Local first, the cloud for harder requests](#local-first-the-cloud-for-harder-requests)).
 
 ## Privacy
 
@@ -798,6 +822,9 @@ memory a cloud model works better.
   the tools it calls (for example your window titles, notification text or
   file names when you ask about them). Read your provider's privacy policy.
   Requests identify themselves as "Umoja Desktop".
+- **Local first, if you choose.** With **Use the cloud model for harder
+  requests**, only the requests that rule sends to the cloud leave your
+  computer, and anything attached from your screen never does.
 - **Always local:** the notification digest, quick replies, crash
   diagnosis from a crash notification and the file search index never use
   the cloud model.
@@ -840,6 +867,7 @@ All in the `org.umoja.shell` schema, for example
 | `assistant-backend` | `'local'` | `'local'` or `'cloud'` |
 | `cloud-base-url` | `''` | Base URL of the OpenAI-compatible service |
 | `cloud-model` | `''` | Model name requested from it |
+| `cloud-offload` | `false` | Send harder requests to the cloud model, keep the rest local |
 | `clipboard-history` | `true` | Keep a clipboard history |
 | `file-search-enabled` | `true` | Index the home folder for file search |
 | `file-search-embedding-model` | `'nomic-embed-text-v1-GGUF'` | Embedding model for file search; changing it rebuilds the index |

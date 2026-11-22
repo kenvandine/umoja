@@ -1,0 +1,16 @@
+[Unit]
+# Started by umoja-lemonade.service each time lemond starts, and by Ask
+# Umoja when the setting changes.
+Description=Umoja cloud offload routing for the embedded Lemonade
+PartOf=umoja-lemonade.service
+After=umoja-lemonade.service
+ConditionPathExists=/usr/lib/umoja/lemonade/lemond
+
+[Service]
+Type=oneshot
+Environment=UMOJA_LEMONADE_PORT=13345
+EnvironmentFile=-%E/umoja/lemonade.env
+ExecStart=/usr/lib/umoja/umoja-lemonade-routing
+# Without the routers the assistant and agent use the local model.
+SuccessExitStatus=1
+

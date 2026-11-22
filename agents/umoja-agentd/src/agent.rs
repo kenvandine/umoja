@@ -375,7 +375,7 @@ impl Agent {
         } else {
             (
                 format!("http://host.openshell.internal:{}/api/v1", paths::ports().1),
-                local_model(),
+                routed_model().unwrap_or_else(local_model),
                 "lemonade".to_owned(),
             )
         };
@@ -1630,6 +1630,23 @@ fn local_model() -> String {
     } else {
         "Qwen3.5-2B-GGUF".into()
     }
+}
+
+/// Cloud offload (opt-in, `org.umoja.shell cloud-offload`): the Lemonade
+/// routing model umoja-lemonade-routing registered for the agent. It keeps
+/// requests on the local model and sends long agent tasks and complex
+/// requests to the user's cloud model. None while offload is off.
+fn routed_model() -> Option<String> {
+    if std::env::var_os("UMOJA_AGENTS_MODEL").is_some() {
+        return None;
+    }
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+    let raw = std::fs::read(std::path::Path::new(&dir).join("umoja-routing.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    if v["ok"] != true {
+        return None;
+    }
+    v["agent"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
 /// Asks Umoja's Lemonade to have the local model loaded with Hermes's

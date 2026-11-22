@@ -486,6 +486,8 @@ pub fn button() -> gtk::MenuButton {
     local_page.append(&note);
     local_page.append(&scroller);
     local_page.append(&free_row);
+    let offload = crate::offload::OffloadRow::new();
+    local_page.append(&offload.root);
 
     let popover = gtk::Popover::new();
     let cloud = CloudForm::new(&popover);
@@ -539,6 +541,8 @@ pub fn button() -> gtk::MenuButton {
                     let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
                 }
             }
+            // Cloud offload's routers name the local model.
+            backend::routing::apply();
             popover.popdown();
         });
     }
@@ -560,6 +564,7 @@ pub fn button() -> gtk::MenuButton {
         });
         stack.set_visible_child_name(page);
         cloud.load();
+        offload.refresh();
         voice.load();
         dictation.load();
         agent_row.refresh();

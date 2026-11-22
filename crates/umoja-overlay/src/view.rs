@@ -1103,6 +1103,8 @@ impl Overlay {
         let model = model.rsplit('/').next().unwrap_or(model).trim_start_matches('~');
         self.foot_backend.set_text(&if b.cloud {
             format!("{model} · {}", b.host())
+        } else if b.router.is_some() {
+            format!("{model} · {}", i18n::umoja("on this computer, harder requests in the cloud"))
         } else {
             format!("{model} · {}", i18n::umoja("on this computer"))
         });

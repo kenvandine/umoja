@@ -1,0 +1,273 @@
+#!/usr/bin/python3
+"""Cloud offload for Umoja's Lemonade: local first, the cloud for harder work.
+
+Opt-in (org.umoja.shell cloud-offload, with a cloud model set up in Ask
+Umoja's settings). Registers the user's cloud model with Umoja's embedded
+Lemonade as cloud provider "umoja" (the API key comes from the keyring and
+stays in lemond's memory) and two routing models (Lemonade collection.router
+policies):
+
+  user.Umoja-Assistant-Auto   for Ask Umoja's assistant
+  user.Umoja-Agent-Auto       for the background agent (umoja-agents)
+
+Both default to the model on this computer and send a request to the cloud
+model when it looks like more than the local model handles well: long
+conversations (a multi-step agent task piles up tool output), a long or
+complex request (research, planning, writing, comparing, code), or images.
+The assistant keeps anything with screen context the user attached on this
+computer.
+
+With offload off (or no cloud model) the agent's router stays, with one
+rule that keeps everything local, so the agent's settings never change when
+the user flips the setting and a running task isn't restarted.
+
+It writes $XDG_RUNTIME_DIR/umoja-routing.json with the routers that are
+live: umoja-agentd uses "agent" when it's there, the assistant uses
+"assistant" (only set while offload is on), and both use the local model
+directly without the file.
+
+Run by umoja-lemonade-routing.service after Lemonade starts, and again by
+Ask Umoja when the setting changes.
+
+    umoja-lemonade-routing            apply the current settings
+    umoja-lemonade-routing --print    print the policies, change nothing
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+PROVIDER = "umoja"
+ASSISTANT = "user.Umoja-Assistant-Auto"
+AGENT = "user.Umoja-Agent-Auto"
+SCHEMA = "org.umoja.shell"
+STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "umoja-routing.json")
+SCREEN_MARK = "The user attached this context from their screen"
+
+# Last-message words that mark a job worth the bigger model (lowercase,
+# substring match). Desktop chores ("turn on dark mode") stay local.
+HARD_WORDS = [
+    "research", "compare", "comparison", "analy", "itinerary", "plan a ",
+    "plan my", "plan the", "report", "summarize this", "summarise this",
+    "step by step", "pros and cons", "write a ", "write an ", "draft ",
+    "essay", "code", "script", "debug", "spreadsheet", "budget", "translate",
+    "explain why", "in depth", "in-depth", "detailed",
+]
+
+
+def log(msg):
+    print("umoja-lemonade-routing: " + msg, flush=True)
+
+
+def gsetting(key):
+    r = subprocess.run(["gsettings", "get", SCHEMA, key], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    v = r.stdout.strip()
+    if v in ("true", "false"):
+        return v == "true"
+    if len(v) >= 2 and v[0] == v[-1] == "'":
+        return v[1:-1].replace("\\'", "'")
+    return v
+
+
+def api_key():
+    r = subprocess.run(["secret-tool", "lookup", "umoja", "assistant-cloud", "kind", "api-key"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def total_ram_mb():
+    try:
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return 8192
+
+
+def local_model():
+    """The assistant's local model, picked as umoja_common::lemonade does."""
+    m = gsetting("lemonade-model") or ""
+    if m:
+        return m
+    state = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "umoja")
+    if os.path.exists(os.path.join(state, "lemonade-tiny-model")):
+        return "Qwen3.5-0.8B-GGUF"
+    return "Qwen3-4B-Instruct-2507-GGUF" if total_ram_mb() >= 12 * 1024 else "Qwen3.5-2B-GGUF"
+
+
+class Lemonade:
+    def __init__(self, port):
+        self.base = "http://127.0.0.1:%d/api/v1" % port
+
+    def call(self, method, path, body=None, timeout=60):
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(self.base + path, data=data, method=method)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+                return r.status, json.loads(raw or b"null")
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            try:
+                return e.code, json.loads(raw or b"null")
+            except ValueError:
+                return e.code, raw.decode("utf-8", "replace")
+
+    def wait(self, seconds=90):
+        end = time.time() + seconds
+        while time.time() < end:
+            try:
+                if self.call("GET", "/health", timeout=3)[0] == 200:
+                    return True
+            except OSError:
+                pass
+            time.sleep(1)
+        return False
+
+
+def policy(name, local, cloud, agent):
+    """A collection.router document. First matching rule wins; anything
+    else stays on the local model."""
+    rules = []
+    if not agent:
+        rules.append({"id": "screen-context-stays-local",
+                      "match": {"keywords_any": [SCREEN_MARK.lower()]},
+                      "route_to": local, "outputs": {"reason": "privacy"}})
+    rules += [
+        {"id": "images-to-cloud", "match": {"has_images": True}, "route_to": cloud},
+        # A long conversation: an agent task several tool calls in, or a
+        # long chat. Agents carry a big system prompt, so their bar is higher.
+        {"id": "long-conversation-to-cloud",
+         "match": {"min_total_chars": 60000 if agent else 16000}, "route_to": cloud},
+        {"id": "long-request-to-cloud",
+         "match": {"min_chars": 600 if agent else 1200}, "route_to": cloud},
+        {"id": "complex-request-to-cloud",
+         "match": {"keywords_any": HARD_WORDS}, "route_to": cloud},
+    ]
+    return {
+        "model_name": name,
+        "version": "1",
+        "recipe": "collection.router",
+        "components": [local, cloud],
+        "routing": {"candidates": [local, cloud], "default_model": local, "rules": rules},
+    }
+
+
+def cloud_model_id(lem, wanted):
+    """The provider-prefixed id Lemonade discovered for the user's cloud
+    model ("umoja.<id>"), or None."""
+    status, body = lem.call("GET", "/models")
+    models = body.get("data", []) if isinstance(body, dict) else []
+    wanted = wanted.strip()
+    ids = [m.get("id", "") for m in models if m.get("cloud_provider") == PROVIDER or
+           str(m.get("id", "")).startswith(PROVIDER + ".")]
+    for cand in (PROVIDER + "." + wanted, PROVIDER + "." + wanted.split("/models/")[-1]):
+        if cand in ids:
+            return cand
+    tail = [i for i in ids if i.endswith("/" + wanted) or i.endswith("." + wanted)]
+    return tail[0] if tail else None
+
+
+def local_only(name, local):
+    """The agent's router while offload is off: everything stays local
+    (Lemonade wants at least one rule)."""
+    return {
+        "model_name": name,
+        "version": "1",
+        "recipe": "collection.router",
+        "components": [local],
+        "routing": {"candidates": [local], "default_model": local,
+                    "rules": [{"id": "offload-off", "match": {"min_chars": 0}, "route_to": local}]},
+    }
+
+
+def register(lem, doc):
+    lem.call("POST", "/delete", {"model_name": doc["model_name"]})
+    status, body = lem.call("POST", "/pull", doc, timeout=120)
+    if status != 200:
+        log("couldn't register %s (%s): %s" % (doc["model_name"], status, str(body)[:300]))
+    return status == 200
+
+
+def write_state(state):
+    if state is None:
+        try:
+            os.unlink(STATE)
+        except FileNotFoundError:
+            pass
+        return
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    os.replace(tmp, STATE)
+
+
+def cloud_for(lem):
+    """Registers the user's cloud model with Lemonade when offload is on and
+    set up. Returns its Lemonade id, or None (with the reason logged)."""
+    url, model = gsetting("cloud-base-url") or "", gsetting("cloud-model") or ""
+    if not gsetting("cloud-offload"):
+        log("cloud offload is off")
+        return None
+    if not url or not model:
+        log("cloud offload is on, but no cloud model is set up")
+        return None
+    key = api_key()
+    if not key:
+        log("no cloud API key in the keyring; offload stays off")
+        return None
+    status, body = lem.call("POST", "/install", {
+        "backend": "cloud", "provider": PROVIDER, "base_url": url, "api_key": key,
+        "allow_insecure_http": url.startswith("http://"),
+    }, timeout=120)
+    if status != 200:
+        log("Lemonade refused the cloud model (%s): %s" % (status, str(body)[:300]))
+        return None
+    cloud = cloud_model_id(lem, model)
+    if not cloud:
+        log("Lemonade doesn't list %s from %s" % (model, url))
+    return cloud
+
+
+def main(argv):
+    port = int(os.environ.get("UMOJA_LEMONADE_PORT", "13345"))
+    if "--print" in argv:
+        local, cloud = local_model(), PROVIDER + "." + (gsetting("cloud-model") or "CLOUD-MODEL")
+        print(json.dumps([policy(ASSISTANT, local, cloud, False), policy(AGENT, local, cloud, True),
+                          local_only(AGENT, local)], indent=2))
+        return 0
+    lem = Lemonade(port)
+    if not lem.wait():
+        write_state(None)
+        log("Lemonade isn't answering on port %d" % port)
+        return 1
+    local = local_model()
+    cloud = cloud_for(lem)
+    if cloud and register(lem, policy(ASSISTANT, local, cloud, False)) and \
+            register(lem, policy(AGENT, local, cloud, True)):
+        write_state({"ok": True, "offload": True, "assistant": ASSISTANT, "agent": AGENT,
+                     "local": local, "cloud": cloud})
+        log("routing between %s and %s" % (local, cloud))
+        return 0
+    lem.call("POST", "/delete", {"model_name": ASSISTANT})
+    if register(lem, local_only(AGENT, local)):
+        write_state({"ok": True, "offload": False, "assistant": "", "agent": AGENT, "local": local})
+        log("everything stays on %s" % local)
+        return 0 if not gsetting("cloud-offload") else 1
+    lem.call("POST", "/delete", {"model_name": AGENT})
+    write_state(None)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -51,6 +51,9 @@ vendor-cargo:
 	@# agents/ (OpenShell + openshell-desktop git crates) vendors separately;
 	@# debian/cargo-config-agents.toml points at it.
 	cd agents && $(CARGO) vendor --locked $(abspath $(VENDOR))/cargo-agents > /dev/null
+	@# openshell-core/-server's build.rs read ../../proto, outside the
+	@# vendored crate: copy OpenShell's proto/ next to the vendored crates.
+	cd agents && ../packaging/openshell-proto $(abspath $(VENDOR))/proto
 	@echo "vendored agent crates in $(VENDOR)/cargo-agents"
 
 # Download the upstream "embeddable" Lemonade build for each architecture,

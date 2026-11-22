@@ -144,6 +144,7 @@ endif
 	install -d $(DESKTOP)/usr/lib/umoja/lemonade
 	cp -a $(LEMONADE_SRC)/. $(DESKTOP)/usr/lib/umoja/lemonade/
 	install -D -m 0755 bin/umoja-lemonade $(DESKTOP)/usr/lib/umoja/umoja-lemonade
+	install -D -m 0755 bin/umoja-lemonade-routing $(DESKTOP)/usr/lib/umoja/umoja-lemonade-routing
 	install -d $(DESKTOP)/usr/share/umoja/icons
 	cp -r data/icons/hicolor $(DESKTOP)/usr/share/umoja/icons/
 	install -D -m 0644 data/lemonade/defaults.json $(DESKTOP)/usr/share/umoja/lemonade/defaults.json
