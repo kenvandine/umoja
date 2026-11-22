@@ -841,6 +841,7 @@ impl Agent {
         drop(s);
         for id in vanished {
             self.settle_chat(&id, "No longer needed.");
+            self.close_note_for(&id).await;
         }
         for (a, chat) in fresh.into_iter().zip(from_chat) {
             self.announce(&a).await;
