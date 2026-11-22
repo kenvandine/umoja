@@ -834,6 +834,17 @@ def t_isolation(run):
     run.check("uid=0" not in out, "Hermes doesn't run as root", out)
 
 
+def limit_mb(limit):
+    """An LXD limits.memory value ("4096MiB", "4GB", "4294967296") in MiB."""
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMGT]i?B|[KMGT])?", limit.strip())
+    if not m:
+        return None
+    n, unit = float(m.group(1)), (m.group(2) or "B").rstrip("B") or "B"
+    scale = {"B": 1, "K": 1e3, "Ki": 1024, "M": 1e6, "Mi": 1024**2, "G": 1e9, "Gi": 1024**3,
+             "T": 1e12, "Ti": 1024**4}.get(unit, 1024**2)
+    return round(n * scale / 1024**2)
+
+
 @test("memory-cap", "The sandbox has a memory cap in LXD")
 def t_memory(run):
     s = run.ensure_ready()
@@ -843,12 +854,12 @@ def t_memory(run):
     except json.JSONDecodeError:
         instances = []
     run.check(bool(instances), "the test project has the sandbox", out[:300])
-    for inst in instances:
+    # The agent's own container; OpenShell's supervisor container has no cap.
+    for inst in [i for i in instances if not i["name"].startswith("openshell-sup-")]:
         limit = inst.get("expanded_config", {}).get("limits.memory") or inst.get("config", {}).get("limits.memory")
         run.check(bool(limit), f"{inst['name']} has limits.memory", limit)
         if limit and s.get("memory_mb"):
-            m = re.fullmatch(r"(\d+)\s*(MiB|MB|M)?", limit.strip())
-            mb = int(m.group(1)) if m else None
+            mb = limit_mb(limit)
             run.check(mb is None or abs(mb - s["memory_mb"]) <= 1, "it matches what the panel shows",
                       f"{limit} vs {s['memory_mb']} MB")
     run.note(f"memory used: {s.get('memory_used_mb')} MB of {s.get('memory_mb')} MB")

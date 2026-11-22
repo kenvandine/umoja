@@ -215,9 +215,22 @@ pub async fn write_file(gw: &Gateway, path: &str, content: &str, mode: u32) -> R
 
 /// Restarts the agent (its start script runs it in a loop), so new
 /// settings take effect.
+/// Restarts the agent with new settings, and returns once it answers again
+/// (Hermes's gateway takes about 10 s to listen), so a task submitted right
+/// after a preset change doesn't hit a closed port.
 pub async fn restart(gw: &Gateway) -> Result<()> {
     call(gw, &["restart"], None).await?;
-    Ok(())
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if health(gw).await {
+            return Ok(());
+        }
+        if std::time::Instant::now() > until {
+            tracing::warn!("the agent didn't answer within 90 s of a restart");
+            return Ok(());
+        }
+    }
 }
 
 /// Something a run waits on: a command to approve or a question.
