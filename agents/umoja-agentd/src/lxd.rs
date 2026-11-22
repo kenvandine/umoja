@@ -166,6 +166,30 @@ impl Lxd {
         Ok((workload, supervisor))
     }
 
+    /// Stops `instance` (forcefully) if it's running.
+    pub fn stop(&self, instance: &Instance) -> Result<()> {
+        if instance.status != "Running" {
+            return Ok(());
+        }
+        let body = serde_json::json!({ "action": "stop", "force": true, "timeout": -1 });
+        self.call("PUT", &self.scoped(&format!("/1.0/instances/{}/state", instance.name)), Some(&body))
+            .map(|_| ())
+    }
+
+    /// Stops the sandbox's two instances, so the guardrails start them
+    /// afresh instead of finding them running from an earlier start.
+    pub fn stop_sandbox(&self, name: &str) -> Result<bool> {
+        let (workload, supervisor) = self.sandbox(name)?;
+        let mut stopped = false;
+        for i in [supervisor, workload].into_iter().flatten() {
+            if i.status == "Running" {
+                self.stop(&i)?;
+                stopped = true;
+            }
+        }
+        Ok(stopped)
+    }
+
     /// Mounts host `source` at `path` in `instance`, idmapped so files keep
     /// their owner. Hot-plugged into a running container.
     pub fn add_disk(&self, instance: &str, device: &str, source: &str, path: &str, readonly: bool) -> Result<()> {

@@ -250,6 +250,17 @@ impl Agent {
 
         self.set_step("Starting the guardrails").await;
         if self.runtime.lock().await.is_none() {
+            // The guardrails run as this daemon's child, so a sandbox still
+            // running now outlived an earlier daemon. Started again by the
+            // new guardrails it would be refused ("already running
+            // generation …"), so stop it first: they start it afresh, and
+            // tasks it was running are carried on.
+            let project = project.clone();
+            match tokio::task::spawn_blocking(move || Lxd::new(&project).stop_sandbox(&paths::sandbox())).await? {
+                Ok(true) => tracing::info!("stopped the sandbox left running by an earlier start"),
+                Ok(false) => {}
+                Err(e) => tracing::warn!(error = %format!("{e:#}"), "couldn't stop the old sandbox"),
+            }
             let rt = Runtime::start(bridge.0).await?;
             *self.runtime.lock().await = Some(rt);
         }
@@ -286,6 +297,15 @@ impl Agent {
             }
             Some(info) if info.state == Phase::Stopped && !paused => {
                 self.set_step(&format!("Starting {n}'s sandbox", n = catalog::active().name)).await;
+                gw.clone().start(&paths::sandbox()).await?;
+            }
+            // A failed start (an earlier try, or the guardrails refusing
+            // a sandbox that was still running): stop it and start again.
+            Some(info) if info.state == Phase::Failed && !paused => {
+                tracing::info!(detail = %info.detail, "sandbox failed earlier, starting it again");
+                self.set_step(&format!("Starting {n}'s sandbox", n = catalog::active().name)).await;
+                let project = project.clone();
+                tokio::task::spawn_blocking(move || Lxd::new(&project).stop_sandbox(&paths::sandbox())).await??;
                 gw.clone().start(&paths::sandbox()).await?;
             }
             Some(_) => {}
@@ -339,7 +359,8 @@ impl Agent {
             match info {
                 Some(i) if i.state == Phase::Running => return Ok(()),
                 Some(i) if i.state == Phase::Failed => {
-                    bail!("{n}'s sandbox failed: {}", if i.detail.is_empty() { i.phase } else { i.detail }, n = catalog::active().name)
+                    tracing::error!(detail = %i.detail, phase = %i.phase, "sandbox failed");
+                    bail!("{n}'s sandbox couldn't start. Try again, or restart this computer if it keeps happening.", n = catalog::active().name)
                 }
                 Some(i) => {
                     let mut s = self.state.lock().await;
