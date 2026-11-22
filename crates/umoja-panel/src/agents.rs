@@ -301,6 +301,24 @@ pub fn button() -> gtk::MenuButton {
     button
 }
 
+/// "using 231 MB of its 4 GB memory": what the sandbox uses, under its cap.
+fn memory_text(used_mb: u32, cap_mb: u32) -> String {
+    fn size(mb: u32) -> String {
+        if mb < 1024 {
+            return format!("{mb} MB");
+        }
+        let gb = f64::from(mb) / 1024.0;
+        if (gb - gb.round()).abs() < 0.05 {
+            format!("{} GB", gb.round())
+        } else {
+            format!("{gb:.1} GB")
+        }
+    }
+    i18n::umoja("using {used} of its {cap} memory")
+        .replace("{used}", &size(used_mb))
+        .replace("{cap}", &size(cap_mb))
+}
+
 impl Pill {
     fn call(&self, method: &str, args: Option<&glib::Variant>) {
         let Some(conn) = self.conn.borrow().clone() else { return };
@@ -354,7 +372,7 @@ impl Pill {
 
         let mut sub = state.summary();
         if state.memory_mb > 0 && state.memory_used_mb > 0 && state.setup == "ready" {
-            sub = format!("{sub} · {} of {} MB", state.memory_used_mb, state.memory_mb);
+            sub = format!("{sub} · {}", memory_text(state.memory_used_mb, state.memory_mb));
         }
         self.subtitle.set_text(&sub);
         self.pause.set_icon_name(if state.paused {
@@ -761,6 +779,12 @@ mod tests {
         assert_eq!(s.running(), 1);
         assert_eq!(s.approvals[0].host, "example.org");
         assert_eq!(s.summary(), "Waiting for you");
+    }
+
+    #[test]
+    fn memory_reads_plainly() {
+        assert_eq!(memory_text(231, 4096), "using 231 MB of its 4 GB memory");
+        assert_eq!(memory_text(1536, 6144), "using 1.5 GB of its 6 GB memory");
     }
 
     #[test]
