@@ -448,7 +448,23 @@ impl Agent {
     async fn mount_folders(&self) -> Result<()> {
         let workspace = paths::workspace();
         std::fs::create_dir_all(&workspace)?;
-        let shared = self.state.lock().await.shared.clone();
+        // A shared folder that was deleted or moved since is let go, so it
+        // can't stop the agent from starting.
+        let shared = {
+            let mut s = self.state.lock().await;
+            let before = s.shared.len();
+            s.shared.retain(|x| {
+                let there = Path::new(&x.path).is_dir();
+                if !there {
+                    tracing::info!(path = %x.path, "shared folder is gone, no longer sharing it");
+                }
+                there
+            });
+            if s.shared.len() != before {
+                s.save();
+            }
+            s.shared.clone()
+        };
         tokio::task::spawn_blocking(move || -> Result<()> {
             let lxd = Lxd::new(&paths::lxd_project());
             let (workload, _) = lxd.sandbox(&paths::sandbox())?;
@@ -462,13 +478,22 @@ impl Agent {
             for s in &shared {
                 wanted.push((device_for(&s.inside), s.path.clone(), s.inside.clone(), !s.writable));
             }
+            // Shares that were let go (or forgotten while LXD was out of
+            // reach) leave the container too.
+            for device in workload.devices.keys() {
+                if device.starts_with("umoja-share") && !wanted.iter().any(|w| &w.0 == device) {
+                    if let Err(e) = lxd.remove_device(&workload.name, device) {
+                        tracing::warn!(device, error = %format!("{e:#}"), "couldn't remove an old share");
+                    }
+                }
+            }
             for (device, source, path, readonly) in wanted {
                 let have = workload.devices.get(&device);
                 if have.is_some_and(|d| d.get("source") == Some(&source)) {
                     continue;
                 }
                 lxd.add_disk(&workload.name, &device, &source, &path, readonly)
-                    .with_context(|| format!("couldn't share {source} with {n}", n = catalog::active().name))?;
+                    .with_context(|| format!("Couldn't share {source} with {n}", n = catalog::active().name))?;
             }
             Ok(())
         })
@@ -1359,7 +1384,12 @@ impl Agent {
             s.shared.retain(|x| x.path != path.display().to_string());
             s.shared.push(Shared { path: path.display().to_string(), writable, inside: inside.clone() });
         }
-        self.mount_folders().await?;
+        if let Err(e) = self.mount_folders().await {
+            // Not shared after all: don't keep it to trip the next start.
+            self.state.lock().await.shared.retain(|x| x.path != path.display().to_string());
+            self.changed().await;
+            return Err(e);
+        }
         self.changed().await;
         Ok(inside)
     }
@@ -1371,6 +1401,9 @@ impl Agent {
             s.shared.retain(|x| x.path != path);
             gone
         };
+        // Forgotten first, so it never comes back even when the sandbox
+        // can't be reached now (it is left out on the next start anyway).
+        self.changed().await;
         if let Some(g) = gone {
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let lxd = Lxd::new(&paths::lxd_project());
@@ -1381,7 +1414,6 @@ impl Agent {
             })
             .await??;
         }
-        self.changed().await;
         Ok(())
     }
 

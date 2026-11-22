@@ -175,6 +175,9 @@ impl Lxd {
             "path": path,
             "readonly": if readonly { "true" } else { "false" },
             "shift": "true",
+            // A folder deleted while the sandbox is stopped mustn't keep
+            // it from starting.
+            "required": "false",
         }}});
         self.call("PATCH", &self.scoped(&format!("/1.0/instances/{instance}")), Some(&body))
             .map(|_| ())
