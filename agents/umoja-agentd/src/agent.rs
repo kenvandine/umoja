@@ -1538,6 +1538,18 @@ impl Agent {
         // An answer given only in words (no file written) is saved too, so
         // "Open" always has something to show and it's kept with the rest.
         let mut files = files;
+        // A job done in a shared folder (tidying Downloads): Open goes
+        // there, and its answer isn't saved as a file of its own (it
+        // only cluttered ~/Agents/<Name>).
+        if status == TaskStatus::Done && files.is_empty() {
+            let s = self.state.lock().await;
+            let worked_in = s.shared.iter().find(|sh| {
+                sh.writable && (result.contains(&sh.inside) || host_words(result, &s.shared).contains(&tilde(&sh.path)))
+            });
+            if let Some(sh) = worked_in {
+                files.push(PathBuf::from(&sh.path));
+            }
+        }
         if status == TaskStatus::Done && files.is_empty() && !result.trim().is_empty() {
             let (title, text) = {
                 let s = self.state.lock().await;
@@ -2079,11 +2091,16 @@ pub fn plain_text(md: &str) -> String {
 
 /// Paths inside the sandbox as the user knows them: "/sandbox/workspace/
 /// plan.md" is "~/Agents/Hermes/plan.md", a shared folder its own place.
-pub fn host_words(text: &str, shared: &[crate::state::Shared]) -> String {
-    let tilde = |p: &Path| match std::env::var_os("HOME").map(PathBuf::from) {
+/// "/home/ken/Downloads" as "~/Downloads".
+fn tilde(p: impl AsRef<Path>) -> String {
+    let p = p.as_ref();
+    match std::env::var_os("HOME").map(PathBuf::from) {
         Some(home) if p.starts_with(&home) => format!("~/{}", p.strip_prefix(&home).unwrap_or(p).display()),
         _ => p.display().to_string(),
-    };
+    }
+}
+
+pub fn host_words(text: &str, shared: &[crate::state::Shared]) -> String {
     let mut out = text.replace(paths::SANDBOX_WORKSPACE, &tilde(&paths::workspace()));
     // Longest first, so /sandbox/shared/Downloads2 isn't cut at Downloads.
     let mut shared: Vec<_> = shared.iter().collect();

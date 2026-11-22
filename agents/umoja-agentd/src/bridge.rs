@@ -45,8 +45,10 @@ pub fn instructions(name: &str, shared: &[crate::state::Shared]) -> String {
 Umoja desktop. Save every file you make in /sandbox/workspace (the user sees it as ~/Agents/{name}) \
 unless they name another shared folder under /sandbox/shared. You cannot see or control the \
 user's desktop, apps or other files. Network access is limited: when a site is blocked the user \
-is asked, so wait and retry once rather than giving up. Keep your final answer short and say \
-which files you wrote."
+is asked, so wait and retry once rather than giving up. To change a file you made earlier, edit \
+that same file (same name, spaces and all) rather than writing a new one. Keep your final answer \
+short and say which files you wrote, with paths as the user sees them: ~/Agents/{name}/... rather \
+than /sandbox/workspace/..., and a shared folder by its own name below."
     );
     // People name a shared folder the way they know it ("my Downloads",
     // "~/Documents/Finances"): say where each one is in here.

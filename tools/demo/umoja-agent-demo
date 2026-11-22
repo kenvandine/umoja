@@ -37,7 +37,7 @@ The scenes:
 Every run starts clean: finished jobs are cleared from the Agents menu
 (their files stay), requests still waiting are turned down, every shared
 folder is unshared, and what's in ~/Agents/<Name> is moved aside to
-~/Agents/<Name>/earlier demo runs/. Text Editor doesn't reopen files from
+~/Agents/<Name>/.earlier demo runs/ (hidden, so it stays off camera). Text Editor doesn't reopen files from
 an earlier session during the run. The demo's own files (the Downloads and
 Finances folders) live in ~/Umoja Agent Demo and are removed at the end,
 shares included.
@@ -200,7 +200,7 @@ class AgentDemo(tour.Demo):
             log("  ! this umoja-agentd can't clear old jobs (needs newer debs): they'll show")
         ws = self.workspace()
         if ws.is_dir() and not self.dry:
-            keep = "earlier demo runs"
+            keep = ".earlier demo runs"
             old = ws / keep / time.strftime("%Y%m%d-%H%M%S")
             for f in ws.iterdir():
                 if f.name == keep or f.name.startswith("."):
@@ -245,7 +245,7 @@ class AgentDemo(tour.Demo):
     def clear_old(self, names):
         """Move files of an earlier run aside, so this one starts clean."""
         ws = self.workspace()
-        old = ws / f"earlier demo runs/{time.strftime('%Y%m%d-%H%M%S')}"
+        old = ws / f".earlier demo runs/{time.strftime('%Y%m%d-%H%M%S')}"
         for n in names:
             f = ws / n
             if f.exists() and not self.dry:
@@ -340,6 +340,11 @@ class AgentDemo(tour.Demo):
                 # (which closes the notification).
                 self.show_agent_answer(tid, f"{name}-answer", result_caption.format(n=n),
                                        scroll_to=scroll_to, hold=hold)
+            elif not self.dry and self.bus.has_method(AGENTS, "Viewing"):
+                # Read here: its notification goes, so it can't cover Ask
+                # Umoja when the next job is typed.
+                self.bus.call(AGENTS, "Viewing", GLib.Variant("(s)", (tid,)), quiet=True)
+                self.bus.call(AGENTS, "Viewing", GLib.Variant("(s)", ("",)), quiet=True)
             self.recorder.stop(caption.format(n=n))
             return t
         finally:
@@ -452,8 +457,7 @@ class AgentDemo(tour.Demo):
             self.shot("agent-phone", f"A guided setup: make a bot with BotFather, paste its token, say hi, "
                       f"and {n} answers only you.")
             self.wait(2.0)
-            self.recorder.stop(f"Type “telegram” in Ask Umoja to connect {n} to Telegram, then send it jobs "
-                               "from your phone.")
+            self.recorder.stop(f"Type “telegram” in Ask Umoja to connect {n} to Telegram.")
         finally:
             self.bus.call(OVERLAY, "Hide", quiet=True)
             self.scrub_overlay()
@@ -573,8 +577,11 @@ class AgentDemo(tour.Demo):
         if not self.agent_ready():
             return
         n = self.agent_name()
-        self.recorder.start("agent-wrap")
+        # Files on the folder first, then roll: the caption is about it.
         wid = self.show_folder(self.workspace())
+        self.wait(0.8)
+        self.recorder.start("agent-wrap")
+        self.wait(0.6)
         self.shot("agent-wrap", f"Everything {n} made is in ~/Agents/{n}, yours to keep.")
         self.agent_menu(True)
         self.shot("agent-wrap-menu", f"Every job in the Agents menu: what {n} did, and the files it made.")

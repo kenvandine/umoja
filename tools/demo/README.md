@@ -182,7 +182,7 @@ Each run starts clean, so nothing from earlier tries shows on camera:
 finished jobs are cleared from the Agents menu and requests still waiting
 are turned down (`Agents.ClearFinished`; their files stay), every shared
 folder is unshared, everything in `~/Agents/<Name>` is moved to
-`earlier demo runs/<time>/` there, and Text Editor's restore-session is off
+`.earlier demo runs/<time>/` there (hidden, so it stays off camera), and Text Editor's restore-session is off
 for the run (it reopened files from an earlier session). Every top-bar menu
 the demo opens is closed again with `Panel.CloseMenus`. The demo's own
 input files live in `~/Umoja Agent Demo` and are removed at the end, with
