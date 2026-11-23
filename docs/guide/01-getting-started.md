@@ -33,7 +33,7 @@ them needs you:
   about and not only by their name. This runs at idle priority, and it only
   reads file contents while the computer is plugged in.
 - **Coding agents are connected.** If you use Claude Code, Codex, GitHub
-  Copilot, Antigravity, OpenCode or Gemini CLI, they're set up to use
+  Copilot, Antigravity, OpenCode, Pi or Gemini CLI, they're set up to use
   Umoja's desktop tools too. A notification tells you which ones.
 
 ## Four keys to remember

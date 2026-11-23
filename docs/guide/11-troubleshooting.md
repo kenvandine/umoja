@@ -65,7 +65,7 @@ but the session comes back.
 Everything the assistant can do comes from `umoja-mcp`, an
 [MCP](https://modelcontextprotocol.io) server. Other AI apps can use it
 too, and they get the same "ask first" rules. Claude Code, Codex, GitHub
-Copilot, Antigravity, OpenCode and Gemini CLI are connected for you at
+Copilot, Antigravity, OpenCode, Pi and Gemini CLI are connected for you at
 login. `umoja-agent-setup
 --status` shows which are connected, and `umoja-agent-setup --remove`
 disconnects them. For other apps, add a stdio MCP server with the command

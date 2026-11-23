@@ -1,6 +1,6 @@
 #!/bin/bash
 # umoja-agent-setup: let the AI coding agents a user already has (Claude Code,
-# Codex, GitHub Copilot CLI, Antigravity CLI, OpenCode, Gemini CLI) work with
+# Codex, GitHub Copilot CLI, Antigravity CLI, OpenCode, Pi, Gemini CLI) work with
 # Umoja. For each agent it finds it
 # links the Umoja agent skill into the agent's skills folder and registers
 # Umoja's MCP server (umoja-mcp), so the agent knows how the desktop works
@@ -17,6 +17,11 @@
 # OpenCode can also use the assistant's cloud model (org.umoja.shell
 # cloud-base-url and cloud-model, the key from the keyring): that happens
 # when it is set up while the assistant uses the cloud, or with --cloud.
+#
+# Pi gets the assistant's models in ~/.pi/agent/models.json: Umoja's local
+# Lemonade model always, and the cloud model when one is set up (its key is
+# read from the keyring at each request, never written to a file). The one
+# the assistant uses becomes Pi's default unless the user picked another.
 
 set -uo pipefail
 
@@ -25,10 +30,11 @@ MCP_CMD=${UMOJA_MCP_COMMAND:-umoja-mcp}
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/umoja
 STATE=$STATE_DIR/agent-setup
 CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}
-AGENTS=(claude codex copilot agy opencode gemini)
+AGENTS=(claude codex copilot agy opencode pi gemini)
 
 # Login services get a short PATH; agents usually live in the user's own bin
 # folders (native installers, npm, bun, mise, snaps).
+PI_DIR=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
 PATH=$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.local/share/mise/shims:$HOME/.opencode/bin:/snap/bin
 
 usage() {
@@ -37,8 +43,8 @@ Usage: umoja-agent-setup [AGENT...]          set up these agents (default: all f
        umoja-agent-setup --remove [AGENT...]  undo it (default: all)
        umoja-agent-setup --status             show what is set up
        umoja-agent-setup --auto               set up agents not seen before (run at login)
-       umoja-agent-setup --cloud [opencode]   point OpenCode at the assistant's cloud model
-       umoja-agent-setup --cloud --remove     undo that
+       umoja-agent-setup --cloud [opencode|pi]  point OpenCode (or Pi) at the assistant's cloud model
+       umoja-agent-setup --cloud --remove [opencode|pi]  undo that
 
 Agents: ${AGENTS[*]}
 EOF
@@ -52,6 +58,7 @@ label() {
     agy) echo "Antigravity" ;;
     gemini) echo "Gemini CLI" ;;
     opencode) echo "OpenCode" ;;
+    pi) echo "Pi" ;;
   esac
 }
 
@@ -64,6 +71,7 @@ home_of() {
     agy) echo "$HOME/.gemini/config" ;;
     gemini) echo "$HOME/.gemini" ;;
     opencode) echo "$CONFIG/opencode" ;;
+    pi) echo "$PI_DIR" ;;
   esac
 }
 
@@ -210,6 +218,7 @@ EOF
     agy) json_mcp "$action" "$(home_of agy)/mcp_config.json" mcpServers umoja "$(gemini_entry)" ;;
     gemini) json_mcp "$action" "$(home_of gemini)/settings.json" mcpServers umoja "$(gemini_entry)" ;;
     opencode) json_mcp "$action" "$CONFIG/opencode/opencode.json" mcp umoja "$(opencode_entry)" ;;
+    pi) json_mcp "$action" "$PI_DIR/mcp.json" mcpServers umoja "$(gemini_entry)" ;;
   esac
 }
 
@@ -336,6 +345,185 @@ cloud_note() {
   echo "OpenCode: uses the assistant's cloud model ($(shell_key cloud-model))"
 }
 
+# --- Pi on the assistant's models -----------------------------------------
+
+# The local model the assistant uses: org.umoja.shell lemonade-model, else
+# the automatic pick of umoja_common::lemonade::auto_model (by RAM, and the
+# tiny model once the small one ran out of memory). Keep the two in step.
+lemonade_model() {
+  local picked mem_kb
+  picked=$(shell_key lemonade-model)
+  if [[ -n $picked ]]; then echo "$picked"; return; fi
+  mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null)
+  if ((${mem_kb:-0} >= 12 * 1024 * 1024)); then
+    echo Qwen3-4B-Instruct-2507-GGUF
+  elif [[ -e ${XDG_STATE_HOME:-$HOME/.local/state}/umoja/lemonade-tiny-model ]]; then
+    echo Qwen3.5-0.8B-GGUF
+  else
+    echo Qwen3.5-2B-GGUF
+  fi
+}
+
+# One setting from ~/.config/umoja/lemonade.env (port, context), as
+# bin/umoja-lemonade reads it.
+lemonade_env() {
+  local file=$CONFIG/umoja/lemonade.env
+  [[ -r $file ]] || return 0
+  sed -n "s/^[[:space:]]*\(export[[:space:]]\+\)\?$1=[\"']\?\([^\"']*\)[\"']\?[[:space:]]*$/\2/p" "$file" | tail -n1
+}
+
+# add [cloud|refresh] | remove | remove-cloud | has. Writes providers "umoja-local" (Lemonade) and
+# "umoja-cloud" (when the assistant has a cloud model) to Pi's models.json,
+# and makes one Pi's default in settings.json when the user hasn't picked a
+# model of their own: the cloud one when the assistant uses it (or with
+# "cloud"), else the local one. Only entries named as ours are touched.
+pi_models() {
+  local action=$1 prefer=${2:-} port ctx mem_kb local_model="" cloud_url="" cloud_model=""
+  if [[ $action == add ]]; then
+    port=$(lemonade_env UMOJA_LEMONADE_PORT)
+    port=${port:-${UMOJA_LEMONADE_PORT:-13345}}
+    ctx=$(lemonade_env UMOJA_LEMONADE_CTX)
+    if [[ -z $ctx ]]; then
+      # bin/umoja-lemonade's defaults: 16k, 8k under 12 GB of RAM.
+      mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null)
+      if ((${mem_kb:-0} > 0 && mem_kb < 12 * 1024 * 1024)); then ctx=8192; else ctx=16384; fi
+    fi
+    local_model=$(lemonade_model)
+    cloud_url=$(shell_key cloud-base-url)
+    cloud_model=$(shell_key cloud-model)
+    [[ $(shell_key assistant-backend) == cloud ]] && prefer=cloud
+    if [[ $prefer == cloud && ( -z $cloud_url || -z $cloud_model ) ]]; then
+      echo "  cloud: the assistant has no cloud model set up (Ask Umoja, model button, Cloud)" >&2
+      [[ ${2:-} == cloud ]] && return 1
+      prefer=""
+    fi
+  fi
+  python3 - "$action" "$PI_DIR" "${port:-}" "${ctx:-}" "$local_model" "$cloud_url" "$cloud_model" "$prefer" <<'PY'
+import json, os, sys, tempfile
+action, pidir, port, ctx, local_model, cloud_url, cloud_model, prefer = sys.argv[1:9]
+models_path = os.path.join(pidir, "models.json")
+settings_path = os.path.join(pidir, "settings.json")
+LOCAL, CLOUD = "umoja-local", "umoja-cloud"
+NAMES = {LOCAL: "Umoja local model", CLOUD: "Umoja cloud model"}
+# Read at each request, so the key never lands in a file.
+KEY_CMD = "!secret-tool lookup umoja assistant-cloud kind api-key"
+
+def load(path):
+    try:
+        with open(path) as f:
+            text = f.read()
+        return json.loads(text) if text.strip() else {}
+    except FileNotFoundError:
+        return {}
+    except ValueError:
+        print(f"  pi: {path} isn't plain JSON; left alone", file=sys.stderr)
+        sys.exit(1)
+
+def save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode = os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+m = load(models_path)
+providers = m.get("providers") or {}
+ours = lambda pid: (providers.get(pid) or {}).get("name") == NAMES[pid]
+if action == "has":
+    sys.exit(0 if ours(LOCAL) or ours(CLOUD) else 1)
+for pid in (LOCAL, CLOUD):
+    if pid in providers and not ours(pid):
+        print(f"  pi: models.json already has a provider called {pid}; left alone", file=sys.stderr)
+        sys.exit(1)
+
+s = load(settings_path)
+mine = str(s.get("defaultProvider", "")).startswith("umoja-") or not s.get("defaultProvider")
+
+if action == "add":
+    providers[LOCAL] = {
+        "name": NAMES[LOCAL],
+        "baseUrl": f"http://127.0.0.1:{port}/api/v1",
+        "api": "openai-completions",
+        "apiKey": "lemonade",
+        "models": [{
+            "id": local_model,
+            "name": f"{local_model} (Umoja, on this computer)",
+            "contextWindow": int(ctx),
+            "maxTokens": 4096,
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            # Qwen3.5 thinks by default and then leaves the answer empty;
+            # the assistant turns it off too (lemonade::chat_template_kwargs).
+            "samplingParams": {"chat_template_kwargs": {"enable_thinking": False}},
+        }],
+    }
+    # A refresh at login keeps the cloud model only if it is still there
+    # (--cloud --remove pi took it away), unless the assistant uses it.
+    keep_cloud = prefer != "refresh" or ours(CLOUD)
+    if cloud_url and cloud_model and keep_cloud:
+        providers[CLOUD] = {
+            "name": NAMES[CLOUD],
+            "baseUrl": cloud_url.rstrip("/"),
+            "api": "openai-completions",
+            "apiKey": KEY_CMD,
+            "models": [{"id": cloud_model, "name": f"{cloud_model} (Umoja cloud)"}],
+        }
+    elif ours(CLOUD):
+        del providers[CLOUD]
+    m["providers"] = providers
+    m.setdefault("$schema", "https://pi.dev/schemas/models.schema.json")
+    save(models_path, m)
+    if mine:
+        current = s.get("defaultProvider")
+        if prefer == "cloud" and CLOUD in providers:
+            pid = CLOUD
+        elif current in providers and current in (LOCAL, CLOUD):
+            pid = current       # keep the user's pick between ours
+        else:
+            pid = LOCAL
+        s["defaultProvider"] = pid
+        s["defaultModel"] = providers[pid]["models"][0]["id"]
+        save(settings_path, s)
+elif action in ("remove", "remove-cloud"):
+    drop = (CLOUD,) if action == "remove-cloud" else (LOCAL, CLOUD)
+    changed = False
+    for pid in drop:
+        if ours(pid):
+            del providers[pid]
+            changed = True
+    if changed:
+        if providers:
+            m["providers"] = providers
+        else:
+            m.pop("providers", None)
+        if set(m) <= {"$schema"}:
+            os.remove(models_path)      # we created it
+        else:
+            save(models_path, m)
+    if s.get("defaultProvider") in drop:
+        if action == "remove-cloud" and LOCAL in providers:
+            s["defaultProvider"] = LOCAL
+            s["defaultModel"] = providers[LOCAL]["models"][0]["id"]
+        else:
+            s.pop("defaultProvider", None)
+            s.pop("defaultModel", None)
+        if s:
+            save(settings_path, s)
+        else:
+            os.remove(settings_path)
+PY
+}
+
+pi_note() {
+  local s=$PI_DIR/settings.json
+  [[ -f $s ]] || return 0
+  python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); p=s.get("defaultProvider","")
+print({"umoja-local":"Pi: uses the assistant'"'"'s local model ("+s.get("defaultModel","")+")",
+       "umoja-cloud":"Pi: uses the assistant'"'"'s cloud model ("+s.get("defaultModel","")+")"}.get(p,""))' "$s" 2>/dev/null | grep . || true
+}
+
 # --- commands ---------------------------------------------------------------
 
 setup_one() {
@@ -346,6 +534,9 @@ setup_one() {
   if [[ $agent == opencode && $(shell_key assistant-backend) == cloud ]] \
     && ! opencode_cloud has 2>/dev/null; then
     opencode_cloud add && cloud_note
+  fi
+  if [[ $agent == pi ]]; then
+    pi_models add && pi_note || ok=1
   fi
   mark_seen "$agent"
   if ((ok == 0)); then
@@ -361,6 +552,7 @@ remove_one() {
   unlink_skill "$(skill_dir "$agent")"
   mcp remove "$agent"
   [[ $agent == opencode ]] && opencode_cloud remove
+  [[ $agent == pi ]] && pi_models remove
   mark_seen "$agent"
   echo "$(label "$agent"): Umoja skill and tools removed"
 }
@@ -377,6 +569,7 @@ status() {
     mcp has "$agent" 2>/dev/null && tools=yes
     local extra=""
     [[ $agent == opencode ]] && opencode_cloud has 2>/dev/null && extra="  model: the assistant's cloud model"
+    [[ $agent == pi ]] && pi_models has 2>/dev/null && extra="  models: the assistant's"
     printf '%-14s skill: %-3s  tools: %s%s\n' "$(label "$agent")" "$skill" "$tools" "$extra"
   done
   if has_skill "$HOME/.agents/skills"; then
@@ -416,15 +609,25 @@ main() {
     --auto) mode=auto; shift ;;
     --cloud)
       shift
-      if [[ ${1:-} == --remove ]]; then
-        opencode_cloud remove && echo "OpenCode: no longer uses the assistant's cloud model"
-        exit
-      fi
-      if [[ -n ${1:-} && $1 != opencode ]]; then
-        echo "Only OpenCode can use the assistant's cloud model" >&2
-        exit 2
-      fi
-      opencode_cloud add && cloud_note
+      local undo=0
+      [[ ${1:-} == --remove ]] && { undo=1; shift; }
+      case ${1:-opencode} in
+        opencode)
+          if ((undo)); then
+            opencode_cloud remove && echo "OpenCode: no longer uses the assistant's cloud model"
+          else
+            opencode_cloud add && cloud_note
+          fi ;;
+        pi)
+          if ((undo)); then
+            pi_models remove-cloud && echo "Pi: no longer uses the assistant's cloud model"
+          else
+            pi_models add cloud && pi_note
+          fi ;;
+        *)
+          echo "Only OpenCode and Pi can use the assistant's cloud model" >&2
+          exit 2 ;;
+      esac
       exit ;;
     -*) usage >&2; exit 2 ;;
   esac
@@ -440,7 +643,12 @@ main() {
   case $mode in
     setup|auto)
       for agent in "${agents[@]}"; do
-        [[ $mode == auto ]] && seen "$agent" && continue
+        if [[ $mode == auto ]] && seen "$agent"; then
+          # Keep Pi on the assistant's current models (they change with
+          # the RAM rule, the model picker and the Cloud page).
+          [[ $agent == pi ]] && pi_models has 2>/dev/null && pi_models add refresh >/dev/null 2>&1
+          continue
+        fi
         if setup_one "$agent"; then added+=("$(label "$agent")"); else rc=1; fi
       done
       # The shared folder several agents read (Codex, OpenCode, Pi...).

@@ -705,7 +705,7 @@ From a terminal, `umoja-files --search "lease pdf"` searches the index.
 The assistant is good at doing things on the desktop, but a small local
 model isn't the right tool for writing a script or changing code. If you
 have an AI coding agent (Claude Code, Codex, GitHub Copilot CLI,
-Antigravity CLI, OpenCode or Gemini CLI), the assistant hands those jobs to
+Antigravity CLI, OpenCode, Pi or Gemini CLI), the assistant hands those jobs to
 it:
 
 - Ask for a coding job ("write me a script that renames my photos by
@@ -714,19 +714,21 @@ it:
 - Under any answer to a coding question there is also a **Continue in
   Claude Code** button (named after your agent).
 - The agent opens in a terminal with your request as its first message, in
-  its normal mode, so it asks before it changes or runs anything. It
-  already knows Umoja through the skill and tools `umoja-agent-setup`
+  its normal mode, so it asks before it changes or runs anything (except
+  Pi, which by design runs commands and edits files without asking; only
+  Umoja's own desktop tools still ask). It already knows Umoja through the skill and tools `umoja-agent-setup`
   added.
 
 Pick which agent gets these jobs under **Coding agent** in the model
 button's popover (**None** turns the hand-off off), or with
 `gsettings set org.umoja.shell ai-agent claude` (`claude`, `codex`,
-`copilot`, `agy`, `opencode`, `gemini`). Under the list it says what the
+`copilot`, `agy`, `opencode`, `pi`, `gemini`). Under the list it says what the
 agent needs next:
 
 - **Install**, when it isn't installed yet. A terminal opens and installs
-  it, connects it to Umoja (below), and starts its sign-in. OpenCode comes
-  from its snap, which Ubuntu publishes. Claude Code, Codex, GitHub Copilot
+  it, connects it to Umoja (below), and starts its sign-in. OpenCode and Pi
+  come from their classic snaps, which Ubuntu publishes
+  (`opencode`, `pi-coding-agent`). Claude Code, Codex, GitHub Copilot
   and Antigravity come from their makers' own installers, for you only,
   into `~/.local/bin`, without sudo. Their snaps on the Snap Store are
   unofficial and strictly confined, so they couldn't reach your projects
@@ -736,7 +738,7 @@ agent needs next:
   (GitHub Copilot and Antigravity keep their sign-in in the keyring). A
   terminal opens with the agent's own sign-in (`claude auth login`,
   `codex login`, `copilot login`, `opencode auth login`, or Antigravity's
-  first run). It opens your browser, or shows a code for a device login.
+  and Pi's first run, where Pi's `/login` signs in to a provider). It opens your browser, or shows a code for a device login.
   Umoja never sees your password or token. It only checks whether the
   agent's sign-in file exists.
 
@@ -754,6 +756,21 @@ provider reads with `"apiKey": "{file:...}"`, so the key itself never sits
 in `opencode.json`. `umoja-agent-setup --cloud` sets this up again,
 for example after you change the model, and `umoja-agent-setup --cloud --remove`
 undoes it.
+
+**Pi uses the assistant's models.** When Pi is set up, Umoja adds two
+providers to `~/.pi/agent/models.json`: `umoja-local`, the assistant's
+local model on Umoja's Lemonade (`127.0.0.1:13345`, with its context size),
+and `umoja-cloud`, the cloud model from the **Cloud** page when you have
+one. Its key isn't copied anywhere: Pi reads it from your keyring with
+`secret-tool` for each request. The one the assistant uses becomes Pi's
+default model in `~/.pi/agent/settings.json`, unless you picked another
+one, so Pi works without signing in. `/model` in Pi switches between them,
+and between any providers you sign in to with `/login`. Umoja refreshes the
+providers at each login (the local model follows the RAM rule and the
+model picker). The local models are small, so they suit small jobs; the
+cloud model, or a provider of your own, does better on real projects.
+`umoja-agent-setup --cloud pi` makes the cloud model Pi's default and
+`umoja-agent-setup --cloud --remove pi` takes it away.
 
 The `ai-agent-hotkey` key (unset by default) can open the agent with a
 keyboard shortcut.
@@ -908,7 +925,7 @@ All in the `org.umoja.shell` schema, for example
 | `ask-about-screen-hotkey` | `['<Super><Shift>a']` | Ask about the screen |
 | `clipboard-history-hotkey` | `['<Super><Shift>v']` | Clipboard history |
 | `copy-text-hotkey` | `['<Super><Control>Print']` | Copy the text in a screen area |
-| `ai-agent` | `''` | Coding agent for coding jobs: `claude`, `codex`, `copilot`, `agy`, `opencode`, `gemini`, `none`; empty picks the first installed |
+| `ai-agent` | `''` | Coding agent for coding jobs: `claude`, `codex`, `copilot`, `agy`, `opencode`, `pi`, `gemini`, `none`; empty picks the first installed |
 | `ai-agent-hotkey` | `[]` | Open the coding agent in a terminal |
 | `crash-notifications` | `true` | Notify when an app crashes, with **Ask Why** |
 | `crash-notifications-muted` | `[]` | Programs whose crashes don't notify |
@@ -937,14 +954,15 @@ Claude Code, can use it too and gets the same tools and the same
 **Allow** rules.
 
 **AI coding agents are connected for you.** At login, `umoja-agent-setup`
-looks for Claude Code, Codex, GitHub Copilot CLI, Antigravity CLI, OpenCode
-and Gemini CLI. For each one it finds for the first time, and right away
+looks for Claude Code, Codex, GitHub Copilot CLI, Antigravity CLI, OpenCode,
+Pi and Gemini CLI. For each one it finds for the first time, and right away
 for one you install from the **Coding agent** picker, it:
 
 - registers `umoja-mcp` with it (`claude mcp add --scope user`, Codex's
   `config.toml`, Copilot's `~/.copilot/mcp-config.json`, Antigravity's
   `~/.gemini/config/mcp_config.json` (shared with the Antigravity app),
-  OpenCode's `opencode.json`, Gemini's `settings.json`), and
+  OpenCode's `opencode.json`, Pi's `~/.pi/agent/mcp.json`, Gemini's
+  `settings.json`), and
 - links Umoja's agent skill into its skills folder (and `~/.agents/skills`),
   so the agent knows how Umoja is configured: GSettings rather than config
   files, which unit to restart, where the logs are, and never to edit

@@ -149,10 +149,11 @@ always stay on your computer. See [Privacy](09-privacy-and-settings.md).
 ### Coding jobs
 
 A small local model isn't the right tool for writing code. If you have a
-coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode or
-Gemini CLI), the assistant hands coding jobs to it. The agent opens in a
+coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode, Pi
+or Gemini CLI), the assistant hands coding jobs to it. The agent opens in a
 terminal with your request as its first message, already set up to use
-Umoja's desktop tools, and it asks you before it changes anything.
+Umoja's desktop tools. Most agents ask you before they change anything;
+Pi doesn't, by design, so keep an eye on what it does.
 
 #### Choosing your coding agent
 
@@ -168,7 +169,7 @@ Umoja sends coding jobs to one agent, your default. To pick it:
 Under the list, Umoja says what that agent still needs:
 
 - **Install**: it isn't installed yet. Umoja installs it in a terminal
-  (OpenCode from its snap, the others with their makers' own installers,
+  (OpenCode and Pi from their snaps, the others with their makers' own installers,
   just for you), connects it to Umoja's tools and signs you in. Installing
   a snap asks for your password.
 - **Sign In**: it's installed but not signed in. This opens the agent's
@@ -182,6 +183,11 @@ Until you pick one, the first agent Umoja finds installed is used. Pick
 
 If the assistant uses a cloud model when OpenCode is set up, OpenCode gets
 the same model and your key, so it works without signing in.
+
+Pi works without signing in too: it gets the assistant's local model, and
+the cloud model if you have one, and starts on the one the assistant uses.
+Type `/model` in Pi to switch, or `/login` to add a provider of your own.
+The local model is small, so give Pi a cloud model for bigger jobs.
 
 #### Using your coding agent
 

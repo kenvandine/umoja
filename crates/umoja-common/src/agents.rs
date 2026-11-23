@@ -1,5 +1,5 @@
 //! AI coding agents (Claude Code, Codex, GitHub Copilot CLI, Antigravity
-//! CLI, OpenCode, Gemini CLI), so the assistant can hand a job it can't
+//! CLI, OpenCode, Pi, Gemini CLI), so the assistant can hand a job it can't
 //! do well (writing a script, changing code) to one of them.
 //!
 //! [`KNOWN`] is the one table of what Umoja knows about each agent: its
@@ -7,8 +7,8 @@
 //! sign in. Umoja finds the agents on PATH or in the user's own bin
 //! folders, uses the one picked in `org.umoja.shell ai-agent` (or the
 //! first one found), and starts it in a terminal with the task as its
-//! first prompt, in the agent's normal mode, so the agent still asks
-//! before it changes anything. `umoja-agent-setup` gives the agents
+//! first prompt, in the agent's normal mode (most agents then ask before
+//! they change anything; Pi doesn't ask, by design). `umoja-agent-setup` gives the agents
 //! Umoja's skill and tools.
 //!
 //! Umoja installs an agent only when the user asks (the Install button,
@@ -149,6 +149,29 @@ pub const KNOWN: &[Agent] = &[
         // assistant's cloud model.
         credentials: &[".local/share/opencode/auth.json", ".local/share/umoja/opencode-cloud.key"],
         aliases: &["opencode", "open code"],
+    },
+    Agent {
+        id: "pi",
+        name: "Pi",
+        // `pi [messages...]` opens its terminal UI on the first message.
+        prompt_flag: None,
+        // Ubuntu's classic snap (command alias `pi`).
+        install: Install::Snap {
+            name: "pi-coding-agent",
+            classic: true,
+        },
+        // Signs in on its first run (/login), if it needs to at all:
+        // umoja-agent-setup gives it the assistant's local Lemonade model
+        // and, when one is set up, its cloud model, in models.json.
+        login: &[],
+        credentials: &[".pi/agent/auth.json", ".pi/agent/models.json"],
+        aliases: &[
+            "pi",
+            "pi agent",
+            "pi coding agent",
+            "pi-coding-agent",
+            "pi.dev",
+        ],
     },
     Agent {
         id: "gemini",
@@ -450,6 +473,8 @@ mod tests {
             o.argv(Path::new("opencode"), "hi"),
             ["opencode", "--prompt", "hi"]
         );
+        let pi = Agent::by_id("pi").unwrap();
+        assert_eq!(pi.argv(Path::new("pi"), "hi"), ["pi", "hi"]);
         for id in ["copilot", "agy"] {
             let a = Agent::by_id(id).unwrap();
             assert_eq!(a.argv(Path::new(id), "hi"), [id, "-i", "hi"]);
@@ -462,6 +487,7 @@ mod tests {
         assert_eq!(Agent::by_name("github copilot cli").unwrap().id, "copilot");
         assert_eq!(Agent::by_name("Antigravity").unwrap().id, "agy");
         assert_eq!(Agent::by_name(" OpenCode ").unwrap().id, "opencode");
+        assert_eq!(Agent::by_name("Pi Coding Agent").unwrap().id, "pi");
         assert_eq!(Agent::by_name("firefox"), None);
     }
 
@@ -489,6 +515,10 @@ mod tests {
         assert!(g.ends_with("&& umoja-agent-setup copilot && copilot login"));
         let a = Agent::by_id("agy").unwrap().install_command().unwrap();
         assert!(a.ends_with("&& umoja-agent-setup agy"));
+        // Pi: Ubuntu's classic snap; setup gives it a model, no login step.
+        let p = Agent::by_id("pi").unwrap().install_command().unwrap();
+        assert!(p.contains("|| snap install pi-coding-agent --classic; }"));
+        assert!(p.ends_with("&& umoja-agent-setup pi"));
         assert_eq!(Agent::by_id("gemini").unwrap().install_command(), None);
         // Every agent the setup script knows is in the table and back.
         let script = include_str!("../../../bin/umoja-agent-setup");
@@ -496,6 +526,19 @@ mod tests {
         let ids: Vec<&str> = line["AGENTS=(".len()..line.len() - 1].split(' ').collect();
         let known: Vec<&str> = KNOWN.iter().map(|a| a.id).collect();
         assert_eq!(ids, known);
+        // Pi's local model follows the assistant's automatic choice.
+        for m in [
+            crate::lemonade::DEFAULT_MODEL,
+            crate::lemonade::SMALL_MODEL,
+            crate::lemonade::TINY_MODEL,
+        ] {
+            assert!(script.contains(m), "umoja-agent-setup lacks {m}");
+        }
+        assert!(script.contains(&format!(
+            "{}:-{}",
+            crate::lemonade::PORT_ENV,
+            crate::lemonade::DEFAULT_PORT
+        )));
     }
 
     #[test]

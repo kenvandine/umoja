@@ -285,7 +285,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             "hand_off_to_agent",
-            "Hand a coding job to the user's AI coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode or Gemini CLI, whichever is installed and chosen): writing a script or program, changing code in a project, fixing a build. It opens in a terminal with the task as its first message and asks the user before changing anything. Pass the whole task in the user's words, and a folder when the job is about one. If the agent isn't installed, install it with install_app first.",
+            "Hand a coding job to the user's AI coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode, Pi or Gemini CLI, whichever is installed and chosen): writing a script or program, changing code in a project, fixing a build. It opens in a terminal with the task as its first message; most agents ask the user before changing anything (Pi doesn't ask). Pass the whole task in the user's words, and a folder when the job is about one. If the agent isn't installed, install it with install_app first.",
             obj(json!({
                 "task": {"type": "string", "description": "The job, fully described"},
                 "folder": {"type": "string", "description": "Optional project folder to start in"},
@@ -316,7 +316,7 @@ pub fn tools() -> Vec<Tool> {
         }),
         Tool::new(
             "sign_in_agent",
-            "Sign the user in to a coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode): opens the agent's own sign-in in a terminal, which opens the browser or shows a code. Umoja never sees the password or token.",
+            "Sign the user in to a coding agent (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode, Pi): opens the agent's own sign-in in a terminal, which opens the browser or shows a code. Umoja never sees the password or token.",
             obj(json!({"agent": {"type": "string", "description": "Agent name, e.g. \"codex\"; default: the chosen one"}}), &[]),
             |a| Box::pin(async move { sign_in_agent(&a).hide_if_ok() }),
         )
@@ -390,7 +390,7 @@ fn hand_off(a: &Value) -> Outcome {
         Ok(Some(agent)) => agent,
         Ok(None) => {
             return err(if agents::installed().is_empty() {
-                "No coding agent is installed. Ask the user which one they'd like (Claude Code, Codex, GitHub Copilot, Antigravity or OpenCode) and install it with install_app."
+                "No coding agent is installed. Ask the user which one they'd like (Claude Code, Codex, GitHub Copilot, Antigravity, OpenCode or Pi) and install it with install_app."
             } else {
                 "The coding agent hand-off is turned off (org.umoja.shell ai-agent is 'none')."
             });

@@ -253,7 +253,7 @@
       <summary>Coding agent the assistant hands coding jobs to</summary>
       <description>
         One of 'claude' (Claude Code), 'codex', 'copilot' (GitHub Copilot
-        CLI), 'agy' (Antigravity CLI), 'opencode' or 'gemini' (Gemini CLI),
+        CLI), 'agy' (Antigravity CLI), 'opencode', 'pi' or 'gemini' (Gemini CLI),
         used when it is installed. Empty picks the first one installed;
         'none' turns the hand-off off. Umoja installs one only when asked
         (the Install button under Coding agent, or the assistant).
