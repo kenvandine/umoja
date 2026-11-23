@@ -326,10 +326,9 @@ send `/stop` in Telegram.
 ![Once it's connected: “Hermes is on Telegram. Only your Telegram account can talk to it.” with Close and Disconnect](images/agent-telegram-connected.png)
 
 When a Telegram job needs a website the agent may not use yet, the
-request comes to your computer as usual, and Telegram tells you about it
-with a **Deny** button. Allowing a site is only done on your computer (the
-notification or the Agents menu), so nothing inside the sandbox can say
-yes for you. The agent can't reach the site in the meantime, so if it
+request comes to your computer as usual, and Telegram tells you about it.
+You answer it on your computer (the notification or the Agents menu), so
+nothing inside the sandbox can answer for you. The agent can't reach the site in the meantime, so if it
 already answered without it, ask again once you've allowed it. Your bot's token is kept
 in your keyring. To stop, open the same setup and click **Disconnect**.
 

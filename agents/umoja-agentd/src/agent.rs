@@ -950,36 +950,21 @@ impl Agent {
         Ok(())
     }
 
-    /// A Telegram job's consent prompt, in Telegram too, with buttons;
-    /// Hermes's Telegram adapter (umoja-patch-hermes) records the tap and
-    /// poll_chat answers it.
+    /// A Telegram job's consent prompt is told in Telegram too, without
+    /// buttons: a tap would be recorded inside the sandbox, where a job
+    /// could forge one, so it is answered on this computer only.
     fn ask_in_chat(self: &Arc<Self>, a: &Approval) {
         let this = self.clone();
         let a = a.clone();
         tokio::spawn(async move {
             let Ok(gw) = this.gateway().await else { return };
-            let key = chat_key(&a.id);
             let n = catalog::active().name.clone();
-            // Only Deny here: the tap is recorded inside the sandbox, where
-            // a job could forge one, and a forged Deny does no harm. Allow
-            // is given on this computer.
             let text = format!(
-                "{n} wants to reach {host}. To let it, press Allow on your computer (the notification or the Agents menu).",
+                "{n} wants to reach {host}. It can't until you allow it on your computer (the notification or the Agents menu).",
                 host = a.host
             );
-            let buttons = vec![("Deny", "deny")];
-            let body = serde_json::json!({ "key": key, "text": text, "buttons": buttons });
-            match bridge::call(&gw, &["chat-ask"], Some(&body)).await {
-                Ok(v) => {
-                    // Answered on the computer meanwhile: nothing to keep.
-                    if this.state.lock().await.approvals.iter().any(|x| x.id == a.id) {
-                        this.chat_prompts.lock().await.insert(
-                            a.id.clone(),
-                            ChatPrompt { key, messages: v["messages"].clone(), host: a.host.clone() },
-                        );
-                    }
-                }
-                Err(e) => tracing::warn!(error = %format!("{e:#}"), "couldn't send the prompt to Telegram"),
+            if let Err(e) = bridge::call(&gw, &["chat-say"], Some(&serde_json::json!({ "text": text }))).await {
+                tracing::warn!(error = %format!("{e:#}"), "couldn't tell Telegram about the request");
             }
         });
     }
@@ -1019,11 +1004,11 @@ impl Agent {
             };
             let Some((id, prompt)) = found else { continue };
             let n = catalog::active().name.clone();
-            // Answers come from inside the sandbox, so only a Deny counts
-            // (see ask_in_chat).
-            if choice != "deny" {
-                tracing::warn!(choice, "ignoring a non-Deny answer from the chat");
-                let text = format!("Allow {} on your computer: the notification or the Agents menu.", prompt.host);
+            // Answers come from inside the sandbox, where a job could forge
+            // them: never trusted (requests are answered on this computer).
+            if !choice.is_empty() {
+                tracing::warn!(choice, request = id, "ignoring an answer from the chat");
+                let text = format!("Answer {} on your computer: the notification or the Agents menu.", prompt.host);
                 let _ = bridge::call(gw, &["chat-say"], Some(&serde_json::json!({ "text": text }))).await;
                 continue;
             }
@@ -2627,15 +2612,6 @@ fn same_image(a: &str, b: &str) -> bool {
 /// fallback addresses). Never a question for the user.
 fn telegram_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("api.telegram.org") || host.starts_with("149.154.") || host.starts_with("91.108.")
-}
-
-/// A short key for approval `id`, for Telegram's 64-byte button data.
-fn chat_key(id: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut h);
-    now_ms().hash(&mut h);
-    format!("{:016x}", h.finish())
 }
 
 /// The text of the last `role` message in the agent's session `session`.
