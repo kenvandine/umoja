@@ -198,7 +198,9 @@ impl LemonadeClient {
             let shape = token.as_deref().map(backend::key_shape);
             tracing::info!(url = %self.endpoint, key = ?shape, "cloud chat request");
         }
-        let mut retried = false;
+        // A strict provider may reject one field per reply: retry while
+        // adapting still changes the request (a handful at most).
+        let mut retries = 0;
         loop {
             let mut req = self.client.post(&self.endpoint).json(&body);
             if let Some(t) = token.as_deref().filter(|t| !t.is_empty()) {
@@ -219,9 +221,9 @@ impl LemonadeClient {
             }
             let text = resp.text().await.unwrap_or_default();
             let err = backend::provider_error(&text).unwrap_or_default();
-            if !retried && status.as_u16() == 400 && backend::adapt_request(&mut body, &err) {
+            if retries < 4 && status.as_u16() == 400 && backend::adapt_request(&mut body, &err) {
                 tracing::info!(%err, "retrying the chat request without the rejected parameter");
-                retried = true;
+                retries += 1;
                 continue;
             }
             tracing::warn!(status = status.as_u16(), body = %text, "chat request failed");

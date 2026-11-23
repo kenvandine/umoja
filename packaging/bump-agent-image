@@ -2,7 +2,10 @@
 # Point an agent's catalog entry at the sandbox image built from this
 # checkout's agents/<id>-image (default: hermes).
 #
-#   packaging/bump-agent-image [id]
+#   packaging/bump-agent-image [id [tag]]
+#
+# `tag` picks a weekly/manual rebuild (<sha>-r<run id>, a newer upstream
+# Hermes under the same files) instead of the commit's own image.
 #
 # The Hermes image workflow tags every image it publishes with the full
 # commit sha (main also gets :latest). Umoja never runs a floating tag: a
@@ -18,7 +21,7 @@ catalog=agents/catalog/$id.json
 dir=agents/$id-image
 [[ -f $catalog && -d $dir ]] || { echo "no $catalog or $dir" >&2; exit 1; }
 
-sha=$(git log -1 --format=%H -- "$dir")
+sha=${2:-$(git log -1 --format=%H -- "$dir")}
 image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$catalog")
 repo=${image%:*}
 name=${repo#ghcr.io/}
