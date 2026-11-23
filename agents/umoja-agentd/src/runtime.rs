@@ -105,9 +105,12 @@ impl Runtime {
         let mut last = String::new();
         while tokio::time::Instant::now() < deadline {
             match Gateway::connect(&self.config()).await {
-                Ok(mut gw) => match gw.list().await {
-                    Ok(_) => return Ok(gw),
-                    Err(e) => last = e.to_string(),
+                // A gateway still recovering can take a call and never
+                // answer it: don't wait on one for ever.
+                Ok(mut gw) => match tokio::time::timeout(Duration::from_secs(10), gw.list()).await {
+                    Ok(Ok(_)) => return Ok(gw),
+                    Ok(Err(e)) => last = e.to_string(),
+                    Err(_) => last = "the gateway took the call but didn't answer".into(),
                 },
                 Err(e) => last = e.to_string(),
             }

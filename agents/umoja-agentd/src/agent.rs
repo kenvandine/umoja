@@ -290,9 +290,13 @@ impl Agent {
             let rt = Runtime::start(bridge.0).await?;
             *self.runtime.lock().await = Some(rt);
         }
-        let gw = {
+        let connected = {
             let rt = self.runtime.lock().await;
-            rt.as_ref().unwrap().connect(Duration::from_secs(60)).await?
+            rt.as_ref().unwrap().connect(Duration::from_secs(60)).await
+        };
+        let gw = match connected {
+            Ok(gw) => gw,
+            Err(e) => self.recover_guardrails(bridge.0, e).await?,
         };
         *self.gw.write().await = Some(gw.clone());
         let _ = gw.clone().ensure_profiles().await;
@@ -394,6 +398,36 @@ impl Agent {
         }
         self.changed().await;
         Ok(())
+    }
+
+    /// The guardrails won't answer. Seen when they were stopped (a log out)
+    /// while making the sandbox: on every start after, they wait for that
+    /// half-made sandbox for ever. With no sandbox on this computer there
+    /// is nothing of value in their state (the rules are applied again on
+    /// every start), so it's set aside and they start afresh; the sandbox is
+    /// then made again. With a sandbox present, the error stands.
+    async fn recover_guardrails(&self, bridge: std::net::Ipv4Addr, error: anyhow::Error) -> Result<Gateway> {
+        let project = paths::lxd_project();
+        let (workload, supervisor) =
+            tokio::task::spawn_blocking(move || Lxd::new(&project).sandbox(&paths::sandbox())).await??;
+        if workload.is_some() || supervisor.is_some() {
+            return Err(error);
+        }
+        tracing::warn!(error = %format!("{error:#}"), "the guardrails don't answer and there's no sandbox: starting them afresh");
+        *self.runtime.lock().await = None; // stops them
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let db = paths::state_dir().join("gateway.db");
+        let aside = paths::state_dir().join(format!("gateway.db.stuck-{}", now()));
+        for suffix in ["", "-wal", "-shm"] {
+            let from = PathBuf::from(format!("{}{suffix}", db.display()));
+            if from.exists() {
+                std::fs::rename(&from, format!("{}{suffix}", aside.display()))?;
+            }
+        }
+        let rt = Runtime::start(bridge).await?;
+        let gw = rt.connect(Duration::from_secs(60)).await?;
+        *self.runtime.lock().await = Some(rt);
+        Ok(gw)
     }
 
     async fn wait_running(&self, gw: &Gateway, timeout: Duration) -> Result<()> {
