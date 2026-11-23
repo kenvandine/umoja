@@ -484,8 +484,28 @@ impl Agent {
         for (host, port) in preset.open_sites() {
             gw.add_rule(&paths::sandbox(), host, *port, Some(ANY_PROGRAM)).await?;
         }
+        // Sites another preset opened that this one doesn't (Balanced to
+        // Careful) close again. Sites the user allowed "always" are rules
+        // of their own (named by the guardrails), so they stay.
+        let open = preset.open_sites();
+        let others = [Preset::Careful, Preset::Balanced, Preset::HandsOff];
+        let mut closed = std::collections::HashSet::new();
+        for (host, port) in others.iter().flat_map(|p| p.open_sites()) {
+            if open.contains(&(*host, *port)) || !closed.insert((*host, *port)) {
+                continue;
+            }
+            let rule = openshell_gateway_client::rule_name_for(host, *port);
+            if let Err(e) = gw.remove_rule(&paths::sandbox(), &rule).await {
+                tracing::debug!(rule, error = %e, "no preset rule to remove");
+            }
+        }
         if messaging.as_ref().is_some_and(|m| m.platform == "telegram") {
             gw.add_rule(&paths::sandbox(), "api.telegram.org", 443, Some(ANY_PROGRAM)).await?;
+        } else {
+            let rule = openshell_gateway_client::rule_name_for("api.telegram.org", 443);
+            if let Err(e) = gw.remove_rule(&paths::sandbox(), &rule).await {
+                tracing::debug!(rule, error = %e, "no Telegram rule to remove");
+            }
         }
         if let Err(e) = gw.set_auto_approve(&paths::sandbox(), preset.auto_approve()).await {
             tracing::warn!(error = %e, "couldn't set OpenShell auto-approval");
@@ -706,12 +726,12 @@ impl Agent {
             tracing::debug!(error = %e, "chat answers");
         }
         let busy = on && {
-            let v = bridge::call(&gw, &["call", "GET", "/health/detailed"], None).await?;
+            let v = bridge::call(&gw, &["get", "/health/detailed"], None).await?;
             v["body"]["active_agents"].as_u64().unwrap_or(0) > 0
         };
         match (busy, current) {
             (true, None) => {
-                let session = bridge::call(&gw, &["call", "GET", "/api/sessions?source=telegram&limit=1"], None)
+                let session = bridge::call(&gw, &["get", "/api/sessions?source=telegram&limit=1"], None)
                     .await
                     .ok()
                     .and_then(|v| v["body"]["data"][0]["id"].as_str().map(str::to_owned))
@@ -940,15 +960,14 @@ impl Agent {
             let Ok(gw) = this.gateway().await else { return };
             let key = chat_key(&a.id);
             let n = catalog::active().name.clone();
+            // Only Deny here: the tap is recorded inside the sandbox, where
+            // a job could forge one, and a forged Deny does no harm. Allow
+            // is given on this computer.
             let text = format!(
-                "{n} wants to reach {host}. It can't until you say so.",
+                "{n} wants to reach {host}. To let it, press Allow on your computer (the notification or the Agents menu).",
                 host = a.host
             );
-            let mut buttons = vec![("Allow once", "allow")];
-            if !a.flagged {
-                buttons.push(("Always allow", "always"));
-            }
-            buttons.push(("Deny", "deny"));
+            let buttons = vec![("Deny", "deny")];
             let body = serde_json::json!({ "key": key, "text": text, "buttons": buttons });
             match bridge::call(&gw, &["chat-ask"], Some(&body)).await {
                 Ok(v) => {
@@ -1000,6 +1019,14 @@ impl Agent {
             };
             let Some((id, prompt)) = found else { continue };
             let n = catalog::active().name.clone();
+            // Answers come from inside the sandbox, so only a Deny counts
+            // (see ask_in_chat).
+            if choice != "deny" {
+                tracing::warn!(choice, "ignoring a non-Deny answer from the chat");
+                let text = format!("Allow {} on your computer: the notification or the Agents menu.", prompt.host);
+                let _ = bridge::call(gw, &["chat-say"], Some(&serde_json::json!({ "text": text }))).await;
+                continue;
+            }
             let say = match self.answer(&id, &choice).await {
                 Ok(()) if choice == "deny" => None,
                 Ok(()) => {
@@ -2614,7 +2641,7 @@ fn chat_key(id: &str) -> String {
 /// The text of the last `role` message in the agent's session `session`.
 async fn last_message(gw: &Gateway, session: &str, role: &str) -> String {
     let path = format!("/api/sessions/{session}/messages");
-    let Ok(v) = bridge::call(gw, &["call", "GET", &path], None).await else { return String::new() };
+    let Ok(v) = bridge::call(gw, &["get", &path], None).await else { return String::new() };
     v["body"]["data"]
         .as_array()
         .and_then(|m| m.iter().rev().find(|m| m["role"] == role).map(|m| message_text(&m["content"])))

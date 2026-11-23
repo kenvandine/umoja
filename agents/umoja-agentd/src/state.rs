@@ -330,10 +330,30 @@ impl State {
         let Ok(json) = serde_json::to_string_pretty(&saved) else { return };
         let path = crate::paths::state_file();
         let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-            let _ = std::fs::rename(tmp, path);
+        // Private from the first byte (it holds the agent's key and the
+        // prompts): created 0600, never written if that fails.
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let _ = std::fs::remove_file(&tmp);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .and_then(|mut f| {
+                // create_new + mode is 0600 minus the umask: make sure.
+                f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+                f.write_all(json.as_bytes())?;
+                f.sync_all()
+            });
+        match written {
+            Ok(()) => {
+                let _ = std::fs::rename(tmp, path);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "couldn't save the agents state");
+                let _ = std::fs::remove_file(&tmp);
+            }
         }
     }
 
@@ -345,11 +365,18 @@ impl State {
         self.tasks.iter_mut().find(|t| t.id == id)
     }
 
+    /// Keeps the last KEEP_TASKS jobs, oldest finished ones going first; a
+    /// job still running is never dropped (the list may run over for it).
     pub fn trim_tasks(&mut self) {
-        if self.tasks.len() > KEEP_TASKS {
-            let drop = self.tasks.len() - KEEP_TASKS;
-            self.tasks.drain(..drop);
-        }
+        let mut over = self.tasks.len().saturating_sub(KEEP_TASKS);
+        self.tasks.retain(|t| {
+            if over > 0 && !matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
+                over -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
