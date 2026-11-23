@@ -5,6 +5,8 @@
 # first account in the lxd group (bin/umoja-install). Leaves an LXD that
 # someone already set up alone.
 set -eu
+# pkexec and systemd give a bare PATH: the snap's commands live in /snap/bin.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 snap list lxd >/dev/null 2>&1 || { echo "LXD isn't installed"; exit 0; }
 snap wait system seed.loaded
 lxd waitready --timeout=300

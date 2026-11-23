@@ -484,8 +484,28 @@ impl Agent {
         for (host, port) in preset.open_sites() {
             gw.add_rule(&paths::sandbox(), host, *port, Some(ANY_PROGRAM)).await?;
         }
+        // Sites another preset opened that this one doesn't (Balanced to
+        // Careful) close again. Sites the user allowed "always" are rules
+        // of their own (named by the guardrails), so they stay.
+        let open = preset.open_sites();
+        let others = [Preset::Careful, Preset::Balanced, Preset::HandsOff];
+        let mut closed = std::collections::HashSet::new();
+        for (host, port) in others.iter().flat_map(|p| p.open_sites()) {
+            if open.contains(&(*host, *port)) || !closed.insert((*host, *port)) {
+                continue;
+            }
+            let rule = openshell_gateway_client::rule_name_for(host, *port);
+            if let Err(e) = gw.remove_rule(&paths::sandbox(), &rule).await {
+                tracing::debug!(rule, error = %e, "no preset rule to remove");
+            }
+        }
         if messaging.as_ref().is_some_and(|m| m.platform == "telegram") {
             gw.add_rule(&paths::sandbox(), "api.telegram.org", 443, Some(ANY_PROGRAM)).await?;
+        } else {
+            let rule = openshell_gateway_client::rule_name_for("api.telegram.org", 443);
+            if let Err(e) = gw.remove_rule(&paths::sandbox(), &rule).await {
+                tracing::debug!(rule, error = %e, "no Telegram rule to remove");
+            }
         }
         if let Err(e) = gw.set_auto_approve(&paths::sandbox(), preset.auto_approve()).await {
             tracing::warn!(error = %e, "couldn't set OpenShell auto-approval");
@@ -706,12 +726,12 @@ impl Agent {
             tracing::debug!(error = %e, "chat answers");
         }
         let busy = on && {
-            let v = bridge::call(&gw, &["call", "GET", "/health/detailed"], None).await?;
+            let v = bridge::call(&gw, &["get", "/health/detailed"], None).await?;
             v["body"]["active_agents"].as_u64().unwrap_or(0) > 0
         };
         match (busy, current) {
             (true, None) => {
-                let session = bridge::call(&gw, &["call", "GET", "/api/sessions?source=telegram&limit=1"], None)
+                let session = bridge::call(&gw, &["get", "/api/sessions?source=telegram&limit=1"], None)
                     .await
                     .ok()
                     .and_then(|v| v["body"]["data"][0]["id"].as_str().map(str::to_owned))
@@ -930,37 +950,21 @@ impl Agent {
         Ok(())
     }
 
-    /// A Telegram job's consent prompt, in Telegram too, with buttons;
-    /// Hermes's Telegram adapter (umoja-patch-hermes) records the tap and
-    /// poll_chat answers it.
+    /// A Telegram job's consent prompt is told in Telegram too, without
+    /// buttons: a tap would be recorded inside the sandbox, where a job
+    /// could forge one, so it is answered on this computer only.
     fn ask_in_chat(self: &Arc<Self>, a: &Approval) {
         let this = self.clone();
         let a = a.clone();
         tokio::spawn(async move {
             let Ok(gw) = this.gateway().await else { return };
-            let key = chat_key(&a.id);
             let n = catalog::active().name.clone();
             let text = format!(
-                "{n} wants to reach {host}. It can't until you say so.",
+                "{n} wants to reach {host}. It can't until you allow it on your computer (the notification or the Agents menu).",
                 host = a.host
             );
-            let mut buttons = vec![("Allow once", "allow")];
-            if !a.flagged {
-                buttons.push(("Always allow", "always"));
-            }
-            buttons.push(("Deny", "deny"));
-            let body = serde_json::json!({ "key": key, "text": text, "buttons": buttons });
-            match bridge::call(&gw, &["chat-ask"], Some(&body)).await {
-                Ok(v) => {
-                    // Answered on the computer meanwhile: nothing to keep.
-                    if this.state.lock().await.approvals.iter().any(|x| x.id == a.id) {
-                        this.chat_prompts.lock().await.insert(
-                            a.id.clone(),
-                            ChatPrompt { key, messages: v["messages"].clone(), host: a.host.clone() },
-                        );
-                    }
-                }
-                Err(e) => tracing::warn!(error = %format!("{e:#}"), "couldn't send the prompt to Telegram"),
+            if let Err(e) = bridge::call(&gw, &["chat-say"], Some(&serde_json::json!({ "text": text }))).await {
+                tracing::warn!(error = %format!("{e:#}"), "couldn't tell Telegram about the request");
             }
         });
     }
@@ -1000,6 +1004,14 @@ impl Agent {
             };
             let Some((id, prompt)) = found else { continue };
             let n = catalog::active().name.clone();
+            // Answers come from inside the sandbox, where a job could forge
+            // them: never trusted (requests are answered on this computer).
+            if !choice.is_empty() {
+                tracing::warn!(choice, request = id, "ignoring an answer from the chat");
+                let text = format!("Answer {} on your computer: the notification or the Agents menu.", prompt.host);
+                let _ = bridge::call(gw, &["chat-say"], Some(&serde_json::json!({ "text": text }))).await;
+                continue;
+            }
             let say = match self.answer(&id, &choice).await {
                 Ok(()) if choice == "deny" => None,
                 Ok(()) => {
@@ -2602,19 +2614,10 @@ fn telegram_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("api.telegram.org") || host.starts_with("149.154.") || host.starts_with("91.108.")
 }
 
-/// A short key for approval `id`, for Telegram's 64-byte button data.
-fn chat_key(id: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut h);
-    now_ms().hash(&mut h);
-    format!("{:016x}", h.finish())
-}
-
 /// The text of the last `role` message in the agent's session `session`.
 async fn last_message(gw: &Gateway, session: &str, role: &str) -> String {
     let path = format!("/api/sessions/{session}/messages");
-    let Ok(v) = bridge::call(gw, &["call", "GET", &path], None).await else { return String::new() };
+    let Ok(v) = bridge::call(gw, &["get", &path], None).await else { return String::new() };
     v["body"]["data"]
         .as_array()
         .and_then(|m| m.iter().rev().find(|m| m["role"] == role).map(|m| message_text(&m["content"])))

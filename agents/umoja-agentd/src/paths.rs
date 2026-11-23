@@ -29,9 +29,11 @@ pub fn user_name() -> String {
         .unwrap_or_else(|| format!("uid{}", uid()))
 }
 
-/// Gateway port, then the model relay on the next one. 17700 + 2 per
-/// account (wrapping after 100), clear of the OpenShell snap's 17670 and
-/// openshell-desktop's 17671.
+/// Gateway port, then the model relay on the next one: 17700 + 2 per
+/// account, clear of the OpenShell snap's 17670 and openshell-desktop's
+/// 17671. Kept in the state folder once picked. Up to uid 8000-odd each
+/// account has its own pair; past that, the first free pair, never the
+/// ephemeral range.
 pub fn ports() -> (u16, u16) {
     if let Some(p) = std::env::var("UMOJA_AGENTS_PORT")
         .ok()
@@ -39,9 +41,39 @@ pub fn ports() -> (u16, u16) {
     {
         return (p, p + 1);
     }
-    let slot = (uid().saturating_sub(1000) % 100) as u16;
-    let base = 17700 + slot * 2;
-    (base, base + 1)
+    static PORTS: std::sync::OnceLock<(u16, u16)> = std::sync::OnceLock::new();
+    *PORTS.get_or_init(|| {
+        let file = state_dir().join("ports");
+        if let Some(base) = std::fs::read_to_string(&file).ok().and_then(|t| t.trim().parse::<u16>().ok()) {
+            if (FIRST_PORT..LAST_PORT).contains(&base) {
+                return (base, base + 1);
+            }
+        }
+        let slots = (LAST_PORT - FIRST_PORT) / 2;
+        let mine = uid().saturating_sub(1000);
+        // Accounts up to uid 8000-odd each have a pair of their own.
+        let base = if mine < u32::from(slots) {
+            FIRST_PORT + mine as u16 * 2
+        } else {
+            let first = (mine % u32::from(slots)) as u16;
+            (0..slots)
+                .map(|i| FIRST_PORT + ((first + i) % slots) * 2)
+                .find(|b| free(*b) && free(*b + 1))
+                .unwrap_or(FIRST_PORT + first * 2)
+        };
+        let _ = std::fs::create_dir_all(state_dir());
+        let _ = std::fs::write(&file, format!("{base}\n"));
+        (base, base + 1)
+    })
+}
+
+const FIRST_PORT: u16 = 17700;
+/// Below Linux's ephemeral range (32768-60999).
+const LAST_PORT: u16 = 32766;
+
+/// Nothing listens on `port` (any address) right now.
+fn free(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 /// The LXD managed bridge the sandboxes' supervisors join.

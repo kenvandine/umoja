@@ -272,7 +272,10 @@ pub async fn restart(gw: &Gateway) -> Result<()> {
         }
         if std::time::Instant::now() > until {
             tracing::warn!("the agent didn't answer within 90 s of a restart");
-            return Ok(());
+            bail!(
+                "{n} didn't come back after restarting. Try again in a moment.",
+                n = crate::catalog::active().name
+            );
         }
     }
 }

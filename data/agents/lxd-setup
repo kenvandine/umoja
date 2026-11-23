@@ -6,6 +6,8 @@
 #
 #   lxd-setup USER
 set -eu
+# pkexec and systemd give a bare PATH: the snap's commands live in /snap/bin.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 user=${1:?usage: lxd-setup USER}
 id "$user" >/dev/null 2>&1 || { echo "no such user: $user" >&2; exit 1; }
 [ "$(id -u "$user")" -ge 1000 ] || { echo "refusing system account $user" >&2; exit 1; }

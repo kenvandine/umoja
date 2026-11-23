@@ -5,7 +5,8 @@
 #   pushes to claude/* branches publish :<sha> only (device tests).
 #   agents/catalog/hermes.json names an exact :<sha>; move it with
 #   packaging/bump-agent-image once a new image is published.
-# - A weekly run picks up a new upstream Hermes Agent image.
+# - A weekly run picks up a new upstream Hermes Agent image as
+#   :<sha>-r<run id>; :<sha> tags are never rebuilt (the catalog pins them).
 # - Pull requests only build.
 #
 # The package must be public (GitHub > Packages > umoja-hermes > settings)
@@ -55,8 +56,13 @@ jobs:
           file: agents/hermes-image/Containerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
+          # A :<sha> tag is published once, by the push of that commit, and
+          # never rebuilt: the catalog pins it, and the base image moves.
+          # Weekly and manual rebuilds get a tag of their own
+          # (:<sha>-r<run id>), which reaches users only when the catalog
+          # is moved to it (packaging/bump-agent-image).
           tags: |
-            ${{ github.ref == 'refs/heads/main' && 'ghcr.io/kenvandine/umoja-hermes:latest' || '' }}
-            ghcr.io/kenvandine/umoja-hermes:${{ github.sha }}
+            ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/kenvandine/umoja-hermes:latest' || '' }}
+            ${{ github.event_name == 'push' && format('ghcr.io/kenvandine/umoja-hermes:{0}', github.sha) || format('ghcr.io/kenvandine/umoja-hermes:{0}-r{1}', github.sha, github.run_id) }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
