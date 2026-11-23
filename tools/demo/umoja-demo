@@ -445,6 +445,7 @@ class Demo:
 
     SCENES = SCENES
     AI_SCENES = AI_SCENES
+    OPT_IN = ()
     TRAILER = TRAILER
     TITLES = TITLES
     HEADING = "A tour of Umoja"
@@ -2768,7 +2769,9 @@ class Demo:
         def picked(s, names):
             return s in names or (s in self.AI_SCENES and "assistant" in names)
         scenes = [s for s in self.SCENES if (not self.opts.only or picked(s, self.opts.only))
-                  and not picked(s, self.opts.skip or [])]
+                  and not picked(s, self.opts.skip or [])
+                  # Scenes not ready for a default run play only when named.
+                  and (s not in self.OPT_IN or picked(s, self.opts.only or []))]
         if self.opts.ask:
             scenes = [s for s in scenes if not s.startswith("ai-")] + ["ai-custom"]
         self.check_tools(scenes)

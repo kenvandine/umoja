@@ -159,7 +159,7 @@ QUIZ = ("Make a 5-question pub quiz about Lisbon, one question per file: quiz-1.
         "each file with its own command, then quiz-answers.md with the answers.")
 QUIZ_FILES = [f"quiz-{i}.md" for i in range(1, 6)] + ["quiz-answers.md"]
 
-TRAILER = ["agent-intro", "agent-trip", "agent-followup", "agent-map", "agent-tidy", "agent-budget", "agent-lid",
+TRAILER = ["agent-intro", "agent-trip", "agent-followup", "agent-tidy", "agent-budget", "agent-lid",
            "agent-phone", "agent-wrap"]
 FOLLOWUP = "Add a rainy-day plan for Saturday, indoors, and keep the budget the same."
 
@@ -167,6 +167,10 @@ FOLLOWUP = "Add a rainy-day plan for Saturday, indoors, and keep the budget the 
 class AgentDemo(tour.Demo):
     SCENES = SCENES
     AI_SCENES = []
+    # Hermes doesn't wait for a site's card yet: it tries the next site and
+    # gives up, so the map scene fails more often than not. Run it with
+    # --only agent-map; the budget scene shows a consent card reliably.
+    OPT_IN = ("agent-map",)
     TRAILER = TRAILER
     TITLES = TITLES
     HEADING = "Umoja's background agent"
