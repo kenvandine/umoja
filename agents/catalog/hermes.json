@@ -2,7 +2,7 @@
   "id": "hermes",
   "name": "Hermes",
   "description": "Nous Research's personal agent: research, writing and chores in the background.",
-  "image": "ghcr.io/kenvandine/umoja-hermes:15a0689f45a5c2fc4a5a12761480dc1e96fc7a12",
+  "image": "ghcr.io/kenvandine/umoja-hermes:b145e9084b1d6b12b5ecd8a8a086939243938120",
   "command": [
     "/usr/local/bin/umoja-agent-start"
   ],
