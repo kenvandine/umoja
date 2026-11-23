@@ -181,6 +181,7 @@ class AgentDemo(tour.Demo):
         self.shares = []  # host folders shared for the demo
         self.extra_windows = []  # windows our scenes opened (Files on a folder)
         self.trip_task = None  # agent-trip's task, for agent-followup
+        self.dropped = []  # (scene, why) of jobs left out of the film
 
     # ---- a clean start ------------------------------------------------
 
@@ -241,7 +242,8 @@ class AgentDemo(tour.Demo):
         s = self.agent_state()
         running = {t["id"] for t in s.get("tasks", []) if t.get("status") in ("running", "waiting")}
         for a in s.get("approvals", []):
-            if a.get("task") not in running and a.get("kind") != "question":
+            # Only sites: a command or question belongs to its own job.
+            if a.get("task") not in running and a.get("kind") == "network":
                 log(f"  turn down a leftover request: {a.get('title')}")
                 self.bus.call(AGENTS, "Answer", GLib.Variant("(ss)", (a["id"], "deny")), quiet=True)
 
@@ -332,14 +334,18 @@ class AgentDemo(tour.Demo):
             tid = self.hand_to_agent(prompt, f"{name}-handed", handed_caption.format(n=n))
             if not tid:
                 log(f"  ! the hand-off didn't make a task, leaving {name} out")
+                self.dropped.append((name, "the hand-off didn't make a task"))
                 self.recorder.discard()
                 return None
             if before_follow:
                 before_follow(tid)
-            t = self.follow_agent(tid, name, allow=allow)
+            # A command it asks to run is OK'd like a person would: the
+            # sandbox and read-only shares keep it harmless.
+            t = self.follow_agent(tid, name, allow=allow, command_answer="allow")
             ok = bool(t) and t.get("status") == "done" and (check(t) if check and not self.dry else True)
             if not ok:
                 log(f"  ! {name}: {(t or {}).get('status')}: {(t or {}).get('result', '')[:160]!r}, leaving it out")
+                self.dropped.append((name, f"{(t or {}).get('status')}: {(t or {}).get('result', '')[:160]}"))
                 self.recorder.discard()
                 return None
             self.wait(2.0)  # its "done" notification
@@ -614,6 +620,12 @@ class AgentDemo(tour.Demo):
         for path in self.shares:
             self.bus.call(AGENTS, "Unshare", GLib.Variant("(s)", (str(path),)), quiet=True, timeout=120_000)
         super().tidy()
+        if self.dropped:
+            log("")
+            log(f"! {len(self.dropped)} scene(s) LEFT OUT of this film, so it's not complete:")
+            for name, why in self.dropped:
+                log(f"!   {name}: {why}")
+            log("")
         if self.agent_dir:
             shutil.rmtree(self.agent_dir, ignore_errors=True)
 
