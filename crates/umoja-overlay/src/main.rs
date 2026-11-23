@@ -18,10 +18,14 @@ mod dictation;
 mod dictation_page;
 mod downloads;
 mod files;
+mod messaging_setup;
+mod background_agent;
 mod lemonade;
+mod markdown;
 mod model;
 mod model_picker;
 mod myna;
+mod offload;
 mod prompt;
 mod screencast;
 mod screenshot;
@@ -77,6 +81,19 @@ const IFACE_XML: &str = r#"
     <method name="Ask">
       <arg name="question" type="s" direction="in"/>
     </method>
+    <!-- A background agent's task (org.umoja.Agents id): its answer in
+         full, with a reply box that follows up in the same conversation. -->
+    <method name="ShowAgentTask">
+      <arg name="task" type="s" direction="in"/>
+    </method>
+    <!-- Type text into the shown agent answer's reply box and send it
+         (tools/demo); false when no answer is waiting for a reply. -->
+    <method name="ReplyAgentTask">
+      <arg name="text" type="s" direction="in"/>
+      <arg name="sent" type="b" direction="out"/>
+    </method>
+    <!-- The guided "Talk to Hermes from Telegram" setup. -->
+    <method name="ShowMessagingSetup"/>
     <!-- flags: 1 = the local model, 2 = type the question out first -->
     <method name="AskWith">
       <arg name="question" type="s" direction="in"/>
@@ -420,6 +437,14 @@ fn export(
                         }
                         methods.toggle()
                     }
+                    "ReplyAgentTask" => {
+                        let Some((text,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "expected (s)");
+                            return;
+                        };
+                        invocation.return_value(Some(&(methods.reply_agent_task(&text),).to_variant()));
+                        return;
+                    }
                     "AskRows" | "AskActivate" | "TestAction" => {
                         if !gtk::glib::user_runtime_dir().join("umoja-demo").exists() {
                             invocation.return_dbus_error(
@@ -661,6 +686,23 @@ fn export(
                         spread.hide();
                         grid.hide();
                         methods.ask_now(&question)
+                    }
+                    "ShowAgentTask" => {
+                        let Some((task,)) = params.get::<(String,)>() else {
+                            invocation.return_dbus_error(
+                                "org.freedesktop.DBus.Error.InvalidArgs",
+                                "expected (s)",
+                            );
+                            return;
+                        };
+                        spread.hide();
+                        grid.hide();
+                        methods.show_agent_task(&task)
+                    }
+                    "ShowMessagingSetup" => {
+                        spread.hide();
+                        grid.hide();
+                        methods.show_messaging_setup()
                     }
                     "AskWith" => {
                         let Some((question, flags)) = params.get::<(String, u32)>() else {

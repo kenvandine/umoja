@@ -66,6 +66,40 @@ Captured hands-free by `tools/demo/umoja-demo` on 2026-11-16 (umoja-desktop 2026
 
 *Make OpenCode the coding agent, then just ask: “write an app in Rust”. It runs on your model, with Umoja's tools, and writes the project.* ([video](videos/ai-opencode.mp4))
 
+## Background agent: plan a trip
+
+![“@agent …” in Ask Umoja hands the job to Hermes.](images/ai-agent-handed.png)
+
+*“@agent …” in Ask Umoja hands the job to Hermes.*
+
+![Hermes works in the background: the Agents button shows what it's doing.](images/ai-agent-working.png)
+
+*Hermes works in the background: the Agents button shows what it's doing.*
+
+![Done: Hermes says so, and the plan is in ~/Agents/Hermes.](images/ai-agent-done.png)
+
+*Done: Hermes says so, and the plan is in ~/Agents/Hermes.*
+
+![Open it: the whole plan in Ask Umoja, with a reply box under it.](images/ai-agent-answer.png)
+
+*Open it: the whole plan in Ask Umoja, with a reply box under it.*
+
+![Reply to refine it: Hermes carries on from the same plan.](images/ai-agent-reply.png)
+
+*Reply to refine it: Hermes carries on from the same plan.*
+
+![Refined: a rainy-day Saturday, same budget.](images/ai-agent-refined.png)
+
+*Refined: a rainy-day Saturday, same budget.*
+
+![The weekend, planned, in the Markdown viewer.](images/ai-agent.png)
+
+*The weekend, planned, in the Markdown viewer.*
+
+[![Hand Hermes a bigger job: “@agent plan a weekend in Lisbon”. It works in its own sandbox; then read the plan in Ask Umoja and reply to refine it.](videos/ai-agent.gif)](videos/ai-agent.mp4)
+
+*Hand Hermes a bigger job: “@agent plan a weekend in Lisbon”. It works in its own sandbox; then read the plan in Ask Umoja and reply to refine it.* ([video](videos/ai-agent.mp4))
+
 ## Assistant: tile windows
 
 ![Tiling by asking for it, in plain words.](images/ai-tiling.png)

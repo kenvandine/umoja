@@ -207,13 +207,17 @@ impl PromptInput {
         let empty = i.view.buffer().char_count() == 0;
         i.placeholder.set_visible(empty);
         i.clear.set_visible(!empty);
-        if let Some(id) = i.pending.take() {
-            id.remove();
-        }
-        // Like a search entry: emptied reports at once, typing after a
-        // pause.
+        // Emptied reports at once; typing at most every CHANGED_DELAY, so
+        // the rows keep up with a fast typist too (a pause-only debounce
+        // left them on the empty prompt's rows until typing stopped).
         if empty {
+            if let Some(id) = i.pending.take() {
+                id.remove();
+            }
             self.emit(|i| &i.changed);
+            return;
+        }
+        if i.pending.borrow().is_some() {
             return;
         }
         let weak = self.weak();

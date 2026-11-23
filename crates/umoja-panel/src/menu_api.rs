@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! OpenMenu(s menu)     open "calendar" or "quick-settings" (GNOME's
-//!                      top-edge touch swipe)
+//!                      top-edge touch swipe), or "agents" (Hermes's card,
+//!                      from a consent notification)
 //! ToggleMenu(s menu)   open or close it (Super+V: the notification list)
 //! Focus()              give the top bar the keyboard (Ctrl+Alt+Tab):
 //!                      Tab/arrows move between its buttons, Escape leaves
@@ -32,6 +33,7 @@ const XML: &str = r#"<node>
     <method name="ToggleMenu"><arg type="s" name="menu" direction="in"/></method>
     <method name="Focus"/>
     <method name="Unfocus"/>
+    <method name="CloseMenus"/>
     <method name="LogOut"/>
     <method name="ConfirmLogOut"/>
     <method name="ConfirmPowerOff"/>
@@ -108,22 +110,58 @@ pub fn install_escape(window: &gtk::Window) {
     window.add_controller(keys);
 }
 
+/// One top-bar menu at a time, and none stuck: opening a menu closes the
+/// others, and a menu the compositor refused to show ("Tried to map a
+/// grabbing popup with a non-top most parent", with another popup still
+/// up) is closed again, so the next click opens it instead of closing an
+/// invisible one.
+fn guard_menus(buttons: &[gtk::MenuButton]) {
+    let all: Vec<_> = buttons.iter().map(|b| b.downgrade()).collect();
+    for b in buttons {
+        let all = all.clone();
+        b.connect_active_notify(move |b| {
+            if !b.is_active() {
+                return;
+            }
+            for other in all.iter().filter_map(|w| w.upgrade()) {
+                if &other != b && other.is_active() {
+                    other.popdown();
+                }
+            }
+            let weak = b.downgrade();
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+                let Some(b) = weak.upgrade() else { return };
+                if let Some(p) = b.popover()
+                    && p.is_visible()
+                    && !p.is_mapped()
+                {
+                    tracing::warn!("a top-bar menu didn't make it on screen; closing it so it can open again");
+                    p.popdown();
+                }
+            });
+        });
+    }
+}
+
 pub fn own_name(
     window: &gtk::Window,
     calendar: &gtk::MenuButton,
     quick_settings: &gtk::MenuButton,
+    agents: &gtk::MenuButton,
 ) {
     install_escape(window);
+    guard_menus(&[calendar.clone(), quick_settings.clone(), agents.clone()]);
     let window = window.downgrade();
     let calendar = calendar.downgrade();
     let quick_settings = quick_settings.downgrade();
+    let agents = agents.downgrade();
     let on_bus = move |conn: gio::DBusConnection, _: &str| {
         let info = gio::DBusNodeInfo::for_xml(XML).expect("valid XML");
         let iface = info
             .lookup_interface(dbus::PANEL_INTERFACE)
             .expect("interface");
-        let (window, calendar, quick_settings) =
-            (window.clone(), calendar.clone(), quick_settings.clone());
+        let (window, calendar, quick_settings, agents) =
+            (window.clone(), calendar.clone(), quick_settings.clone(), agents.clone());
         let res = conn
             .register_object(dbus::PANEL_OBJECT_PATH, &iface)
             .method_call(move |_, _, _, _, method, params, invocation| {
@@ -134,6 +172,15 @@ pub fn own_name(
                                 focus(&w);
                             } else {
                                 unfocus(&w);
+                            }
+                        }
+                        invocation.return_value(None);
+                        return;
+                    }
+                    "CloseMenus" => {
+                        for b in [calendar.upgrade(), quick_settings.upgrade(), agents.upgrade()].into_iter().flatten() {
+                            if b.popover().is_some_and(|p| p.is_visible()) {
+                                b.popdown();
                             }
                         }
                         invocation.return_value(None);
@@ -178,10 +225,19 @@ pub fn own_name(
                 let button = match params.get::<(String,)>().as_ref().map(|(m,)| m.as_str()) {
                     Some("calendar") => calendar.upgrade(),
                     Some("quick-settings") => quick_settings.upgrade(),
+                    Some("agents") => agents.upgrade().filter(|b| b.is_visible()),
                     _ => None,
                 };
                 match button {
                     Some(b) => {
+                        // A menu GTK thinks is open but that never made it
+                        // on screen: reset it, or nothing could open it.
+                        if let Some(p) = b.popover()
+                            && p.is_visible()
+                            && !p.is_mapped()
+                        {
+                            p.popdown();
+                        }
                         let open = b.popover().is_some_and(|p| p.is_visible());
                         if method == "ToggleMenu" && open {
                             b.popdown();

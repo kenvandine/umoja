@@ -207,3 +207,139 @@ To use another agent for one job, name it: "have Codex fix the failing
 test in ~/src/app". Your choice of coding agent stays as it is. To open
 your agent with a keyboard shortcut, set `ai-agent-hotkey` (see
 [Settings](09-privacy-and-settings.md)).
+
+## Your background agent
+
+Some jobs take a while and don't need you watching: plan a weekend away,
+compare a few options and write them up, sort a messy folder, make sense of
+a bank statement. Hand them to your **background agent**. Hermes is the
+first one Umoja offers. It works on its own, in a sandbox on your computer,
+while you get on with other things. It can't see your screen, your apps or
+your files, only its own folder and the folders you share with it, and it
+asks before it goes anywhere new on the internet.
+
+### Setting it up
+
+1. Open Ask Umoja and click the gear button (**Assistant model and
+   voice**).
+2. Under **Background agent**, pick how often it should ask you first:
+   - **Careful**: before every new site and every risky command.
+   - **Balanced** (the default): a few research sites, like Wikipedia, are
+     open; it asks for the rest.
+   - **Hands-off**: only when something looks risky.
+3. Click **Set Up**. If your computer needs to allow sandboxes first, it
+   asks for your password. The first setup downloads the agent once and
+   takes a few minutes. Follow along from the **Agents** button on the top
+   bar.
+
+![The Assistant settings: Background agent set to Balanced, “Hermes: A few research sites are open. Asks for the rest.”, and Telegram connected](images/agent-settings.png)
+
+### Giving it a job
+
+Type `@agent` (or its name, `@hermes`) and the job in Ask Umoja:
+
+- "@agent plan a relaxed 3-day weekend in Lisbon for two, with a rough
+  budget"
+- "@agent read my bank export and tell me which subscriptions I could
+  cancel"
+
+As soon as you type the `@`, the top row shows which agent gets the job.
+Press Enter, and it starts. Its files land in **~/Agents/Hermes**.
+
+![A Lisbon weekend job typed after @agent in Ask Umoja; underneath, “It's on it. Follow along, and answer its questions, from the Agents button on the top bar.”](images/agent-handed.png)
+
+### Following along, and when it asks
+
+The **Agents** button on the top bar shows what the agent is doing. A dot
+means it's working; a number means it's waiting for you. Click it for
+each job's progress, a **Stop** button, and the cards where it asks:
+
+![The Agents menu: Hermes working on one task, “Plan a relaxed 3-day weekend in Lisbon”, with a Stop button and its memory use](images/agent-working.png)
+
+- **Allow** or **Deny** a new website (**Always Allow** for one you
+  trust).
+- **Allow** or **Deny** a command that could change things.
+- A question, with a box for your answer.
+
+![A card in the Agents menu: “Hermes wants to run a command”, showing the Python script it wants to run on the bank export, with Deny and Allow](images/agent-command.png)
+
+The same requests come as notifications. Quick Settings has an **Agents**
+tile too: it says what the agent is doing, and turning it off pauses it.
+
+![Quick Settings with the Agents tile on: “Hermes: Ready”](images/agent-tile.png)
+
+![A notification: “Hermes wants to reach api.firecrawl.dev. Umoja held it back because it isn't one of the sites Hermes may use.” with Allow and Deny](images/agent-consent.png)
+
+### Reading the answer, and replying
+
+When a job is done, a notification says so. Click **Open** (or the
+notification), or click the job in the Agents menu. Ask Umoja shows the
+whole answer, a button that opens its file, and a reply box underneath.
+
+![The October budget answer: the three biggest expenses and a table of subscriptions you could cancel, per month and per year](images/agent-budget.png)
+
+Finished jobs stay in the Agents menu so you can come back to them. To
+take one off the list, click its **×**. Its files stay in your agent's
+folder.
+
+![The finished Lisbon plan in Ask Umoja, with headings and bullet points, an Open “Lisbon weekend.md” button, and “Reply to Hermes…” at the top](images/agent-answer.png)
+
+If the answer isn't quite right, or ends with a question, type your reply
+there ("add a rainy-day plan for Saturday") and press Enter. The agent
+carries on from the same job, with everything it already knows. Its
+files open in **Apostrophe**, a Markdown viewer that shows headings,
+lists, images and links properly.
+
+### Sharing a folder
+
+The agent only sees its own folder until you share another one. In the
+Agents menu, under **Shared folders**, click **Share a Folder…** and pick
+it. A folder is shared read-only, which is enough for reading a bank
+statement. Tick **Can change** when the agent needs to change things there
+(tidying Downloads). The **×** stops sharing it. A shared folder that you
+delete or move stops being shared.
+
+![Shared folders in the Agents menu: Downloads with Can change ticked, Finances read-only, and Share a Folder…](images/agent-shared.png)
+
+### Sending it jobs from your phone
+
+The agent can answer you in Telegram, so you can hand it jobs when you're
+away from your computer. Type "telegram" in Ask Umoja and pick **Talk to
+Hermes from Telegram**, or click **Connect…** next to **Telegram** under
+**Background agent** in the settings. The guided setup takes three steps:
+
+![Typing “telegram” in Ask Umoja offers Talk to Hermes from Telegram, “Send it jobs from your phone · a quick guided setup”](images/agent-telegram.png)
+
+1. **Make a bot.** Click **Open BotFather in Telegram**, send `/newbot`
+   and pick a name. BotFather replies with a token. Paste the whole
+   message into the box; Umoja finds the token in it.
+2. **Say hi.** Click **Open @yourbot** and send it any message from your
+   own Telegram account. That's how the agent knows it's you.
+3. **Is this you?** Check the name and click **Yes, Connect**. The bot
+   says hello back.
+
+From then on the agent only answers your account. While it works on a
+message from Telegram, the Agents button and the Quick Settings tile show
+it, and the job is listed in the Agents menu with its answer. To stop it,
+send `/stop` in Telegram.
+
+![Once it's connected: “Hermes is on Telegram. Only your Telegram account can talk to it.” with Close and Disconnect](images/agent-telegram-connected.png)
+
+When a Telegram job needs a website the agent may not use yet, the
+request comes to Telegram too, with **Allow once**, **Always allow** and
+**Deny** buttons, as well as to your computer. Answer in either place. The
+agent can't reach the site in the meantime, so if it already answered
+without it, ask again once you've allowed it. Your bot's token is kept
+in your keyring. To stop, open the same setup and click **Disconnect**.
+
+### Pausing, and closing the lid
+
+**Pause** in the Agents menu (or the Quick Settings tile) stops every job
+and the sandbox until you resume. It says **Pausing…** or **Resuming…**
+while that happens, which can take a minute. If your laptop sleeps while
+the agent is working, it carries on when you open the lid.
+
+The agent uses the same model as the assistant: the local model, or your
+cloud model if you set one up. It needs a model that can hold a long
+conversation, so on computers with little memory a cloud model works
+better.

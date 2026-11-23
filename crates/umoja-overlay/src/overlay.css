@@ -338,6 +338,27 @@ window.umoja-overlay.ask-umoja {
 .ask-question {
   font-size: 0.9em;
 }
+/* Markdown answers (markdown.rs): flat blocks on the card, accent
+   bullets, links and quote bar, code and tables on a faint panel. */
+.md label link { color: @accent_color; }
+.md-h1 { font-size: 1.35em; font-weight: 800; }
+.md-h2 { font-size: 1.2em; font-weight: 800; }
+.md-h3 { font-weight: 700; color: alpha(#ffffff, 0.85); margin-top: 4px; }
+.md-bullet { color: @accent_color; font-weight: bold; min-width: 14px; }
+.md-quote {
+  border-left: 3px solid @accent_bg_color;
+  padding: 2px 0 2px 12px;
+  color: alpha(#ffffff, 0.8);
+}
+.md-code { background-color: alpha(#ffffff, 0.06); border-radius: 12px; }
+.md-code-head { padding: 2px 4px 0 12px; font-size: 0.85em; }
+.md-code-head button { min-width: 28px; min-height: 28px; }
+.md-code-body { font-family: monospace; font-size: 0.92em; padding: 0 12px 10px 12px; }
+.md-table { border-radius: 12px; background-color: alpha(#ffffff, 0.04); }
+.md-cell { padding: 6px 12px; }
+.md-head { font-weight: bold; background-color: alpha(#ffffff, 0.08); }
+.md-even { background-color: alpha(#ffffff, 0.03); }
+.md-rule { background-color: alpha(#ffffff, 0.10); }
 .ask-answer flowboxchild {
   padding: 0;
   margin: 0 8px 8px 0;
@@ -846,4 +867,12 @@ window.captions {
 }
 .input-source-item label {
   font-size: 1.6em;
+}
+
+/* The guided Telegram setup, in place of the answer. */
+.ask-messaging .error {
+  color: @error_color;
+}
+.ask-messaging passwordentry {
+  min-height: 34px;
 }

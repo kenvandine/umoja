@@ -48,6 +48,7 @@ and [activity recall](guide/07-everyday-ai.md#activity-recall).
 - [When an app crashes](#when-an-app-crashes)
 - [Finding files](#finding-files)
 - [Handing coding jobs to a coding agent](#handing-coding-jobs-to-a-coding-agent)
+- [Background jobs with Hermes](#background-jobs-with-hermes)
 - [Privacy](#privacy)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Settings reference](#settings-reference)
@@ -218,6 +219,27 @@ Cloud page, which also deletes the API key from your keyring.
 Only the overlay assistant (questions, desktop actions, clipboard
 Translate/Reformat/Summarize) uses the cloud model. The notification digest,
 quick replies and file search always stay on your computer.
+
+### Local first, the cloud for harder requests
+
+Once a cloud model is set up, **This Computer** shows **Use the cloud model
+for harder requests**. Turn it on to keep the model on your computer for
+everyday requests and send only the harder ones to the cloud model. Umoja's
+Lemonade decides for each request:
+
+| Goes to the cloud model | Stays on this computer |
+| --- | --- |
+| Research, comparisons, plans and itineraries, reports, writing and drafting, code and scripts, translations, budgets and spreadsheets, "step by step" or "in depth" explanations | Everyday requests and desktop actions ("turn on dark mode", "open Files") |
+| A long request (over about 1,200 characters; 600 for Hermes) | Anything you attached from your screen (Super+Shift+A, window or area text), whatever you ask |
+| A long conversation (a long chat, or a Hermes job several steps in) | |
+| Requests with images | |
+
+The footer of the card then says *on this computer, harder requests in the
+cloud*. Hermes uses the same split when it runs on the local model, which
+helps most with long jobs: they start locally and move to the cloud model
+once their tool output piles up. Turning the setting on or off doesn't
+interrupt a Hermes job. `umoja-lemonade-routing --print` shows the exact
+rules.
 
 ## Hearing answers read aloud
 
@@ -736,6 +758,91 @@ undoes it.
 The `ai-agent-hotkey` key (unset by default) can open the agent with a
 keyboard shortcut.
 
+## Background jobs with Hermes
+
+Hermes is a personal agent for longer jobs that you don't want to watch:
+research a topic and write it up, compare prices, tidy a folder. It works in
+the background in a sandbox on your computer, so it only sees the folders
+you share with it and only reaches the sites you allow. It can't see or
+control your desktop, your apps or the rest of your files. Install the
+`umoja-agents` package to get it. Hermes is the first agent Umoja offers;
+when others are available (such as OpenClaw), you pick one under
+**Background agent**.
+
+**Setting it up.** Open the settings button in Ask Umoja and pick how often
+Hermes should ask you first under **Background agent**, then press
+**Set Up**. The first setup downloads Hermes once and takes a few minutes;
+follow along from the **Agents** button on the top bar.
+
+- **Careful** asks before every new site and every risky command.
+- **Balanced** (the default) leaves a few research sites open, like
+  Wikipedia and DuckDuckGo, and asks for the rest.
+- **Hands-off** only asks when something looks risky.
+
+**Giving it a job.** Type `@hermes` (or `@agent`) and the job in Ask Umoja ("@hermes
+compare the three cheapest flights to Lisbon in March and put it in a
+doc"), or ask the assistant to hand a job to Hermes. As soon as you type
+the `@`, the top row shows which agent the job goes to. Its files land in
+`~/Agents/Hermes`; an answer given only in words is saved there too, as
+`<job>.md`.
+
+**Reading the answer, and replying.** When a job is done you get a
+notification. **Open** (or a click on the notification, or on the job in
+the Agents menu) shows it in Ask Umoja: the whole answer (it scrolls when
+it's long), a button that opens its file, and a reply box. Type a reply
+("add a rainy-day plan for Saturday") and Hermes carries on in the same
+conversation, as a new job linked to the first. Markdown files open in
+**Apostrophe** (`umoja-desktop` recommends it and makes it the default
+viewer for Markdown in the Umoja session; your own choice still wins).
+
+**When it asks.** Hermes asks before it reaches a new site or runs a risky
+command. The request shows up as a notification and as a card in the
+**Agents** menu, with **Allow** and **Deny** (and **Always Allow** for a
+site you trust). The Agents button shows a count while something waits for
+you, and so does the **Agents** tile in Quick Settings.
+
+**Stopping and pausing.** Each running job has a **Stop** button in the
+Agents menu. **Pause Hermes** (in the menu, or turning off the Quick
+Settings tile) stops everything it's doing until you resume it; it says
+**Pausing…** or **Resuming…** while the sandbox stops or starts, which can
+take a minute. The menu also shows how much memory Hermes uses; it has a
+fixed cap.
+
+**Its folder, and sharing others.** Hermes only sees `~/Agents/Hermes`
+(the folder button in the Agents menu opens it) and the folders you share.
+Under **Shared folders** in the Agents menu, **Share a Folder…** shares one
+read-only; tick **Can change** to let Hermes change files there, and **×**
+stops sharing. A shared folder you delete or move is dropped.
+
+**From your phone (Telegram).** Hermes can take jobs and answer you in
+Telegram. Type "telegram" in Ask Umoja (**Talk to Hermes from Telegram**),
+or click **Connect…** next to Telegram under **Background agent** in Ask
+Umoja's settings, and follow the three steps: make a bot with BotFather and
+paste its message (Umoja picks out the token and checks it), send your bot
+any message so Hermes learns who you are, and confirm **Is this you?**. The
+bot says hello, and from then on Hermes only answers your account. Jobs sent
+from Telegram show in the Agents menu (marked Telegram) and on the Quick
+Settings tile while Hermes works on them; stop one with `/stop` in Telegram. When a Telegram job wants a new site, the
+consent prompt also goes to Telegram with **Allow once**, **Always allow**
+and **Deny** buttons (only your account can answer them); answering on the
+computer clears the buttons there. The
+token is kept in your keyring. **Disconnect** in the same setup turns it
+off. Without the setup:
+`busctl --user call org.umoja.Agents /org/umoja/Agents org.umoja.Agents SetMessaging sss telegram TOKEN USER_ID`
+(an empty token keeps the saved one; three empty strings turn it off).
+
+**Closing the lid.** If your laptop sleeps while Hermes is working, it picks
+the job up again when you open the lid: it checks what it had already done
+and carries on from there instead of starting over.
+
+**Which model.** Hermes uses the same model as the assistant: the local
+model by default, or your cloud model if you set one up. It needs a model
+that can hold a long conversation (64K tokens), so on computers with little
+memory a cloud model works better. With **Use the cloud model for harder
+requests** on, Hermes starts on the local model and hands the harder parts
+of a job to the cloud model (see
+[Local first, the cloud for harder requests](#local-first-the-cloud-for-harder-requests)).
+
 ## Privacy
 
 - **Local by default.** Questions, screen and clipboard text, the
@@ -749,6 +856,9 @@ keyboard shortcut.
   the tools it calls (for example your window titles, notification text or
   file names when you ask about them). Read your provider's privacy policy.
   Requests identify themselves as "Umoja Desktop".
+- **Local first, if you choose.** With **Use the cloud model for harder
+  requests**, only the requests that rule sends to the cloud leave your
+  computer, and anything attached from your screen never does.
 - **Always local:** the notification digest, quick replies, crash
   diagnosis from a crash notification and the file search index never use
   the cloud model.
@@ -791,6 +901,7 @@ All in the `org.umoja.shell` schema, for example
 | `assistant-backend` | `'local'` | `'local'` or `'cloud'` |
 | `cloud-base-url` | `''` | Base URL of the OpenAI-compatible service |
 | `cloud-model` | `''` | Model name requested from it |
+| `cloud-offload` | `false` | Send harder requests to the cloud model, keep the rest local |
 | `clipboard-history` | `true` | Keep a clipboard history |
 | `file-search-enabled` | `true` | Index the home folder for file search |
 | `file-search-embedding-model` | `'nomic-embed-text-v1-GGUF'` | Embedding model for file search; changing it rebuilds the index |

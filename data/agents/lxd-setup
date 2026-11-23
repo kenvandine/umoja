@@ -1,0 +1,40 @@
+#!/bin/sh
+# Prepares LXD for Hermes's sandbox, as root (pkexec from umoja-agentd's
+# FixLxd, or Setup, when LXD is missing or this account can't use it): install the snap if it isn't (it is seeded
+# on Umoja's image), initialise it (lxd init --auto, as first boot does)
+# if it has never been set up, and let USER use it.
+#
+#   lxd-setup USER
+set -eu
+user=${1:?usage: lxd-setup USER}
+id "$user" >/dev/null 2>&1 || { echo "no such user: $user" >&2; exit 1; }
+[ "$(id -u "$user")" -ge 1000 ] || { echo "refusing system account $user" >&2; exit 1; }
+
+if ! snap list lxd >/dev/null 2>&1; then
+    snap install lxd
+fi
+snap wait system seed.loaded
+# The daemon starts on demand; wait for it.
+lxd waitready --timeout=120
+
+if ! lxc storage show default >/dev/null 2>&1 || ! lxc network show lxdbr0 >/dev/null 2>&1; then
+    # Never re-initialise an LXD someone already set up: only the missing
+    # pieces are added.
+    if [ -z "$(lxc storage list --format csv 2>/dev/null)" ] && [ -z "$(lxc network list --format csv 2>/dev/null | grep ',YES,' || true)" ]; then
+        lxd init --auto
+    else
+        lxc storage show default >/dev/null 2>&1 || lxc storage create default dir
+        lxc network show lxdbr0 >/dev/null 2>&1 || lxc network create lxdbr0 ipv4.address=auto ipv4.nat=true ipv6.address=none
+    fi
+fi
+
+getent group lxd >/dev/null || groupadd --system lxd
+adduser "$user" lxd >/dev/null
+# The group only reaches the user's processes at their next login. Until
+# then, let them reach the socket directly, so setup can carry on now. The
+# grant goes when LXD restarts, by which time the group usually applies.
+sock=/var/snap/lxd/common/lxd/unix.socket
+if [ -S "$sock" ] && command -v setfacl >/dev/null 2>&1; then
+    setfacl -m "u:$user:rw" "$sock" || true
+fi
+echo "LXD is ready for $user"

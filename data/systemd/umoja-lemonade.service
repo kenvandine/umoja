@@ -12,6 +12,9 @@ Type=simple
 Environment=UMOJA_LEMONADE_PORT=13345
 EnvironmentFile=-%E/umoja/lemonade.env
 ExecStart=/usr/lib/umoja/umoja-lemonade
+# Cloud offload routers live in lemond's memory: register them again each
+# time it starts (umoja-lemonade-routing waits for it to answer).
+ExecStartPost=-/usr/bin/systemctl --user --no-block restart umoja-lemonade-routing.service
 Restart=on-failure
 RestartSec=2s
 # lemond says "Cleanup complete" within 40 ms of SIGTERM and then lingers

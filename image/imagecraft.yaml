@@ -177,6 +177,10 @@ parts:
       # without it the first read-aloud has to install it, which needs
       # the password and the internet.
       - piper-tts
+      # Hermes's sandbox (umoja-agents: OpenShell's LXD driver). Seeded so
+      # setting Hermes up needs no download of LXD itself; umoja-agents'
+      # lxd-setup initialises it the first time.
+      - lxd
     # Download from latest/stable, but have every snap track Ubuntu's
     # release branch, as Ubuntu Desktop does. A closed or expired branch
     # falls back to latest/stable on refresh; prepare-image itself

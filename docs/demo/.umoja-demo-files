@@ -38,6 +38,13 @@ images/quick-settings.png
 images/shortcuts.png
 images/screenshot-ui.png
 images/screensaver.png
+images/ai-agent-handed.png
+images/ai-agent-working.png
+images/ai-agent-done.png
+images/ai-agent-answer.png
+images/ai-agent-reply.png
+images/ai-agent-refined.png
+images/ai-agent.png
 images/layout.json
 videos/ask-umoja.gif
 videos/ask-umoja.mp4
@@ -77,6 +84,8 @@ videos/workspaces.gif
 videos/workspaces.mp4
 videos/screensaver.gif
 videos/screensaver.mp4
+videos/ai-agent.gif
+videos/ai-agent.mp4
 videos/trailer.mp4
 README.md
 snippet.md

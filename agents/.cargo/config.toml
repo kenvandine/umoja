@@ -1,0 +1,5 @@
+# OpenShell's driver pulls the supervisor and sandbox runtime images tagged
+# with this. Keep it equal to the openshell-* git rev in Cargo.toml so the
+# images speak the gateway's protocol.
+[env]
+OPENSHELL_IMAGE_TAG = "39d95b42cb403d883e2f545a3861131ccd3d2ebf"

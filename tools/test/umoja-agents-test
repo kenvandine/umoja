@@ -1,0 +1,964 @@
+#!/usr/bin/python3
+"""Test Hermes in Umoja (umoja-agents) on a live session, on camera.
+
+Run it from a terminal inside an Umoja session on the test laptop, then keep
+your hands off the keyboard and mouse until it says it's done. Each use case
+is driven the way a person would: a task handed over from Ask Umoja
+("@hermes ..."), consent cards answered with Allow / Deny, Stop, Pause,
+shared folders. Then the script checks what really happened: the file is in
+the Hermes folder, the blocked site stayed blocked, the sandbox couldn't see
+the desktop, the memory cap is set in LXD.
+
+    tools/test/umoja-agents-test                  # everything
+    tools/test/umoja-agents-test --only consent-allow stop
+    tools/test/umoja-agents-test --list
+    tools/test/umoja-agents-test --real-model     # your model, not the script
+
+Isolation: the script stops your own umoja-agentd for the run and starts a
+test instance of it, with its own LXD project (umoja-test), gateway port,
+state, Hermes folder and runtime folder, so your real Hermes sandbox, tasks
+and approvals are never touched. By default the model is a scripted fake
+(tools/test/agents/fake-model.py) so every run does the same thing; it
+follows [[tags]] in the prompts. At the end the test sandbox is removed and
+your umoja-agentd is started again if it was running.
+
+It writes, by default to ~/umoja-agents-test-<time>/:
+
+    REPORT.md         pass / fail / skip per test, every check, with pictures
+    results.json      the same, for a machine (or Claude) to read
+    states/*.json     the agent state (GetState) at each step that matters
+    images/*.png      screenshots (grim)
+    videos/*.webm     a clip of each test (wf-recorder)
+    model.jsonl       every request the fake model got (tools Hermes offered)
+    agentd.log        the test umoja-agentd's log (debug)
+    lxd.json          the test project's instances and their config
+    journal.txt       the session's journal for the run (umoja units)
+    log.txt           what the script did, step by step
+
+No keyboard or mouse input is injected. Ask Umoja's test hooks only answer
+while $XDG_RUNTIME_DIR/umoja-demo exists, which the script creates and
+removes. It holds an idle inhibitor and stops if the screen blanks or locks.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import traceback
+from pathlib import Path
+
+try:
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+except (ImportError, ValueError):
+    sys.exit("umoja-agents-test needs PyGObject: sudo apt install python3-gi")
+
+HERE = Path(__file__).resolve().parent
+AGENTS = ("org.umoja.Agents", "/org/umoja/Agents", "org.umoja.Agents")
+OVERLAY = ("org.umoja.Overlay", "/org/umoja/Overlay", "org.umoja.Overlay")
+PANEL = ("org.umoja.Panel", "/org/umoja/Panel", "org.umoja.Panel")
+NOTIFICATIONS = ("org.umoja.Notifications", "/org/umoja/Notifications", "org.umoja.Notifications")
+NOTIFY = ("org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications")
+SCREENSAVER = ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver")
+DBUS = ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
+
+PROJECT = "umoja-test"
+PORT = 17790
+MODEL_PORT = 13399
+MODEL = "umoja-test-model"
+MARK = "4711"  # in test file names and texts, so they're easy to find
+DONE = ("done", "failed", "cancelled")
+
+TESTS = []
+
+
+def test(name, title, real=True):
+    """real=False: needs the scripted model (skipped with --real-model)."""
+
+    def wrap(fn):
+        TESTS.append((name, title, fn, real))
+        return fn
+
+    return wrap
+
+
+class Skip(Exception):
+    pass
+
+
+class Stop(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+
+
+class Bus:
+    def __init__(self, log):
+        self.conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.system = None
+        self.log = log
+
+    def call(self, target, method, args=None, reply=None, timeout=10_000, quiet=False, raise_=False):
+        name, path, iface = target
+        try:
+            res = self.conn.call_sync(name, path, iface, method, args,
+                                      GLib.VariantType(reply) if reply else None,
+                                      Gio.DBusCallFlags.NONE, timeout, None)
+        except GLib.Error as e:
+            if raise_:
+                raise
+            if not quiet:
+                self.log(f"  ! {iface}.{method}: {e.message}")
+            return None
+        return res.unpack() if res is not None else None
+
+    def owner_pid(self, name):
+        res = self.call(DBUS, "GetConnectionUnixProcessID", GLib.Variant("(s)", (name,)), "(u)", quiet=True)
+        return res[0] if res else None
+
+    def has_method(self, target, method):
+        name, path, iface = target
+        try:
+            res = self.conn.call_sync(name, path, "org.freedesktop.DBus.Introspectable", "Introspect",
+                                      None, GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            return False
+        info = Gio.DBusNodeInfo.new_for_xml(res.unpack()[0])
+        i = info.lookup_interface(iface)
+        return bool(i and i.lookup_method(method))
+
+    def session_locked(self):
+        try:
+            if self.system is None:
+                self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            res = self.system.call_sync(
+                "org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                "org.freedesktop.DBus.Properties", "Get",
+                GLib.Variant("(ss)", ("org.freedesktop.login1.Session", "LockedHint")),
+                GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 5000, None)
+            return bool(res.unpack()[0])
+        except GLib.Error:
+            return False
+
+
+class Recorder:
+    def __init__(self, run):
+        self.run = run
+        self.proc = None
+
+    def start(self, name):
+        if not self.run.video or not shutil.which("wf-recorder"):
+            return
+        path = self.run.out / "videos" / f"{name}.webm"
+        cmd = ["wf-recorder", "-y", "-D", "-c", "libvpx", "-x", "yuv420p", "-p", "deadline=realtime",
+               "-p", "cpu-used=8", "-p", "b=6M", "-f", str(path)]
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        if self.proc.poll() is not None:
+            self.proc = None
+            return
+        self.run.current["video"] = str(path.relative_to(self.run.out))
+
+    def stop(self):
+        if not self.proc:
+            return
+        time.sleep(1.5)  # wf-recorder drops the tail
+        self.proc.send_signal(signal.SIGINT)
+        try:
+            self.proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.proc = None
+
+
+# ---------------------------------------------------------------------------
+
+
+class Run:
+    def __init__(self, opts):
+        self.opts = opts
+        self.out = opts.out
+        for d in ("images", "videos", "states", "state", "workspace", "shared"):
+            (self.out / d).mkdir(parents=True, exist_ok=True)
+        (self.out / ".nomedia").touch()
+        self.logf = open(self.out / "log.txt", "w")
+        self.bus = Bus(self.log)
+        self.video = not opts.no_video
+        self.recorder = Recorder(self)
+        self.results = []
+        self.current = None
+        self.cleanups = []
+        self.started = datetime.datetime.now()
+        self.inhibit_cookie = None
+        self.before_ids = set()
+        self.signals = []  # (name, json, monotonic)
+        self.model = None
+        self.agentd = None
+        self.agentd_log = None
+        self.user_agentd_was_active = False
+        self.runtime = Path(GLib.get_user_runtime_dir()) / "umoja-agents-test"
+        self.workspace = self.out / "workspace"
+        self.lxc_bin = shutil.which("lxc") or "/snap/bin/lxc"
+
+    # ---- plumbing ------------------------------------------------------
+
+    def log(self, msg):
+        line = f"{datetime.datetime.now():%H:%M:%S} {msg}"
+        print(line, flush=True)
+        self.logf.write(line + "\n")
+        self.logf.flush()
+
+    def check_screen(self):
+        res = self.bus.call(SCREENSAVER, "GetActive", None, "(b)", quiet=True)
+        if res and res[0]:
+            raise Stop("the screen is blanked")
+        if self.bus.session_locked():
+            raise Stop("the session is locked")
+
+    def wait(self, seconds, until=None):
+        end = time.monotonic() + seconds
+        ctx = GLib.MainContext.default()
+        last = 0.0
+        while True:
+            while ctx.iteration(False):
+                pass
+            if until:
+                v = until()
+                if v:
+                    return v
+            now = time.monotonic()
+            if now >= end:
+                return None
+            if now - last > 1.0:
+                self.check_screen()
+                last = now
+            time.sleep(0.2)
+
+    def wait_for(self, fn, timeout, what):
+        v = self.wait(timeout, fn)
+        if not v:
+            raise AssertionError(f"timed out after {timeout:g} s waiting for {what}")
+        return v
+
+    def shot(self, name, caption):
+        path = self.out / "images" / f"{self.current['name']}-{name}.png"
+        r = subprocess.run(["grim", "-s", "1", str(path)], capture_output=True, text=True)
+        if r.returncode == 0:
+            self.current["shots"].append({"file": str(path.relative_to(self.out)), "caption": caption})
+            self.log(f"  shot {path.name}")
+        else:
+            self.log(f"  ! grim: {r.stderr.strip()}")
+
+    def check(self, ok, what, detail=""):
+        self.current["checks"].append({"ok": bool(ok), "check": what, "detail": str(detail)[:2000]})
+        self.log(f"  {'✓' if ok else '✗'} {what}" + (f": {str(detail)[:200]}" if detail else ""))
+        return bool(ok)
+
+    def note(self, text):
+        self.current["notes"].append(text)
+        self.log(f"  · {text}")
+
+    def notifications(self):
+        res = self.bus.call(NOTIFICATIONS, "GetNotifications", None, "(a(ussssx))", quiet=True)
+        return res[0] if res else []
+
+    def lxc(self, *args):
+        r = subprocess.run([self.lxc_bin, "--project", PROJECT, *args], capture_output=True, text=True)
+        return r.returncode, (r.stdout + r.stderr).strip()
+
+    # ---- the agent -------------------------------------------------------
+
+    def state(self):
+        res = self.bus.call(AGENTS, "GetState", None, "(s)", quiet=True)
+        return json.loads(res[0]) if res else {}
+
+    def save_state(self, label):
+        path = self.out / "states" / f"{self.current['name']}-{label}.json"
+        path.write_text(json.dumps(self.state(), indent=2, ensure_ascii=False))
+        self.current.setdefault("states", []).append(str(path.relative_to(self.out)))
+
+    def agent(self, method, sig=None, *args, reply=None, timeout=60_000):
+        """Calls org.umoja.Agents; raises AssertionError with the error."""
+        self.log(f"  Agents.{method}{args!r}")
+        try:
+            return self.bus.call(AGENTS, method, GLib.Variant(sig, args) if sig else None, reply,
+                                 timeout=timeout, raise_=True)
+        except GLib.Error as e:
+            Gio.DBusError.strip_remote_error(e)
+            raise AssertionError(f"Agents.{method} failed: {e.message}") from None
+
+    def task(self, tid):
+        return next((t for t in self.state().get("tasks", []) if t["id"] == tid), None)
+
+    def submit(self, prompt):
+        tid = self.agent("Submit", "(s)", prompt, reply="(s)")[0]
+        self.log(f"  task {tid}: {prompt!r}")
+        return tid
+
+    def wait_task(self, tid, timeout=None, statuses=DONE):
+        timeout = timeout or self.opts.task_timeout
+        t = self.wait_for(lambda: (lambda t: t if t and t["status"] in statuses else None)(self.task(tid)),
+                          timeout, f"task {tid} to be {'/'.join(statuses)}")
+        self.log(f"  task {tid} {t['status']}: {t.get('result', '')[:200]!r}")
+        return t
+
+    def wait_approval(self, tid=None, kind=None, timeout=90):
+        def find():
+            for a in self.state().get("approvals", []):
+                if (tid is None or a.get("task") in ("", tid)) and (kind is None or a.get("kind") == kind):
+                    return a
+            return None
+
+        a = self.wait_for(find, timeout, f"a {kind or ''} approval".replace("  ", " "))
+        self.log(f"  approval {a['id']}: {a['title']!r}")
+        return a
+
+    def menu(self, open_):
+        if open_:
+            self.bus.call(PANEL, "OpenMenu", GLib.Variant("(s)", ("agents",)), quiet=True)
+            self.wait(1.0)
+        else:
+            # Unfocus alone leaves a menu opened by OpenMenu up.
+            self.bus.call(PANEL, "CloseMenus", quiet=True)
+            self.bus.call(PANEL, "Unfocus", quiet=True)
+            self.wait(0.5)
+
+    def ensure_ready(self):
+        """The sandbox up and Hermes answering (setup if a test needs it)."""
+        s = self.state()
+        if s.get("setup") == "ready" and not s.get("paused"):
+            return s
+        if s.get("paused"):
+            # SetPaused returns at once; "switching" clears when it's done.
+            self.agent("SetPaused", "(b)", False)
+            self.wait_for(lambda: (lambda s: s if not s.get("switching") else None)(self.state()), 420, "Resume")
+            s = self.state()
+            if s.get("setup") == "ready" and not s.get("paused"):
+                return s
+        elif s.get("setup") != "working":
+            self.agent("Setup", "(s)", "balanced")
+        s = self.wait_for(lambda: (lambda s: s if s.get("setup") in ("ready", "error") else None)(self.state()),
+                          self.opts.setup_timeout, "Hermes to be set up")
+        if s["setup"] != "ready":
+            raise AssertionError(f"setup failed: {s.get('error')} (needs: {s.get('needs')})")
+        return s
+
+    def ws_file(self, name):
+        return self.workspace / name
+
+    # ---- setup and teardown -------------------------------------------
+
+    def flag(self, on):
+        f = Path(GLib.get_user_runtime_dir()) / "umoja-demo"
+        if on:
+            f.touch()
+        else:
+            f.unlink(missing_ok=True)
+
+    def systemctl(self, *args):
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+
+    def start_model(self):
+        if self.opts.real_model:
+            return
+        script = HERE / "agents" / "fake-model.py"
+        self.model = subprocess.Popen(
+            [sys.executable, str(script), "--port", str(MODEL_PORT), "--log", str(self.out / "model.jsonl")],
+            stdout=subprocess.DEVNULL, stderr=open(self.out / "model-stderr.txt", "w"))
+        time.sleep(1.0)
+        if self.model.poll() is not None:
+            sys.exit(f"the fake model didn't start (port {MODEL_PORT} busy?): see model-stderr.txt")
+        self.log(f"fake model on 127.0.0.1:{MODEL_PORT}")
+
+    def start_agentd(self):
+        if self.systemctl("is-active", "--quiet", "umoja-agentd.service").returncode == 0:
+            self.user_agentd_was_active = True
+        self.systemctl("stop", "umoja-agentd.service")
+        pid = self.bus.owner_pid(AGENTS[0])
+        if pid:
+            self.log(f"stopping umoja-agentd {pid} that isn't the unit")
+            os.kill(pid, signal.SIGTERM)
+            self.wait(5, lambda: not self.bus.owner_pid(AGENTS[0]))
+        self.runtime.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ,
+                   UMOJA_AGENTS_PROJECT=PROJECT,
+                   UMOJA_AGENTS_PORT=str(PORT),
+                   XDG_STATE_HOME=str(self.out / "state"),
+                   UMOJA_AGENTS_WORKSPACE=str(self.workspace),
+                   UMOJA_AGENTS_RUNTIME_DIR=str(self.runtime),
+                   UMOJA_AGENTS_TEST="1",
+                   RUST_LOG=os.environ.get("RUST_LOG", "umoja_agentd=debug,info"))
+        if not self.opts.real_model:
+            env.update(UMOJA_AGENTS_MODEL_PORT=str(MODEL_PORT), UMOJA_AGENTS_MODEL=MODEL)
+        if self.opts.image:
+            env["UMOJA_AGENT_IMAGE"] = self.opts.image
+        self.agentd_log = open(self.out / "agentd.log", "w")
+        self.agentd = subprocess.Popen([self.opts.agentd], env=env, stdout=self.agentd_log,
+                                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        self.wait_for(lambda: self.bus.owner_pid(AGENTS[0]) == self.agentd.pid or self.agentd.poll() is not None,
+                      20, "the test umoja-agentd on the bus")
+        if self.agentd.poll() is not None:
+            sys.exit("the test umoja-agentd exited: see agentd.log")
+        self.bus.conn.signal_subscribe(
+            None, AGENTS[2], None, AGENTS[1], None, Gio.DBusSignalFlags.NONE,
+            lambda _c, _s, _p, _i, name, params: self.signals.append((name, params.unpack()[0], time.monotonic())))
+        self.log(f"test umoja-agentd {self.agentd.pid}: project {PROJECT}, port {PORT}")
+
+    def preflight(self):
+        problems = []
+        if not Path(self.opts.agentd).exists():
+            problems.append(f"{self.opts.agentd} is missing: install umoja-agents (or pass --agentd)")
+        for target, method in [(PANEL, "OpenMenu"), (OVERLAY, "AskWith"), (NOTIFICATIONS, "GetNotifications")]:
+            if not self.bus.has_method(target, method):
+                problems.append(f"{target[2]}.{method} is missing: install the debs and log in again")
+        if not shutil.which("grim"):
+            problems.append("grim is not installed")
+        if not Path(self.lxc_bin).exists():
+            problems.append("LXD isn't installed (sudo snap install lxd), or run the Agents setup once")
+        if problems:
+            for p in problems:
+                self.log(f"! {p}")
+            sys.exit(1)
+        if not shutil.which("wf-recorder"):
+            self.log("wf-recorder is missing: no videos")
+            self.video = False
+        res = self.bus.call(SCREENSAVER, "Inhibit",
+                            GLib.Variant("(ss)", ("umoja-agents-test", "Testing Hermes")), "(u)")
+        self.inhibit_cookie = res[0] if res else None
+        self.flag(True)
+        self.before_ids = {n[0] for n in self.notifications()}
+        self.start_model()
+        self.start_agentd()
+
+    def clear_test_banners(self):
+        for n in self.notifications():
+            if n[0] not in self.before_ids:
+                self.bus.call(NOTIFY, "CloseNotification", GLib.Variant("(u)", (n[0],)), quiet=True)
+
+    def teardown(self):
+        self.recorder.stop()
+        self.menu(False)
+        self.bus.call(OVERLAY, "Hide", quiet=True)
+        for what, fn in reversed(self.cleanups):
+            try:
+                fn()
+                self.log(f"restored: {what}")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"! could not restore {what}: {e}")
+        code, out = self.lxc("list", "--format", "json")
+        (self.out / "lxd.json").write_text(out if code == 0 else json.dumps({"error": out}))
+        if self.agentd and self.agentd.poll() is None:
+            if not self.opts.keep:
+                self.log("removing the test sandbox")
+                try:
+                    self.agent("Remove", timeout=300_000)
+                except AssertionError as e:
+                    self.log(f"! {e}")
+            self.agentd.terminate()
+            try:
+                self.agentd.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.agentd.kill()
+        if self.model:
+            self.model.terminate()
+        self.clear_test_banners()
+        self.flag(False)
+        if self.inhibit_cookie is not None:
+            self.bus.call(SCREENSAVER, "UnInhibit", GLib.Variant("(u)", (self.inhibit_cookie,)), quiet=True)
+        if self.user_agentd_was_active:
+            self.systemctl("start", "umoja-agentd.service")
+            self.log("started your umoja-agentd again")
+
+    # ---- running -------------------------------------------------------
+
+    def run(self, selected):
+        self.preflight()
+        self.log(f"umoja-agents-test: {len(selected)} tests, output in {self.out}")
+        try:
+            for name, title, fn, _ in selected:
+                self.current = {"name": name, "title": title, "status": "pass", "checks": [], "notes": [],
+                                "shots": [], "video": None, "seconds": 0}
+                self.results.append(self.current)
+                self.log(f"== {name}: {title}")
+                t0 = time.monotonic()
+                try:
+                    self.check_screen()
+                    self.clear_test_banners()
+                    self.recorder.start(name)
+                    fn(self)
+                except Skip as e:
+                    self.current["status"] = "skip"
+                    self.note(f"skipped: {e}")
+                except Stop:
+                    raise
+                except AssertionError as e:
+                    self.check(False, str(e))
+                except Exception as e:  # noqa: BLE001
+                    self.check(False, f"crashed: {e}", traceback.format_exc())
+                finally:
+                    try:
+                        self.save_state("end")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.recorder.stop()
+                    self.menu(False)
+                    self.bus.call(OVERLAY, "Hide", quiet=True)
+                if self.current["status"] != "skip":
+                    self.current["status"] = "pass" if all(c["ok"] for c in self.current["checks"]) else "fail"
+                self.current["seconds"] = round(time.monotonic() - t0, 1)
+                self.log(f"   -> {self.current['status'].upper()}")
+        except Stop as e:
+            self.log(f"stopped: {e}")
+            self.current["status"] = "stopped"
+            self.current["notes"].append(f"stopped: {e}")
+        finally:
+            self.teardown()
+            self.write_report()
+
+    def write_report(self):
+        journal = subprocess.run(
+            ["journalctl", "--user", "--since", self.started.strftime("%Y-%m-%d %H:%M:%S"), "-o", "short-precise",
+             "--no-pager"], capture_output=True, text=True)
+        keep = [ln for ln in journal.stdout.splitlines()
+                if any(w in ln.lower() for w in ("umoja", "lemonade", "hermes", "openshell"))]
+        (self.out / "journal.txt").write_text("\n".join(keep) + "\n")
+
+        def version(pkg):
+            return subprocess.run(["dpkg-query", "-W", "-f", "${Version}", pkg],
+                                  capture_output=True, text=True).stdout.strip()
+
+        summary = {
+            "started": self.started.isoformat(timespec="seconds"),
+            "umoja_desktop": version("umoja-desktop"),
+            "umoja_agents": version("umoja-agents"),
+            "model": "real (your setting)" if self.opts.real_model else f"scripted ({MODEL})",
+            "results": self.results,
+        }
+        (self.out / "results.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+        icon = {"pass": "✅", "fail": "❌", "skip": "⏭️", "stopped": "⏹️"}
+        lines = [
+            "# Umoja agents (Hermes) test",
+            "",
+            f"Run {summary['started']} on umoja-desktop {summary['umoja_desktop'] or '?'}, "
+            f"umoja-agents {summary['umoja_agents'] or '?'}, model {summary['model']}.",
+            "",
+            "| Test | Result | Checks | Time |",
+            "| --- | --- | --- | --- |",
+        ]
+        for r in self.results:
+            ok = sum(c["ok"] for c in r["checks"])
+            lines.append(f"| [{r['name']}](#{r['name']}) {r['title']} | {icon.get(r['status'], '')} {r['status']} "
+                         f"| {ok}/{len(r['checks'])} | {r['seconds']} s |")
+        for r in self.results:
+            lines += ["", f"## {r['name']}", "", f"**{r['title']}**: {icon.get(r['status'], '')} {r['status']}", ""]
+            for c in r["checks"]:
+                lines.append(f"- {'✓' if c['ok'] else '✗'} {c['check']}"
+                             + (f"\n  ```\n  {c['detail'][:600]}\n  ```" if c["detail"] and not c["ok"] else ""))
+            for n in r["notes"]:
+                lines.append(f"- _{n}_")
+            if r["video"]:
+                lines.append(f"- video: [{Path(r['video']).name}]({r['video']})")
+            for s in r.get("states", []):
+                lines.append(f"- state: [{Path(s).name}]({s})")
+            for s in r["shots"]:
+                lines += ["", f"![{s['caption']}]({s['file']})", f"_{s['caption']}_"]
+        (self.out / "REPORT.md").write_text("\n".join(lines) + "\n")
+        passed = sum(r["status"] == "pass" for r in self.results)
+        self.log(f"done: {passed}/{len(self.results)} passed. Report: {self.out / 'REPORT.md'}")
+
+
+# ---------------------------------------------------------------------------
+# The tests, in the order a new user meets them. Later tests set Hermes up
+# themselves if an earlier one was skipped or failed.
+
+
+@test("setup", "Setting up Hermes makes a sandbox and shows the Agents button")
+def t_setup(run):
+    s = run.state()
+    run.check(s.get("setup") in ("none", "error"), "the test instance starts with nothing set up", s.get("setup"))
+    # Where a person sets it up: Ask Umoja's settings, "Background agent".
+    run.bus.call(OVERLAY, "ToggleAsk", quiet=True)
+    run.wait(1.0)
+    res = run.bus.call(OVERLAY, "TestAction", GLib.Variant("(s)", ("settings-open",)), "(bs)", quiet=True)
+    if res and res[0]:
+        run.wait(1.5)
+        run.shot("settings", "Background agent in Ask Umoja's settings, before setup")
+    run.bus.call(OVERLAY, "Hide", quiet=True)
+    run.agent("Setup", "(s)", "balanced")
+    steps = []
+
+    def progress():
+        s = run.state()
+        if s.get("step") and (not steps or steps[-1] != s["step"]):
+            steps.append(s["step"])
+            run.log(f"  step: {s['step']}")
+        return s if s.get("setup") in ("ready", "error") else None
+
+    t0 = time.monotonic()
+    s = run.wait_for(progress, run.opts.setup_timeout, "setup to finish")
+    run.note(f"setup took {time.monotonic() - t0:.0f} s; steps: {' → '.join(steps)}")
+    run.save_state("ready")
+    run.check(s["setup"] == "ready", "setup finished", f"{s.get('error')} needs={s.get('needs')}")
+    run.check(s.get("preset") == "balanced", "the Balanced preset is on", s.get("preset"))
+    run.check(bool(s.get("sandbox")), "there's a sandbox", s.get("sandbox"))
+    code, out = run.lxc("list", "--format", "csv", "-c", "ns")
+    run.check(code == 0 and "RUNNING" in out, f"its container runs in LXD project {PROJECT}", out)
+    run.menu(True)
+    run.shot("pill", "The Agents button and its menu after setup")
+    run.menu(False)
+
+
+@test("write-file", "A task writes a file into the Hermes folder", real=False)
+def t_write(run):
+    run.ensure_ready()
+    name = f"umoja-test-{MARK}.txt"
+    run.ws_file(name).unlink(missing_ok=True)
+    tid = run.submit(f"Write a note for me [[write {name} Hello from Hermes {MARK}]]")
+    run.wait(2.0)
+    run.menu(True)
+    run.shot("working", "Hermes working on the task")
+    run.menu(False)
+    t = run.wait_task(tid)
+    run.check(t["status"] == "done", "the task finished", t)
+    f = run.ws_file(name)
+    run.check(f.exists() and MARK in f.read_text(), "the file is in the Hermes folder on the host", f)
+    run.check(any(name in x for x in t.get("files", [])), "the task lists the file it made", t.get("files"))
+    run.check("terminal" in " ".join(t.get("tools", [])), "the task shows the tool Hermes used", t.get("tools"))
+    finished = [x for x in run.signals if x[0] == "TaskFinished" and tid in x[1]]
+    run.check(bool(finished), "TaskFinished was signalled")
+    note = run.wait(10, lambda: [n for n in run.notifications() if n[1] == "Hermes" and n[0] not in run.before_ids])
+    run.shot("done", "The “done” notification")
+    run.check(bool(note), "a notification says it's done", note)
+
+
+@test("ask-umoja", "“@hermes …” in Ask Umoja hands the task to Hermes", real=False)
+def t_ask(run):
+    run.ensure_ready()
+    name = f"umoja-ask-{MARK}.txt"
+    run.ws_file(name).unlink(missing_ok=True)
+    before = {t["id"] for t in run.state().get("tasks", [])}
+    run.bus.call(OVERLAY, "AskWith", GLib.Variant("(su)", (f"@hermes make a file [[write {name} from Ask {MARK}]]", 0)))
+    run.wait(2.5)
+    run.shot("handed", "Ask Umoja hands the task over")
+    new = run.wait_for(lambda: [t for t in run.state().get("tasks", []) if t["id"] not in before], 30,
+                       "a new Hermes task")
+    run.check(len(new) == 1, "exactly one task arrived", [t["prompt"] for t in new])
+    run.check(not new[0]["prompt"].lower().startswith("@hermes"), "the @hermes prefix was taken off", new[0]["prompt"])
+    t = run.wait_task(new[0]["id"])
+    run.check(t["status"] == "done" and run.ws_file(name).exists(), "Hermes did it", t)
+
+
+@test("consent-allow", "A new site asks first; Allow lets it through", real=False)
+def t_allow(run):
+    run.ensure_ready()
+    tid = run.submit("What's on this page? [[fetch https://example.com/]]")
+    a = run.wait_approval(kind="network")
+    run.save_state("asking")
+    run.check(a["host"] == "example.com", "the card names the site", a)
+    run.wait(1.5)
+    run.shot("banner", "The consent notification")
+    run.menu(True)
+    run.shot("card", "The consent card in the Agents menu")
+    run.agent("Answer", "(ss)", a["id"], "allow")
+    run.wait(1.0)
+    run.shot("allowed", "After Allow")
+    run.menu(False)
+    gone = run.wait(20, lambda: all(x["id"] != a["id"] for x in run.state().get("approvals", [])))
+    run.check(bool(gone), "the card went away")
+    run.wait_task(tid)
+    # The first try already failed at the proxy; asking again goes through.
+    t = run.wait_task(run.submit("Try that page again [[fetch https://example.com/]]"))
+    run.check("Example Domain" in t.get("result", ""), "the page came back after Allow", t.get("result"))
+    run.check(not any(x.get("host") == "example.com" for x in run.state().get("approvals", [])),
+              "no second card for the same site")
+
+
+@test("consent-deny", "Deny keeps a site blocked", real=False)
+def t_deny(run):
+    run.ensure_ready()
+    tid = run.submit("Read this page [[fetch https://example.org/]]")
+    a = run.wait_approval(kind="network")
+    run.check(a["host"] == "example.org", "the card names the site", a)
+    run.menu(True)
+    run.shot("card", "Asking about example.org")
+    run.agent("Answer", "(ss)", a["id"], "deny")
+    run.wait(1.0)
+    run.menu(False)
+    run.wait_task(tid)
+    t = run.wait_task(run.submit("Try once more [[fetch https://example.org/]]"))
+    run.check("Example Domain" not in t.get("result", ""), "the page stayed blocked", t.get("result"))
+    for x in run.state().get("approvals", []):
+        if x.get("host") == "example.org":
+            run.agent("Answer", "(ss)", x["id"], "deny")
+
+
+@test("open-site", "A preset site (Wikipedia) needs no prompt", real=False)
+def t_open_site(run):
+    run.ensure_ready()
+    seen = set(a["id"] for a in run.state().get("approvals", []))
+    t = run.wait_task(run.submit("Check Wikipedia [[fetch https://en.wikipedia.org/wiki/Ubuntu]]"))
+    new = [a for a in run.state().get("approvals", []) if a["id"] not in seen]
+    run.check(not new, "no consent card", new)
+    run.check("Fetched it" in t.get("result", "") and "curl:" not in t.get("result", ""),
+              "the page came back", t.get("result"))
+
+
+@test("command-approval", "Careful preset: a risky command waits; Deny then Allow", real=False)
+def t_command(run):
+    run.ensure_ready()
+    run.agent("SetPreset", "(s)", "careful", timeout=120_000)
+    run.cleanups.append(("the Balanced preset", lambda: run.agent("SetPreset", "(s)", "balanced", timeout=120_000)))
+    run.wait(5)
+    old = run.ws_file("umoja-test-old")
+    old.mkdir(exist_ok=True)
+    (old / "keep.txt").write_text(MARK)
+    tid = run.submit("Tidy up [[danger]]")
+    a = run.wait_approval(tid, "command")
+    run.check("rm -rf" in a.get("command", ""), "the card shows the command", a)
+    run.menu(True)
+    run.shot("card", "Hermes asks before deleting")
+    run.agent("Answer", "(ss)", a["id"], "deny")
+    run.wait(1.0)
+    run.menu(False)
+    t = run.wait_task(tid)
+    run.check(old.exists(), "Deny: the folder is still there", t.get("result"))
+    tid = run.submit("Tidy up, I'm sure [[danger]]")
+    a = run.wait_approval(tid, "command")
+    run.agent("Answer", "(ss)", a["id"], "allow")
+    t = run.wait_task(tid)
+    run.check(not old.exists(), "Allow: the folder is gone", t.get("result"))
+    run.agent("SetPreset", "(s)", "balanced", timeout=120_000)
+    run.cleanups.pop()
+
+
+@test("stop", "Stop ends a running task", real=False)
+def t_stop(run):
+    run.ensure_ready()
+    tid = run.submit("Wait a while [[slow 300]]")
+    run.wait_for(lambda: (run.task(tid) or {}).get("step"), 60, "the task to start a step")
+    run.wait(3)
+    run.menu(True)
+    run.shot("running", "A long task, with Stop")
+    t0 = time.monotonic()
+    run.agent("Stop", "(s)", tid)
+    t = run.wait_task(tid, timeout=60)
+    run.shot("stopped", "After Stop")
+    run.check(t["status"] in ("cancelled", "failed"), "the task stopped", t["status"])
+    run.check(time.monotonic() - t0 < 30, f"within 30 s ({time.monotonic() - t0:.0f} s)")
+
+
+@test("pause", "Pause stops the sandbox; Resume brings it back", real=False)
+def t_pause(run):
+    run.ensure_ready()
+    tid = run.submit("Wait a bit [[slow 300]]")
+    run.wait(5)
+    t0 = time.monotonic()
+    run.agent("SetPaused", "(b)", True)
+    run.check(time.monotonic() - t0 < 5, f"SetPaused answers at once ({time.monotonic() - t0:.1f} s)")
+    s = run.state()
+    run.check(s.get("switching") == "pausing", "the state says it's pausing", s.get("switching"))
+    run.agent("SetPaused", "(b)", False)  # ignored while pausing
+    s = run.wait_for(lambda: (lambda s: s if s.get("paused") and not s.get("switching") else None)(run.state()),
+                     300, "paused")
+    run.menu(True)
+    run.shot("paused", "Agents paused")
+    run.menu(False)
+    run.check((run.task(tid) or {}).get("status") == "cancelled", "the running task was stopped", run.task(tid))
+    code, out = run.lxc("list", "--format", "csv", "-c", "ns")
+    run.check("RUNNING" not in out, "the container isn't running", out)
+    run.save_state("paused")
+    run.agent("SetPaused", "(b)", False)
+    run.wait_for(lambda: (lambda s: s if not s.get("paused") and not s.get("switching") else None)(run.state()),
+                 420, "resumed")
+    code, out = run.lxc("list", "--format", "csv", "-c", "ns")
+    run.check("RUNNING" in out, "the container runs again", out)
+    if not run.opts.real_model:
+        t = run.wait_task(run.submit(f"After the pause [[write umoja-resume-{MARK}.txt back]]"))
+        run.check(t["status"] == "done", "a new task works after Resume", t)
+
+
+@test("sleep-resume", "A task carries on after the laptop sleeps mid-task", real=False)
+def t_sleep(run):
+    """Simulated by default: the sandbox is frozen (lxc pause, like a
+    suspend freezes it), the model goes away so the request in flight
+    drops (like a cloud connection across a lid close), and agentd gets
+    logind's PrepareForSleep through its test hook. --suspend does a real
+    suspend with rtcwake instead (needs sudo)."""
+    run.ensure_ready()
+    name = f"steps-{MARK}.txt"
+    f = run.ws_file(name)
+    f.unlink(missing_ok=True)
+    tid = run.submit(f"Do six steps [[steps 6 {name}]]")
+    run.wait_for(lambda: f.exists() and len(f.read_text().splitlines()) >= 2, 90, "two steps done")
+    run.menu(True)
+    run.shot("before", "Working, before the lid closes")
+    run.menu(False)
+    if run.opts.suspend:
+        run.note("real suspend for 30 s (rtcwake)")
+        r = subprocess.run(["sudo", "-n", "rtcwake", "-m", "mem", "-s", "30"], capture_output=True, text=True)
+        run.check(r.returncode == 0, "the laptop suspended and woke", r.stderr.strip())
+        run.wait(5)
+    else:
+        code, out = run.lxc("list", "--format", "csv", "-c", "n")
+        inst = out.splitlines()[0].strip() if code == 0 and out else ""
+        run.agent("TestSleep", "(b)", True)
+        code, out = run.lxc("pause", inst)
+        run.check(code == 0, "the sandbox froze", out)
+        if run.model:
+            run.model.terminate()
+            run.model.wait(10)
+        run.note("asleep for 25 s; the model is gone")
+        run.wait(25)
+        run.start_model()
+        code, out = run.lxc("start", inst)
+        run.check(code == 0, "the sandbox thawed", out)
+        run.agent("TestSleep", "(b)", False)
+    t = run.wait_task(tid, timeout=run.opts.task_timeout * 2)
+    run.save_state("after")
+    run.menu(True)
+    run.shot("after", "After waking up")
+    run.menu(False)
+    lines = f.read_text().splitlines() if f.exists() else []
+    run.note(f"steps written: {lines}; carried on {t.get('resumes', 0)} time(s)")
+    run.check(t["status"] == "done", "the task finished after waking", t.get("result"))
+    run.check(all(f"step {i}" in lines for i in range(1, 7)), "all six steps are there", lines)
+    run.check(lines.count("step 1") == 1, "it didn't start over from step 1", lines)
+
+
+@test("isolation", "The sandbox can't see the desktop, the user's home or LXD", real=False)
+def t_isolation(run):
+    run.ensure_ready()
+    t = run.wait_task(run.submit(f"Look around [[escape {Path.home()}]]"))
+    out = t.get("result", "")
+    run.note(out.replace("\n", " | ")[:600])
+    run.check("SEE" not in out.replace("SEE host:631", ""), "no host socket or folder is visible", out)
+    run.check("SEE host:631" not in out, "host services (CUPS) aren't reachable", out)
+    run.check("NO " in out, "the check really ran", out)
+    run.check("uid=0" not in out, "Hermes doesn't run as root", out)
+
+
+def limit_mb(limit):
+    """An LXD limits.memory value ("4096MiB", "4GB", "4294967296") in MiB."""
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMGT]i?B|[KMGT])?", limit.strip())
+    if not m:
+        return None
+    n, unit = float(m.group(1)), (m.group(2) or "B").rstrip("B") or "B"
+    scale = {"B": 1, "K": 1e3, "Ki": 1024, "M": 1e6, "Mi": 1024**2, "G": 1e9, "Gi": 1024**3,
+             "T": 1e12, "Ti": 1024**4}.get(unit, 1024**2)
+    return round(n * scale / 1024**2)
+
+
+@test("memory-cap", "The sandbox has a memory cap in LXD")
+def t_memory(run):
+    s = run.ensure_ready()
+    code, out = run.lxc("list", "--format", "json")
+    try:
+        instances = json.loads(out) if code == 0 else []
+    except json.JSONDecodeError:
+        instances = []
+    run.check(bool(instances), "the test project has the sandbox", out[:300])
+    # The agent's own container; OpenShell's supervisor container has no cap.
+    for inst in [i for i in instances if not i["name"].startswith("openshell-sup-")]:
+        limit = inst.get("expanded_config", {}).get("limits.memory") or inst.get("config", {}).get("limits.memory")
+        run.check(bool(limit), f"{inst['name']} has limits.memory", limit)
+        if limit and s.get("memory_mb"):
+            mb = limit_mb(limit)
+            run.check(mb is None or abs(mb - s["memory_mb"]) <= 1, "it matches what the panel shows",
+                      f"{limit} vs {s['memory_mb']} MB")
+    run.note(f"memory used: {s.get('memory_used_mb')} MB of {s.get('memory_mb')} MB")
+
+
+@test("shared-folder", "Shared folders: read-only stays read-only, writable takes writes", real=False)
+def t_shared(run):
+    run.ensure_ready()
+    ro = run.out / "shared" / "ReadOnly"
+    rw = run.out / "shared" / "Writable"
+    for d in (ro, rw):
+        d.mkdir(parents=True, exist_ok=True)
+    (ro / "read-me.txt").write_text(MARK)
+    inside_ro = run.agent("ShareFolder", "(sb)", str(ro), False, reply="(s)", timeout=120_000)[0]
+    inside_rw = run.agent("ShareFolder", "(sb)", str(rw), True, reply="(s)", timeout=120_000)[0]
+    run.cleanups.append(("unshare the test folders", lambda: [run.agent("Unshare", "(s)", str(d)) for d in (ro, rw)]))
+    run.save_state("shared")
+    run.menu(True)
+    run.shot("shared", "Two shared folders")
+    run.menu(False)
+    t = run.wait_task(run.submit(f"[[writeto {inside_ro}/nope.txt {MARK}]]"))
+    run.check("REFUSED" in t.get("result", "") and not (ro / "nope.txt").exists(),
+              "a write to the read-only folder fails", t.get("result"))
+    t = run.wait_task(run.submit(f"[[writeto {inside_rw}/yes.txt {MARK}]]"))
+    run.check("WROTE" in t.get("result", "") and (rw / "yes.txt").exists(),
+              "a write to the writable folder lands on the host", t.get("result"))
+    t = run.wait_task(run.submit(f"[[writeto {Path.home()}/umoja-escape-{MARK}.txt x]]"))
+    run.check(not (Path.home() / f"umoja-escape-{MARK}.txt").exists(), "an unshared host folder can't be written",
+              t.get("result"))
+    for d in (ro, rw):
+        run.agent("Unshare", "(s)", str(d), timeout=120_000)
+    run.cleanups.pop()
+
+
+@test("real-model", "A real question with your model (smoke test)")
+def t_real(run):
+    if not run.opts.real_model:
+        raise Skip("needs --real-model")
+    run.ensure_ready()
+    tid = run.submit(f"Write a two-line poem about the sea into a file called poem-{MARK}.txt in your workspace.")
+    t = run.wait_task(tid, timeout=run.opts.task_timeout * 3)
+    run.shot("done", "Your model's answer")
+    run.check(t["status"] == "done", "the task finished", t)
+    run.check(run.ws_file(f"poem-{MARK}.txt").exists(), "the poem is in the Hermes folder", t.get("files"))
+
+
+# ---------------------------------------------------------------------------
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--only", nargs="+", metavar="TEST", help="run only these tests (setup runs as needed)")
+    p.add_argument("--skip", nargs="+", metavar="TEST", default=[], help="leave these out")
+    p.add_argument("--list", action="store_true", help="list the tests and exit")
+    p.add_argument("--out", type=Path, help="output folder (default ~/umoja-agents-test-<time>)")
+    p.add_argument("--no-video", action="store_true", help="screenshots only")
+    p.add_argument("--real-model", action="store_true", help="use your model, not the scripted one")
+    p.add_argument("--agentd", default="/usr/libexec/umoja-agents/umoja-agentd", help="umoja-agentd to test")
+    p.add_argument("--image", help="agent sandbox image, e.g. ghcr.io/kenvandine/umoja-hermes:<sha> (default: the catalog's)")
+    p.add_argument("--suspend", action="store_true", help="sleep-resume: really suspend (sudo rtcwake)")
+    p.add_argument("--keep", action="store_true", help="keep the test sandbox afterwards")
+    p.add_argument("--setup-timeout", type=float, default=900, help="seconds for setup (first image pull)")
+    p.add_argument("--task-timeout", type=float, default=180, help="seconds per task")
+    p.add_argument("--countdown", type=int, default=5, help="seconds before the first test")
+    opts = p.parse_args()
+    if opts.list:
+        for name, title, _, real in TESTS:
+            print(f"{name:18} {title}" + ("" if real else "  (scripted model)"))
+        return
+    names = {n for n, *_ in TESTS}
+    for n in (opts.only or []) + opts.skip:
+        if n not in names:
+            sys.exit(f"no test called {n}; see --list")
+    selected = [t for t in TESTS if (not opts.only or t[0] in opts.only) and t[0] not in opts.skip
+                and (t[3] or not opts.real_model)]
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        sys.exit("run this inside your Umoja session")
+    opts.out = opts.out or Path.home() / f"umoja-agents-test-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    run = Run(opts)
+    for n in range(opts.countdown, 0, -1):
+        print(f"starting in {n}… hands off the keyboard and mouse", flush=True)
+        time.sleep(1)
+    run.run(selected)
+    failed = sum(r["status"] == "fail" for r in run.results)
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

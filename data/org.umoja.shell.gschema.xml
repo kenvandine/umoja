@@ -67,6 +67,18 @@
       <default>''</default>
       <summary>Model name requested from the cloud endpoint</summary>
     </key>
+    <key name="cloud-offload" type="b">
+      <default>false</default>
+      <summary>Send harder requests to the cloud model</summary>
+      <description>
+        With a cloud model set up (cloud-base-url, cloud-model and a key in
+        the keyring) and the assistant on the local model, Umoja's Lemonade
+        routes each request: everyday questions stay on this computer, long
+        or complex ones (research, planning, writing, code, images, long
+        agent tasks) go to the cloud model. Anything with screen context
+        stays local. Applied by umoja-lemonade-routing.
+      </description>
+    </key>
     <key name="file-search-enabled" type="b">
       <default>true</default>
       <summary>Index the home folder so files can be found by what they're about</summary>

@@ -1,0 +1,905 @@
+{
+ "agent-budget-answer": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    696
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-budget-command": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-budget-done": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-budget-handed": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    285
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-budget-working": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-followup": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    664
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-followup-answer": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    696
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-followup-reply": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    238
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-intro-menu": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-intro-settings": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    517
+   ],
+   "popover": [
+    888,
+    46,
+    546,
+    517
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-intro-tile": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-map-answer": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    345
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-map-done": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-map-handed": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    239
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-map-working": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-phone": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    254
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-phone-row": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    517
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-tidy-before": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-tidy-done": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-tidy-handed": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    285
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Downloads"
+   }
+  ]
+ },
+ "agent-trip-answer": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    696
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-trip-done": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-trip-handed": {
+  "regions": {
+   "card": [
+    544,
+    96,
+    640,
+    285
+   ]
+  },
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-trip-working": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Umoja Tour"
+   },
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   }
+  ]
+ },
+ "agent-wrap": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Hermes"
+   }
+  ]
+ },
+ "agent-wrap-menu": {
+  "regions": {},
+  "screen": [
+   1728,
+   1080
+  ],
+  "windows": [
+   {
+    "app": "org.gnome.TextEditor",
+    "demo": true,
+    "rect": [
+     998,
+     221,
+     700,
+     520
+    ],
+    "title": "Release notes.md (~/Umoja Tour) - Text Editor"
+   },
+   {
+    "app": "org.gnome.Nautilus",
+    "demo": true,
+    "rect": [
+     90,
+     92,
+     890,
+     550
+    ],
+    "title": "Hermes"
+   }
+  ]
+ }
+}

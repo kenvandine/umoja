@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Copy OpenShell's proto/ directory to DEST (make vendor-cargo).
+
+openshell-core's and openshell-server's build.rs read ../../proto relative
+to the crate, which `cargo vendor` doesn't copy. Run from agents/: finds
+the openshell-core checkout cargo uses and copies its proto/ to DEST
+(vendor/proto, next to vendor/cargo-agents).
+"""
+
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+if len(sys.argv) != 2:
+    sys.exit("usage: openshell-proto DEST")
+meta = json.loads(subprocess.run(["cargo", "metadata", "--locked", "--format-version", "1"],
+                                 check=True, capture_output=True, text=True).stdout)
+core = next(Path(p["manifest_path"]) for p in meta["packages"] if p["name"] == "openshell-core")
+src = core.parent.parent.parent / "proto"
+dest = Path(sys.argv[1])
+shutil.copytree(src, dest, dirs_exist_ok=True)
+print(f"copied {src} to {dest}")

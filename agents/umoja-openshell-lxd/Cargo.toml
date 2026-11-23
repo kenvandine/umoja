@@ -1,0 +1,16 @@
+[package]
+name = "umoja-openshell-lxd"
+description = "OpenShell compute driver that runs Umoja's agent sandboxes as LXD containers"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+
+[dependencies]
+openshell-driver-lxd = { workspace = true }
+openshell-core = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs", "signal"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { version = "0.14", features = ["transport"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

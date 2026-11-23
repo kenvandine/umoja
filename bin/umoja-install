@@ -255,7 +255,10 @@ in_target() { chroot "$TARGET" "$@"; }
 
 progress 84 "Creating your account"
 groups=
-for g in adm cdrom sudo dip plugdev lpadmin users; do
+# lxd: Hermes's sandbox runs in LXD (seeded snap) as this account; the
+# snap only creates the group when its daemon first starts, so make it now.
+in_target getent group lxd >/dev/null || in_target groupadd --system lxd
+for g in adm cdrom sudo dip plugdev lpadmin users lxd; do
     in_target getent group "$g" >/dev/null && groups="$groups${groups:+,}$g"
 done
 in_target useradd --create-home --shell /bin/bash --comment "$FULLNAME" \

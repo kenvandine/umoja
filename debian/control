@@ -29,6 +29,8 @@ Build-Depends: debhelper-compat (= 13),
                libglib2.0-dev,
                libglib2.0-bin,
                libssl3t64,
+               libz3-dev,
+               libclang-dev,
                python3,
                pandoc <!nodoc>,
                weasyprint <!nodoc>,
@@ -58,12 +60,15 @@ Depends: ${shlibs:Depends},
          yaru-theme-icon,
          ubuntu-wallpapers,
          grim,
-         wf-recorder
+         wf-recorder,
+         python3
 # libgdm1 ships the org.gnome.login-screen schema; without it (no GDM)
 # GNOME Settings hides Users > Fingerprint Login.
 Recommends: umoja-greeter,
+            umoja-agents,
             libgdm1,
             zenity,
+            apostrophe,
             myna-config,
             ibus,
             ibus-gtk4,
@@ -140,6 +145,28 @@ Description: GTK4 LightDM greeter for Umoja
  On a fresh install this package makes LightDM the default display manager
  in place of GDM; the change takes effect at the next boot. Removing the
  package restores the previous display manager.
+
+Package: umoja-agents
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         umoja-desktop (= ${binary:Version}),
+         pkexec,
+         libsecret-tools,
+         acl
+Recommends: snapd
+Description: Hermes agent for Umoja, sandboxed by OpenShell on LXD
+ Runs the Hermes agent for the signed-in user inside an NVIDIA OpenShell
+ sandbox: an LXD container with no network card of its own, a capped
+ amount of memory, and only the folders the user shares. Every new
+ website and every risky command Hermes wants is put to the user as an
+ Allow/Deny card in the panel and as a notification.
+ .
+ This package has umoja-agentd (the session service behind
+ org.umoja.Agents that the panel and Ask Umoja use), and Umoja's own builds
+ of OpenShell's gateway and LXD compute driver, one per user, so no
+ OpenShell desktop app or system-wide gateway is needed. LXD comes from
+ its snap; Hermes's sandbox image is pulled the first time it is set up.
 
 Package: umoja-installer
 Architecture: amd64

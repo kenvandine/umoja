@@ -83,6 +83,12 @@ impl Attachment {
     }
 }
 
+/// Opens every block of screen context. Cloud offload keeps any
+/// conversation that contains it on this computer (see
+/// `LemonadeClient::stream_chat` and umoja-lemonade-routing's
+/// SCREEN_MARK, which must match).
+pub const SCREEN_MARK: &str = "The user attached this context from their screen";
+
 /// What we ask when the user attaches something and just presses Enter.
 pub const DEFAULT_QUESTION: &str = "Explain what this is and anything I should do about it.";
 
@@ -93,10 +99,7 @@ pub fn build_context(attachments: &[Attachment]) -> Option<String> {
         return None;
     }
     let mut budget = MAX_CONTEXT_CHARS;
-    let mut out = String::from(
-        "The user attached this context from their screen. Use it to answer; \
-         OCR text may contain recognition errors.\n\n",
-    );
+    let mut out = format!("{SCREEN_MARK}. Use it to answer; OCR text may contain recognition errors.\n\n");
     for a in attachments {
         let text = truncate_chars(a.text.trim(), budget);
         budget = budget.saturating_sub(text.chars().count());

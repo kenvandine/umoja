@@ -1,0 +1,19 @@
+#!/bin/sh
+# First boot of an installed Umoja (umoja-lxd-init.service): initialise
+# the seeded LXD snap with `lxd init --auto`, so Hermes's sandbox can be
+# set up without asking for a password. The installer already put the
+# first account in the lxd group (bin/umoja-install). Leaves an LXD that
+# someone already set up alone.
+set -eu
+snap list lxd >/dev/null 2>&1 || { echo "LXD isn't installed"; exit 0; }
+snap wait system seed.loaded
+lxd waitready --timeout=300
+if [ -z "$(lxc storage list --format csv 2>/dev/null)" ] && \
+   [ -z "$(lxc network list --format csv 2>/dev/null | grep ',YES,' || true)" ]; then
+    lxd init --auto
+    echo "LXD initialised"
+else
+    echo "LXD was already set up"
+fi
+mkdir -p /var/lib/umoja
+touch /var/lib/umoja/lxd-initialised

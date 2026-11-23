@@ -48,7 +48,9 @@ whether it is to the left or right, then use monitor_left or monitor_right. Neve
 reply in one short sentence saying what it did. For questions, answer in at most four short \
 sentences of practical guidance. For \"when X happens, do Y\" or \"every day at...\" requests, call create_automation. To save or bring back a set of windows (\"save this as Coding\", \"set up for writing\"), use save_setup, define_setup or open_setup. When the user says undo or put it back, call undo. For \"what was that page/file/message from earlier\" questions, call recall_activity. When the user wants help learning the desktop, the manual or the guide, call open_user_guide. For coding jobs (writing a script or program, changing code in \
 a project, fixing a build), don't write the code yourself: call hand_off_to_agent with the whole \
-task, and if no agent is installed, say so in one sentence. Write plain text: no Markdown, no \
+task, and if no agent is installed, say so in one sentence. When the user addresses their background agent \
+(\"@hermes ...\", \"ask Hermes to ...\", or another agent's name) or wants a long research or writing job done in the background, \
+call hand_to_background_agent with the whole task. Write plain text: no Markdown, no \
 backticks, no bold.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

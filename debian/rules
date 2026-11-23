@@ -20,6 +20,10 @@ DESKTOP := debian/umoja-desktop
 GREETER := debian/umoja-greeter
 INSTALLER := debian/umoja-installer
 KEYRING := debian/umoja-archive-keyring
+AGENTS := debian/umoja-agents
+# The agents workspace (agents/) has its own lock file, git dependencies
+# (OpenShell, openshell-desktop's crates) and vendor directory.
+AGENTS_CARGO_HOME := $(CURDIR)/debian/.cargo-agents
 META := packaging/meta/ubuntu-umoja-desktop
 
 %:
@@ -30,9 +34,15 @@ override_dh_auto_configure:
 	# Cargo resolves relative paths against the config file's parent, so
 	# the vendor directory must be absolute.
 	sed "s|@VENDOR_DIR@|$(CURDIR)/vendor/cargo|" debian/cargo-config.toml > $(CARGO_HOME)/config.toml
+	mkdir -p $(AGENTS_CARGO_HOME)
+	sed "s|@VENDOR_DIR@|$(CURDIR)/vendor/cargo-agents|" debian/cargo-config-agents.toml > $(AGENTS_CARGO_HOME)/config.toml
 
 override_dh_auto_build:
 	cargo build --release --offline --frozen --workspace
+	# From inside agents/ so agents/.cargo/config.toml (OpenShell's image
+	# tag) applies.
+	cd agents && CARGO_HOME=$(AGENTS_CARGO_HOME) CARGO_TARGET_DIR=$(CURDIR)/target/agents \
+		cargo build --release --offline --frozen --workspace
 ifeq (,$(filter nodoc,$(DEB_BUILD_OPTIONS)))
 	# The user guide (docs/guide) as a PDF, opened from Ask Umoja.
 	python3 tools/guide/build-pdf --out target/umoja-user-guide.pdf
@@ -42,10 +52,12 @@ override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# GTK crates need a display to run; test the headless logic only.
 	cargo test --release --offline --frozen -p umoja-common -p umoja-mir -p umoja-portal -p umoja-panel -p umoja-files -p umoja-mcp -p umoja-screensaver -p umoja-installer -p umoja-portal-helper
+	cd agents && CARGO_HOME=$(AGENTS_CARGO_HOME) CARGO_TARGET_DIR=$(CURDIR)/target/agents \
+		cargo test --release --offline --frozen -p umoja-agentd
 endif
 
 override_dh_auto_clean:
-	rm -rf debian/.cargo target
+	rm -rf debian/.cargo debian/.cargo-agents target
 
 override_dh_auto_install:
 	# Binaries
@@ -105,6 +117,7 @@ endif
 	install -D -m 0644 data/umoja.desktop $(DESKTOP)/usr/share/wayland-sessions/umoja.desktop
 	install -D -m 0644 data/org.umoja.shell.gschema.xml $(DESKTOP)/usr/share/glib-2.0/schemas/org.umoja.shell.gschema.xml
 	install -D -m 0644 data/90_umoja.gschema.override $(DESKTOP)/usr/share/glib-2.0/schemas/90_umoja.gschema.override
+	install -D -m 0644 data/umoja-mimeapps.list $(DESKTOP)/usr/share/applications/umoja-mimeapps.list
 	# Ubuntu's extension schemas (dock, tiling, appindicator, desktop icons)
 	# with Ubuntu's and Umoja's dock defaults, for systems without GNOME
 	# Shell. umoja-session adds this directory to XDG_DATA_DIRS only when
@@ -132,6 +145,7 @@ endif
 	install -d $(DESKTOP)/usr/lib/umoja/lemonade
 	cp -a $(LEMONADE_SRC)/. $(DESKTOP)/usr/lib/umoja/lemonade/
 	install -D -m 0755 bin/umoja-lemonade $(DESKTOP)/usr/lib/umoja/umoja-lemonade
+	install -D -m 0755 bin/umoja-lemonade-routing $(DESKTOP)/usr/lib/umoja/umoja-lemonade-routing
 	install -d $(DESKTOP)/usr/share/umoja/icons
 	cp -r data/icons/hicolor $(DESKTOP)/usr/share/umoja/icons/
 	install -D -m 0644 data/lemonade/defaults.json $(DESKTOP)/usr/share/umoja/lemonade/defaults.json
@@ -139,6 +153,21 @@ endif
 	# Agent skill for AI coding agents (linked by umoja-agent-setup)
 	install -d $(DESKTOP)/usr/share/umoja/agents/skills
 	cp -r data/agents/skills/umoja $(DESKTOP)/usr/share/umoja/agents/skills/
+
+	# Agents: a personal agent (Hermes first; agents/catalog) in a per-user
+	# OpenShell sandbox on LXD
+	install -D -m 0755 target/agents/release/umoja-agentd $(AGENTS)/usr/libexec/umoja-agents/umoja-agentd
+	install -D -m 0755 target/agents/release/umoja-openshell-gateway $(AGENTS)/usr/libexec/umoja-agents/umoja-openshell-gateway
+	install -D -m 0755 target/agents/release/umoja-openshell-lxd $(AGENTS)/usr/libexec/umoja-agents/umoja-openshell-lxd
+	install -D -m 0755 data/agents/lxd-setup $(AGENTS)/usr/libexec/umoja-agents/lxd-setup
+	install -D -m 0755 data/agents/lxd-init $(AGENTS)/usr/libexec/umoja-agents/lxd-init
+	install -D -m 0644 agents/catalog/hermes.json $(AGENTS)/usr/share/umoja/agents/catalog/hermes.json
+	install -D -m 0644 data/agents/umoja-lxd-init.service $(AGENTS)/usr/lib/systemd/system/umoja-lxd-init.service
+	install -d $(AGENTS)/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../umoja-lxd-init.service $(AGENTS)/usr/lib/systemd/system/multi-user.target.wants/umoja-lxd-init.service
+	install -D -m 0644 data/agents/umoja-agentd.service $(AGENTS)/usr/lib/systemd/user/umoja-agentd.service
+	install -D -m 0644 data/agents/org.umoja.Agents.service $(AGENTS)/usr/share/dbus-1/services/org.umoja.Agents.service
+	install -D -m 0644 data/agents/org.umoja.agents.policy $(AGENTS)/usr/share/polkit-1/actions/org.umoja.agents.policy
 
 	# Greeter
 	install -D -m 0644 data/lightdm-umoja-greeter.desktop $(GREETER)/usr/share/xgreeters/lightdm-umoja-greeter.desktop

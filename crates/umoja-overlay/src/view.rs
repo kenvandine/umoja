@@ -54,6 +54,8 @@ const SPEAKING_ICON: &str = "media-playback-stop-symbolic";
 /// File rows for typed text.
 const MAX_FILES: u32 = 3;
 /// Width of the card, as in the mockup.
+/// Tallest the answer text grows before it scrolls.
+const ANSWER_MAX_HEIGHT: i32 = 440;
 const CARD_WIDTH: i32 = 640;
 /// Pause in typing before umoja-files is asked, and before the top row is
 /// read out.
@@ -98,6 +100,15 @@ enum Item {
     },
     /// A named setup (umoja-mcp's open_setup).
     Setup(String),
+    /// "Talk to Hermes from Telegram": the guided messaging setup.
+    Messaging(String),
+    /// "@hermes …": hand `task` to a background agent; without a task yet,
+    /// picking it completes the mention.
+    Agent {
+        mention: String,
+        name: String,
+        task: Option<String>,
+    },
 }
 
 /// Names of the saved setups (`~/.config/umoja/setups.json`, written by
@@ -169,6 +180,8 @@ pub struct Overlay {
     foot_backend: gtk::Label,
     question_label: gtk::Label,
     answer: gtk::Label,
+    /// The guided Telegram setup, in place of the answer while it's open.
+    messaging: Rc<crate::messaging_setup::MessagingSetup>,
     /// One line per tool call ("✓ Turn on Dark Style").
     steps: gtk::Box,
     chips: gtk::FlowBox,
@@ -220,6 +233,8 @@ pub struct Overlay {
     /// Bumped per read-aloud, so a finished one can't reset a newer one.
     speak_serial: Cell<u64>,
     answer_text: RefCell<String>,
+    /// Holds a Markdown answer's widgets (shown instead of `answer`).
+    answer_md: gtk::Box,
     /// The conversation so far: earlier user and assistant messages, sent
     /// along with follow-ups. Cleared when the card opens or the entry is
     /// emptied.
@@ -230,6 +245,9 @@ pub struct Overlay {
     /// The last answer asked the user something: the search entry is a
     /// reply box until it's answered.
     awaiting_reply: Cell<bool>,
+    /// The background agent's task the card shows: the reply box follows
+    /// up on it (org.umoja.Agents.FollowUp) instead of asking Umoja.
+    agent_thread: RefCell<Option<String>>,
     /// This conversation started on the local model (crash diagnosis), so
     /// its follow-ups stay local too.
     local_chat: Cell<bool>,
@@ -462,7 +480,24 @@ impl Overlay {
             .build();
         let answer_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         answer.set_hexpand(true);
-        answer_row.append(&answer);
+        answer.set_valign(gtk::Align::Start);
+        // A long answer (a background agent's whole report) scrolls inside
+        // the card instead of running off the bottom of the screen.
+        // An agent's answer is Markdown, drawn as widgets in answer_md in
+        // place of the label.
+        let answer_md = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        answer_md.set_visible(false);
+        let answer_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        answer_body.append(&answer);
+        answer_body.append(&answer_md);
+        let answer_scroll = gtk::ScrolledWindow::builder()
+            .child(&answer_body)
+            .hexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(ANSWER_MAX_HEIGHT)
+            .build();
+        answer_row.append(&answer_scroll);
         answer_row.append(&speak_button);
         answer_row.append(&copy_button);
         let confirm_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -514,6 +549,8 @@ impl Overlay {
         card.append(&model_status);
         card.append(&stack);
         card.append(&assistant);
+        let messaging = crate::messaging_setup::MessagingSetup::new();
+        card.append(&messaging.root);
 
         // The card floats over the focused window, about a sixth of the way
         // down; clicking anywhere else closes it.
@@ -594,14 +631,17 @@ impl Overlay {
             history: clipboard::history(),
             clip_button,
             stack,
+            messaging,
             clip_list,
             clip_empty,
             copy_button,
             speak_button,
             speak_serial: Cell::new(0),
             answer_text: RefCell::default(),
+            answer_md,
             conversation: RefCell::default(),
             awaiting_reply: Cell::new(false),
+            agent_thread: RefCell::default(),
             local_chat: Cell::new(false),
             hide_serial: Rc::new(Cell::new(0)),
         });
@@ -633,6 +673,20 @@ impl Overlay {
             }
         });
         root.add_controller(outside);
+        {
+            let weak = Rc::downgrade(&overlay);
+            overlay.messaging.set_on_close(move || {
+                if let Some(o) = weak.upgrade() {
+                    o.hide();
+                }
+            });
+            let weak = Rc::downgrade(&overlay);
+            crate::messaging_setup::set_opener(move || {
+                if let Some(o) = weak.upgrade() {
+                    o.show_messaging_setup();
+                }
+            });
+        }
         overlay.connect_signals();
         overlay.connect_context();
         // The assistant's read_focused_window tool steps the overlay aside too.
@@ -654,6 +708,14 @@ impl Overlay {
         let weak = Rc::downgrade(self);
         self.entry.connect_search_changed(move |_| {
             if let Some(o) = weak.upgrade() {
+                if o.messaging.is_open() {
+                    // Typing leaves the setup for the usual rows.
+                    if o.entry.text().is_empty() {
+                        return;
+                    }
+                    o.messaging.stop();
+                    o.assistant.set_visible(true);
+                }
                 o.selected.set(0);
                 o.refresh_results();
             }
@@ -921,7 +983,11 @@ impl Overlay {
         if !self.window.is_visible() {
             return;
         }
+        if self.agent_thread.borrow().is_some() || self.question_label.is_visible() {
+            tell_agents_viewing("");
+        }
         self.entry.set_text("");
+        self.messaging.stop();
         self.assistant.set_visible(false);
         appgrid::hide_after_clean_frame(self.window.upcast_ref(), self.hide_serial.clone(), serial);
     }
@@ -1103,6 +1169,8 @@ impl Overlay {
         let model = model.rsplit('/').next().unwrap_or(model).trim_start_matches('~');
         self.foot_backend.set_text(&if b.cloud {
             format!("{model} · {}", b.host())
+        } else if b.router.is_some() {
+            format!("{model} · {}", i18n::umoja("on this computer, harder requests in the cloud"))
         } else {
             format!("{model} · {}", i18n::umoja("on this computer"))
         });
@@ -1436,6 +1504,14 @@ impl Overlay {
             }
             return out;
         }
+        // "@…": which background agent it goes to, while still typing.
+        if let Some(rows) = agent_rows(text) {
+            out.extend(rows.into_iter().map(Entry::Item));
+            if !text.trim_start_matches('@').is_empty() {
+                out.push(ask_row(i18n::umoja("Ask Umoja: “%s”").replace("%s", text), i18n::umoja("Tab")));
+            }
+            return out;
+        }
         let focus = self.focused_app();
         let usage = self.usage.borrow();
 
@@ -1546,6 +1622,13 @@ impl Overlay {
             let s = ask::score(&name, &["setup", "layout", "workspace", "set up"], &words);
             if s > 0 {
                 scored.push((s + 1, Item::Setup(name)));
+            }
+        }
+        if let Some((name, true)) = crate::background_agent::current() {
+            let title = i18n::umoja("Talk to {name} from Telegram").replace("{name}", &name);
+            let s = ask::score(&title, &["telegram", "messaging", "phone", "chat", "bot", "connect"], &words);
+            if s > 0 {
+                scored.push((s + 2, Item::Messaging(name)));
             }
         }
         // Stable: equal scores keep apps, then actions, then the catalog.
@@ -1737,6 +1820,26 @@ impl Overlay {
                 String::new(),
                 i18n::umoja("Web"),
             ),
+            Item::Messaging(name) => (
+                i18n::umoja("Talk to {name} from Telegram").replace("{name}", name),
+                i18n::umoja("Send it jobs from your phone · a quick guided setup"),
+                i18n::umoja("Background agent"),
+            ),
+            Item::Agent { name, task: Some(task), .. } => (
+                i18n::umoja("Hand to {name}: “{task}”").replace("{name}", name).replace("{task}", task),
+                i18n::umoja("Works on it in the background, in its sandbox · Enter"),
+                i18n::umoja("Background agent"),
+            ),
+            Item::Agent { name, mention, task: None } => (
+                i18n::umoja("Hand a job to {name}").replace("{name}", name),
+                match crate::background_agent::current() {
+                    Some((_, false)) if mention == "agent" => {
+                        i18n::umoja("Set it up first, in Ask Umoja's settings")
+                    }
+                    _ => i18n::umoja("Type what it should do"),
+                },
+                i18n::umoja("Background agent"),
+            ),
         }
     }
 
@@ -1760,6 +1863,8 @@ impl Overlay {
             // Ours (data/icons): no fallbacks, or Yaru's would win.
             Item::Ask { .. } => gtk::Image::from_icon_name("umoja-ask-symbolic"),
             Item::Web(_) => gtk::Image::from_icon_name("web-browser-symbolic"),
+            // Ours (data/icons): no fallbacks.
+            Item::Agent { .. } | Item::Messaging(_) => gtk::Image::from_icon_name("umoja-agents-symbolic"),
             Item::Setup(_) => gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&[
                 "view-grid-symbolic",
                 "focus-windows-symbolic",
@@ -1776,7 +1881,7 @@ impl Overlay {
         icon.set_accessible_role(gtk::AccessibleRole::Presentation);
         let icon_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         icon_box.add_css_class("ask-icon");
-        if matches!(item, Item::Ask { .. }) {
+        if matches!(item, Item::Ask { .. } | Item::Agent { .. }) {
             icon_box.add_css_class("ask-icon-accent");
         }
         icon_box.set_valign(gtk::Align::Center);
@@ -1898,6 +2003,13 @@ impl Overlay {
                 }
             }
             Item::Ask { question, .. } => self.ask(&question),
+            Item::Messaging(_) => self.show_messaging_setup(),
+            Item::Agent { task: Some(task), .. } => self.hand_to_agent(task),
+            Item::Agent { mention, task: None, .. } => {
+                let text = format!("@{mention} ");
+                self.entry.set_text(&text);
+                self.entry.set_position(-1);
+            }
             Item::Rewrite { instruction, .. } => self.rewrite(&instruction),
             Item::Setup(name) => self.call_tool("open_setup", serde_json::json!({ "name": name }), None),
             Item::Web(q) => {
@@ -2222,6 +2334,32 @@ impl Overlay {
                 ),
             ),
             "voice-page" => (crate::model_picker::show_page("voice"), String::new()),
+            // Scroll the answer on show to a fraction of its length (0.0
+            // top, 1.0 end): the demo shows the part a caption is about.
+            a if a.starts_with("answer-scroll:") => {
+                let Ok(f) = a[14..].parse::<f64>() else {
+                    return (false, String::new());
+                };
+                match self.answer.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>() {
+                    Some(sw) => {
+                        let adj = sw.vadjustment();
+                        let span = (adj.upper() - adj.page_size()).max(0.0);
+                        let (from, to) = (adj.value(), adj.lower() + span * f.clamp(0.0, 1.0));
+                        // Glides there over about a second, as a reader would.
+                        glib::spawn_future_local(async move {
+                            const STEPS: u32 = 30;
+                            for i in 1..=STEPS {
+                                glib::timeout_future(Duration::from_millis(33)).await;
+                                let t = f64::from(i) / f64::from(STEPS);
+                                let eased = t * t * (3.0 - 2.0 * t);
+                                adj.set_value(from + (to - from) * eased);
+                            }
+                        });
+                        (span > 0.0, String::new())
+                    }
+                    None => (false, String::new()),
+                }
+            }
             "settings-open" => (crate::model_picker::open(), String::new()),
             a if a.starts_with("agent-pick:") => {
                 (crate::model_picker::test_pick_agent(&a[11..]), String::new())
@@ -2291,6 +2429,19 @@ impl Overlay {
             "" if !attachments.is_empty() => context::DEFAULT_QUESTION.to_string(),
             q => q.to_string(),
         };
+        // "@hermes <task>" (or "@agent", or another agent's id) goes
+        // straight to the background agent (umoja-agents), without the model
+        // deciding: it works in its sandbox, and its progress and consent
+        // cards are in the panel's Agents pill.
+        if !replying && let Some(task) = agent_task(&text) {
+            self.hand_to_agent(task);
+            return;
+        }
+        // Replying to a background agent's answer: it follows up there.
+        if replying && let Some(parent) = self.agent_thread.borrow().clone() {
+            self.agent_follow_up(parent, text);
+            return;
+        }
         let context = context::build_context(&attachments).or_else(|| {
             (!replying && self.conversation.borrow().is_empty())
                 .then(|| self.focus_context())
@@ -2303,8 +2454,262 @@ impl Overlay {
         });
     }
 
+    /// Opens a background agent's finished (or running) task: what was
+    /// asked, the whole answer (its saved file when it wrote one), a chip
+    /// for the file, and the reply box to follow up in the same
+    /// conversation.
+    /// Types `text` into the reply box of the agent answer on show and
+    /// sends it, as a person replying would (org.umoja.Overlay
+    /// ReplyAgentTask, for tools/demo). False when no answer is waiting.
+    pub fn reply_agent_task(self: &Rc<Self>, text: &str) -> bool {
+        if !self.is_visible() || self.agent_thread.borrow().is_none() || !self.awaiting_reply.get() {
+            return false;
+        }
+        let generation = self.generation.get();
+        let chars: Vec<char> = text.chars().collect();
+        let weak = Rc::downgrade(self);
+        let text = text.to_owned();
+        glib::spawn_future_local(async move {
+            for n in 1..=chars.len() {
+                glib::timeout_future(Duration::from_millis(38)).await;
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation || !o.is_visible() {
+                    return;
+                }
+                let typed: String = chars[..n].iter().collect();
+                o.entry.set_text(&typed);
+                o.entry.set_position(-1);
+            }
+            glib::timeout_future(Duration::from_millis(350)).await;
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() == generation {
+                o.ask(&text);
+            }
+        });
+        true
+    }
+
+    /// The guided "Talk to Hermes from Telegram" setup, in the card.
+    pub fn show_messaging_setup(self: &Rc<Self>) {
+        if !self.is_visible() {
+            self.show();
+        }
+        crate::model_picker::close();
+        self.generation.set(self.generation.get() + 1);
+        self.end_conversation();
+        self.reset_card();
+        self.entry.set_text("");
+        self.stack.set_visible(false);
+        self.assistant.set_visible(false);
+        self.messaging.start();
+    }
+
+    pub fn show_agent_task(self: &Rc<Self>, id: &str) {
+        if !self.is_visible() {
+            self.show();
+        }
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.end_conversation();
+        self.reset_card();
+        self.stack.set_visible(false);
+        self.answer.set_text(&i18n::umoja("Loading…"));
+        self.follow_agent_task(id.to_owned(), generation);
+    }
+
+    /// Shows task `id` once it has an answer, updating its progress line
+    /// until then (every 2 s, while the card is open and current).
+    fn follow_agent_task(self: &Rc<Self>, id: String, generation: u64) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            loop {
+                let state = agents_state().await;
+                let Some(o) = weak.upgrade() else { return };
+                if o.generation.get() != generation || !o.is_visible() {
+                    return;
+                }
+                let Some(state) = state else {
+                    o.answer.set_text(&i18n::umoja("The background agent isn't running."));
+                    return;
+                };
+                let name = state["agent_name"].as_str().unwrap_or("Hermes").to_owned();
+                let Some(t) = state["tasks"].as_array().and_then(|a| a.iter().find(|t| t["id"] == id.as_str())).cloned()
+                else {
+                    o.answer.set_text(&i18n::umoja("That job isn't there any more."));
+                    return;
+                };
+                // While it's on show, its "finished" notification would
+                // only cover it.
+                tell_agents_viewing(&id);
+                o.question_label.set_text(&context::truncate_chars(t["prompt"].as_str().unwrap_or_default().trim(), 200));
+                o.question_label.set_visible(true);
+                let status = t["status"].as_str().unwrap_or_default();
+                if matches!(status, "running" | "waiting") {
+                    let step = t["step"].as_str().filter(|s| !s.is_empty()).unwrap_or("Working…");
+                    let line = if status == "waiting" {
+                        i18n::umoja("{name} is waiting for you: answer on the Agents button in the top bar.")
+                            .replace("{name}", &name)
+                    } else {
+                        format!("{name}: {step}")
+                    };
+                    o.answer.set_text(&line);
+                    glib::timeout_future(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                let files: Vec<String> = t["files"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
+                // The whole answer: its file when that's text, else the
+                // (shortened) answer the task kept.
+                let file = files.first().filter(|f| f.ends_with(".md") || f.ends_with(".txt"));
+                let mut text = file
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .filter(|t| t.len() < 200_000)
+                    .unwrap_or_default();
+                // Agents write Markdown; only a .txt answer is plain.
+                let mut plain = file.is_some_and(|f| f.ends_with(".txt"));
+                if text.trim().is_empty() {
+                    text = t["result"].as_str().unwrap_or_default().to_owned();
+                    plain = false;
+                }
+                if plain || text.trim().is_empty() {
+                    o.clear_markdown();
+                    o.answer.set_visible(true);
+                    o.answer.set_text(text.trim());
+                } else {
+                    let base = file.and_then(|f| std::path::Path::new(f).parent().map(|p| p.to_path_buf()));
+                    o.show_markdown(text.trim(), base);
+                }
+                *o.answer_text.borrow_mut() = text.trim().to_owned();
+                o.show_answer_actions(!text.trim().is_empty());
+                while let Some(c) = o.chips.first_child() {
+                    o.chips.remove(&c);
+                }
+                if let Some(f) = files.first() {
+                    o.chips.append(&o.open_file_chip(f));
+                }
+                if status == "done" {
+                    o.agent_thread.replace(Some(id.clone()));
+                    o.awaiting_reply.set(true);
+                    o.entry.set_placeholder_text(Some(
+                        &i18n::umoja("Reply to {name}…").replace("{name}", &name),
+                    ));
+                    o.entry.set_text("");
+                    o.entry.grab_focus();
+                }
+                return;
+            }
+        });
+    }
+
+    /// A follow-up to the agent's task `parent`, shown as it goes.
+    fn agent_follow_up(self: &Rc<Self>, parent: String, text: String) {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        self.set_awaiting_reply(false);
+        self.reset_card();
+        self.stack.set_visible(false);
+        self.entry.set_text("");
+        self.question_label.set_text(&context::truncate_chars(text.trim(), 200));
+        self.question_label.set_visible(true);
+        self.answer.set_text(&i18n::umoja("Handing it to your background agent…"));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let res = match gio::bus_get_future(gio::BusType::Session).await {
+                Ok(conn) => conn
+                    .call_future(
+                        Some("org.umoja.Agents"),
+                        "/org/umoja/Agents",
+                        "org.umoja.Agents",
+                        "FollowUp",
+                        Some(&(parent.as_str(), text.as_str()).to_variant()),
+                        Some(glib::VariantTy::new("(s)").expect("type")),
+                        gio::DBusCallFlags::NONE,
+                        60_000,
+                    )
+                    .await
+                    .map(|v| v.get::<(String,)>().map(|(s,)| s).unwrap_or_default())
+                    .map_err(|mut e| {
+                        gio::DBusError::strip_remote_error(&mut e);
+                        e.message().to_string()
+                    }),
+                Err(e) => Err(e.to_string()),
+            };
+            let Some(o) = weak.upgrade() else { return };
+            if o.generation.get() != generation {
+                return;
+            }
+            match res {
+                Ok(id) => o.follow_agent_task(id, generation),
+                Err(e) => o.answer.set_text(&e),
+            }
+        });
+    }
+
+    /// "Open “Marrakech week.md”".
+    fn open_file_chip(self: &Rc<Self>, path: &str) -> gtk::Widget {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let button = gtk::Button::builder()
+            .label(i18n::umoja("Open “%s”").replace("%s", &name))
+            .css_classes(["pill", "reply-chip", "flat"])
+            .build();
+        let path = path.to_owned();
+        let weak = Rc::downgrade(self);
+        button.connect_clicked(move |_| {
+            let Some(o) = weak.upgrade() else { return };
+            let ctx = WidgetExt::display(&o.window).app_launch_context();
+            match crate::files::open(&path, Some(ctx.upcast_ref())) {
+                Ok(()) => o.hide(),
+                Err(e) => o.show_error(&e.to_string()),
+            }
+        });
+        button.upcast()
+    }
+
+    fn hand_to_agent(self: &Rc<Self>, task: String) {
+        self.show_error(&i18n::umoja("Handing it to your background agent…"));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let text = match gio::bus_get_future(gio::BusType::Session).await {
+                Ok(conn) => match conn
+                    .call_future(
+                        Some("org.umoja.Agents"),
+                        "/org/umoja/Agents",
+                        "org.umoja.Agents",
+                        "Submit",
+                        Some(&(task.as_str(),).to_variant()),
+                        Some(glib::VariantTy::new("(s)").expect("type")),
+                        gio::DBusCallFlags::NONE,
+                        60_000,
+                    )
+                    .await
+                {
+                    Ok(_) => i18n::umoja(
+                        "It's on it. Follow along, and answer its questions, from the Agents button on the top bar.",
+                    ),
+                    Err(e) if e.matches(gio::DBusError::ServiceUnknown) => {
+                        i18n::umoja("No background agent is installed on this computer.")
+                    }
+                    Err(mut e) => {
+                        gio::DBusError::strip_remote_error(&mut e);
+                        e.message().to_string()
+                    }
+                },
+                Err(e) => e.to_string(),
+            };
+            if let Some(o) = weak.upgrade() {
+                o.show_error(&text);
+            }
+        });
+    }
+
     /// Forget the conversation: the next question starts afresh.
     fn end_conversation(&self) {
+        self.agent_thread.replace(None);
         self.conversation.borrow_mut().clear();
         self.local_chat.set(false);
         self.set_awaiting_reply(false);
@@ -2585,6 +2990,7 @@ impl Overlay {
         self.cancel_confirm();
         self.assistant.set_visible(true);
         self.answer.set_visible(true);
+        self.clear_markdown();
         self.question_label.set_visible(false);
         self.show_answer_actions(false);
         self.stop_speaking();
@@ -2601,6 +3007,41 @@ impl Overlay {
             self.steps.remove(&c);
         }
         self.steps.set_visible(false);
+    }
+
+    fn clear_markdown(&self) {
+        while let Some(c) = self.answer_md.first_child() {
+            self.answer_md.remove(&c);
+        }
+        self.answer_md.set_visible(false);
+    }
+
+    /// Shows `md` drawn as Markdown in place of the answer label. Relative
+    /// links resolve against `base` (the answer file's folder).
+    fn show_markdown(self: &Rc<Self>, md: &str, base: Option<std::path::PathBuf>) {
+        self.clear_markdown();
+        let weak = Rc::downgrade(self);
+        let on_link: crate::markdown::LinkHandler = Rc::new(move |uri: &str| {
+            let Some(o) = weak.upgrade() else { return };
+            let uri = if glib::Uri::peek_scheme(uri).is_some() {
+                uri.to_owned()
+            } else {
+                let path = std::path::Path::new(uri);
+                let path = match &base {
+                    Some(b) if path.is_relative() => b.join(path),
+                    _ => path.to_path_buf(),
+                };
+                gio::File::for_path(path).uri().to_string()
+            };
+            let ctx = WidgetExt::display(&o.window).app_launch_context();
+            match gio::AppInfo::launch_default_for_uri(&uri, Some(&ctx)) {
+                Ok(()) => o.hide(),
+                Err(e) => o.show_error(&e.to_string()),
+            }
+        });
+        self.answer_md.append(&crate::markdown::render(md, on_link));
+        self.answer.set_visible(false);
+        self.answer_md.set_visible(true);
     }
 
     fn show_error(&self, text: &str) {
@@ -3600,4 +4041,176 @@ fn capitalize(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
         .unwrap_or_default()
+}
+
+/// The background agents a prompt can address: "@agent" for whichever is
+/// set up, and each agent in umoja-agents' catalog by id ("@hermes",
+/// "@openclaw", ...).
+fn agent_ids() -> Vec<String> {
+    let mut ids = vec!["agent".to_owned(), "hermes".to_owned()];
+    if let Ok(dir) = std::fs::read_dir("/usr/share/umoja/agents/catalog") {
+        for e in dir.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "json") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    if !ids.iter().any(|i| i == stem) {
+                        ids.push(stem.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Tells the background agent which of its jobs Ask Umoja shows ("" for
+/// none), so a "finished" notification doesn't pop up over it.
+fn tell_agents_viewing(task: &str) {
+    let task = task.to_owned();
+    glib::spawn_future_local(async move {
+        if let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await {
+            let _ = conn
+                .call_future(
+                    Some("org.umoja.Agents"),
+                    "/org/umoja/Agents",
+                    "org.umoja.Agents",
+                    "Viewing",
+                    Some(&(task.as_str(),).to_variant()),
+                    None,
+                    gio::DBusCallFlags::NO_AUTO_START,
+                    2_000,
+                )
+                .await;
+        }
+    });
+}
+
+/// org.umoja.Agents' state, or None when it isn't running.
+async fn agents_state() -> Option<serde_json::Value> {
+    let conn = gio::bus_get_future(gio::BusType::Session).await.ok()?;
+    let v = conn
+        .call_future(
+            Some("org.umoja.Agents"),
+            "/org/umoja/Agents",
+            "org.umoja.Agents",
+            "GetState",
+            None,
+            Some(glib::VariantTy::new("(s)").expect("type")),
+            gio::DBusCallFlags::NONE,
+            5_000,
+        )
+        .await
+        .ok()?;
+    let (json,) = v.get::<(String,)>()?;
+    serde_json::from_str(&json).ok()
+}
+
+/// The rows for a prompt starting with "@": the agent a complete mention
+/// goes to (with the task once there is one), or every agent the partial
+/// word could be. None when it isn't about an agent.
+fn agent_rows(text: &str) -> Option<Vec<Item>> {
+    agent_rows_for(text, &agent_ids())
+}
+
+fn agent_rows_for(text: &str, ids: &[String]) -> Option<Vec<Item>> {
+    let p = text.trim_start().strip_prefix('@')?;
+    let word_len = p.find(|c: char| !c.is_ascii_alphanumeric() && c != '-').unwrap_or(p.len());
+    let word = &p[..word_len];
+    let typed_on = word_len < p.len();
+    let exact = ids.iter().find(|i| i.eq_ignore_ascii_case(word));
+    let item = |id: &str, task: Option<String>| Item::Agent {
+        mention: id.to_owned(),
+        name: agent_display_name(id),
+        task,
+    };
+    if let Some(id) = exact {
+        if typed_on || word_len > 0 {
+            return Some(vec![item(id, agent_task_for(text, ids))]);
+        }
+    }
+    if typed_on {
+        // "@someone else …": not ours.
+        return None;
+    }
+    let mut names = Vec::new();
+    let matches: Vec<Item> = ids
+        .iter()
+        .filter(|i| i.to_lowercase().starts_with(&word.to_lowercase()))
+        .map(|i| item(i, None))
+        // "@agent" and "@hermes" are one agent when Hermes is the one set up.
+        .filter(|it| match it {
+            Item::Agent { name, .. } if names.contains(name) => false,
+            Item::Agent { name, .. } => {
+                names.push(name.clone());
+                true
+            }
+            _ => true,
+        })
+        .collect();
+    (!matches.is_empty()).then_some(matches)
+}
+
+/// "Hermes" for "@hermes" (its catalog name) and for "@agent" (whichever
+/// is set up).
+fn agent_display_name(id: &str) -> String {
+    if id == "agent" {
+        return crate::background_agent::current()
+            .map(|(n, _)| n)
+            .unwrap_or_else(|| i18n::umoja("your background agent"));
+    }
+    std::fs::read_to_string(format!("/usr/share/umoja/agents/catalog/{id}.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["name"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| capitalize(id))
+}
+
+/// The task in "@hermes plan a trip" ("@Agent, ..." too), if the prompt is
+/// addressed to a background agent.
+pub fn agent_task(prompt: &str) -> Option<String> {
+    agent_task_for(prompt, &agent_ids())
+}
+
+fn agent_task_for(prompt: &str, ids: &[String]) -> Option<String> {
+    let p = prompt.trim_start().strip_prefix('@')?;
+    let word_len = p.find(|c: char| !c.is_ascii_alphanumeric() && c != '-').unwrap_or(p.len());
+    let word = &p[..word_len];
+    if !ids.iter().any(|i| i.eq_ignore_ascii_case(word)) {
+        return None;
+    }
+    let rest = p[word_len..].trim_start_matches([',', ':', ' ']).trim();
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+#[cfg(test)]
+mod agent_prefix_tests {
+    use super::{Item, agent_rows_for, agent_task_for};
+
+    #[test]
+    fn rows_while_typing() {
+        let ids: Vec<String> = ["agent", "hermes", "picoclaw"].iter().map(|s| s.to_string()).collect();
+        let task = |t: &str| match agent_rows_for(t, &ids).as_deref() {
+            Some([Item::Agent { task, mention, .. }]) => Some((mention.clone(), task.clone())),
+            _ => None,
+        };
+        assert_eq!(task("@agent"), Some(("agent".into(), None)));
+        assert_eq!(task("@hermes plan a trip"), Some(("hermes".into(), Some("plan a trip".into()))));
+        assert_eq!(task("@pico"), Some(("picoclaw".into(), None)));
+        assert!(agent_rows_for("@", &ids).is_some_and(|r| r.len() >= 2));
+        assert!(agent_rows_for("@bob hello", &ids).is_none());
+        assert!(agent_rows_for("plan a trip", &ids).is_none());
+    }
+
+    #[test]
+    fn prefix() {
+        let ids: Vec<String> = ["agent", "hermes", "picoclaw"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(agent_task_for("@hermes plan a trip", &ids).as_deref(), Some("plan a trip"));
+        assert_eq!(agent_task_for("  @Hermes, summarise this", &ids).as_deref(), Some("summarise this"));
+        assert_eq!(agent_task_for("@agent: tidy Downloads", &ids).as_deref(), Some("tidy Downloads"));
+        assert_eq!(agent_task_for("@PicoClaw check prices", &ids).as_deref(), Some("check prices"));
+        assert_eq!(agent_task_for("@hermes", &ids), None);
+        assert_eq!(agent_task_for("hermes plan", &ids), None);
+        assert_eq!(agent_task_for("@hermesx do it", &ids), None);
+        assert_eq!(agent_task_for("@someone hi", &ids), None);
+    }
 }

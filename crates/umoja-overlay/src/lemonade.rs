@@ -246,7 +246,7 @@ impl LemonadeClient {
 
     fn request(&self, user_query: &str, stream: bool) -> CompletionRequest {
         CompletionRequest {
-            model: self.model.clone(),
+            model: self.backend.request_model().to_owned(),
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
@@ -354,8 +354,15 @@ impl LemonadeClient {
         }
         // The idle-unload countdown starts when the answer ends, however it ends.
         let _used = (!self.backend.cloud).then(|| UseMark(self.model.clone()));
+        // Cloud offload: a conversation with screen context in it, anywhere,
+        // stays on the local model (the router only sees the last message).
+        let model = if self.backend.router.is_some() && has_screen_context(&messages) {
+            self.model.as_str()
+        } else {
+            self.backend.request_model()
+        };
         let mut body = serde_json::json!({
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "temperature": 0.2,
             "stream": true,
@@ -585,6 +592,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn screen_context_anywhere_in_the_conversation() {
+        use serde_json::json;
+        let ctx = crate::context::build_context(&[crate::context::Attachment::new(crate::context::Kind::Selection, "secret")]).unwrap();
+        let follow_up = vec![
+            json!({"role": "user", "content": ctx}),
+            json!({"role": "assistant", "content": "A document."}),
+            json!({"role": "user", "content": "research it more"}),
+        ];
+        assert!(has_screen_context(&follow_up));
+        assert!(!has_screen_context(&[json!({"role": "user", "content": "research laptops"})]));
+    }
+
+    #[test]
     fn sse_parsing() {
         assert_eq!(
             parse_sse_line(r#"data: {"choices":[{"delta":{"content":"Hi"}}]}"#),
@@ -635,4 +655,16 @@ mod tests {
         assert!(!c.endpoint.contains(":13305"));
         assert!(c.endpoint.ends_with("/api/v1/chat/completions"));
     }
+}
+
+/// True when any message carries screen context the user attached.
+fn has_screen_context(messages: &[serde_json::Value]) -> bool {
+    messages.iter().any(|m| {
+        m["content"].as_str().is_some_and(|c| c.contains(crate::context::SCREEN_MARK))
+            || m["content"].as_array().is_some_and(|parts| {
+                parts
+                    .iter()
+                    .any(|p| p["text"].as_str().is_some_and(|t| t.contains(crate::context::SCREEN_MARK)))
+            })
+    })
 }

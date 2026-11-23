@@ -42,6 +42,7 @@ The test hooks some scenes use (`Overlay.AnswerConfirm`, `AskRows`,
 | `ask-umoja` | `Overlay.ToggleAsk` over Text Editor (the empty card: its launcher actions, frequent picks, suggestions), then `Overlay.AskType` types "dark", "12*7+5", "sound" and a question; nothing is picked, so nothing changes | `images/ask-umoja.png`, `images/ask-switch.png`, `images/ask-sum.png`, `images/ask-settings.png`, `images/ask-question.png`, `videos/ask-umoja.*` |
 | `ai-btop` | Types "btop" in Ask Umoja. btop isn't installed, so Umoja offers to install it (snap first, else the deb); the scene allows that with `Overlay.AnswerConfirm(true)`, then allows the "Run btop in a terminal" prompt and films btop running. **This one really installs btop.** Afterwards it quits that btop, closes its window and removes btop again with `sudo -n` so the next run can film it; without passwordless sudo btop stays installed and later runs skip the scene until you remove it. `AnswerConfirm` only works while the scene's `$XDG_RUNTIME_DIR/umoja-demo` flag file exists | `images/ai-btop-1.png`, `images/ai-btop-2.png`, `images/ai-btop-running.png`, `videos/ai-btop.*` |
 | `ai-opencode` | The coding agent, from Ask Umoja. Needs the assistant on a cloud model (`assistant-backend` 'cloud') and the tour's own folder. If OpenCode isn't installed: "Install OpenCode", allowing its prompts; the terminal runs the snap install and `umoja-agent-setup opencode`, which gives OpenCode the assistant's cloud model (no sign-in), and the scene waits for `~/.config/opencode/opencode.json` to have the `umoja` provider. Then it opens Ask Umoja's settings and picks OpenCode as the Coding agent (`TestAction("settings-open")`, `"agent-pick:opencode"`; `ai-agent` is put back at the end), and asks "Write an app in Rust: a hello world GTK 4 window, in a new project called hello-gtk in ~/Umoja Tour/Projects. Don't compile it." without naming OpenCode, allowing the hand-off; OpenCode runs in a terminal in that folder, whose `opencode.json` lets it write files and run `cargo new` but nothing else (no builds, no downloads), so it never stops on a prompt. Ends on `src/main.rs` in Text Editor. **The first run really installs OpenCode, and it stays installed**; later runs film only the coding job unless you pass `--reinstall-agent` (removes the snap first with `sudo -n`) | `images/ai-opencode-install.png`, `images/ai-opencode-installed.png`, `images/ai-opencode-default.png`, `images/ai-opencode-agent.png`, `images/ai-opencode.png`, `videos/ai-opencode.*` |
+| `ai-agent` | The background agent, from Ask Umoja: types "@agent plan a weekend in Lisbon…" (`Overlay.AskWith`), waits for the new task in `org.umoja.Agents.GetState`, films the Agents button on the top bar while it works, allows any site it asks for (`Agents.Answer`), shows the finished plan in Ask Umoja as the notification's Open does (`Overlay.ShowAgentTask`), types a reply under it ("Add a rainy-day plan for Saturday…", `Overlay.ReplyAgentTask`) and follows that follow-up job, then opens the plan it saved in `~/Agents/<Name>` in the Markdown viewer (`Agents.Open`). Skipped when the background agent isn't set up; resumed if it was paused. Takes a minute or two on a cloud model, longer on the local one (`--task-timeout`, default 420 s) | `images/ai-agent-handed.png`, `images/ai-agent-working.png`, `images/ai-agent-done.png`, `images/ai-agent-answer.png`, `images/ai-agent-reply.png`, `images/ai-agent-refined.png`, `images/ai-agent.png`, `videos/ai-agent.*` |
 | `ai-tiling` | "Put Files on the left half of the screen and Text Editor on the right half" (floated again after) | `images/ai-tiling.png`, `videos/ai-tiling.*` |
 | `ai-setups` | tiles Files left and Text Editor right, asks "Save this window layout as my Writing setup", floats and moves both windows, then types "writing" in Ask Umoja and picks the Setup row (`Overlay.AskRows` / `AskActivate`), which tiles them back. The saved setup is removed again (`~/.config/umoja/setups.json` put back as it was) | `images/ai-setups-saved.png`, `images/ai-setups-row.png`, `images/ai-setups.png`, `videos/ai-setups.*` |
 | `ai-settings` | starts from light style with Night Light off, then "Turn on Night Light and switch to dark style"; the answer's Undo button (`Overlay.TestAction("undo")`) puts the style back on camera (both put back straight after) | `images/ai-settings.png`, `images/ai-settings-undo.png`, `videos/ai-settings.*` |
@@ -116,7 +117,7 @@ change). A rerun replaces only the files the previous run wrote.
 ## Options
 
 ```text
---only SCENE...       run just these scenes (e.g. --only assistant)
+--only SCENE...       run just these scenes (e.g. --only assistant) (the earlier run's other scenes stay, in the page and the trailer)
 --skip SCENE...       leave scenes out
 --ask "QUESTION"      ask this instead of the default questions (repeatable)
 --answer-timeout 60   give up on an answer after this long
@@ -135,6 +136,7 @@ change). A rerun replaces only the files the previous run wrote.
 --no-demo-folder      don't create ~/Umoja Tour (a tidy folder Files and Text Editor show)
 --keep-terminal       don't minimize the terminal the tour runs in
 --pace 1.5            stretch every pause (slow machine, slow model)
+--task-timeout 420    give up on a background agent job after this long
 --dry-run             print the steps without touching the desktop
 ```
 
@@ -144,3 +146,46 @@ the tiling scene and floating layout need the compositor's `DragWindow`
 and parking the pointer needs `MovePointer` (both after 2026.46.4). Without them those steps are skipped. The
 `ask-umoja` scene needs the overlay's `AskType` (after 2026.46.5) and `ai-btop` needs `AnswerConfirm` (newer still); each is skipped
 without it.
+
+## umoja-agent-demo: the background agent, on its own
+
+`tools/demo/umoja-agent-demo` is a separate recording about the background
+agent, built on the same machinery (safety checks, clips, captions, GIFs,
+trailer, options). Every job is handed over the way a person would, by
+typing "@agent …" into Ask Umoja, and every job is real: the agent runs on
+your model and writes real files.
+
+```sh
+tools/demo/umoja-agent-demo              # into docs/agent-demo
+tools/demo/umoja-agent-demo --suspend    # also film "close the lid"
+```
+
+Before you record: set up the background agent (Ask Umoja's settings,
+Background agent, Set Up) on the Balanced guardrails, and turn on "Use the
+cloud model for harder requests" if you have a cloud model: the jobs are
+much quicker and better with it. Allow 10 to 15 minutes; waits are
+fast-forwarded in the clips.
+
+| Scene | What it shows | Output |
+| --- | --- | --- |
+| `agent-intro` | Where it lives: Ask Umoja's settings (Background agent row), the Agents button on the top bar and the Agents tile in Quick Settings | `images/agent-intro*.png` |
+| `agent-trip` | "Plan a weekend in Lisbon": a day-by-day plan with a budget, saved as `Lisbon weekend.md`, read in Ask Umoja (`Overlay.ShowAgentTask`) | `images/agent-trip*.png`, `videos/agent-trip.*` |
+| `agent-followup` | A reply typed under the plan in Ask Umoja (`Overlay.ReplyAgentTask`): "Add a rainy-day plan for Saturday…"; the agent carries on in the same conversation and the updated answer is shown. Needs `agent-trip` in the same run | `images/agent-followup*.png`, `videos/agent-followup.*` |
+| `agent-map` | The guardrails: "@agent download the Lisbon metro map…" reaches the metro's own site, which isn't open, so a card asks first; the scene presses Allow on camera and the map is saved next to the plan. A take where no card came is dropped (its caption would be wrong). Asking for a fact instead (the weekend's weather) was answered by Hermes's search tool with no new site, so no card | `images/agent-map*.png`, `videos/agent-map.*` | **Off by default** (run it with `--only agent-map`): Hermes tries the next site instead of waiting for the card, so it usually gives up; the budget scene's command card shows consent instead.
+| `agent-tidy` | A messy Downloads folder (15 made-up files) shared with it writable, before and after in Files: sorted into Documents, Images, Receipts and Installers, with `What I moved.md` | `images/agent-tidy*.png`, `videos/agent-tidy.*` |
+| `agent-budget` | A made-up bank export shared read-only, turned into `October budget.md` (by category, biggest costs, subscriptions worth cancelling); the answer glides down to the subscriptions (`Overlay.TestAction answer-scroll:0.75`) and holds; the scene checks the CSV is unchanged. The prompts name shared folders the way a person would ("my Downloads folder", "my October bank export in Finances"); the agent is told where each shared folder is | `images/agent-budget*.png`, `videos/agent-budget.*` |
+| `agent-lid` | Only with `--suspend`: a five-part job, then a real 25 s suspend (`sudo -n rtcwake -m mem -s 25`, so it needs passwordless sudo for rtcwake); after the wake it carries on and finishes | `images/agent-lid*.png`, `videos/agent-lid*.*` |
+| `agent-phone` | Types "telegram" in Ask Umoja (the "Talk to <Name> from Telegram" row), then opens the guided setup (`Overlay.ShowMessagingSetup`) on its first step and closes it. Nothing is connected | `images/agent-phone*.png`, `videos/agent-phone.*` |
+| `agent-wrap` | Everything it made, in Files on `~/Agents/<Name>`, and the job list in the Agents menu | `images/agent-wrap*.png` |
+
+Each run starts clean, so nothing from earlier tries shows on camera:
+finished jobs are cleared from the Agents menu and requests still waiting
+are turned down (`Agents.ClearFinished`; their files stay), every shared
+folder is unshared, everything in `~/Agents/<Name>` is moved to
+`.earlier demo runs/<time>/` there (hidden, so it stays off camera), and Text Editor's restore-session is off
+for the run (it reopened files from an earlier session). Every top-bar menu
+the demo opens is closed again with `Panel.CloseMenus`. The demo's own
+input files live in `~/Umoja Agent Demo` and are removed at the end, with
+their shares. Nothing is
+installed; the only site it reaches beyond the model and the Balanced open
+sites is the metro's site, after the on-camera Allow.

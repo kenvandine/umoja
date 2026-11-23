@@ -1,0 +1,62 @@
+# Hermes for Umoja: the upstream Hermes Agent image, made to run as an
+# OpenShell sandbox (LXD driver) instead of under its own s6 supervisor.
+#
+#   * runs as the unprivileged `sandbox` user (uid 1000), HOME=/sandbox
+#   * /sandbox is the working directory: OpenShell makes it writable;
+#     the user's ~/Agents/Hermes is mounted at /sandbox/workspace
+#   * ships the filesystem policy OpenShell enforces (/etc/openshell/policy.yaml);
+#     network access is decided by Umoja's consent prompts, not here
+#   * Hermes's Telegram adapter answers Umoja's consent buttons
+#     (umoja-patch-hermes)
+#   * umoja-agent-start keeps `hermes gateway run` (API server on
+#     127.0.0.1:8642 inside the sandbox) running; umoja-agentd reaches it
+#     only through umoja-agent-bridge (Umoja agent protocol v1, see
+#     agents/README.md) over OpenShell exec
+#
+# Built and pushed by .github/workflows/hermes-image.yml as
+# ghcr.io/kenvandine/umoja-hermes.
+ARG HERMES_IMAGE=docker.io/nousresearch/hermes-agent:latest
+FROM ${HERMES_IMAGE}
+
+USER root
+RUN set -eu; \
+    if ! getent group sandbox >/dev/null; then groupadd --gid 1000 sandbox 2>/dev/null || groupadd sandbox; fi; \
+    if ! getent passwd sandbox >/dev/null; then \
+        useradd --uid 1000 --gid sandbox --home-dir /sandbox --no-create-home --shell /bin/bash sandbox 2>/dev/null \
+        || useradd --gid sandbox --home-dir /sandbox --no-create-home --shell /bin/bash sandbox; \
+    fi; \
+    mkdir -p /sandbox/workspace /sandbox/shared /sandbox/.config/umoja /sandbox/.hermes /etc/openshell; \
+    chown -R sandbox:sandbox /sandbox
+
+# Web search without an API key: Hermes's ddgs backend (configured by
+# umoja-agent-bridge). Without it Hermes falls back to Firecrawl, which
+# needs a key, so every search failed.
+RUN set -eu; \
+    py=/opt/hermes/.venv/bin/python; \
+    if "$py" -m pip --version >/dev/null 2>&1; then "$py" -m pip install --no-cache-dir ddgs; \
+    elif command -v uv >/dev/null 2>&1; then uv pip install --python "$py" ddgs; \
+    else "$py" -m ensurepip && "$py" -m pip install --no-cache-dir ddgs; fi; \
+    "$py" -c "import ddgs"
+
+COPY --chmod=0644 policy.yaml /etc/openshell/policy.yaml
+COPY --chmod=0755 umoja-agent-start umoja-agent-bridge /usr/local/bin/
+# Allow/Deny buttons for Umoja's consent prompts in Telegram.
+COPY --chmod=0755 umoja-patch-hermes /tmp/umoja-patch-hermes
+RUN python3 /tmp/umoja-patch-hermes && rm /tmp/umoja-patch-hermes
+
+ENV HOME=/sandbox \
+    HERMES_HOME=/sandbox/.hermes \
+    HERMES_WRITE_SAFE_ROOT=/sandbox \
+    XDG_RUNTIME_DIR=/tmp/hermes-runtime \
+    PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+LABEL org.opencontainers.image.title="umoja-hermes" \
+      org.opencontainers.image.description="Hermes Agent as an OpenShell sandbox for the Umoja desktop" \
+      org.opencontainers.image.source="https://github.com/kenvandine/umoja"
+
+USER sandbox
+WORKDIR /sandbox
+ENTRYPOINT []
+CMD ["/usr/local/bin/umoja-agent-start"]

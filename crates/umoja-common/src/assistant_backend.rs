@@ -25,6 +25,10 @@ pub struct Endpoint {
     pub model: String,
     /// True for a user-configured cloud endpoint (needs the keyring token).
     pub cloud: bool,
+    /// The Lemonade routing model requests are sent to instead of `model`
+    /// when cloud offload is on (see [`routing`]). `model` stays the local
+    /// model, for loading and idle unloading.
+    pub router: Option<String>,
 }
 
 impl Endpoint {
@@ -34,7 +38,18 @@ impl Endpoint {
             chat_url: lemonade::chat_completions_url(),
             model: lemonade::chat_model(),
             cloud: false,
+            router: None,
         }
+    }
+
+    /// [`Endpoint::local`], through the cloud offload router when it's live.
+    pub fn local_routed() -> Self {
+        Self { router: routing::assistant(), ..Self::local() }
+    }
+
+    /// The model name to put in a request.
+    pub fn request_model(&self) -> &str {
+        self.router.as_deref().unwrap_or(&self.model)
     }
 
     pub fn cloud(base_url: &str, model: &str) -> Self {
@@ -42,6 +57,7 @@ impl Endpoint {
             chat_url: chat_url(base_url),
             model: model.trim().to_string(),
             cloud: true,
+            router: None,
         }
     }
 
@@ -77,7 +93,48 @@ pub fn current() -> Endpoint {
             return Endpoint::cloud(&url, &model);
         }
     }
-    Endpoint::local()
+    Endpoint::local_routed()
+}
+
+/// Cloud offload (`org.umoja.shell cloud-offload`): Umoja's Lemonade picks
+/// the local or the cloud model for each request through `collection.router`
+/// models that `umoja-lemonade-routing` registers. It writes
+/// `$XDG_RUNTIME_DIR/umoja-routing.json` naming the live ones: the
+/// assistant's only while offload is on; the agent's always (local only
+/// while offload is off), so flipping the setting doesn't restart it.
+pub mod routing {
+    pub const OFFLOAD_KEY: &str = "cloud-offload";
+    pub const UNIT: &str = "umoja-lemonade-routing.service";
+
+    fn state() -> Option<serde_json::Value> {
+        let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+        let raw = std::fs::read(std::path::Path::new(&dir).join("umoja-routing.json")).ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+        (v["ok"] == true).then_some(v)
+    }
+
+    fn model(v: &serde_json::Value, key: &str) -> Option<String> {
+        v[key].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+    }
+
+    /// The assistant's routing model, while cloud offload is live.
+    pub fn assistant() -> Option<String> {
+        model(&state()?, "assistant")
+    }
+
+    /// The background agent's routing model, while cloud offload is live.
+    pub fn agent() -> Option<String> {
+        model(&state()?, "agent")
+    }
+
+    /// Applies the setting now (after the toggle or the cloud model changes).
+    pub fn apply() {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "--no-block", "restart", UNIT])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
 }
 
 /// `https://api.openai.com/v1` → `https://api.openai.com/v1/chat/completions`.
@@ -129,6 +186,19 @@ pub fn adapt_request(body: &mut serde_json::Value, error: &str) -> bool {
     }
     if error.contains("temperature") && obj.remove("temperature").is_some() {
         changed = true;
+    }
+    // Through the cloud offload router, a local-shaped request can reach a
+    // strict cloud provider: drop Lemonade's template switches and the
+    // `name` on tool results when it complains.
+    if error.contains("chat_template_kwargs") && obj.remove("chat_template_kwargs").is_some() {
+        changed = true;
+    }
+    if error.contains("name")
+        && let Some(serde_json::Value::Array(m)) = obj.get_mut("messages")
+    {
+        let had = m.iter().any(|x| x.get("role").and_then(|r| r.as_str()) == Some("tool") && x.get("name").is_some());
+        strip_local_only_fields(m);
+        changed |= had;
     }
     changed
 }
@@ -346,6 +416,20 @@ mod tests {
         assert!(b.get("temperature").is_none());
         assert!(!adapt_request(&mut b, "temperature"));
         assert!(!adapt_request(&mut b, "something else"));
+    }
+
+    #[test]
+    fn routed_requests_drop_local_fields_when_refused() {
+        let mut b = json!({
+            "model": "user.Umoja-Assistant-Auto",
+            "chat_template_kwargs": {"enable_thinking": false},
+            "messages": [{"role": "tool", "tool_call_id": "c", "name": "t", "content": "r"}],
+        });
+        assert!(adapt_request(&mut b, "Unrecognized request argument supplied: chat_template_kwargs"));
+        assert!(b.get("chat_template_kwargs").is_none());
+        assert!(adapt_request(&mut b, "Additional properties are not allowed ('name' was unexpected)"));
+        assert!(b["messages"][0].get("name").is_none());
+        assert!(!adapt_request(&mut b, "Additional properties are not allowed ('name' was unexpected)"));
     }
 
     #[test]

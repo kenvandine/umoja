@@ -34,7 +34,8 @@ to whatever catches your eye.
 5. [Ask Umoja](05-ask-umoja.md): the card that does everything, from
    switches and sums to emoji and setups
 6. [The assistant](06-the-assistant.md): asking in plain words, what it can
-   do, what it asks first, **Undo**, and choosing a model
+   do, what it asks first, **Undo**, choosing a model, and your background
+   agent for longer jobs
 7. [AI in your everyday work](07-everyday-ai.md): rewriting text in any
    app, asking about the screen, the clipboard history, notification
    digests and replies, automatic Do Not Disturb, your calendar, finding

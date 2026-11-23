@@ -486,6 +486,8 @@ pub fn button() -> gtk::MenuButton {
     local_page.append(&note);
     local_page.append(&scroller);
     local_page.append(&free_row);
+    let offload = crate::offload::OffloadRow::new();
+    local_page.append(&offload.root);
 
     let popover = gtk::Popover::new();
     let cloud = CloudForm::new(&popover);
@@ -517,6 +519,8 @@ pub fn button() -> gtk::MenuButton {
     let agent_row = AgentRow::new();
     AGENT_ROW.with(|r| r.replace(Rc::downgrade(&agent_row)));
     content.append(&agent_row.root);
+    let background_row = crate::background_agent::BackgroundAgentRow::new();
+    content.append(&background_row.root);
     // The whole popover scrolls when the screen has less room than it
     // wants (see fit_popover).
     let fit = gtk::ScrolledWindow::builder()
@@ -537,6 +541,8 @@ pub fn button() -> gtk::MenuButton {
                     let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
                 }
             }
+            // Cloud offload's routers name the local model.
+            backend::routing::apply();
             popover.popdown();
         });
     }
@@ -558,9 +564,11 @@ pub fn button() -> gtk::MenuButton {
         });
         stack.set_visible_child_name(page);
         cloud.load();
+        offload.refresh();
         voice.load();
         dictation.load();
         agent_row.refresh();
+        background_row.refresh();
         let list = list.clone();
         let popover = popover.clone();
         let mem = mem_total_gb();
