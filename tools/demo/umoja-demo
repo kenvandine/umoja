@@ -2380,6 +2380,15 @@ class Demo:
         n = self.agent_name()
         caption = (f"Hand {n} a bigger job: “@agent plan a weekend in Lisbon”. It works in its own "
                    f"sandbox; then read the plan in Ask Umoja and reply to refine it.")
+        # Hermes won't write over a file: an earlier take's plan would make
+        # it describe the old one instead.
+        ws = Path.home() / "Agents" / n
+        earlier = ws / "Lisbon weekend.md"
+        if earlier.exists() and not self.dry:
+            old = ws / ".earlier demo runs" / time.strftime("%Y%m%d-%H%M%S")
+            old.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(earlier), str(old / earlier.name))
+            log(f"  moved an earlier {earlier.name} aside")
         self.recorder.start("ai-agent")
         opened = None
         try:

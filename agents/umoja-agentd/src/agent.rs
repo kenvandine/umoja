@@ -1606,6 +1606,18 @@ impl Agent {
         // An answer given only in words (no file written) is saved too, so
         // "Open" always has something to show and it's kept with the rest.
         let mut files = files;
+        // Hermes's own "File-mutation verifier" footer (a write it refused,
+        // usually because the file was already there) becomes a plain note,
+        // and Open goes to that file instead of saving this answer as one
+        // more.
+        let (cleaned, refused) = {
+            let s = self.state.lock().await;
+            refused_writes(&host_words(result, &s.shared), &catalog::active().name)
+        };
+        let result = cleaned.as_str();
+        if files.is_empty() {
+            files.extend(refused.into_iter().filter(|p| p.exists()));
+        }
         // A job done in a shared folder (tidying Downloads): Open goes
         // there, and its answer isn't saved as a file of its own (it
         // only cluttered ~/Agents/<Name>).
@@ -2278,6 +2290,52 @@ pub fn plain_text(md: &str) -> String {
 /// Paths inside the sandbox as the user knows them: "/sandbox/workspace/
 /// plan.md" is "~/Agents/Hermes/plan.md", a shared folder its own place.
 /// "/home/ken/Downloads" as "~/Downloads".
+/// Splits Hermes's "File-mutation verifier" footer off an answer: the
+/// answer with a plain note in its place, and the files it named (host
+/// paths). The footer lists each failed edit as "• `path` — [tool] why".
+fn refused_writes(text: &str, name: &str) -> (String, Vec<PathBuf>) {
+    let Some(at) = text.find("File-mutation verifier") else {
+        return (text.to_owned(), Vec::new());
+    };
+    // From the start of its line (it opens with a warning sign).
+    let start = text[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let footer = &text[start..];
+    let mut files: Vec<PathBuf> = Vec::new();
+    for part in footer.split('`').skip(1).step_by(2) {
+        let part = part.trim();
+        let path = if let Some(rest) = part.strip_prefix("~/") {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest))
+        } else if part.starts_with('/') {
+            Some(PathBuf::from(part))
+        } else {
+            None
+        };
+        if let Some(p) = path {
+            if !files.contains(&p) {
+                files.push(p);
+            }
+        }
+    }
+    let mut out = text[..start].trim_end().to_owned();
+    let names: Vec<String> = files
+        .iter()
+        .map(|p| format!("“{}”", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
+        .collect();
+    let note = if names.is_empty() {
+        format!("{name} couldn't save a file it meant to change.")
+    } else {
+        format!(
+            "{name} couldn't save {}: a file with that name is already there, and {name} doesn't write over files.",
+            names.join(", ")
+        )
+    };
+    if !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(&format!("*{note}*"));
+    (out, files)
+}
+
 fn tilde(p: impl AsRef<Path>) -> String {
     let p = p.as_ref();
     match std::env::var_os("HOME").map(PathBuf::from) {
@@ -2726,6 +2784,21 @@ fn clear_secret(kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verifier_footer_becomes_a_note() {
+        let (text, files) = refused_writes(
+            "Here's your plan.\n\n⚠️ File-mutation verifier: 1 file edit(s) FAILED this turn.\n• `/tmp/x/Lisbon weekend.md` — [write_file] Refusing to overwrite",
+            "Hermes",
+        );
+        assert!(text.starts_with("Here's your plan."));
+        assert!(!text.contains("verifier"));
+        assert!(text.contains("“Lisbon weekend.md”"));
+        assert_eq!(files, vec![PathBuf::from("/tmp/x/Lisbon weekend.md")]);
+        let (same, none) = refused_writes("All done.", "Hermes");
+        assert_eq!(same, "All done.");
+        assert!(none.is_empty());
+    }
 
     #[test]
     fn answers_saved_as_files() {
