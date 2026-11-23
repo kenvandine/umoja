@@ -17,3 +17,5 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.9"
+# The same as openshell-gateway-client's: reask.rs lists rejected requests.
+tonic = { version = "0.14", default-features = false, features = ["transport", "tls-aws-lc"] }

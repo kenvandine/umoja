@@ -46,6 +46,10 @@ pub struct Agent {
     /// The task Ask Umoja shows (Viewing), and when it last said so: its
     /// "finished" notification would only cover it.
     viewing: Mutex<(String, Option<std::time::Instant>)>,
+    /// Rejected requests, to ask again when tried again (reask.rs), and
+    /// when Umoja turned each down (chunk id → ms).
+    rejected: Mutex<Option<crate::reask::Rejected>>,
+    turned_down: Mutex<HashMap<String, i64>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,6 +91,8 @@ impl Agent {
             lifecycle: Mutex::new(()),
             wake: Default::default(),
             viewing: Mutex::new((String::new(), None)),
+            rejected: Mutex::new(None),
+            turned_down: Mutex::new(HashMap::new()),
         })
     }
 
@@ -724,6 +730,17 @@ impl Agent {
             })
             .unwrap_or_default();
         let mut proposals = mine.map(|s| s.proposals).unwrap_or_default();
+        // Turned down earlier and tried again since: asked again (the
+        // guardrails themselves never would).
+        // Every poll, like the pending ones: one missing from a poll would
+        // count as answered and its card would go.
+        if phase == "running" {
+            for p in self.tried_again().await {
+                if !proposals.iter().any(|x| x.chunk_id == p.chunk_id) {
+                    proposals.push(p);
+                }
+            }
+        }
         // Sites the agent reaches for on its own (update checks, catalogs)
         // stay blocked without asking the user.
         let quiet = catalog::active().quiet_hosts.clone();
@@ -731,7 +748,7 @@ impl Agent {
         let is_quiet = |host: &str| quiet.iter().any(|h| h.eq_ignore_ascii_case(host)) || (telegram && telegram_host(host));
         for p in proposals.iter().filter(|p| is_quiet(&p.host)) {
             tracing::debug!(host = %p.host, "turning down the agent's own background fetch");
-            let _ = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await;
+            let _ = self.reject(&gw, &p.chunk_id).await;
         }
         proposals.retain(|p| !is_quiet(&p.host));
 
@@ -1591,7 +1608,7 @@ impl Agent {
             if a.kind == ApprovalKind::Network {
                 let p = self.proposals.lock().await.remove(&a.id);
                 if let (Some(p), Ok(gw)) = (p, self.gateway().await) {
-                    let _ = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await;
+                    let _ = self.reject(&gw, &p.chunk_id).await;
                 }
             }
             self.close_note_for(&a.id).await;
@@ -1660,6 +1677,40 @@ impl Agent {
             notify::close(&self.conn, nid).await;
         }
         self.changed().await;
+    }
+
+    /// Turns a request down at the guardrails, noting when: a later try
+    /// asks again (reask.rs).
+    async fn reject(&self, gw: &Gateway, chunk_id: &str) -> Result<()> {
+        self.turned_down.lock().await.insert(chunk_id.to_owned(), now_ms() as i64);
+        gw.clone().reject(&paths::sandbox(), chunk_id).await?;
+        Ok(())
+    }
+
+    /// Rejected requests tried again since they were turned down.
+    async fn tried_again(&self) -> Vec<Proposal> {
+        let mut rejected = self.rejected.lock().await;
+        if rejected.is_none() {
+            let config = self.runtime.lock().await.as_ref().map(|r| r.config());
+            if let Some(config) = config {
+                match crate::reask::Rejected::connect(&config).await {
+                    Ok(r) => *rejected = Some(r),
+                    Err(e) => tracing::debug!(error = %format!("{e:#}"), "no connection for rejected requests yet"),
+                }
+            }
+        }
+        let Some(r) = rejected.clone() else { return Vec::new() };
+        drop(rejected);
+        let turned_down = self.turned_down.lock().await.clone();
+        match r.tried_again(&paths::sandbox(), &turned_down).await {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::debug!(error = %format!("{e:#}"), "couldn't list rejected requests");
+                // A gateway restarted since: connect again next time.
+                *self.rejected.lock().await = None;
+                Vec::new()
+            }
+        }
     }
 
     /// Ask Umoja shows task `id` (empty: nothing). Its "finished"
@@ -1751,7 +1802,7 @@ impl Agent {
                             }
                         }
                     }
-                } else if let Err(e) = gw.clone().reject(&paths::sandbox(), &p.chunk_id).await {
+                } else if let Err(e) = self.reject(&gw, &p.chunk_id).await {
                     // Turned down either way: it's gone, or it will lapse.
                     tracing::info!(error = %e, "couldn't reject; dropping the card");
                 }

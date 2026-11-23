@@ -202,6 +202,10 @@ def cmd_configure():
     ] + ["  %s:\n    provider: main" % t for t in AUX_TASKS] + [
         "model_catalog:",
         "  enabled: false",
+        # Search with no API key (the image has ddgs); the search engines
+        # it uses are open on Balanced (umoja-agentd's presets).
+        "web:",
+        "  search_backend: ddgs",
         "terminal:",
         "  backend: local",
         "  cwd: /sandbox/workspace",

@@ -44,8 +44,17 @@ impl Preset {
     pub fn open_sites(self) -> &'static [(&'static str, u16)] {
         match self {
             Self::Careful => &[],
+            // Web search (Hermes's ddgs backend asks these engines) and a
+            // few research sites.
             Self::Balanced | Self::HandsOff => &[
                 ("html.duckduckgo.com", 443),
+                ("lite.duckduckgo.com", 443),
+                ("duckduckgo.com", 443),
+                ("www.bing.com", 443),
+                ("search.brave.com", 443),
+                ("www.mojeek.com", 443),
+                ("search.yahoo.com", 443),
+                ("www.google.com", 443),
                 ("en.wikipedia.org", 443),
                 ("api.github.com", 443),
                 ("raw.githubusercontent.com", 443),

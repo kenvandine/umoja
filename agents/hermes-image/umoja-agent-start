@@ -7,6 +7,10 @@
 set -u
 export HOME=/sandbox
 export HERMES_HOME="${HERMES_HOME:-/sandbox/.hermes}"
+# Web search (ddgs) goes through the sandbox's proxy like everything else,
+# so the guardrails see it (and ask) instead of it failing on its own.
+_proxy="${HTTPS_PROXY:-${https_proxy:-${ALL_PROXY:-${all_proxy:-}}}}"
+[ -n "$_proxy" ] && [ -z "${DDGS_PROXY:-}" ] && export DDGS_PROXY="$_proxy"
 ENV_FILE=/sandbox/.config/umoja/agent.env
 PID_FILE=/tmp/umoja-agent.pid
 LOG=/sandbox/.hermes/umoja-gateway.log

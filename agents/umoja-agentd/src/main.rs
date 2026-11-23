@@ -8,6 +8,7 @@ mod catalog;
 mod lxd;
 mod notify;
 mod paths;
+mod reask;
 mod relay;
 mod runtime;
 mod service;

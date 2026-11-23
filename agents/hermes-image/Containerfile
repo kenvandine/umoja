@@ -28,6 +28,16 @@ RUN set -eu; \
     mkdir -p /sandbox/workspace /sandbox/shared /sandbox/.config/umoja /sandbox/.hermes /etc/openshell; \
     chown -R sandbox:sandbox /sandbox
 
+# Web search without an API key: Hermes's ddgs backend (configured by
+# umoja-agent-bridge). Without it Hermes falls back to Firecrawl, which
+# needs a key, so every search failed.
+RUN set -eu; \
+    py=/opt/hermes/.venv/bin/python; \
+    if "$py" -m pip --version >/dev/null 2>&1; then "$py" -m pip install --no-cache-dir ddgs; \
+    elif command -v uv >/dev/null 2>&1; then uv pip install --python "$py" ddgs; \
+    else "$py" -m ensurepip && "$py" -m pip install --no-cache-dir ddgs; fi; \
+    "$py" -c "import ddgs"
+
 COPY --chmod=0644 policy.yaml /etc/openshell/policy.yaml
 COPY --chmod=0755 umoja-agent-start umoja-agent-bridge /usr/local/bin/
 # Allow/Deny buttons for Umoja's consent prompts in Telegram.
