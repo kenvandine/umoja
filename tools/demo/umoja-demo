@@ -698,12 +698,59 @@ class Demo:
             w, h = h, w
         return connector, (x, y, w, h)
 
+    def keep_previous(self, rerun):
+        """Loads the shots and clips of the scenes not in `rerun` from the
+        earlier run's README.md, so they stay (prepare_out leaves their
+        files, and the page and trailer include them)."""
+        import re
+        readme = self.out / "README.md"
+        if not readme.exists():
+            return
+        by_title = {t: sc for sc, t in self.TITLES.items()}
+        shot = re.compile(r"^!\[(?P<cap>.*)\]\((?P<path>[^)]*)\)$")
+        clip = re.compile(r"^\[!\[(?P<cap>.*)\]\((?P<gif>[^)]*)\)\]\((?P<mp4>[^)]*\.mp4)\)$")
+        bare = re.compile(r"^\[(?P<cap>.*) \(video\)\]\((?P<mp4>[^)]*)\)$")
+        scene = None
+        kept = 0
+        for line in readme.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("## "):
+                scene = by_title.get(line[3:])
+                continue
+            if scene is None or scene in rerun:
+                continue
+            if m := clip.match(line):
+                if (self.out / m["mp4"]).exists():
+                    gif = self.out / m["gif"]
+                    self.videos.setdefault(scene, []).append((gif if gif.exists() else None, self.out / m["mp4"], m["cap"]))
+                    kept += 1
+            elif m := bare.match(line):
+                if (self.out / m["mp4"]).exists():
+                    self.videos.setdefault(scene, []).append((None, self.out / m["mp4"], m["cap"]))
+                    kept += 1
+            elif m := shot.match(line):
+                if (self.out / m["path"]).exists():
+                    self.shots.setdefault(scene, []).append((self.out / m["path"], m["cap"]))
+                    kept += 1
+        if kept:
+            log(f"keeping {kept} shots and clips of the earlier run's other scenes")
+            try:
+                self.layout.update(json.loads((self.img_dir / "layout.json").read_text()))
+            except (OSError, ValueError):
+                pass
+
     def prepare_out(self):
         if self.dry:
             return
         manifest = self.out / ".umoja-demo-files"
+        keep = {self.rel(p) for v in self.shots.values() for p, _ in v}
+        keep |= {self.rel(p) for v in self.videos.values() for g, m, _ in v for p in (g, m) if p}
+        if keep:
+            keep.add(self.rel(self.img_dir / "layout.json"))
         if manifest.exists():  # remove what an earlier run wrote, nothing else
             for line in manifest.read_text().splitlines():
+                if line in keep:
+                    continue
                 p = self.out / line
                 if p.is_file() and p.resolve().is_relative_to(self.out.resolve()):
                     p.unlink()
@@ -2783,6 +2830,10 @@ class Demo:
             for n in range(self.opts.countdown, 0, -1):
                 print(f"  {n}...", flush=True)
                 time.sleep(1)
+        if self.opts.only and not self.dry:
+            # Only some scenes: the earlier run's other scenes stay, in the
+            # page and the trailer, instead of being cleared away.
+            self.keep_previous(set(scenes))
         self.prepare_out()
         self.inhibit()
         stopped = None

@@ -117,7 +117,7 @@ change). A rerun replaces only the files the previous run wrote.
 ## Options
 
 ```text
---only SCENE...       run just these scenes (e.g. --only assistant)
+--only SCENE...       run just these scenes (e.g. --only assistant) (the earlier run's other scenes stay, in the page and the trailer)
 --skip SCENE...       leave scenes out
 --ask "QUESTION"      ask this instead of the default questions (repeatable)
 --answer-timeout 60   give up on an answer after this long
