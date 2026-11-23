@@ -746,7 +746,10 @@ class Demo:
         keep = {self.rel(p) for v in self.shots.values() for p, _ in v}
         keep |= {self.rel(p) for v in self.videos.values() for g, m, _ in v for p in (g, m) if p}
         if keep:
-            keep.add(self.rel(self.img_dir / "layout.json"))
+            # Rewritten at the end anyway; an interrupted run (Ctrl+C while
+            # the trailer encodes) shouldn't leave the tour without them.
+            keep |= {self.rel(self.img_dir / "layout.json"), "README.md", "snippet.md",
+                     self.rel(self.vid_dir / "trailer.mp4")}
         if manifest.exists():  # remove what an earlier run wrote, nothing else
             for line in manifest.read_text().splitlines():
                 if line in keep:
@@ -2877,6 +2880,7 @@ class Demo:
         log("encoding clips")
         self.encode()
         if not self.opts.no_trailer:
+            log("making the trailer (a few minutes; Ctrl+C now leaves the earlier one)")
             self.make_trailer()
         self.write_markdown()
         n_shots = sum(len(v) for v in self.shots.values())
