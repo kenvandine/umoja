@@ -1,0 +1,102 @@
+Description: Don't leave the screen dimmed after the idle timeouts change while idle
+ BasicIdleHandler re-registers its observers whenever the display-off
+ timeout changes, and when the session locks or unlocks with different
+ timeouts. A dimmer registered while already idle is told so through the
+ idle hub's executor, so its idle() can run after clear_observers() has
+ already called active() and dropped it. That dimmer then adds its
+ dimming renderable and nothing ever removes it: the whole screen (and
+ every screen capture) stays at half brightness until the server
+ restarts. Seen in Umoja when the screen dimmed, the session locked at
+ the blank (three timeout changes within a second), and the user unlocked
+ with a fingerprint. Dimmers are now retired when unregistered: they
+ undim and ignore a late idle(), and a dimmer removes its renderable when
+ destroyed.
+Author: Umoja developers
+Forwarded: no
+
+--- a/src/server/shell/basic_idle_handler.cpp	2026-11-23 02:53:21.208290683 +0000
++++ b/src/server/shell/basic_idle_handler.cpp	2026-11-23 02:53:21.237495775 +0000
+@@ -128,20 +128,28 @@
+     {
+     }
+ 
+-    void active() override
++    ~Dimmer()
+     {
+         if (renderable)
+         {
+             input_scene->remove_input_visualization(renderable);
+-            renderable.reset();
+-            observer.wake();
+         }
++    }
+ 
++    void active() override
++    {
++        std::lock_guard lock{mutex};
++        undim(lock);
+     }
+ 
+     void idle() override
+     {
+-        if (!renderable)
++        std::lock_guard lock{mutex};
++        // The hub tells observers through an executor, so an idle() can
++        // arrive after this dimmer was unregistered (the timeouts changed
++        // while idle). Dimming then would leave the screen dim for good:
++        // nothing calls active() on a retired dimmer.
++        if (!renderable && !retired)
+         {
+             renderable = std::make_shared<DimmingRenderable>(*allocator);
+             input_scene->add_input_visualization(renderable);
+@@ -149,11 +157,31 @@
+         }
+     }
+ 
++    /// No longer registered: undim, and ignore an idle() still on its way.
++    void retire()
++    {
++        std::lock_guard lock{mutex};
++        retired = true;
++        undim(lock);
++    }
++
+ private:
++    void undim(std::lock_guard<std::mutex> const&)
++    {
++        if (renderable)
++        {
++            input_scene->remove_input_visualization(renderable);
++            renderable.reset();
++            observer.wake();
++        }
++    }
++
+     std::shared_ptr<mi::Scene> const input_scene;
+     std::shared_ptr<mg::GraphicBufferAllocator> const allocator;
+     std::shared_ptr<mg::Renderable> renderable;
+     msh::IdleHandlerObserver& observer;
++    std::mutex mutex;
++    bool retired = false;
+ };
+ 
+ struct PowerModeSetter : ms::IdleStateObserver
+@@ -306,9 +334,16 @@
+ {
+     for (auto const& observer : observers)
+     {
+-        // If we remove observers in an idle state, the display might become stuck off or dim
+-        observer->active();
+         idle_hub->unregister_interest(*observer);
++        // If we remove observers in an idle state, the display might become stuck off or dim
++        if (auto const dimmer = std::dynamic_pointer_cast<Dimmer>(observer))
++        {
++            dimmer->retire();
++        }
++        else
++        {
++            observer->active();
++        }
+     }
+     observers.clear();
+ }

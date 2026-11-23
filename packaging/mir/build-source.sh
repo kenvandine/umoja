@@ -39,4 +39,5 @@ dch --append "Cross-GPU copy: map linear client buffers instead of reading them 
 dch --append "Read connector state from the kernel without forcing a probe, so empty DisplayPort ports do not add seconds of black screen to every start."
 dch --append "Answer frame callbacks whose buffer the compositor has not used after half a second, so a window that starts fully covered (the installer under the welcome screen) does not stop drawing until a VT switch."
 dch --append "Keep one Num Lock for the whole seat when the server asks for it (mir_num_lock_initial_hook), so Umoja can restore and remember it across sessions like GNOME."
+dch --append "Don't leave the screen dimmed for good when the idle timeouts change while it is idle (a late idle() reached a dimmer already dropped)."
 echo "$PWD"

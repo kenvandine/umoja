@@ -177,6 +177,16 @@ Umoja PPA:
   lowered it to the bottom of the X stack, and Chromium hid the menu. The
   XWM now leaves WM_STATE, `_NET_WM_STATE` and hidden-state restacking off
   override-redirect windows, as ICCCM expects.
+- `patches/3028_dimmer-late-idle.patch` (umoja30): Mir re-registers its
+  idle observers whenever the display-off timeout changes (and at lock and
+  unlock when the timeouts differ). A dimmer registered while already idle
+  hears so through the idle hub's executor, so its `idle()` could land
+  after `clear_observers()` had already undimmed and dropped it: the dim
+  renderable stayed for good, the whole screen and every recording at half
+  brightness until the compositor restarted (2026-11-22: dim, lock at the
+  blank, fingerprint unlock, then a whole demo take recorded dim). Retired
+  dimmers now undim and ignore a late `idle()`, and remove their renderable
+  when destroyed.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds
