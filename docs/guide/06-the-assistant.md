@@ -261,8 +261,12 @@ each job's progress, a **Stop** button, and the cards where it asks:
 - **Allow** or **Deny** a command that could change things.
 - A question, with a box for your answer.
 
+![A card in the Agents menu: “Hermes wants to run a command”, showing the Python script it wants to run on the bank export, with Deny and Allow](images/agent-command.png)
+
 The same requests come as notifications. Quick Settings has an **Agents**
 tile too: it says what the agent is doing, and turning it off pauses it.
+
+![Quick Settings with the Agents tile on: “Hermes: Ready”](images/agent-tile.png)
 
 ![A notification: “Hermes wants to reach api.firecrawl.dev. Umoja held it back because it isn't one of the sites Hermes may use.” with Allow and Deny](images/agent-consent.png)
 
@@ -271,6 +275,8 @@ tile too: it says what the agent is doing, and turning it off pauses it.
 When a job is done, a notification says so. Click **Open** (or the
 notification), or click the job in the Agents menu. Ask Umoja shows the
 whole answer, a button that opens its file, and a reply box underneath.
+
+![The October budget answer: the three biggest expenses and a table of subscriptions you could cancel, per month and per year](images/agent-budget.png)
 
 Finished jobs stay in the Agents menu so you can come back to them. To
 take one off the list, click its **×**. Its files stay in your agent's
