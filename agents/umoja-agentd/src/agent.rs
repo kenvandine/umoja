@@ -294,18 +294,33 @@ impl Agent {
             let rt = self.runtime.lock().await;
             rt.as_ref().unwrap().connect(Duration::from_secs(60)).await
         };
-        let gw = match connected {
-            Ok(gw) => gw,
-            Err(e) => self.recover_guardrails(bridge.0, e).await?,
+        // Connected isn't answering: guardrails stuck on a half-made sandbox
+        // answer a list and then hang on the next calls. Their first calls
+        // run under one deadline; past it, they're recovered.
+        let settle = |gw: Gateway| async move {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                let _ = gw.clone().ensure_profiles().await;
+                gw.clone().list().await
+            })
+            .await
+            .map_err(|_| anyhow!("the guardrails took calls and didn't answer"))?
+            .map_err(anyhow::Error::from)
+            .map(|list| (gw, list))
+        };
+        let (gw, list) = match connected {
+            Ok(gw) => match settle(gw).await {
+                Ok(ok) => ok,
+                Err(e) => settle(self.recover_guardrails(bridge.0, e).await?).await?,
+            },
+            Err(e) => settle(self.recover_guardrails(bridge.0, e).await?).await?,
         };
         *self.gw.write().await = Some(gw.clone());
-        let _ = gw.clone().ensure_profiles().await;
 
         self.ensure_relay(bridge.0).await;
         self.spawn_poller();
 
         let paused = self.state.lock().await.paused;
-        let exists = gw.clone().list().await?.into_iter().find(|s| s.name == paths::sandbox());
+        let exists = list.into_iter().find(|s| s.name == paths::sandbox());
         match exists {
             None => {
                 self.set_step(&format!("Downloading {} (first time only)", catalog::active().name)).await;
