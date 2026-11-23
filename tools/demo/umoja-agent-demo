@@ -197,6 +197,11 @@ class AgentDemo(tour.Demo):
         for sh in s.get("shared", []):
             log(f"  unshare {sh.get('path')}")
             self.bus.call(AGENTS, "Unshare", GLib.Variant("(s)", (sh["path"],)), quiet=True, timeout=120_000)
+        # Jobs left running by an earlier, cut-short run.
+        for t in s.get("tasks", []):
+            if t.get("status") in ("running", "waiting") and not t.get("source"):
+                log(f"  stop leftover job {t.get('title')!r}")
+                self.bus.call(AGENTS, "Stop", GLib.Variant("(s)", (t["id"],)), quiet=True, timeout=60_000)
         if self.dry or self.bus.has_method(AGENTS, "ClearFinished"):
             log("  clear finished jobs and waiting requests")
             self.bus.call(AGENTS, "ClearFinished", quiet=True, timeout=60_000)

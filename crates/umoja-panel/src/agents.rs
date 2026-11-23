@@ -922,6 +922,23 @@ impl Pill {
             });
             row.append(&b);
         }
+        // A finished job can be taken off the list (its files stay).
+        if !active {
+            let x = gtk::Button::builder()
+                .icon_name("window-close-symbolic")
+                .tooltip_text(i18n::umoja("Dismiss"))
+                .css_classes(["flat", "circular", "agents-dismiss"])
+                .valign(gtk::Align::Center)
+                .build();
+            let id = t.id.clone();
+            let weak = Rc::downgrade(self);
+            x.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.call("Dismiss", Some(&(id.as_str(),).to_variant()));
+                }
+            });
+            row.append(&x);
+        }
         // The row itself opens the task in Ask Umoja: the whole answer, and
         // a reply box to follow up.
         row.set_tooltip_text(Some(&i18n::umoja("Show the whole answer and reply")));

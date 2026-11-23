@@ -292,7 +292,14 @@ impl State {
                 s.approvals.clear();
                 s.sandbox.clear();
                 for t in &mut s.tasks {
-                    if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
+                    // Never got a run (handed over while the sandbox was
+                    // still starting): nothing to reconnect to.
+                    if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) && t.run.is_empty() && t.source.is_empty() {
+                        t.status = TaskStatus::Failed;
+                        t.step.clear();
+                        t.result = "Interrupted before it started. Ask again.".into();
+                        t.finished = now();
+                    } else if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
                         t.status = TaskStatus::Running;
                         t.step = "Reconnecting…".into();
                         t.interrupted = true;

@@ -272,6 +272,10 @@ When a job is done, a notification says so. Click **Open** (or the
 notification), or click the job in the Agents menu. Ask Umoja shows the
 whole answer, a button that opens its file, and a reply box underneath.
 
+Finished jobs stay in the Agents menu so you can come back to them. To
+take one off the list, click its **×**. Its files stay in your agent's
+folder.
+
 ![The finished Lisbon plan in Ask Umoja, with headings and bullet points, an Open “Lisbon weekend.md” button, and “Reply to Hermes…” at the top](images/agent-answer.png)
 
 If the answer isn't quite right, or ends with a question, type your reply

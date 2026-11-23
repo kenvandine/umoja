@@ -104,6 +104,11 @@ impl Agents {
         self.0.open(task).await.map_err(err)
     }
 
+    /// Take one job off the list (its files stay); stops it if running.
+    async fn dismiss(&self, task: &str) -> fdo::Result<()> {
+        self.0.dismiss(task).await.map_err(err)
+    }
+
     /// Forget finished jobs (their files stay) and turn down requests no
     /// running job is waiting on.
     async fn clear_finished(&self) {

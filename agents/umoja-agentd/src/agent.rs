@@ -323,6 +323,7 @@ impl Agent {
         let exists = list.into_iter().find(|s| s.name == paths::sandbox());
         match exists {
             None => {
+                self.end_lost_tasks().await;
                 self.set_step(&format!("Downloading {} (first time only)", catalog::active().name)).await;
                 self.create_sandbox(&gw).await?;
             }
@@ -332,6 +333,7 @@ impl Agent {
             Some(info) if !paused && !info.image.is_empty() && !same_image(&info.image, &paths::image()) => {
                 tracing::info!(from = %info.image, to = %paths::image(), "new agent image: making the sandbox again");
                 self.set_step(&format!("Updating {}", catalog::active().name)).await;
+                self.end_lost_tasks().await;
                 gw.clone().delete(&paths::sandbox()).await?;
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
                 while gw.clone().list().await?.iter().any(|s| s.name == paths::sandbox()) {
@@ -1696,6 +1698,38 @@ impl Agent {
         }
     }
 
+    /// Takes one finished job off the list (its files stay); a running
+    /// one is stopped first.
+    pub async fn dismiss(self: &Arc<Self>, id: &str) -> Result<()> {
+        let active = {
+            let s = self.state.lock().await;
+            let t = s.tasks.iter().find(|t| t.id == id).ok_or_else(|| anyhow!("That job isn't there any more."))?;
+            matches!(t.status, TaskStatus::Running | TaskStatus::Waiting)
+        };
+        if active {
+            self.stop_task(id).await?;
+        }
+        {
+            let mut s = self.state.lock().await;
+            s.tasks.retain(|t| t.id != id);
+            s.approvals.retain(|a| a.task != id);
+        }
+        let notes: Vec<u32> = self
+            .notes
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, n)| matches!(n, Note::Result(t, _) if t == id))
+            .map(|(nid, _)| *nid)
+            .collect();
+        for nid in notes {
+            self.notes.lock().await.remove(&nid);
+            notify::close(&self.conn, nid).await;
+        }
+        self.changed().await;
+        Ok(())
+    }
+
     /// Forgets finished jobs (their files stay) and turns down requests
     /// no running job is waiting on: a clean Agents menu.
     pub async fn clear_finished(self: &Arc<Self>) {
@@ -1806,8 +1840,54 @@ impl Agent {
         if source == "telegram" {
             bail!("Send /stop in Telegram to stop it.");
         }
-        let gw = self.gateway().await?;
-        bridge::stop(&gw, &run).await
+        // Nothing in the sandbox to stop (it never got a run, or the run is
+        // gone): Stop still ends the job here, so it can't hang on forever.
+        let stopped = match self.gateway().await {
+            Ok(gw) if !run.is_empty() => bridge::stop(&gw, &run).await,
+            Ok(_) => Err(anyhow!("no run")),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = stopped {
+            tracing::info!(task = id, error = %format!("{e:#}"), "no run to stop; ending the job here");
+            {
+                let mut s = self.state.lock().await;
+                if let Some(t) = s.task_mut(id) {
+                    if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) {
+                        t.status = TaskStatus::Cancelled;
+                        t.step = "Stopped".into();
+                        t.interrupted = false;
+                        t.finished = now();
+                    }
+                }
+                s.approvals.retain(|a| a.task != id);
+            }
+            self.changed().await;
+        }
+        Ok(())
+    }
+
+    /// The sandbox is being made again: runs in the old one are gone, so
+    /// their jobs end now instead of "Reconnecting…" forever.
+    async fn end_lost_tasks(&self) {
+        let n = catalog::active().name.clone();
+        let ended = {
+            let mut s = self.state.lock().await;
+            let mut ended = false;
+            for t in s.tasks.iter_mut() {
+                if matches!(t.status, TaskStatus::Running | TaskStatus::Waiting) && t.source.is_empty() {
+                    t.status = TaskStatus::Failed;
+                    t.step.clear();
+                    t.result = format!("Interrupted when {n} restarted. Ask again to carry on.");
+                    t.interrupted = false;
+                    t.finished = now();
+                    ended = true;
+                }
+            }
+            ended
+        };
+        if ended {
+            self.changed().await;
+        }
     }
 
     pub async fn answer(self: &Arc<Self>, approval: &str, choice: &str) -> Result<()> {
