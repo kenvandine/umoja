@@ -2360,7 +2360,11 @@ class Demo:
         does) and shoots it. Returns the window it opened, or None."""
         before = {w[0] for w in self.windows()} if not self.dry else set()
         self.bus.call(AGENTS, "Open", GLib.Variant("(s)", (t["id"],)), quiet=True)
+        t0 = time.monotonic()
         new = None if self.dry else self.wait_for_window(before, timeout=10)
+        # The wait for the viewer is fast-forwarded in the clip (it may
+        # reuse a window and never show a new one, the whole 10 s).
+        self.recorder.waited(t0, time.monotonic())
         self.wait(2.0)
         self.shot(name, caption)
         return new
