@@ -478,8 +478,9 @@ impl CloudForm {
                 let _ = s.set_string(backend::BACKEND_KEY, backend::CLOUD);
             }
             tracing::info!(%url, %model, "assistant switched to the cloud model");
-            // Cloud offload follows the new cloud model.
+            // Cloud offload and the coding agents follow the new cloud model.
             backend::routing::apply();
+            crate::model_picker::refresh_agent_models();
             // Saved: the field goes back to "Saved in your keyring".
             if !form.key.text().trim().is_empty() {
                 form.has_key.set(true);
@@ -506,6 +507,7 @@ impl CloudForm {
                 let _ = s.set_string(backend::BACKEND_KEY, backend::LOCAL);
             }
             backend::routing::apply();
+            crate::model_picker::refresh_agent_models();
             form.has_key.set(false);
             form.key.set_text("");
             form.set_key_hint(false);

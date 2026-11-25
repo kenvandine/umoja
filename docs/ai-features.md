@@ -726,7 +726,8 @@ button's popover (**None** turns the hand-off off), or with
 agent needs next:
 
 - **Install**, when it isn't installed yet. A terminal opens and installs
-  it, connects it to Umoja (below), and starts its sign-in. OpenCode and Pi
+  it, connects it to Umoja (below), and starts its sign-in (except OpenCode
+  and Pi, which use the assistant's models, below). OpenCode and Pi
   come from their classic snaps, which Ubuntu publishes
   (`opencode`, `pi-coding-agent`). Claude Code, Codex, GitHub Copilot
   and Antigravity come from their makers' own installers, for you only,
@@ -737,25 +738,35 @@ agent needs next:
 - **Sign In**, when the agent isn't signed in, or when Umoja can't tell
   (GitHub Copilot and Antigravity keep their sign-in in the keyring). A
   terminal opens with the agent's own sign-in (`claude auth login`,
-  `codex login`, `copilot login`, `opencode auth login`, or Antigravity's
-  and Pi's first run, where Pi's `/login` signs in to a provider). It opens your browser, or shows a code for a device login.
-  Umoja never sees your password or token. It only checks whether the
-  agent's sign-in file exists.
+  `codex login`, `copilot login`, or Antigravity's first run). It opens
+  your browser, or shows a code for a device login. Umoja never sees your
+  password or token. It only checks whether the agent's sign-in file
+  exists. Claude Code, Codex, GitHub Copilot, Antigravity and Gemini CLI
+  only work with their makers' accounts, so they need this.
+- Nothing to do for **OpenCode** and **Pi**: they use the assistant's own
+  models, so there's no account to sign in to. If one isn't set up that
+  way yet, picking it sets it up.
 
 You can also ask: "install Codex", "sign me in to Copilot", or "have
 OpenCode write a hello world GTK app in Rust". The assistant asks first,
 the same as for any install.
 
-**OpenCode can use the assistant's cloud model.** If the assistant uses a
-cloud model (the **Cloud** page) when OpenCode is set up, OpenCode gets the
-same model. Umoja adds a `umoja` provider with your URL and model to
-`~/.config/opencode/opencode.json` and makes it the model, unless you
-picked another one. It copies the key from your keyring into
-`~/.local/share/umoja/opencode-cloud.key` (readable only by you), which the
-provider reads with `"apiKey": "{file:...}"`, so the key itself never sits
-in `opencode.json`. `umoja-agent-setup --cloud` sets this up again,
-for example after you change the model, and `umoja-agent-setup --cloud --remove`
-undoes it.
+**OpenCode and Pi use the assistant's models.** When OpenCode is set up,
+Umoja adds two providers to `~/.config/opencode/opencode.json`:
+`umoja-local`, the assistant's local model on Umoja's Lemonade
+(`127.0.0.1:13345`, with its context size), and `umoja-cloud`, the cloud
+model from the **Cloud** page when you have one. The one the assistant uses
+becomes OpenCode's model, unless you picked another one, so OpenCode works
+without signing in; `/models` switches between them and any providers you
+sign in to with `opencode auth login`. OpenCode can't read the keyring, so
+Umoja copies the cloud key into `~/.local/share/umoja/opencode-cloud.key`
+(readable only by you), which the provider reads with
+`"apiKey": "{file:...}"`; the key itself never sits in `opencode.json`.
+Umoja refreshes the providers at each login and whenever you change the
+assistant's model or cloud settings. `umoja-agent-setup --models opencode`
+sets them up again, `umoja-agent-setup --cloud opencode` makes the cloud
+model OpenCode's model and `umoja-agent-setup --cloud --remove opencode`
+takes the cloud model away.
 
 **Pi uses the assistant's models.** When Pi is set up, Umoja adds two
 providers to `~/.pi/agent/models.json`: `umoja-local`, the assistant's
@@ -766,8 +777,8 @@ one. Its key isn't copied anywhere: Pi reads it from your keyring with
 default model in `~/.pi/agent/settings.json`, unless you picked another
 one, so Pi works without signing in. `/model` in Pi switches between them,
 and between any providers you sign in to with `/login`. Umoja refreshes the
-providers at each login (the local model follows the RAM rule and the
-model picker). The local models are small, so they suit small jobs; the
+providers at each login and when you change the assistant's model (the
+local model follows the RAM rule and the model picker). The local models are small, so they suit small jobs; the
 cloud model, or a provider of your own, does better on real projects.
 `umoja-agent-setup --cloud pi` makes the cloud model Pi's default and
 `umoja-agent-setup --cloud --remove pi` takes it away.

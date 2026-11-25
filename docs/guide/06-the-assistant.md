@@ -174,15 +174,18 @@ Under the list, Umoja says what that agent still needs:
   a snap asks for your password.
 - **Sign In**: it's installed but not signed in. This opens the agent's
   own sign-in, which uses your browser or shows a code. Umoja never sees
-  your password or token.
-- Nothing: it's ready.
+  your password or token. Only agents tied to their maker's account
+  (Claude Code, Codex, GitHub Copilot, Antigravity) need this.
+- Nothing: it's ready. OpenCode and Pi are always ready once installed,
+  because they use the assistant's own model.
 
 Until you pick one, the first agent Umoja finds installed is used. Pick
 **None** to turn the hand-off off. You can also ask the assistant to
 "install OpenCode".
 
-If the assistant uses a cloud model when OpenCode is set up, OpenCode gets
-the same model and your key, so it works without signing in.
+OpenCode and Pi get the assistant's models: the one on this computer, and
+your cloud model when you have one, so they work without signing in. When
+you change the assistant's model, they follow.
 
 Pi works without signing in too: it gets the assistant's local model, and
 the cloud model if you have one, and starts on the one the assistant uses.

@@ -99,6 +99,9 @@ struct AgentRow {
     agents: Rc<RefCell<Vec<umoja_common::agents::Agent>>>,
     /// Set while refresh() fills the list, so it doesn't save a pick.
     filling: Rc<Cell<bool>>,
+    /// Agents given the assistant's models since the popover opened (or
+    /// being given them now), so a failed setup isn't retried in a loop.
+    models_tried: Rc<RefCell<HashSet<&'static str>>>,
 }
 
 impl AgentRow {
@@ -137,6 +140,7 @@ impl AgentRow {
             action,
             agents: Rc::default(),
             filling: Rc::default(),
+            models_tried: Rc::default(),
         });
         {
             let weak = Rc::downgrade(&row);
@@ -167,10 +171,13 @@ impl AgentRow {
     }
 
     fn selected(&self) -> Option<umoja_common::agents::Agent> {
-        self.agents.borrow().get(self.drop.selected() as usize).copied()
+        self.agents
+            .borrow()
+            .get(self.drop.selected() as usize)
+            .copied()
     }
 
-    fn refresh(&self) {
+    fn refresh(self: &Rc<Self>) {
         use umoja_common::agents::{self, KNOWN, State};
         let list: Vec<agents::Agent> = KNOWN
             .iter()
@@ -196,7 +203,7 @@ impl AgentRow {
         self.show_state();
     }
 
-    fn show_state(&self) {
+    fn show_state(self: &Rc<Self>) {
         use umoja_common::agents::State;
         let Some(agent) = self.selected() else {
             self.status
@@ -204,7 +211,17 @@ impl AgentRow {
             self.action.set_visible(false);
             return;
         };
-        let (text, button) = match agent.state() {
+        let state = agent.state();
+        // OpenCode and Pi can use the assistant's own models: set that up
+        // instead of asking for a sign-in.
+        if matches!(state, State::SignedOut | State::Installed)
+            && agent.umoja_models.is_some()
+            && self.models_tried.borrow_mut().insert(agent.id)
+        {
+            self.give_umoja_models(agent);
+            return;
+        }
+        let (text, button) = match state {
             State::NotInstalled => (
                 i18n::umoja("Not installed on this computer."),
                 Some(i18n::umoja("Install")),
@@ -214,6 +231,12 @@ impl AgentRow {
                 Some(i18n::umoja("Sign In")),
             ),
             State::Ready => (i18n::umoja("Ready, and signed in."), None),
+            State::OnUmojaModels => (
+                i18n::umoja(
+                    "Ready. It uses the assistant's model, so there's nothing to sign in to.",
+                ),
+                None,
+            ),
             State::Installed => (
                 i18n::umoja("Installed. It asks you to sign in the first time."),
                 Some(i18n::umoja("Sign In")),
@@ -234,6 +257,33 @@ impl AgentRow {
         }
     }
 
+    /// Run `umoja-agent-setup --models` for `agent`, then show its state.
+    fn give_umoja_models(self: &Rc<Self>, agent: umoja_common::agents::Agent) {
+        self.status
+            .set_text(&i18n::umoja("Setting it up with the assistant's model…"));
+        self.action.set_visible(false);
+        let (tx, rx) = async_channel::bounded(1);
+        RUNTIME.spawn_blocking(move || {
+            let ok = umoja_common::agents::use_umoja_models(Some(agent))
+                .and_then(|mut c| c.wait())
+                .is_ok_and(|s| s.success());
+            let _ = tx.send_blocking(ok);
+        });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let ok = rx.recv().await.unwrap_or(false);
+            if !ok {
+                tracing::warn!(
+                    agent = agent.id,
+                    "couldn't give the agent the assistant's models"
+                );
+            }
+            if let Some(r) = weak.upgrade() {
+                r.show_state();
+            }
+        });
+    }
+
     /// Install or sign in, in a terminal: both are the vendor's own flow,
     /// and signing in opens the browser from there.
     fn act(&self) {
@@ -248,6 +298,16 @@ impl AgentRow {
             Err(e) => self.status.set_text(&e),
         }
     }
+}
+
+/// Keep the coding agents that use the assistant's models (OpenCode, Pi)
+/// on its current ones, after the model or the backend changed.
+pub fn refresh_agent_models() {
+    RUNTIME.spawn_blocking(|| {
+        if let Ok(mut c) = umoja_common::agents::use_umoja_models(None) {
+            let _ = c.wait();
+        }
+    });
 }
 
 /// The model to suggest for this computer: the largest one that is good
@@ -376,7 +436,9 @@ pub fn close() {
 /// on screen (a terminal, Text Editor), whose pointer enter/leave makes
 /// GTK re-show the tooltip.
 pub fn quiet_tooltip_while_open(button: &gtk::MenuButton) {
-    let Some(popover) = button.popover() else { return };
+    let Some(popover) = button.popover() else {
+        return;
+    };
     let weak = button.downgrade();
     popover.connect_show(move |_| {
         if let Some(b) = weak.upgrade() {
@@ -402,7 +464,9 @@ pub fn quiet_tooltip_while_open(button: &gtk::MenuButton) {
 fn fit_popover(button: &gtk::MenuButton, fit: &gtk::ScrolledWindow) {
     let Some(root) = button.root() else { return };
     let root: &gtk::Widget = root.upcast_ref();
-    let Some(b) = button.compute_bounds(root) else { return };
+    let Some(b) = button.compute_bounds(root) else {
+        return;
+    };
     // Ask Umoja is a full-screen layer surface: its height is the monitor's.
     let height = root.height() as f32;
     let above = b.y();
@@ -502,7 +566,11 @@ pub fn button() -> gtk::MenuButton {
     let voice = crate::voice_picker::VoicePage::new();
     stack.add_titled(&voice.page, Some("voice"), &i18n::umoja("Voice"));
     let dictation = crate::dictation_page::DictationPage::new();
-    stack.add_titled(&dictation.page, Some("dictation"), &i18n::umoja("Dictation"));
+    stack.add_titled(
+        &dictation.page,
+        Some("dictation"),
+        &i18n::umoja("Dictation"),
+    );
     let switcher = gtk::StackSwitcher::builder()
         .stack(&stack)
         .halign(gtk::Align::Center)
@@ -543,6 +611,7 @@ pub fn button() -> gtk::MenuButton {
             }
             // Cloud offload's routers name the local model.
             backend::routing::apply();
+            refresh_agent_models();
             popover.popdown();
         });
     }
@@ -557,11 +626,13 @@ pub fn button() -> gtk::MenuButton {
     button.set_create_popup_func(move |b| fit_popover(b, &fit));
     BUTTON.with(|b| b.replace(Some(button.downgrade())));
     popover.connect_show(move |popover| {
-        let page = OPEN_ON.with(|o| o.take()).unwrap_or(if backend::current().cloud {
-            "cloud"
-        } else {
-            "local"
-        });
+        let page = OPEN_ON
+            .with(|o| o.take())
+            .unwrap_or(if backend::current().cloud {
+                "cloud"
+            } else {
+                "local"
+            });
         stack.set_visible_child_name(page);
         cloud.load();
         offload.refresh();

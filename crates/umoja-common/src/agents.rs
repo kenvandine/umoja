@@ -19,6 +19,9 @@
 //! or tools, so they are never used. Signing in is always the agent's own
 //! flow (a browser or a device code) in a terminal; Umoja never sees a
 //! token, and only checks whether the agent's credentials file exists.
+//! OpenCode and Pi need no sign-in at all: `umoja-agent-setup --models`
+//! gives them the assistant's own models (Lemonade, and the cloud model
+//! when one is set up), and the Coding agent picker does that for them.
 
 use crate::gsettings as gs;
 use std::path::{Path, PathBuf};
@@ -49,6 +52,9 @@ pub enum State {
     SignedOut,
     /// Installed and signed in.
     Ready,
+    /// Installed and set up with the assistant's own models (OpenCode,
+    /// Pi): ready, with nothing to sign in to.
+    OnUmojaModels,
     /// Installed; it keeps its sign-in in the keyring, so Umoja can't
     /// tell whether it is signed in.
     Installed,
@@ -71,6 +77,10 @@ pub struct Agent {
     /// Files (relative to home) that exist once the agent is signed in;
     /// empty when it keeps its sign-in in the keyring.
     pub credentials: &'static [&'static str],
+    /// The config file (relative to home) where `umoja-agent-setup
+    /// --models` gives the agent the assistant's own models (Lemonade, and
+    /// the cloud model when one is set up). With those it needs no sign-in.
+    pub umoja_models: Option<&'static str>,
     /// Other names people use for it, for "install …" requests.
     pub aliases: &'static [&'static str],
 }
@@ -86,6 +96,7 @@ pub const KNOWN: &[Agent] = &[
         },
         login: &["auth", "login"],
         credentials: &[".claude/.credentials.json"],
+        umoja_models: None,
         aliases: &["claude", "claude code", "claude-code"],
     },
     Agent {
@@ -98,6 +109,7 @@ pub const KNOWN: &[Agent] = &[
         },
         login: &["login"],
         credentials: &[".codex/auth.json"],
+        umoja_models: None,
         aliases: &["codex", "codex cli", "openai codex"],
     },
     Agent {
@@ -110,6 +122,7 @@ pub const KNOWN: &[Agent] = &[
         },
         login: &["login"],
         credentials: &[],
+        umoja_models: None,
         aliases: &[
             "copilot",
             "copilot cli",
@@ -128,6 +141,7 @@ pub const KNOWN: &[Agent] = &[
         },
         login: &[],
         credentials: &[],
+        umoja_models: None,
         aliases: &[
             "agy",
             "antigravity",
@@ -144,10 +158,11 @@ pub const KNOWN: &[Agent] = &[
             name: "opencode",
             classic: true,
         },
+        // For providers of the user's own; it needs none for the
+        // assistant's models.
         login: &["auth", "login"],
-        // Its own sign-in, or the key umoja-agent-setup gave it for the
-        // assistant's cloud model.
-        credentials: &[".local/share/opencode/auth.json", ".local/share/umoja/opencode-cloud.key"],
+        credentials: &[".local/share/opencode/auth.json"],
+        umoja_models: Some(".config/opencode/opencode.json"),
         aliases: &["opencode", "open code"],
     },
     Agent {
@@ -160,11 +175,11 @@ pub const KNOWN: &[Agent] = &[
             name: "pi-coding-agent",
             classic: true,
         },
-        // Signs in on its first run (/login), if it needs to at all:
-        // umoja-agent-setup gives it the assistant's local Lemonade model
-        // and, when one is set up, its cloud model, in models.json.
+        // Signs in on its first run (/login), for providers of the
+        // user's own; it needs none for the assistant's models.
         login: &[],
-        credentials: &[".pi/agent/auth.json", ".pi/agent/models.json"],
+        credentials: &[".pi/agent/auth.json"],
+        umoja_models: Some(".pi/agent/models.json"),
         aliases: &[
             "pi",
             "pi agent",
@@ -180,6 +195,7 @@ pub const KNOWN: &[Agent] = &[
         install: Install::None,
         login: &[],
         credentials: &[".gemini/oauth_creds.json"],
+        umoja_models: None,
         aliases: &["gemini", "gemini cli", "gemini-cli"],
     },
 ];
@@ -207,6 +223,9 @@ impl Agent {
         if self.path().is_none() {
             return State::NotInstalled;
         }
+        if self.has_umoja_models() {
+            return State::OnUmojaModels;
+        }
         if self.credentials.is_empty() {
             return State::Installed;
         }
@@ -216,6 +235,16 @@ impl Agent {
         } else {
             State::SignedOut
         }
+    }
+
+    /// Whether `umoja-agent-setup` gave it the assistant's models (its
+    /// providers carry these names, in opencode.json and Pi's models.json).
+    pub fn has_umoja_models(&self) -> bool {
+        self.umoja_models
+            .and_then(|f| std::fs::read_to_string(glib::home_dir().join(f)).ok())
+            .is_some_and(|text| {
+                text.contains("\"Umoja local model\"") || text.contains("\"Umoja cloud model\"")
+            })
     }
 
     pub fn can_install(&self) -> bool {
@@ -282,10 +311,10 @@ impl Agent {
             "{install} && export PATH=\"$PATH:{path}\" && umoja-agent-setup {id}",
             id = self.id
         );
-        if !self.login.is_empty() {
+        // Setup gives OpenCode and Pi the assistant's models: no sign-in.
+        if !self.login.is_empty() && self.umoja_models.is_none() {
             let login = format!("{} {}", self.id, self.login.join(" "));
-            // Setup may already have signed it in (OpenCode on the
-            // assistant's cloud model): only sign in when still needed.
+            // Only sign in when not signed in already.
             if self.credentials.is_empty() {
                 cmd.push_str(&format!(" && {login}"));
             } else {
@@ -388,6 +417,22 @@ pub fn install(agent: Agent) -> Result<(), String> {
         .install_command()
         .ok_or_else(|| format!("Umoja can't install {}", agent.name))?;
     crate::terminal::spawn_in_terminal(&cmd).map_err(|e| format!("couldn't open a terminal: {e}"))
+}
+
+/// Give OpenCode or Pi the assistant's models (`umoja-agent-setup
+/// --models`), so it needs no sign-in; without an agent, refresh the ones
+/// that have them, after the assistant's model changed. In the
+/// background; the returned child exits when it's done.
+pub fn use_umoja_models(agent: Option<Agent>) -> std::io::Result<std::process::Child> {
+    let mut c = std::process::Command::new("umoja-agent-setup");
+    c.arg("--models");
+    if let Some(a) = agent {
+        c.arg(a.id);
+    }
+    c.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
 }
 
 /// Sign `agent` in with its own flow, in a terminal. Its login commands
@@ -500,11 +545,11 @@ mod tests {
              && sudo -n snap install opencode --classic 2>/dev/null; } \
              || snap install opencode --classic; }"
         ));
-        assert!(o.contains("&& umoja-agent-setup opencode"));
-        // Skips the sign-in when setup already signed it in.
-        assert!(o.ends_with(
-            "&& { [ -s \"$HOME/.local/share/opencode/auth.json\" ] \
-             || [ -s \"$HOME/.local/share/umoja/opencode-cloud.key\" ] || opencode auth login; }"
+        // Setup gives it the assistant's models: no sign-in step.
+        assert!(o.ends_with("&& umoja-agent-setup opencode"));
+        // Signs in when not signed in already.
+        assert!(CLAUDE.install_command().unwrap().ends_with(
+            "&& umoja-agent-setup claude && { [ -s \"$HOME/.claude/.credentials.json\" ] || claude auth login; }"
         ));
         // Else the vendor's installer, for this user only.
         let c = CODEX.install_command().unwrap();
