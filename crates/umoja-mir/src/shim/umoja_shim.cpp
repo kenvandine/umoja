@@ -2372,6 +2372,13 @@ private:
     // pass the motion and which edges hold the pointer back.
     void report_motion(MirPointerEvent const* event, int32_t px, int32_t py) {
         if (outputs.empty()) return;
+        // A game holding the pointer (zwp_pointer_constraints_v1, or
+        // Xwayland on behalf of an X11 game) turns the view with motion that
+        // pushes against nothing: never let that raise the dock or overview.
+        if (auto const active = tools.active_window()) {
+            auto const confine = tools.info_for(active).confine_pointer();
+            if (confine != mir_pointer_unconfined) return;
+        }
         geom::Point const p{px, py};
         geom::Rectangle const o = output_at(p);
         if (!o.contains(p)) return;

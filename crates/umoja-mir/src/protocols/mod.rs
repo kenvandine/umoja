@@ -21,6 +21,11 @@
 //!   predate them.
 //! * `zwp_idle_inhibit_manager_v1` — video players and browsers keep the
 //!   screen from blanking while they play (see [`crate::idle`]).
+//! * `zwp_pointer_constraints_v1` / `zwp_relative_pointer_manager_v1` —
+//!   games (and Xwayland, for X11 and Wine/Proton games) lock or confine the
+//!   pointer and read raw mouse motion, so mouse look turns the view, as on
+//!   GNOME. Motion while a window holds the pointer never counts as edge
+//!   pressure (see the shim's `report_motion`).
 //! * `ext_background_effect_manager_v1` — blur behind the translucent panel,
 //!   dock, menus, notification bubbles and OSD. Only in Umoja's patched Mir
 //!   (`packaging/mir/patches/3004_background-blur.patch`); skipped elsewhere.
@@ -50,6 +55,8 @@ pub const ENABLED: &[&str] = &[
     "wp_fractional_scale_manager_v1",
     "wp_viewporter",
     "zwp_idle_inhibit_manager_v1",
+    "zwp_pointer_constraints_v1",
+    "zwp_relative_pointer_manager_v1",
     "ext_background_effect_manager_v1",
 ];
 
