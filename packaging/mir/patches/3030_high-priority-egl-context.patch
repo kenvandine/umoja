@@ -1,0 +1,230 @@
+Description: Ask for high-priority EGL contexts for compositing
+ Mir created its GL contexts with the default priority, so while a game kept
+ the GPU busy (Potluck at 99% on the Radeon 8060S) every composite queued
+ behind the game's frames and the whole desktop lagged: cursor, panel, dock
+ and other windows. GNOME's and KDE's compositors ask for high priority
+ (EGL_IMG_context_priority) for this. The gbm-kms and egl-generic rendering
+ platforms and the cross-GPU copy surface now do too, through a header-only
+ helper (no ABI change), falling back to a normal context when the extension
+ is missing or the driver refuses: amdgpu and i915 give high priority only
+ to the DRM master or a process with CAP_SYS_NICE, and Mir renders on the
+ render node. The outcome is logged once ("EGL context priority: ...").
+Author: Umoja developers
+Forwarded: no
+Last-Update: 2026-11-27
+---
+new file mode 100644
+--- /dev/null
++++ b/include/platform/mir/graphics/egl_context_priority.h
+@@ -0,0 +1,116 @@
++/*
++ * Copyright © Canonical Ltd.
++ *
++ * This program is free software: you can redistribute it and/or modify it
++ * under the terms of the GNU Lesser General Public License version 2 or 3,
++ * as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef MIR_GRAPHICS_EGL_CONTEXT_PRIORITY_H_
++#define MIR_GRAPHICS_EGL_CONTEXT_PRIORITY_H_
++
++// Not <mir/log.h>: its printf-style overloads depend on MIR_LOG_COMPONENT,
++// which files including this one may define only afterwards
++#include <mir/logging/logger.h>
++
++#include <EGL/egl.h>
++#include <EGL/eglext.h>
++
++#include <atomic>
++#include <cstring>
++#include <vector>
++
++namespace mir
++{
++[[gnu::format (printf, 3, 4)]]
++void log(logging::Severity sev, const char *component, char const* fmt, ...);
++}
++
++namespace mir::graphics::common
++{
++/**
++ * eglCreateContext(), asking for a high-priority context where the driver
++ * offers EGL_IMG_context_priority, so the compositor's drawing does not queue
++ * behind a client that keeps the GPU busy (as GNOME's and KDE's compositors
++ * do). Without the extension, or once the driver has refused high priority
++ * (amdgpu and i915 give it only to the DRM master or a process with
++ * CAP_SYS_NICE), it is plain eglCreateContext() with \a attribs.
++ *
++ * Header only, so it adds nothing to the platform ABI.
++ */
++inline auto create_compositor_context(
++    EGLDisplay dpy,
++    EGLConfig config,
++    EGLContext share,
++    EGLint const* attribs) -> EGLContext
++{
++    static std::atomic<bool> refused{false};
++    static std::atomic<bool> reported{false};
++
++    auto const has_extension = [dpy]
++        {
++            char const* const extensions = eglQueryString(dpy, EGL_EXTENSIONS);
++            if (!extensions)
++                return false;
++            char const* const name = "EGL_IMG_context_priority";
++            auto const length = std::strlen(name);
++            for (char const* p = std::strstr(extensions, name); p; p = std::strstr(p + length, name))
++            {
++                if ((p == extensions || p[-1] == ' ') && (p[length] == ' ' || p[length] == '\0'))
++                    return true;
++            }
++            return false;
++        };
++
++    if (!refused && has_extension())
++    {
++        std::vector<EGLint> with_priority;
++        for (auto attrib = attribs; attrib && *attrib != EGL_NONE; attrib += 2)
++        {
++            with_priority.push_back(attrib[0]);
++            with_priority.push_back(attrib[1]);
++        }
++        with_priority.push_back(EGL_CONTEXT_PRIORITY_LEVEL_IMG);
++        with_priority.push_back(EGL_CONTEXT_PRIORITY_HIGH_IMG);
++        with_priority.push_back(EGL_NONE);
++
++        if (auto const ctx = eglCreateContext(dpy, config, share, with_priority.data()); ctx != EGL_NO_CONTEXT)
++        {
++            if (!reported.exchange(true))
++            {
++                EGLint priority{EGL_CONTEXT_PRIORITY_MEDIUM_IMG};
++                eglQueryContext(dpy, ctx, EGL_CONTEXT_PRIORITY_LEVEL_IMG, &priority);
++                // The kernel may still run it at normal priority: amdgpu,
++                // for one, does unless we are DRM master or have CAP_SYS_NICE
++                mir::log(
++                    mir::logging::Severity::informational, "EGL",
++                    "EGL context priority: asked for high, EGL reports %s",
++                    priority == EGL_CONTEXT_PRIORITY_HIGH_IMG ? "high" :
++                    priority == EGL_CONTEXT_PRIORITY_LOW_IMG ? "low" : "medium");
++            }
++            return ctx;
++        }
++
++        eglGetError(); // Clear the error from the refused attempt
++        refused = true;
++        if (!reported.exchange(true))
++        {
++            mir::log(
++                mir::logging::Severity::informational, "EGL",
++                "EGL context priority: medium (the driver refused high priority)");
++        }
++    }
++
++    return eglCreateContext(dpy, config, share, attribs);
++}
++}
++
++#endif // MIR_GRAPHICS_EGL_CONTEXT_PRIORITY_H_
+--- a/src/platform/graphics/cpu_copy_output_surface.cpp
++++ b/src/platform/graphics/cpu_copy_output_surface.cpp
+@@ -23,6 +23,7 @@
+ #include <drm_fourcc.h>
+ 
+ #include <mir/graphics/egl_error.h>
++#include <mir/graphics/egl_context_priority.h>
+ #include <mir/graphics/platform.h>
+ #include <mir/graphics/gl_config.h>
+ #include <mir/log.h>
+@@ -95,7 +96,7 @@ auto create_current_context(EGLDisplay dpy, EGLContext share_ctx)
+     }
+ 
+     eglBindAPI(EGL_OPENGL_ES_API);
+-    auto ctx = eglCreateContext(dpy, EGL_NO_CONFIG_KHR, share_ctx, context_attr);
++    auto ctx = mg::common::create_compositor_context(dpy, EGL_NO_CONFIG_KHR, share_ctx, context_attr);
+ 
+     if (eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) != EGL_TRUE)
+     {
+--- a/src/platforms/gbm-kms/server/buffer_allocator.cpp
++++ b/src/platforms/gbm-kms/server/buffer_allocator.cpp
+@@ -27,6 +27,7 @@
+ #include <mir/graphics/egl_context_executor.h>
+ #include <mir/graphics/egl_extensions.h>
+ #include <mir/graphics/egl_error.h>
++#include <mir/graphics/egl_context_priority.h>
+ #include <mir/raii.h>
+ #include <mir/graphics/display.h>
+ #include <mir/renderer/gl/context.h>
+@@ -454,7 +455,7 @@ private:
+             EGL_NONE
+         };
+ 
+-        auto egl_ctx = eglCreateContext(dpy, egl_cfg, share_context, context_attr);
++        auto egl_ctx = mg::common::create_compositor_context(dpy, egl_cfg, share_context, context_attr);
+         if (egl_ctx == EGL_NO_CONTEXT)
+         {
+             BOOST_THROW_EXCEPTION(mg::egl_error("Failed to create EGL context"));
+--- a/src/platforms/gbm-kms/server/surfaceless_egl_context.cpp
++++ b/src/platforms/gbm-kms/server/surfaceless_egl_context.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include "surfaceless_egl_context.h"
+ #include <mir/graphics/egl_error.h>
++#include <mir/graphics/egl_context_priority.h>
+ 
+ #include <optional>
+ #include <EGL/egl.h>
+@@ -48,7 +49,7 @@ auto make_share_only_context(EGLDisplay dpy, std::optional<EGLContext> share_wit
+         BOOST_THROW_EXCEPTION((mg::egl_error("Failed to find any matching EGL config")));
+     }
+ 
+-    auto ctx = eglCreateContext(dpy, cfg, share_with.value_or(EGL_NO_CONTEXT), context_attr);
++    auto ctx = mg::common::create_compositor_context(dpy, cfg, share_with.value_or(EGL_NO_CONTEXT), context_attr);
+     if (ctx == EGL_NO_CONTEXT)
+     {
+         BOOST_THROW_EXCEPTION(mg::egl_error("Failed to create EGL context"));
+--- a/src/platforms/renderer-generic-egl/buffer_allocator.cpp
++++ b/src/platforms/renderer-generic-egl/buffer_allocator.cpp
+@@ -24,6 +24,7 @@
+ #include <mir/graphics/egl_context_executor.h>
+ #include <mir/graphics/egl_extensions.h>
+ #include <mir/graphics/egl_error.h>
++#include <mir/graphics/egl_context_priority.h>
+ #include <mir/graphics/buffer_properties.h>
+ #include <mir/raii.h>
+ #include <mir/graphics/display.h>
+@@ -95,7 +96,7 @@ auto make_share_only_context(EGLDisplay dpy, std::optional<EGLContext> share_wit
+         cfg = EGL_NO_CONFIG_KHR;
+     }
+ 
+-    auto ctx = eglCreateContext(dpy, cfg, share_with.value_or(EGL_NO_CONTEXT), context_attr);
++    auto ctx = mg::common::create_compositor_context(dpy, cfg, share_with.value_or(EGL_NO_CONTEXT), context_attr);
+     if (ctx == EGL_NO_CONTEXT)
+     {
+         BOOST_THROW_EXCEPTION(mg::egl_error("Failed to create EGL context"));
+--- a/src/platforms/renderer-generic-egl/rendering_platform.cpp
++++ b/src/platforms/renderer-generic-egl/rendering_platform.cpp
+@@ -19,6 +19,7 @@
+ #include <mir/graphics/egl_extensions.h>
+ #include <mir/graphics/platform.h>
+ #include <mir/graphics/egl_error.h>
++#include <mir/graphics/egl_context_priority.h>
+ #include <mir/renderer/gl/context.h>
+ 
+ #define MIR_LOG_COMPONENT "platform-generic-egl"
+@@ -105,7 +106,7 @@ auto make_share_only_context(EGLDisplay dpy, std::optional<EGLContext> share_con
+         cfg = EGL_NO_CONFIG_KHR;
+     }
+ 
+-    auto ctx = eglCreateContext(dpy, cfg, share_context.value_or(EGL_NO_CONTEXT), context_attr);
++    auto ctx = mg::common::create_compositor_context(dpy, cfg, share_context.value_or(EGL_NO_CONTEXT), context_attr);
+     if (ctx == EGL_NO_CONTEXT)
+     {
+         BOOST_THROW_EXCEPTION(mg::egl_error("Failed to create EGL context"));

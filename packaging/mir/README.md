@@ -200,6 +200,18 @@ Umoja PPA:
   one, and only 16 can queue. `WlSurfaceState::update_from()` now keeps the
   opaque region and surface specification when merging. Upstream report
   draft: `upstream-bugs/syncobj-commit-superseded-before-ready.md`.
+- `patches/3030_high-priority-egl-context.patch` (umoja31): Mir's GL
+  contexts had default priority, so a game keeping the GPU busy left every
+  composite queued behind its frames and the whole desktop lagged. The
+  gbm-kms and egl-generic rendering platforms and the cross-GPU copy surface
+  now ask for high priority (`EGL_IMG_context_priority`, as mutter and KWin
+  do), falling back to a normal context when the extension is missing or
+  context creation fails. What EGL reports is logged once at start
+  (`EGL context priority: ...`). The kernel decides in the end: amdgpu and
+  i915 give high priority only to the DRM master or a process with
+  `CAP_SYS_NICE`, and Mir renders on the render node, so without that
+  capability umoja-mir may still run at normal priority (EGL reports high
+  either way on Mesa 26.2/amdgpu).
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds

@@ -41,4 +41,5 @@ dch --append "Answer frame callbacks whose buffer the compositor has not used af
 dch --append "Keep one Num Lock for the whole seat when the server asks for it (mir_num_lock_initial_hook), so Umoja can restore and remember it across sessions like GNOME."
 dch --append "Don't leave the screen dimmed for good when the idle timeouts change while it is idle (a late idle() reached a dimmer already dropped)."
 dch --append "Explicit sync: keep commits waiting for their fences in order instead of dropping a frame that is not ready yet, so games presenting with Vulkan MAILBOX while GPU bound keep updating."
+dch --append "Ask for high-priority EGL contexts for compositing where the driver allows it, so a game keeping the GPU busy does not hold up the desktop."
 echo "$PWD"
