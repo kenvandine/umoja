@@ -1,0 +1,492 @@
+Description: Keep explicit-sync commits in order instead of dropping a frame not yet ready
+ WlSurface::commit() with a linux-drm-syncobj acquire point waits for the
+ fence before applying anything, and a commit arriving before that fence
+ signalled superseded it: the waiting buffer was released unused and only
+ the newest commit was kept. A client drawing faster than its GPU finishes
+ (Vulkan MAILBOX or IMMEDIATE while GPU bound: Potluck on the Radeon 8060S,
+ 2026-11-27) always has its next frame committed by then, so every frame
+ was superseded and the window kept showing an old one for as long as the
+ game kept drawing. Clicks in its menu worked, but the screen only changed
+ when focus left the window and the game slowed down.
+ .
+ Commits now queue in order, each with the state it had when committed
+ (requests sent after a commit no longer fold into it, half of
+ canonical/mir#5460), and apply as their fences signal. A waiting frame is
+ dropped only once a newer one is ready, its other state (damage, frame
+ callbacks, subsurface order) going with the newer one; a client 16 commits
+ ahead has its oldest frame let go, as before. A commit without a fence
+ waits behind fenced ones instead of overtaking them. Merging keeps the
+ opaque region and surface specification, which WlSurfaceState::update_from()
+ dropped (also for synchronized subsurfaces' cached commits), and a
+ subsurface destroyed while an order is pending leaves that order.
+Author: Umoja developers
+Forwarded: not yet (bug report drafted in packaging/mir/upstream-bugs/)
+Last-Update: 2026-11-27
+---
+--- a/src/server/frontend_wayland/wl_surface.cpp
++++ b/src/server/frontend_wayland/wl_surface.cpp
+@@ -60,13 +60,46 @@ namespace geom = mir::geometry;
+ namespace mw = mir::wayland;
+ namespace msh = mir::shell;
+ 
+-struct mf::WlSurface::PendingBufferState
++/* A commit waiting for its acquire point (explicit sync), or queued behind
++ * one that is. It holds the state the client had built up when it committed,
++ * so requests sent after the commit can't leak into it.
++ */
++struct mf::WlSurface::FencedCommit
+ {
+     WlSurface* surf;
++    WlSurfaceState state;
++    std::optional<std::list<WlSubsurface*>> surface_order;
++    /// The acquire point as an eventfd, which `source` polls; invalid for a
++    /// commit without one, which only waits for the commits before it.
+     Fd eventfd;
+-    mf::SyncPoint release;
++    wl_event_source* source{nullptr};
++    bool ready{false};
++
++    /// Gives up on this commit's buffer: stop waiting for it and tell the
++    /// client it is free again (it was never used). Its other state stays.
++    void drop_frame()
++    {
++        if (source)
++        {
++            wl_event_source_remove(source);
++            source = nullptr;
++        }
++        if (state.release_fence)
++        {
++            state.release_fence->signal();
++            state.release_fence.reset();
++        }
++        state.buffer.reset();
++    }
+ };
+ 
++namespace
++{
++/// A client this far ahead of its GPU has its oldest waiting frame let go.
++/// Swapchains have three to five images, so real clients never get here.
++size_t const max_fenced_commits = 16;
++}
++
+ mf::WlSurfaceState::Callback::Callback(wl_resource* new_resource)
+     : mw::Callback{new_resource, Version<1>()}
+ {
+@@ -103,6 +136,12 @@ void mf::WlSurfaceState::update_from(WlSurfaceState const& source)
+     if (source.viewport)
+         viewport = source.viewport;
+ 
++    // Merging the commits a newer frame supersedes needs these too
++    surface_spec.update_from(source.surface_spec);
++
++    if (source.opaque_region)
++        opaque_region = source.opaque_region;
++
+     if (source.surface_data_invalidated)
+         surface_data_invalidated = true;
+ 
+@@ -137,24 +176,19 @@ mf::WlSurface::WlSurface(
+ 
+ mf::WlSurface::~WlSurface()
+ {
+-    /* A commit may still be waiting for its acquire point (explicit sync).
+-     * The event source's data is pending_context, which dies with us: if the
++    /* Commits may still be waiting for their acquire points (explicit sync).
++     * Each event source's data is a FencedCommit, which dies with us: if a
+      * fence signals after the client has gone (it crashed, or was killed for
+-     * a protocol error), handle_buffer_ready would run complete_commit() on
+-     * freed memory. Seen as the Wayland thread spinning forever in
+-     * std::advance over a garbage std::list, which in turn blocks the main
+-     * loop in WaylandConnector::stop() at the next VT switch.
++     * a protocol error), the handler would apply the commit to freed memory.
++     * Seen as the Wayland thread spinning forever in std::advance over a
++     * garbage std::list, which in turn blocks the main loop in
++     * WaylandConnector::stop() at the next VT switch.
+      */
+-    if (buffer_ready_source)
++    for (auto const& queued : fenced_commits)
+     {
+-        wl_event_source_remove(buffer_ready_source);
+-        buffer_ready_source = nullptr;
+-        if (pending_context)
+-        {
+-            pending_context->release.signal();
+-            pending_context.reset();
+-        }
++        queued->drop_frame();
+     }
++    fenced_commits.clear();
+ 
+     // We can't use a function try block as we want to access `client`:
+     // "Before any catch clauses of a function-try-block on a destructor are entered,
+@@ -246,6 +280,16 @@ void mf::WlSurface::add_subsurface(WlSubsurface* child)
+ 
+ void mf::WlSurface::remove_subsurface(WlSubsurface* child)
+ {
++    // Orders not applied yet must forget it too, or applying one would bring
++    // the destroyed subsurface back
++    if (pending_surface_order)
++        pending_surface_order->remove(child);
++    for (auto const& queued : fenced_commits)
++    {
++        if (queued->surface_order)
++            queued->surface_order->remove(child);
++    }
++
+     auto it = std::find(children.begin(), children.end(), child);
+     if (it != children.end())
+     {
+@@ -274,11 +318,23 @@ void mf::WlSurface::reorder_subsurface(WlSubsurface* child, WlSurface* sibling_s
+ {
+     if (!pending_surface_order)
+     {
+-        std::list<WlSubsurface*> surfaces(children.begin(), children.begin()+parent_z_index);
+-        surfaces.push_back(nullptr); // Special entry marking the parent position
+-        surfaces.insert(surfaces.end(), children.begin()+parent_z_index, children.end());
++        // A commit still waiting for its fence may have reordered already
++        auto const queued = std::find_if(
++            fenced_commits.rbegin(), fenced_commits.rend(),
++            [](auto const& c) { return c->surface_order.has_value(); });
+ 
+-        pending_surface_order = surfaces;
++        if (queued != fenced_commits.rend())
++        {
++            pending_surface_order = (*queued)->surface_order;
++        }
++        else
++        {
++            std::list<WlSubsurface*> surfaces(children.begin(), children.begin()+parent_z_index);
++            surfaces.push_back(nullptr); // Special entry marking the parent position
++            surfaces.insert(surfaces.end(), children.begin()+parent_z_index, children.end());
++
++            pending_surface_order = surfaces;
++        }
+     }
+ 
+     // Find the child in the pending order
+@@ -721,14 +777,19 @@ void mf::WlSurface::commit(WlSurfaceState const& state)
+ 
+ void mf::WlSurface::commit()
+ {
+-    if (pending.offset && *pending.offset == offset_)
+-        pending.offset = std::nullopt;
+-
+-    // The same input shape could be represented by the same rectangles in a different order, or even
+-    // different rectangles. We don't check for that, however, because it would only cause an unnecessary
+-    // update and not do any real harm. Checking for identical vectors should cover most cases.
+-    if (pending.input_shape && *pending.input_shape == input_shape)
+-        pending.input_shape = std::nullopt;
++    // These compare with the surface's current state, which commits still
++    // queued ahead of this one may yet change
++    if (fenced_commits.empty())
++    {
++        if (pending.offset && *pending.offset == offset_)
++            pending.offset = std::nullopt;
++
++        // The same input shape could be represented by the same rectangles in a different order, or even
++        // different rectangles. We don't check for that, however, because it would only cause an unnecessary
++        // update and not do any real harm. Checking for identical vectors should cover most cases.
++        if (pending.input_shape && *pending.input_shape == input_shape)
++            pending.input_shape = std::nullopt;
++    }
+ 
+     auto const [acquire_syncpoint, release_syncpoint] = [&]() -> std::pair<std::optional<SyncPoint>, std::optional<SyncPoint>>
+         {
+@@ -740,40 +801,53 @@ void mf::WlSurface::commit()
+             return std::make_pair(std::nullopt, std::nullopt);
+         }();
+ 
+-    /* Any previously committed, but not yet ready, buffer is now superceded
+-     */
+-    if (buffer_ready_source)
++    bool const fenced = acquire_syncpoint && release_syncpoint;
++
++    if (fenced && (!pending.buffer || !(*pending.buffer)))
+     {
+-        // We don't need to handle the buffer becoming ready anymore...
+-        wl_event_source_remove(buffer_ready_source);
+-        // ...and the client is now free to reuse it
+-        pending_context->release.signal();
+-        // Now clean up our context handling.
+-        pending_context.reset();
+-        buffer_ready_source = nullptr;
++        throw wayland::ProtocolError{
++            sync_timeline.value().resource,
++            SyncTimeline::Error::no_buffer,
++            "Timeline acquire sync point set, but no buffer committed"};
+     }
+ 
+-    if (acquire_syncpoint && release_syncpoint)
++    if (!fenced && fenced_commits.empty())
+     {
+-        /* If we have an acquire syncpoint then we need to wait for the buffer to be ready
+-         * before we actually commit.
+-         *
+-         * In future we might want to push this further into the pipeline, but for now,
+-         * waiting before doing any of the commit is sufficient.
+-         */
++        // order is important
++        auto state = std::move(pending);
++        pending = WlSurfaceState();
++        auto surface_order = std::move(pending_surface_order);
++        pending_surface_order = std::nullopt;
++        apply_commit(std::move(state), std::move(surface_order));
++        return;
++    }
+ 
+-        if (!pending.buffer || !(*pending.buffer))
+-        {
+-            throw wayland::ProtocolError{
+-                sync_timeline.value().resource,
+-                SyncTimeline::Error::no_buffer,
+-                "Timeline acquire sync point set, but no buffer committed"};
+-        }
++    /* Wait for the buffer to be ready (or, without an acquire point, for the
++     * commits before this one) before applying any of the commit.
++     *
++     * Mir used to keep only the newest such commit: one arriving before the
++     * previous one's fence signalled superseded it. A client that commits
++     * faster than its GPU finishes (Vulkan MAILBOX or IMMEDIATE while GPU
++     * bound) always has the next frame committed by then, so every frame was
++     * superseded and the window stopped updating for as long as the client
++     * kept drawing. Commits now queue in order, and a frame is only dropped
++     * once a newer one is ready (apply_ready_commits()).
++     */
++    auto queued = std::make_unique<FencedCommit>();
++    queued->surf = this;
++    if (fenced)
++        queued->eventfd = acquire_syncpoint->to_eventfd();
++    else
++        queued->ready = true;
++
++    queued->state = std::move(pending);
++    pending = WlSurfaceState();
++    queued->surface_order = std::move(pending_surface_order);
++    pending_surface_order = std::nullopt;
+ 
+-        pending_context = std::make_unique<PendingBufferState>(PendingBufferState{
+-            this,
+-            acquire_syncpoint->to_eventfd(),
+-            *release_syncpoint});
++    if (fenced)
++    {
++        queued->state.release_fence = *release_syncpoint;
+ 
+         wl_event_loop_fd_func_t handle_buffer_ready =
+             [](int /*fd*/, uint32_t /*mask*/, void* data)
+@@ -782,13 +856,17 @@ void mf::WlSurface::commit()
+                  * need locking here; either data is valid, or we should have been
+                  * removed from the run queue.
+                  */
+-                auto& state = *static_cast<PendingBufferState*>(data);
++                auto& entry = *static_cast<FencedCommit*>(data);
++                auto const surf = entry.surf;
+ 
+-                state.surf->pending.release_fence = state.release;
++                wl_event_source_remove(entry.source);
++                entry.source = nullptr;
++                entry.ready = true;
+ 
+                 try
+                 {
+-                    complete_commit(state.surf);
++                    // May free `entry`
++                    surf->apply_ready_commits();
+                 }
+                 catch (wayland::ProtocolError const& err)
+                 {
+@@ -796,13 +874,9 @@ void mf::WlSurface::commit()
+                 }
+                 catch (...)
+                 {
+-                    wayland::internal_error_processing_request(state.surf->client->raw_client(), "Surface::commit()");
++                    wayland::internal_error_processing_request(surf->client->raw_client(), "Surface::commit()");
+                 }
+ 
+-                wl_event_source_remove(state.surf->buffer_ready_source);
+-                state.surf->buffer_ready_source = nullptr;
+-                state.surf->pending_context.reset();
+-
+                 return 0;
+             };
+ 
+@@ -810,51 +884,123 @@ void mf::WlSurface::commit()
+         auto display = wl_client_get_display(client);
+         auto event_loop = wl_display_get_event_loop(display);
+ 
+-        buffer_ready_source = wl_event_loop_add_fd(
++        queued->source = wl_event_loop_add_fd(
+             event_loop,
+-            pending_context->eventfd,
++            queued->eventfd,
+             WL_EVENT_READABLE,
+             handle_buffer_ready,
+-            pending_context.get());
++            queued.get());
+     }
+-    else
++
++    fenced_commits.push_back(std::move(queued));
++
++    if (fenced_commits.size() > max_fenced_commits)
+     {
+-        complete_commit(this);
++        // The oldest commit hasn't been applied, so it is still waiting: fold
++        // it into the next one, as Mir did for every frame before.
++        auto oldest = std::move(fenced_commits.front());
++        fenced_commits.pop_front();
++        auto& next = *fenced_commits.front();
++
++        if (next.state.buffer)
++        {
++            // The next commit brings its own frame: the oldest's goes
++            oldest->drop_frame();
++            auto merged = std::move(oldest->state);
++            merged.update_from(next.state);
++            next.state = std::move(merged);
++            if (!next.surface_order)
++                next.surface_order = std::move(oldest->surface_order);
++        }
++        else
++        {
++            // The next only carries other state: the oldest keeps waiting
++            // for its frame, with that state on top
++            oldest->state.update_from(next.state);
++            if (next.surface_order)
++                oldest->surface_order = std::move(next.surface_order);
++            fenced_commits.pop_front();
++            fenced_commits.push_front(std::move(oldest));
++        }
+     }
++
++    apply_ready_commits();
+ }
+ 
+-void mf::WlSurface::complete_commit(WlSurface* surf)
++void mf::WlSurface::apply_ready_commits()
++{
++    // The newest commit that is ready and brings a frame: older frames still
++    // waiting for their fences are superseded by it
++    auto const newest_frame = std::find_if(
++        fenced_commits.rbegin(), fenced_commits.rend(),
++        [](auto const& c) { return c->ready && c->state.buffer.has_value(); });
++    auto superseded_until = static_cast<size_t>(fenced_commits.rend() - newest_frame);
++
++    // State of superseded commits (all but their frames), for the next one applied
++    std::optional<WlSurfaceState> carried;
++    std::optional<std::list<WlSubsurface*>> carried_order;
++
++    for (size_t i = 0; !fenced_commits.empty(); ++i)
++    {
++        bool const superseded = i < superseded_until && !fenced_commits.front()->ready;
++        if (!fenced_commits.front()->ready && !superseded)
++            break;
++
++        auto entry = std::move(fenced_commits.front());
++        fenced_commits.pop_front();
++
++        if (superseded)
++        {
++            entry->drop_frame();
++            if (!carried)
++                carried.emplace();
++            carried->update_from(entry->state);
++            if (entry->surface_order)
++                carried_order = std::move(entry->surface_order);
++            continue;
++        }
++
++        auto state = std::move(entry->state);
++        if (carried)
++        {
++            carried->update_from(state);
++            state = std::move(*carried);
++            carried.reset();
++        }
++        auto surface_order = entry->surface_order ? std::move(entry->surface_order) : std::move(carried_order);
++        carried_order.reset();
++
++        apply_commit(std::move(state), std::move(surface_order));
++    }
++}
++
++void mf::WlSurface::apply_commit(WlSurfaceState state, std::optional<std::list<WlSubsurface*>> surface_order)
+ {
+     // Apply pending subsurface z-order changes BEFORE role->commit()
+     // Per Wayland spec, subsurface state changes (z-order, position) are applied
+     // immediately on parent commit, even if the parent is a synchronized subsurface
+-    if (surf->pending_surface_order)
++    if (surface_order)
+     {
+         // Convert list back to vector
+-        surf->children.assign(surf->pending_surface_order->begin(), surf->pending_surface_order->end());
++        children.assign(surface_order->begin(), surface_order->end());
+ 
+         // Update parent_z_index and clear the parent marker
+-        auto const parent_marker = std::find(surf->children.begin(), surf->children.end(), nullptr);
+-        surf->parent_z_index = parent_marker - surf->children.begin();
+-        surf->children.erase(parent_marker);
+-
+-        surf->pending_surface_order = std::nullopt;
++        auto const parent_marker = std::find(children.begin(), children.end(), nullptr);
++        parent_z_index = parent_marker - children.begin();
++        children.erase(parent_marker);
+     }
+ 
+-    // order is important
+-    auto const state = std::move(surf->pending);
+-    surf->pending = WlSurfaceState();
+-    surf->role->commit(state);
++    role->commit(state);
+ 
+-    if (surf->scene_surface_created_callbacks.size())
++    if (scene_surface_created_callbacks.size())
+     {
+-        if (auto const surface = surf->scene_surface(); surface && surface.value())
++        if (auto const surface = scene_surface(); surface && surface.value())
+         {
+-            for (auto const& callback : surf->scene_surface_created_callbacks)
++            for (auto const& callback : scene_surface_created_callbacks)
+             {
+                 callback(surface.value());
+             }
+-            surf->scene_surface_created_callbacks.clear();
++            scene_surface_created_callbacks.clear();
+         }
+     }
+ }
+--- a/src/server/frontend_wayland/wl_surface.h
++++ b/src/server/frontend_wayland/wl_surface.h
+@@ -26,6 +26,7 @@
+ 
+ #include <mir/geometry/displacement.h>
+ #include <chrono>
++#include <deque>
+ #include <mir/geometry/size.h>
+ #include <mir/geometry/point.h>
+ #include <mir/geometry/rectangle.h>
+@@ -223,13 +224,17 @@ private:
+      */
+     std::shared_ptr<graphics::Buffer> current_buffer;
+ 
+-    /* State for when a buffer update is waiting for a client fence to signal
++    /* Commits waiting for their explicit-sync acquire point (or for one
++     * committed before them), oldest first. Each keeps its own state from
++     * the moment it was committed; see commit().
+      */
+-    struct PendingBufferState;
+-    std::unique_ptr<PendingBufferState> pending_context;
+-    struct wl_event_source* buffer_ready_source{nullptr};
++    struct FencedCommit;
++    std::deque<std::unique_ptr<FencedCommit>> fenced_commits;
+ 
+-    static void complete_commit(WlSurface* surf);
++    /// Applies the commits at the front of fenced_commits that are ready,
++    /// letting the newest ready frame supersede older ones still waiting.
++    void apply_ready_commits();
++    void apply_commit(WlSurfaceState state, std::optional<std::list<WlSubsurface*>> surface_order);
+ 
+     WlSurfaceState pending;
+     // Subsurface z-order state (plus a nullptr representing the parent surface)

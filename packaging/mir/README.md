@@ -187,6 +187,19 @@ Umoja PPA:
   blank, fingerprint unlock, then a whole demo take recorded dim). Retired
   dimmers now undim and ignore a late `idle()`, and remove their renderable
   when destroyed.
+- `patches/3029_fenced-commits-in-order.patch` (umoja31): a commit with a
+  linux-drm-syncobj acquire point waits for its fence, and a commit arriving
+  before that superseded it, releasing the waiting buffer unused. A game
+  drawing faster than its GPU finishes (Vulkan MAILBOX while GPU bound:
+  Potluck on the 8060S, 2026-11-27) always has its next frame committed by
+  then, so every frame was dropped and the window froze while the game kept
+  drawing (its menu only redrew when focus left it). Commits now queue in
+  order, each with its own state from `commit()` (canonical/mir#5460's
+  missing snapshot), and apply as their fences signal; a waiting frame is
+  dropped only once a newer one is ready, its other state going with that
+  one, and only 16 can queue. `WlSurfaceState::update_from()` now keeps the
+  opaque region and surface specification when merging. Upstream report
+  draft: `upstream-bugs/syncobj-commit-superseded-before-ready.md`.
 - The blur patch's GL error drain is bounded (a lost context reports
   `GL_CONTEXT_LOST` forever).
 - `UPSTREAM`: the archive source version we patch; our version adds
