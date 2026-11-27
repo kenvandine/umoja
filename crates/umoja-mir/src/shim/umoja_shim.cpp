@@ -1151,9 +1151,14 @@ public:
     }
 
     // xdg_wm_base ping for "App is not responding" (attention.rs). Not for
-    // X11 windows: Xwayland has no xdg_wm_base, so it would never answer.
+    // X11 windows: they have no xdg_wm_base, so they would never answer. Mir
+    // gives each X11 client its own session under the client's _NET_WM_PID
+    // (not Xwayland's pid), so the process name can't tell; the session has
+    // no client socket, which can. Checking the name only let every X11 game
+    // that took a click show "not responding" 5 s later while it ran fine.
     void check_alive(Window const& w) {
         if (!all_windows.count(w)) return;
+        if (miral::socket_fd_of(w.application()) < 0) return;
         pid_t const pid = miral::pid_of(w.application());
         if (pid <= 0 || process_name(pid) == "Xwayland" || is_shell_process(w)) return;
         auto const& info = tools.info_for(w);
