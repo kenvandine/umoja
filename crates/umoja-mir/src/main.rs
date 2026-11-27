@@ -7,6 +7,7 @@
 //! session down.
 
 mod attention;
+mod caps;
 mod display_config;
 mod dock_icons;
 mod edge_pressure;
@@ -43,17 +44,23 @@ const DISPLAY_CONFIG_FILE: &str = "umoja-mir.display";
 use std::ffi::{CString, c_char};
 
 fn main() {
-    // The package gives umoja-mir CAP_SYS_NICE (debian/umoja-desktop.postinst)
-    // so its GPU contexts get high priority. A file capability makes the
-    // kernel mark the process undumpable: no core dumps for coredumpctl or
-    // Apport, no gdb -p, and /proc/<pid> owned by root. Undo that, so a crash
-    // can still be debugged; the process is then as open to its own user as
-    // before the capability.
+    // The package gives umoja-mir CAP_SYS_NICE (see caps.rs) so its GPU
+    // contexts get high priority; raise it before any thread starts.
+    let high_priority = caps::raise_sys_nice();
+    // A file capability makes the kernel mark the process undumpable: no
+    // core dumps for coredumpctl or Apport, no gdb -p, and /proc/<pid> owned
+    // by root. Undo that, so a crash can still be debugged; the process is
+    // then as open to its own user as before the capability.
     // SAFETY: prctl with plain integer arguments; it only changes a flag.
     unsafe {
         libc::prctl(libc::PR_SET_DUMPABLE, 1, 0, 0, 0);
     }
     umoja_common::init_logging("umoja-mir");
+    tracing::info!(
+        cap_sys_nice = high_priority,
+        "GPU priority: {}",
+        if high_priority { "high available" } else { "normal (no CAP_SYS_NICE)" }
+    );
     let greeter = greeter::enabled();
     if greeter {
         // The login screen (see greeter.rs): no session services, D-Bus

@@ -15,11 +15,14 @@ fi
 # drawing smoothly while a game keeps the GPU busy (Mir patch 3030). amdgpu
 # and i915 grant high priority only to the DRM master or a process with
 # CAP_SYS_NICE, and Mir draws on the render node, so give the compositor
-# CAP_SYS_NICE, as KDE does for kwin_wayland. dpkg drops file capabilities
-# whenever it replaces the binary, so set it on every configure. umoja-mir
-# makes itself dumpable again at start, so crash reports and gdb still work.
+# CAP_SYS_NICE, as KDE does for kwin_wayland. Permitted only, not effective:
+# with the effective bit the kernel won't run the binary at all where the
+# capability can't be had (containers, NoNewPrivileges); umoja-mir raises it
+# itself when granted (crates/umoja-mir/src/caps.rs) and makes itself
+# dumpable again, so crash reports and gdb still work. dpkg drops file
+# capabilities whenever it replaces the binary, so set it on every configure.
 if [ "$1" = "configure" ]; then
-    if ! setcap cap_sys_nice=ep /usr/bin/umoja-mir 2>/dev/null; then
+    if ! setcap cap_sys_nice=p /usr/bin/umoja-mir 2>/dev/null; then
         echo "umoja-desktop: could not give umoja-mir CAP_SYS_NICE (no file capabilities on this filesystem?)." >&2
         echo "umoja-desktop: the desktop works, but may lag while a game keeps the GPU busy." >&2
     fi
