@@ -47,6 +47,7 @@ Package: umoja-desktop
 Architecture: amd64 arm64
 Depends: ${shlibs:Depends},
          ${misc:Depends},
+         libcap2-bin,
          mir-platform-graphics-gbm-kms,
          mir-platform-graphics-atomic-kms,
          xwayland,

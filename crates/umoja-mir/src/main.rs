@@ -43,6 +43,16 @@ const DISPLAY_CONFIG_FILE: &str = "umoja-mir.display";
 use std::ffi::{CString, c_char};
 
 fn main() {
+    // The package gives umoja-mir CAP_SYS_NICE (debian/umoja-desktop.postinst)
+    // so its GPU contexts get high priority. A file capability makes the
+    // kernel mark the process undumpable: no core dumps for coredumpctl or
+    // Apport, no gdb -p, and /proc/<pid> owned by root. Undo that, so a crash
+    // can still be debugged; the process is then as open to its own user as
+    // before the capability.
+    // SAFETY: prctl with plain integer arguments; it only changes a flag.
+    unsafe {
+        libc::prctl(libc::PR_SET_DUMPABLE, 1, 0, 0, 0);
+    }
     umoja_common::init_logging("umoja-mir");
     let greeter = greeter::enabled();
     if greeter {

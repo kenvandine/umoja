@@ -11,6 +11,20 @@ if [ "$1" = "configure" ] && command -v deb-systemd-invoke >/dev/null 2>&1; then
     deb-systemd-invoke --user try-restart xdg-desktop-portal-umoja.service >/dev/null 2>&1 || true
 fi
 
+# umoja-mir asks for high-priority GPU contexts so the desktop keeps
+# drawing smoothly while a game keeps the GPU busy (Mir patch 3030). amdgpu
+# and i915 grant high priority only to the DRM master or a process with
+# CAP_SYS_NICE, and Mir draws on the render node, so give the compositor
+# CAP_SYS_NICE, as KDE does for kwin_wayland. dpkg drops file capabilities
+# whenever it replaces the binary, so set it on every configure. umoja-mir
+# makes itself dumpable again at start, so crash reports and gdb still work.
+if [ "$1" = "configure" ]; then
+    if ! setcap cap_sys_nice=ep /usr/bin/umoja-mir 2>/dev/null; then
+        echo "umoja-desktop: could not give umoja-mir CAP_SYS_NICE (no file capabilities on this filesystem?)." >&2
+        echo "umoja-desktop: the desktop works, but may lag while a game keeps the GPU busy." >&2
+    fi
+fi
+
 #DEBHELPER#
 
 exit 0
